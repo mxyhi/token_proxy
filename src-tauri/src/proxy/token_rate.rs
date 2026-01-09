@@ -25,6 +25,7 @@ struct TrackerInner {
     active: AtomicUsize,
     enabled: AtomicBool,
     generation: AtomicU64,
+    cleanup_started: AtomicBool,
     last_cleanup: Mutex<Instant>,
     requests: RwLock<HashMap<u64, Arc<Mutex<RequestWindow>>>>,
 }
@@ -65,12 +66,13 @@ impl TokenRateTracker {
                 active: AtomicUsize::new(0),
                 enabled: AtomicBool::new(true),
                 generation: AtomicU64::new(1),
+                cleanup_started: AtomicBool::new(false),
                 last_cleanup: Mutex::new(Instant::now()),
                 requests: RwLock::new(HashMap::new()),
             }),
             activity_tx,
         });
-        Self::spawn_cleanup(&tracker);
+        tracker.try_start_cleanup();
         tracker
     }
 
@@ -84,6 +86,7 @@ impl TokenRateTracker {
     }
 
     pub(crate) async fn set_enabled(&self, enabled: bool) {
+        self.try_start_cleanup();
         tracing::debug!(enabled, "token_rate set_enabled start");
         let previous = self.inner.enabled.swap(enabled, Ordering::SeqCst);
         if previous == enabled {
@@ -107,6 +110,7 @@ impl TokenRateTracker {
         model: Option<String>,
         input_tokens: Option<u64>,
     ) -> RequestTokenTracker {
+        self.try_start_cleanup();
         self.maybe_cleanup(Instant::now()).await;
         let enabled = self.inner.enabled.load(Ordering::SeqCst);
         let generation = self.inner.generation.load(Ordering::SeqCst);
@@ -150,6 +154,7 @@ impl TokenRateTracker {
     }
 
     pub(crate) async fn snapshot(&self) -> TokenRateSnapshot {
+        self.try_start_cleanup();
         if !self.inner.enabled.load(Ordering::SeqCst) {
             return TokenRateSnapshot {
                 input: 0,
@@ -221,21 +226,35 @@ impl TokenRateTracker {
         }
     }
 
-    // 后台定时清理，避免长时间无请求时也能释放过期窗口。
-    fn spawn_cleanup(tracker: &Arc<Self>) {
-        let weak = Arc::downgrade(tracker);
-        tokio::spawn(async move {
+    // 在有 Tokio runtime 时启动清理任务，避免无 reactor 场景崩溃。
+    fn try_start_cleanup(&self) {
+        if self.inner.cleanup_started.load(Ordering::SeqCst) {
+            return;
+        }
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        if self
+            .inner
+            .cleanup_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        let weak_inner = Arc::downgrade(&self.inner);
+        handle.spawn(async move {
             let mut ticker = interval(CLEANUP_INTERVAL);
             ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
             loop {
                 ticker.tick().await;
-                let Some(tracker) = weak.upgrade() else {
+                let Some(inner) = weak_inner.upgrade() else {
                     break;
                 };
-                if !tracker.inner.enabled.load(Ordering::SeqCst) {
+                if !inner.enabled.load(Ordering::SeqCst) {
                     continue;
                 }
-                tracker.cleanup_expired(Instant::now()).await;
+                cleanup_expired_inner(&inner, Instant::now()).await;
             }
         });
     }
@@ -261,37 +280,40 @@ impl TokenRateTracker {
     }
 
     async fn cleanup_expired(&self, now: Instant) {
-        let windows: Vec<(u64, Arc<Mutex<RequestWindow>>)> = self
-            .inner
-            .requests
-            .read()
-            .await
-            .iter()
-            .map(|(id, window)| (*id, window.clone()))
-            .collect();
-        if windows.is_empty() {
-            return;
+        cleanup_expired_inner(&self.inner, now).await;
+    }
+}
+
+async fn cleanup_expired_inner(inner: &TrackerInner, now: Instant) {
+    let windows: Vec<(u64, Arc<Mutex<RequestWindow>>)> = inner
+        .requests
+        .read()
+        .await
+        .iter()
+        .map(|(id, window)| (*id, window.clone()))
+        .collect();
+    if windows.is_empty() {
+        return;
+    }
+    let mut expired = Vec::new();
+    for (id, window) in windows {
+        let guard = window.lock().await;
+        if guard.is_expired(now) {
+            expired.push(id);
         }
-        let mut expired = Vec::new();
-        for (id, window) in windows {
-            let guard = window.lock().await;
-            if guard.is_expired(now) {
-                expired.push(id);
-            }
+    }
+    if expired.is_empty() {
+        return;
+    }
+    let mut guard = inner.requests.write().await;
+    let mut removed = 0usize;
+    for id in expired {
+        if guard.remove(&id).is_some() {
+            removed += 1;
         }
-        if expired.is_empty() {
-            return;
-        }
-        let mut guard = self.inner.requests.write().await;
-        let mut removed = 0usize;
-        for id in expired {
-            if guard.remove(&id).is_some() {
-                removed += 1;
-            }
-        }
-        if removed > 0 {
-            self.inner.active.fetch_sub(removed, Ordering::SeqCst);
-        }
+    }
+    if removed > 0 {
+        inner.active.fetch_sub(removed, Ordering::SeqCst);
     }
 }
 

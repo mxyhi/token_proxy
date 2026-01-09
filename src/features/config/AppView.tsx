@@ -268,9 +268,9 @@ export function AppView(props: AppViewProps) {
       <SidebarInset className="min-h-0 md:m-0 md:ml-0 md:rounded-none md:shadow-none">
         <div className="flex flex-1 min-h-0 flex-col">
           <ScrollArea className="flex-1 min-h-0">
-            <div className="@container/main flex flex-1 flex-col gap-2">
+            <div className="@container/main flex flex-1 flex-col gap-1">
               <SiteHeader title={sectionMeta.label()} />
-              <div className="flex flex-col gap-4 py-4 md:gap-6 md:py-6">
+              <div className="flex flex-col gap-2.5 py-2.5 md:gap-3.5 md:py-3.5">
                 <ConfigSectionContent
                   {...viewProps}
                   activeSectionId={activeSectionId}

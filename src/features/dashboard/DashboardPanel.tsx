@@ -1,24 +1,35 @@
 import { useCallback, useEffect, useState } from "react"
-import { AlertCircle } from "lucide-react"
+import { AlertCircle, RefreshCcw } from "lucide-react"
 
-import { ChartAreaInteractive, type DashboardTimeRange } from "@/components/chart-area-interactive"
+import { ChartAreaInteractive } from "@/components/chart-area-interactive"
 import { DataTable } from "@/components/data-table"
 import { SectionCards } from "@/components/section-cards"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Button } from "@/components/ui/button"
+import { Card, CardContent } from "@/components/ui/card"
+import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { readDashboardSnapshot } from "@/features/dashboard/api"
+import {
+  DASHBOARD_RANGE_OPTIONS,
+  type DashboardTimeRange,
+  resolveDashboardRange,
+  toDashboardTimeRange,
+} from "@/features/dashboard/range"
 import type { DashboardSnapshot } from "@/features/dashboard/types"
 import { parseError } from "@/lib/error"
+import { cn } from "@/lib/utils"
 import { m } from "@/paraglide/messages.js"
 
 const RECENT_PAGE_SIZE = 50
 
 type DashboardStatus = "idle" | "loading" | "error"
-
-function resolveRange(preset: DashboardTimeRange) {
-  const now = Date.now()
-  const days = preset === "7d" ? 7 : preset === "30d" ? 30 : 90
-  return { fromTsMs: now - days * 24 * 60 * 60 * 1000, toTsMs: now }
-}
 
 function usePagination(totalRequests: number) {
   const [page, setPage] = useState(1)
@@ -58,7 +69,7 @@ function useDashboardSnapshot() {
     setStatus("loading")
     setStatusMessage("")
     try {
-      const range = resolveRange(rangePreset)
+      const range = resolveDashboardRange(rangePreset)
       const offset = (page - 1) * RECENT_PAGE_SIZE
       const data = await readDashboardSnapshot(range, offset)
       setSnapshot(data)
@@ -91,6 +102,58 @@ function useDashboardSnapshot() {
   }
 }
 
+type DashboardFiltersProps = {
+  range: DashboardTimeRange
+  loading: boolean
+  onRangeChange: (range: DashboardTimeRange) => void
+  onRefresh: () => void
+}
+
+function DashboardFilters({
+  range,
+  loading,
+  onRangeChange,
+  onRefresh,
+}: DashboardFiltersProps) {
+  return (
+    <div data-slot="dashboard-filters" className="px-4 lg:px-6">
+      <Card className="gap-0 border-border/60 bg-background/70 py-0">
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Label htmlFor="dashboard-range" className="text-xs text-muted-foreground">
+              {m.dashboard_range_label()}
+            </Label>
+            <Select
+              value={range}
+              onValueChange={(value) => {
+                const next = toDashboardTimeRange(value)
+                if (next) {
+                  onRangeChange(next)
+                }
+              }}
+            >
+              <SelectTrigger id="dashboard-range" className="h-9 w-[160px]">
+                <SelectValue placeholder={m.dashboard_range_placeholder()} />
+              </SelectTrigger>
+              <SelectContent>
+                {DASHBOARD_RANGE_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <Button type="button" variant="outline" onClick={onRefresh} disabled={loading}>
+            <RefreshCcw className={cn("mr-2 size-4", loading && "animate-spin")} />
+            {m.common_refresh()}
+          </Button>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
 export function DashboardPanel() {
   const {
     snapshot,
@@ -118,15 +181,19 @@ export function DashboardPanel() {
         </Alert>
       ) : null}
 
+      <DashboardFilters
+        range={rangePreset}
+        loading={isLoading}
+        onRangeChange={onRangeChange}
+        onRefresh={refresh}
+      />
+
       <SectionCards summary={snapshot?.summary ?? null} />
 
       <div className="px-4 lg:px-6">
         <ChartAreaInteractive
           series={snapshot?.series ?? []}
           range={rangePreset}
-          loading={isLoading}
-          onRangeChange={onRangeChange}
-          onRefresh={refresh}
         />
       </div>
 

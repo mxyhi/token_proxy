@@ -2,15 +2,10 @@
 
 import * as React from "react"
 import { Area, AreaChart, CartesianGrid, XAxis } from "recharts"
-import { RefreshCcw } from "lucide-react"
 
-import { useIsMobile } from "@/hooks/use-mobile"
-import { Button } from "@/components/ui/button"
 import {
   Card,
-  CardAction,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -20,43 +15,16 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from "@/components/ui/chart"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import {
-  ToggleGroup,
-  ToggleGroupItem,
-} from "@/components/ui/toggle-group"
 import { formatInteger } from "@/features/dashboard/format"
+import type { DashboardTimeRange } from "@/features/dashboard/range"
 import type { DashboardSeriesPoint } from "@/features/dashboard/types"
-import { cn } from "@/lib/utils"
 import { m } from "@/paraglide/messages.js"
-
-export type DashboardTimeRange = "90d" | "30d" | "7d"
-
-type RangeOption = {
-  value: DashboardTimeRange
-  label: string
-  shortLabel: string
-}
 
 type ChartPoint = {
   tsMs: number
   inputTokens: number
   outputTokens: number
 }
-
-const RANGE_OPTIONS: RangeOption[] = [
-  { value: "90d", label: "Last 3 months", shortLabel: "Last 3 months" },
-  { value: "30d", label: "Last 30 days", shortLabel: "Last 30 days" },
-  { value: "7d", label: "Last 7 days", shortLabel: "Last 7 days" },
-]
-
-const RANGE_VALUES = new Set(RANGE_OPTIONS.map((option) => option.value))
 
 const chartConfig = {
   inputTokens: {
@@ -72,16 +40,6 @@ const chartConfig = {
 type ChartAreaInteractiveProps = {
   series: DashboardSeriesPoint[]
   range: DashboardTimeRange
-  loading: boolean
-  onRangeChange: (range: DashboardTimeRange) => void
-  onRefresh: () => void
-}
-
-type ChartHeaderProps = {
-  range: DashboardTimeRange
-  loading: boolean
-  onRangeChange: (range: DashboardTimeRange) => void
-  onRefresh: () => void
 }
 
 type ChartBodyProps = {
@@ -89,95 +47,18 @@ type ChartBodyProps = {
   range: DashboardTimeRange
 }
 
-function toRangeValue(value: string) {
-  return RANGE_VALUES.has(value as DashboardTimeRange)
-    ? (value as DashboardTimeRange)
-    : null
-}
-
 function formatTick(value: number, range: DashboardTimeRange) {
   const date = new Date(value)
-  if (range === "7d") {
+  if (range === "today") {
     return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })
   }
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
 }
 
-function resolveRangeLabel(range: DashboardTimeRange) {
-  return RANGE_OPTIONS.find((option) => option.value === range)
-}
-
-type RangeSelectorProps = {
-  range: DashboardTimeRange
-  onRangeChange: (range: DashboardTimeRange) => void
-}
-
-function RangeSelector({ range, onRangeChange }: RangeSelectorProps) {
-  return (
-    <>
-      <ToggleGroup
-        type="single"
-        value={range}
-        onValueChange={(value) => {
-          const next = toRangeValue(value)
-          if (next) {
-            onRangeChange(next)
-          }
-        }}
-        variant="outline"
-        className="hidden *:data-[slot=toggle-group-item]:!px-4 @[767px]/card:flex"
-      >
-        {RANGE_OPTIONS.map((option) => (
-          <ToggleGroupItem key={option.value} value={option.value}>
-            {option.label}
-          </ToggleGroupItem>
-        ))}
-      </ToggleGroup>
-      <Select
-        value={range}
-        onValueChange={(value) => {
-          const next = toRangeValue(value)
-          if (next) {
-            onRangeChange(next)
-          }
-        }}
-      >
-        <SelectTrigger
-          className="flex w-40 **:data-[slot=select-value]:block **:data-[slot=select-value]:truncate @[767px]/card:hidden"
-          size="sm"
-          aria-label="Select a value"
-        >
-          <SelectValue placeholder="Last 3 months" />
-        </SelectTrigger>
-        <SelectContent className="rounded-xl">
-          {RANGE_OPTIONS.map((option) => (
-            <SelectItem key={option.value} value={option.value} className="rounded-lg">
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </>
-  )
-}
-
-function ChartHeader({ range, loading, onRangeChange, onRefresh }: ChartHeaderProps) {
-  const label = resolveRangeLabel(range)
-
+function ChartHeader() {
   return (
     <CardHeader>
       <CardTitle>{m.dashboard_stat_total_tokens()}</CardTitle>
-      <CardDescription>
-        <span className="hidden @[540px]/card:block">{label?.label}</span>
-        <span className="@[540px]/card:hidden">{label?.shortLabel}</span>
-      </CardDescription>
-      <CardAction className="flex items-center gap-2">
-        <RangeSelector range={range} onRangeChange={onRangeChange} />
-        <Button type="button" variant="outline" size="icon" onClick={onRefresh} disabled={loading}>
-          <RefreshCcw className={cn("size-4", loading && "animate-spin")} />
-          <span className="sr-only">{m.common_refresh()}</span>
-        </Button>
-      </CardAction>
     </CardHeader>
   )
 }
@@ -264,21 +145,7 @@ function ChartBody({ data, range }: ChartBodyProps) {
   )
 }
 
-export function ChartAreaInteractive({
-  series,
-  range,
-  loading,
-  onRangeChange,
-  onRefresh,
-}: ChartAreaInteractiveProps) {
-  const isMobile = useIsMobile()
-
-  React.useEffect(() => {
-    if (isMobile && range !== "7d") {
-      onRangeChange("7d")
-    }
-  }, [isMobile, onRangeChange, range])
-
+export function ChartAreaInteractive({ series, range }: ChartAreaInteractiveProps) {
   const chartData = React.useMemo(
     () =>
       series.map((item) => ({
@@ -291,12 +158,7 @@ export function ChartAreaInteractive({
 
   return (
     <Card className="@container/card">
-      <ChartHeader
-        range={range}
-        loading={loading}
-        onRangeChange={onRangeChange}
-        onRefresh={onRefresh}
-      />
+      <ChartHeader />
       <ChartBody data={chartData} range={range} />
     </Card>
   )

@@ -1,5 +1,4 @@
-// 使用空格作为千位分隔符，方便复制时不带逗号
+// 使用逗号作为千位分隔符，便于阅读
 export function formatInteger(value: number) {
-  return Math.round(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return Math.round(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
-

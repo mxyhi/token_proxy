@@ -85,8 +85,12 @@ where
                     self.collector.push_chunk(&chunk);
                     let mut events = Vec::new();
                     self.parser.push_chunk(&chunk, |data| events.push(data));
+                    let mut texts = Vec::new();
                     for data in events {
-                        self.handle_event(&data);
+                        self.handle_event(&data, &mut texts);
+                    }
+                    for text in texts {
+                        self.token_tracker.add_output_text(&text).await;
                     }
                 }
                 Some(Err(err)) => {
@@ -97,8 +101,12 @@ where
                     self.upstream_ended = true;
                     let mut events = Vec::new();
                     self.parser.finish(|data| events.push(data));
+                    let mut texts = Vec::new();
                     for data in events {
-                        self.handle_event(&data);
+                        self.handle_event(&data, &mut texts);
+                    }
+                    for text in texts {
+                        self.token_tracker.add_output_text(&text).await;
                     }
                     if !self.sent_done {
                         self.push_done();
@@ -112,7 +120,7 @@ where
         }
     }
 
-    fn handle_event(&mut self, data: &str) {
+    fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
         if self.sent_done {
             return;
         }
@@ -132,7 +140,7 @@ where
         let Some(delta) = value.get("delta").and_then(Value::as_str) else {
             return;
         };
-        self.token_tracker.add_output_text(delta);
+        token_texts.push(delta.to_string());
 
         if !self.sent_role {
             self.sent_role = true;

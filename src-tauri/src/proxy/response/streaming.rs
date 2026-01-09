@@ -25,36 +25,48 @@ pub(super) fn stream_with_logging(
     let parser = SseEventParser::new();
     try_unfold(
         (upstream, collector, parser, log, context, token_tracker),
-        |(mut upstream, mut collector, mut parser, log, context, mut token_tracker)| async move {
+        |(mut upstream, mut collector, mut parser, log, context, token_tracker)| async move {
             match upstream.next().await {
                 Some(Ok(chunk)) => {
                     collector.push_chunk(&chunk);
                     let provider = context.provider.as_str();
+                    let mut texts = Vec::new();
                     parser.push_chunk(&chunk, |data| {
                         if let Some(text) = extract_stream_text(provider, &data) {
-                            token_tracker.add_output_text(&text);
+                            texts.push(text);
                         }
                     });
+                    for text in texts {
+                        token_tracker.add_output_text(&text).await;
+                    }
                     Ok(Some((chunk, (upstream, collector, parser, log, context, token_tracker))))
                 }
                 Some(Err(err)) => {
                     let provider = context.provider.as_str();
+                    let mut texts = Vec::new();
                     parser.finish(|data| {
                         if let Some(text) = extract_stream_text(provider, &data) {
-                            token_tracker.add_output_text(&text);
+                            texts.push(text);
                         }
                     });
+                    for text in texts {
+                        token_tracker.add_output_text(&text).await;
+                    }
                     let entry = build_log_entry(&context, collector.finish());
                     log.write(&entry).await;
                     Err(std::io::Error::new(std::io::ErrorKind::Other, err))
                 }
                 None => {
                     let provider = context.provider.as_str();
+                    let mut texts = Vec::new();
                     parser.finish(|data| {
                         if let Some(text) = extract_stream_text(provider, &data) {
-                            token_tracker.add_output_text(&text);
+                            texts.push(text);
                         }
                     });
+                    for text in texts {
+                        token_tracker.add_output_text(&text).await;
+                    }
                     let entry = build_log_entry(&context, collector.finish());
                     log.write(&entry).await;
                     Ok(None)
@@ -131,8 +143,15 @@ where
                     self.collector.push_chunk(&chunk);
                     let mut events = Vec::new();
                     self.parser.push_chunk(&chunk, |data| events.push(data));
+                    let mut texts = Vec::new();
                     for data in events {
-                        self.push_event(&data);
+                        if let Some(text) = extract_stream_text(&self.context.provider, &data) {
+                            texts.push(text);
+                        }
+                        self.push_event_output(&data);
+                    }
+                    for text in texts {
+                        self.token_tracker.add_output_text(&text).await;
                     }
                 }
                 Some(Err(err)) => {
@@ -143,18 +162,22 @@ where
                     self.upstream_ended = true;
                     let mut events = Vec::new();
                     self.parser.finish(|data| events.push(data));
+                    let mut texts = Vec::new();
                     for data in events {
-                        self.push_event(&data);
+                        if let Some(text) = extract_stream_text(&self.context.provider, &data) {
+                            texts.push(text);
+                        }
+                        self.push_event_output(&data);
+                    }
+                    for text in texts {
+                        self.token_tracker.add_output_text(&text).await;
                     }
                 }
             }
         }
     }
 
-    fn push_event(&mut self, data: &str) {
-        if let Some(text) = extract_stream_text(&self.context.provider, data) {
-            self.token_tracker.add_output_text(&text);
-        }
+    fn push_event_output(&mut self, data: &str) {
         let output = rewrite_sse_data(data, &self.model_override);
         self.out.push_back(Bytes::from(format!("data: {output}\n\n")));
     }

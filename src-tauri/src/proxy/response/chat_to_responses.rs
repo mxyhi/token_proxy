@@ -115,8 +115,12 @@ where
                     self.collector.push_chunk(&chunk);
                     let mut events = Vec::new();
                     self.parser.push_chunk(&chunk, |data| events.push(data));
+                    let mut texts = Vec::new();
                     for data in events {
-                        self.handle_event(&data);
+                        self.handle_event(&data, &mut texts);
+                    }
+                    for text in texts {
+                        self.token_tracker.add_output_text(&text).await;
                     }
                 }
                 Some(Err(err)) => {
@@ -127,8 +131,12 @@ where
                     self.upstream_ended = true;
                     let mut events = Vec::new();
                     self.parser.finish(|data| events.push(data));
+                    let mut texts = Vec::new();
                     for data in events {
-                        self.handle_event(&data);
+                        self.handle_event(&data, &mut texts);
+                    }
+                    for text in texts {
+                        self.token_tracker.add_output_text(&text).await;
                     }
                     if !self.sent_done {
                         self.push_done();
@@ -142,7 +150,7 @@ where
         }
     }
 
-    fn handle_event(&mut self, data: &str) {
+    fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
         if self.sent_done {
             return;
         }
@@ -164,7 +172,7 @@ where
         };
 
         if let Some(content) = delta.get("content").and_then(Value::as_str) {
-            self.handle_text_delta(content);
+            self.handle_text_delta(content, token_texts);
         }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for tool_call in tool_calls {
@@ -176,14 +184,14 @@ where
         }
     }
 
-    fn handle_text_delta(&mut self, delta: &str) {
+    fn handle_text_delta(&mut self, delta: &str, token_texts: &mut Vec<String>) {
         self.ensure_message_output();
         let (item_id, output_index) = {
             let message = self.message.as_mut().expect("message output must exist");
             message.text.push_str(delta);
             (message.id.clone(), message.output_index)
         };
-        self.token_tracker.add_output_text(delta);
+        token_texts.push(delta.to_string());
 
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({

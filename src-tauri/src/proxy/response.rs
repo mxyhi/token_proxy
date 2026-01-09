@@ -59,7 +59,9 @@ pub(super) async fn build_proxy_response(
         .as_deref()
         .or(meta.original_model.as_deref())
         .map(|value| value.to_string());
-    let request_tracker = token_rate.register(model_for_tokens, meta.estimated_input_tokens);
+    let request_tracker = token_rate
+        .register(model_for_tokens, meta.estimated_input_tokens)
+        .await;
     if meta.stream {
         build_stream_response(
             status,
@@ -120,7 +122,9 @@ pub(super) async fn build_proxy_response_buffered(
         .as_deref()
         .or(meta.original_model.as_deref())
         .map(|value| value.to_string());
-    let request_tracker = token_rate.register(model_for_tokens, meta.estimated_input_tokens);
+    let request_tracker = token_rate
+        .register(model_for_tokens, meta.estimated_input_tokens)
+        .await;
     build_buffered_response(
         status,
         upstream_res,
@@ -199,7 +203,7 @@ async fn build_buffered_response(
     headers: HeaderMap,
     context: LogContext,
     log: Arc<LogWriter>,
-    mut request_tracker: RequestTokenTracker,
+    request_tracker: RequestTokenTracker,
     response_transform: FormatTransform,
     model_override: Option<&str>,
 ) -> Response {
@@ -231,7 +235,7 @@ async fn build_buffered_response(
     };
 
     let output = maybe_override_response_model(output, model_override);
-    apply_output_tokens_from_response(&mut request_tracker, &context.provider, &output);
+    apply_output_tokens_from_response(&request_tracker, &context.provider, &output).await;
 
     http::build_response(status, headers, Body::from(output))
 }
@@ -273,14 +277,15 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn apply_output_tokens_from_response(
-    tracker: &mut RequestTokenTracker,
+async fn apply_output_tokens_from_response(
+    tracker: &RequestTokenTracker,
     provider: &str,
     bytes: &Bytes,
 ) {
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
         return;
     };
+    let mut texts = Vec::new();
 
     match provider {
         PROVIDER_OPENAI | PROVIDER_OPENAI_RESPONSES => {
@@ -288,65 +293,69 @@ fn apply_output_tokens_from_response(
                 for choice in choices {
                     if let Some(content) = choice.get("message").and_then(|message| message.get("content")) {
                         if let Some(text) = content.as_str() {
-                            tracker.add_output_text(text);
+                            texts.push(text.to_string());
                         } else if let Some(parts) = content.as_array() {
                             for part in parts {
                                 if let Some(text) = part.get("text").and_then(Value::as_str) {
-                                    tracker.add_output_text(text);
+                                    texts.push(text.to_string());
                                 }
                             }
                         }
                     }
                     if let Some(text) = choice.get("text").and_then(Value::as_str) {
-                        tracker.add_output_text(text);
+                        texts.push(text.to_string());
                     }
                 }
-                return;
             }
-            if let Some(output) = value.get("output").and_then(Value::as_array) {
-                apply_responses_output(tracker, output);
-                return;
+            if texts.is_empty() {
+                if let Some(output) = value.get("output").and_then(Value::as_array) {
+                    collect_responses_output(output, &mut texts);
+                }
             }
         }
         PROVIDER_ANTHROPIC => {
             if let Some(content) = value.get("content").and_then(Value::as_array) {
                 for item in content {
                     if let Some(text) = item.get("text").and_then(Value::as_str) {
-                        tracker.add_output_text(text);
+                        texts.push(text.to_string());
                     }
                 }
-                return;
             }
         }
         PROVIDER_GEMINI => {
             if let Some(candidates) = value.get("candidates").and_then(Value::as_array) {
-                apply_gemini_output(tracker, candidates);
-                return;
+                collect_gemini_output(candidates, &mut texts);
             }
         }
         _ => {}
     }
+    if texts.is_empty() {
+        return;
+    }
+    for text in texts {
+        tracker.add_output_text(&text).await;
+    }
 }
 
-fn apply_responses_output(tracker: &mut RequestTokenTracker, output: &[Value]) {
+fn collect_responses_output(output: &[Value], texts: &mut Vec<String>) {
     for item in output {
         if let Some(content) = item.get("content").and_then(Value::as_array) {
             for part in content {
                 if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    tracker.add_output_text(text);
+                    texts.push(text.to_string());
                 }
             }
         }
     }
 }
 
-fn apply_gemini_output(tracker: &mut RequestTokenTracker, candidates: &[Value]) {
+fn collect_gemini_output(candidates: &[Value], texts: &mut Vec<String>) {
     for candidate in candidates {
         if let Some(content) = candidate.get("content") {
             if let Some(parts) = content.get("parts").and_then(Value::as_array) {
                 for part in parts {
                     if let Some(text) = part.get("text").and_then(Value::as_str) {
-                        tracker.add_output_text(text);
+                        texts.push(text.to_string());
                     }
                 }
             }

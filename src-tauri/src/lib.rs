@@ -83,7 +83,7 @@ async fn write_proxy_config(
     let start = Instant::now();
     tracing::debug!("write_proxy_config apply_config start");
     let apply_start = Instant::now();
-    tray_state.apply_config(&config.tray_token_rate);
+    tray_state.apply_config(&config.tray_token_rate).await;
     tracing::debug!(
         elapsed_ms = apply_start.elapsed().as_millis(),
         "write_proxy_config apply_config done"
@@ -245,7 +245,9 @@ pub fn run() {
             let app_handle_for_config = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 if let Ok(response) = proxy::config::read_config(app_handle_for_config).await {
-                    tray_state_for_config.apply_config(&response.config.tray_token_rate);
+                    tray_state_for_config
+                        .apply_config(&response.config.tray_token_rate)
+                        .await;
                 }
             });
 

@@ -56,28 +56,29 @@ impl TrayState {
         self.inner.should_quit.store(true, Ordering::SeqCst);
     }
 
-    pub(crate) fn apply_config(&self, config: &TrayTokenRateConfig) {
+    pub(crate) async fn apply_config(&self, config: &TrayTokenRateConfig) {
         tracing::debug!("tray apply_config start");
         let start = Instant::now();
         tracing::debug!("tray apply_config acquiring token_rate_config write lock");
-        let mut guard = self
-            .inner
-            .token_rate_config
-            .write()
-            .expect("tray token rate config lock poisoned");
-        tracing::debug!(
-            elapsed_ms = start.elapsed().as_millis(),
-            "tray apply_config token_rate_config locked"
-        );
-        *guard = config.clone();
-        let enabled = config.enabled;
-        drop(guard);
+        let enabled = {
+            let mut guard = self
+                .inner
+                .token_rate_config
+                .write()
+                .expect("tray token rate config lock poisoned");
+            tracing::debug!(
+                elapsed_ms = start.elapsed().as_millis(),
+                "tray apply_config token_rate_config locked"
+            );
+            *guard = config.clone();
+            config.enabled
+        };
         tracing::debug!(
             enabled,
             elapsed_ms = start.elapsed().as_millis(),
             "tray apply_config set_enabled start"
         );
-        self.inner.token_rate.set_enabled(enabled);
+        self.inner.token_rate.set_enabled(enabled).await;
         tracing::debug!(
             enabled,
             elapsed_ms = start.elapsed().as_millis(),
@@ -130,20 +131,21 @@ impl TrayState {
     }
 
     #[cfg(target_os = "macos")]
-    fn update_token_rate_title(&self) {
-        let config = self
-            .inner
-            .token_rate_config
-            .read()
-            .expect("tray token rate config lock poisoned")
-            .clone();
+    async fn update_token_rate_title(&self) {
+        let config = {
+            self.inner
+                .token_rate_config
+                .read()
+                .expect("tray token rate config lock poisoned")
+                .clone()
+        };
         if !config.enabled {
             tracing::debug!("tray update_token_rate_title disabled -> clear");
             self.clear_title();
             return;
         }
         // 启用后始终显示速率；无 token 时展示并发请求数。
-        let snapshot = self.inner.token_rate.snapshot();
+        let snapshot = self.inner.token_rate.snapshot().await;
         let title = format_rate_title(snapshot, config.format);
         tracing::debug!(title = %title, "tray update_token_rate_title set");
         self.set_title(Some(title));
@@ -353,7 +355,7 @@ fn start_token_rate_loop(tray_state: TrayState, loop_id: u64) {
                     if !tray_state.should_keep_token_rate_loop(loop_id) {
                         break 'main;
                     }
-                    tray_state.update_token_rate_title();
+                    tray_state.update_token_rate_title().await;
                     if !token_rate.has_active_requests() {
                         break;
                     }
@@ -361,7 +363,7 @@ fn start_token_rate_loop(tray_state: TrayState, loop_id: u64) {
                 continue;
             }
 
-            tray_state.update_token_rate_title();
+            tray_state.update_token_rate_title().await;
             // 空闲时不轮询，等待新请求或配置变化唤醒。
             if activity_rx.changed().await.is_err() {
                 break 'main;

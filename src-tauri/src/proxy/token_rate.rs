@@ -1,11 +1,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use tiktoken_rs::{cl100k_base, o200k_base, CoreBPE};
 use tokio::{
-    sync::watch,
+    sync::{watch, Mutex, RwLock},
     time::{interval, MissedTickBehavior},
 };
 
@@ -83,7 +83,7 @@ impl TokenRateTracker {
         let _ = self.activity_tx.send(next);
     }
 
-    pub(crate) fn set_enabled(&self, enabled: bool) {
+    pub(crate) async fn set_enabled(&self, enabled: bool) {
         tracing::debug!(enabled, "token_rate set_enabled start");
         let previous = self.inner.enabled.swap(enabled, Ordering::SeqCst);
         if previous == enabled {
@@ -94,11 +94,7 @@ impl TokenRateTracker {
         self.inner.generation.fetch_add(1, Ordering::SeqCst);
         if !enabled {
             tracing::debug!("token_rate set_enabled clearing requests start");
-            let mut guard = self
-                .inner
-                .requests
-                .write()
-                .expect("token rate lock poisoned");
+            let mut guard = self.inner.requests.write().await;
             guard.clear();
             self.inner.active.store(0, Ordering::SeqCst);
             tracing::debug!("token_rate set_enabled clearing requests done");
@@ -106,22 +102,18 @@ impl TokenRateTracker {
         tracing::debug!(enabled, "token_rate set_enabled done");
     }
 
-    pub(crate) fn register(
+    pub(crate) async fn register(
         &self,
         model: Option<String>,
         input_tokens: Option<u64>,
     ) -> RequestTokenTracker {
-        self.maybe_cleanup(Instant::now());
+        self.maybe_cleanup(Instant::now()).await;
         let enabled = self.inner.enabled.load(Ordering::SeqCst);
         let generation = self.inner.generation.load(Ordering::SeqCst);
         let (mut id, mut window) = if enabled {
             let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
             let window = Arc::new(Mutex::new(RequestWindow::new()));
-            let mut guard = self
-                .inner
-                .requests
-                .write()
-                .expect("token rate lock poisoned");
+            let mut guard = self.inner.requests.write().await;
             guard.insert(id, window.clone());
             self.inner.active.fetch_add(1, Ordering::SeqCst);
             (Some(id), Some(window))
@@ -134,14 +126,14 @@ impl TokenRateTracker {
             let current_generation = self.inner.generation.load(Ordering::SeqCst);
             if !still_enabled || current_generation != generation {
                 // 开关状态变更后不再追踪该请求，避免重新开启时继续计数。
-                self.unregister(current_id);
+                self.unregister(current_id).await;
                 id = None;
                 window = None;
                 effective_generation = None;
             }
         }
 
-        let mut tracker = RequestTokenTracker {
+        let tracker = RequestTokenTracker {
             id,
             window,
             tracker: self.clone(),
@@ -149,7 +141,7 @@ impl TokenRateTracker {
             generation: effective_generation,
         };
         if let Some(tokens) = input_tokens {
-            tracker.add_input_tokens(tokens);
+            tracker.add_input_tokens(tokens).await;
         }
         if enabled {
             self.notify_activity();
@@ -157,7 +149,7 @@ impl TokenRateTracker {
         tracker
     }
 
-    pub(crate) fn snapshot(&self) -> TokenRateSnapshot {
+    pub(crate) async fn snapshot(&self) -> TokenRateSnapshot {
         if !self.inner.enabled.load(Ordering::SeqCst) {
             return TokenRateSnapshot {
                 input: 0,
@@ -166,20 +158,20 @@ impl TokenRateTracker {
                 connections: 0,
             };
         }
-        self.maybe_cleanup(Instant::now());
+        self.maybe_cleanup(Instant::now()).await;
         let now = Instant::now();
         let windows: Vec<Arc<Mutex<RequestWindow>>> = self
             .inner
             .requests
             .read()
-            .expect("token rate lock poisoned")
+            .await
             .values()
             .cloned()
             .collect();
         let mut input = 0u64;
         let mut output = 0u64;
         for window in windows {
-            let mut guard = window.lock().expect("token rate lock poisoned");
+            let mut guard = window.lock().await;
             guard.prune(now);
             let (i, o) = guard.sum();
             input = input.saturating_add(i);
@@ -200,28 +192,28 @@ impl TokenRateTracker {
         self.inner.active.load(Ordering::SeqCst) > 0
     }
 
-    fn record(&self, window: &Arc<Mutex<RequestWindow>>, input: u64, output: u64) {
+    async fn record(&self, window: &Arc<Mutex<RequestWindow>>, input: u64, output: u64) {
         if input == 0 && output == 0 {
             return;
         }
         let now = Instant::now();
         {
-            let mut guard = window.lock().expect("token rate lock poisoned");
+            let mut guard = window.lock().await;
             guard.push(TokenEvent {
                 ts: now,
                 input,
                 output,
             });
         }
-        self.maybe_cleanup(now);
+        self.maybe_cleanup(now).await;
     }
 
-    fn unregister(&self, id: u64) {
+    async fn unregister(&self, id: u64) {
         let removed = self
             .inner
             .requests
             .write()
-            .expect("token rate lock poisoned")
+            .await
             .remove(&id)
             .is_some();
         if removed {
@@ -243,28 +235,24 @@ impl TokenRateTracker {
                 if !tracker.inner.enabled.load(Ordering::SeqCst) {
                     continue;
                 }
-                tracker.cleanup_expired(Instant::now());
+                tracker.cleanup_expired(Instant::now()).await;
             }
         });
     }
 
     // 惰性清理：在流量发生时按间隔触发，减少单独后台依赖。
-    fn maybe_cleanup(&self, now: Instant) {
+    async fn maybe_cleanup(&self, now: Instant) {
         if !self.inner.enabled.load(Ordering::SeqCst) {
             return;
         }
-        if !self.should_cleanup(now) {
+        if !self.should_cleanup(now).await {
             return;
         }
-        self.cleanup_expired(now);
+        self.cleanup_expired(now).await;
     }
 
-    fn should_cleanup(&self, now: Instant) -> bool {
-        let mut guard = self
-            .inner
-            .last_cleanup
-            .lock()
-            .expect("token rate lock poisoned");
+    async fn should_cleanup(&self, now: Instant) -> bool {
+        let mut guard = self.inner.last_cleanup.lock().await;
         if now.duration_since(*guard) < CLEANUP_INTERVAL {
             return false;
         }
@@ -272,12 +260,12 @@ impl TokenRateTracker {
         true
     }
 
-    fn cleanup_expired(&self, now: Instant) {
+    async fn cleanup_expired(&self, now: Instant) {
         let windows: Vec<(u64, Arc<Mutex<RequestWindow>>)> = self
             .inner
             .requests
             .read()
-            .expect("token rate lock poisoned")
+            .await
             .iter()
             .map(|(id, window)| (*id, window.clone()))
             .collect();
@@ -286,7 +274,7 @@ impl TokenRateTracker {
         }
         let mut expired = Vec::new();
         for (id, window) in windows {
-            let guard = window.lock().expect("token rate lock poisoned");
+            let guard = window.lock().await;
             if guard.is_expired(now) {
                 expired.push(id);
             }
@@ -294,11 +282,7 @@ impl TokenRateTracker {
         if expired.is_empty() {
             return;
         }
-        let mut guard = self
-            .inner
-            .requests
-            .write()
-            .expect("token rate lock poisoned");
+        let mut guard = self.inner.requests.write().await;
         let mut removed = 0usize;
         for id in expired {
             if guard.remove(&id).is_some() {
@@ -351,17 +335,17 @@ impl RequestWindow {
 }
 
 impl RequestTokenTracker {
-    pub(crate) fn add_input_tokens(&mut self, tokens: u64) {
+    pub(crate) async fn add_input_tokens(&self, tokens: u64) {
         if !self.can_record() {
             return;
         }
         let Some(window) = self.window.as_ref() else {
             return;
         };
-        self.tracker.record(window, tokens, 0);
+        self.tracker.record(window, tokens, 0).await;
     }
 
-    pub(crate) fn add_output_text(&mut self, text: &str) {
+    pub(crate) async fn add_output_text(&self, text: &str) {
         if !self.can_record() {
             return;
         }
@@ -369,7 +353,7 @@ impl RequestTokenTracker {
         let Some(window) = self.window.as_ref() else {
             return;
         };
-        self.tracker.record(window, 0, tokens);
+        self.tracker.record(window, 0, tokens).await;
     }
 
     fn can_record(&self) -> bool {
@@ -386,8 +370,21 @@ impl RequestTokenTracker {
 
 impl Drop for RequestTokenTracker {
     fn drop(&mut self) {
-        if let Some(id) = self.id {
-            self.tracker.unregister(id);
+        let Some(id) = self.id else {
+            return;
+        };
+        if let Ok(mut guard) = self.tracker.inner.requests.try_write() {
+            if guard.remove(&id).is_some() {
+                self.tracker.inner.active.fetch_sub(1, Ordering::SeqCst);
+            }
+            return;
+        }
+        // 避免在 Drop 中阻塞异步运行时，使用最佳努力异步清理。
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let tracker = self.tracker.clone();
+            handle.spawn(async move {
+                tracker.unregister(id).await;
+            });
         }
     }
 }

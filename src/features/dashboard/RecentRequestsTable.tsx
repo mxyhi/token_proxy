@@ -63,8 +63,8 @@ function providerColumn(): ColumnDef<DashboardRequestItem> {
     header: m.dashboard_table_provider(),
     cell: ({ row }) => (
       <span className="block truncate text-xs text-muted-foreground">
-        {row.original.provider}
-        <span className="text-muted-foreground/70"> · {row.original.upstreamId}</span>
+        {row.original.upstreamId}
+        <span className="text-muted-foreground/70"> · {row.original.provider}</span>
       </span>
     ),
   };

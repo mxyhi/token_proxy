@@ -118,7 +118,7 @@ function DashboardFilters({
   return (
     <div
       data-slot="dashboard-filters"
-      className="sticky top-[var(--header-height)] z-20 px-4 lg:px-6"
+      className="sticky top-0 z-20 px-4 lg:px-6"
     >
       <Card className="gap-0 border-border/60 bg-background/70 py-0">
         <CardContent className="flex flex-wrap items-center justify-between gap-3 py-3">

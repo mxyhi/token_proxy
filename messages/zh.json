@@ -176,7 +176,7 @@
   "dashboard_hint_success_rate": "成功率 {rate}",
   "dashboard_hint_error_rate": "错误率 {rate}",
   "dashboard_tokens_hint_no_cache": "输入 {input} · 输出 {output}",
-  "dashboard_tokens_hint_with_cache": "输入 {input}（cached {cached}）· 输出 {output}",
+  "dashboard_tokens_hint_with_cache": "输入 {input}（缓存 {cached}）· 输出 {output}",
   "dashboard_latency_hint": "按请求均值",
   "dashboard_providers_title": "Providers",
   "dashboard_providers_desc": "按 Tokens 排序（Top 10）",

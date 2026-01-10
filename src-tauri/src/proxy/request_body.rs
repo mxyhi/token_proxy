@@ -1,5 +1,6 @@
 use axum::body::{Body, Bytes};
 use futures_util::StreamExt;
+use serde::Deserialize;
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},
@@ -18,6 +19,12 @@ static TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 pub(crate) struct ReplayableBody {
     inner: ReplayableBodyInner,
     len: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct JsonMetaProbe {
+    pub(crate) stream: Option<bool>,
+    pub(crate) model: Option<String>,
 }
 
 enum ReplayableBodyInner {
@@ -110,6 +117,22 @@ impl ReplayableBody {
                     output.extend_from_slice(&chunk[..read]);
                 }
                 Ok(Some(Bytes::from(output)))
+            }
+        }
+    }
+
+    pub(crate) async fn probe_json_meta(&self) -> Option<JsonMetaProbe> {
+        match &self.inner {
+            ReplayableBodyInner::InMemory(bytes) => serde_json::from_slice(bytes).ok(),
+            ReplayableBodyInner::TempFile { path } => {
+                let path = path.clone();
+                tokio::task::spawn_blocking(move || {
+                    let file = std::fs::File::open(path).ok()?;
+                    serde_json::from_reader(file).ok()
+                })
+                .await
+                .ok()
+                .flatten()
             }
         }
     }

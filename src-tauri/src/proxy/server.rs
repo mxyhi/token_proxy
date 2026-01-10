@@ -226,7 +226,7 @@ async fn proxy_request(
             )
         }
     };
-    let meta = parse_request_meta_best_effort(&path, &body).await;
+    let meta = parse_request_meta_best_effort(&path, &headers, &body).await;
     let outbound_path = plan.outbound_path.unwrap_or(path.as_str());
     let outbound_path_with_query = uri
         .query()
@@ -288,8 +288,13 @@ fn is_anthropic_path(path: &str) -> bool {
         .is_some_and(|byte| *byte == b'/')
 }
 
-async fn parse_request_meta_best_effort(path: &str, body: &ReplayableBody) -> RequestMeta {
+async fn parse_request_meta_best_effort(
+    path: &str,
+    headers: &HeaderMap,
+    body: &ReplayableBody,
+) -> RequestMeta {
     let stream_from_path = gemini::is_gemini_stream_path(path);
+    let stream_from_headers = stream_hint_from_headers(headers);
     let model_from_path = gemini::parse_gemini_model_from_path(path);
 
     let Some(bytes) = body
@@ -297,9 +302,16 @@ async fn parse_request_meta_best_effort(path: &str, body: &ReplayableBody) -> Re
         .await
         .unwrap_or(None)
     else {
+        let probe = body.probe_json_meta().await;
+        let stream_from_body = probe.as_ref().and_then(|meta| meta.stream);
+        let mut stream = stream_from_body.unwrap_or(stream_from_headers);
+        if stream_from_path {
+            stream = true;
+        }
+        let original_model = probe.and_then(|meta| meta.model).or(model_from_path);
         return RequestMeta {
-            stream: stream_from_path,
-            original_model: model_from_path,
+            stream,
+            original_model,
             mapped_model: None,
             estimated_input_tokens: None,
         };
@@ -307,19 +319,23 @@ async fn parse_request_meta_best_effort(path: &str, body: &ReplayableBody) -> Re
     let value: Value = match serde_json::from_slice(&bytes) {
         Ok(value) => value,
         Err(_) => {
+            let mut stream = stream_from_headers;
+            if stream_from_path {
+                stream = true;
+            }
             return RequestMeta {
-                stream: stream_from_path,
+                stream,
                 original_model: model_from_path,
                 mapped_model: None,
                 estimated_input_tokens: None,
             }
         }
     };
-    let stream = value
-        .get("stream")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || stream_from_path;
+    let stream_from_body = value.get("stream").and_then(Value::as_bool);
+    let mut stream = stream_from_body.unwrap_or(stream_from_headers);
+    if stream_from_path {
+        stream = true;
+    }
     let original_model = value
         .get("model")
         .and_then(Value::as_str)
@@ -332,6 +348,19 @@ async fn parse_request_meta_best_effort(path: &str, body: &ReplayableBody) -> Re
         mapped_model: None,
         estimated_input_tokens,
     }
+}
+
+fn stream_hint_from_headers(headers: &HeaderMap) -> bool {
+    let Some(accept) = headers.get(axum::http::header::ACCEPT) else {
+        return false;
+    };
+    let Ok(accept) = accept.to_str() else {
+        return false;
+    };
+    accept
+        .split(',')
+        .map(|value| value.trim())
+        .any(|value| value.starts_with("text/event-stream"))
 }
 
 fn estimate_input_tokens(value: &Value, model: Option<&str>) -> Option<u64> {
@@ -654,13 +683,47 @@ mod tests {
 
     #[test]
     fn gemini_meta_prefers_path_for_stream_and_model() {
-        let body = ReplayableBody::from_bytes(Bytes::from_static(b"{}"));
-        let rt = tokio::runtime::Runtime::new().expect("runtime");
-        let meta = rt.block_on(parse_request_meta_best_effort(
-            "/v1beta/models/gemini-1.5-flash:streamGenerateContent",
-            &body,
-        ));
-        assert!(meta.stream);
-        assert_eq!(meta.original_model.as_deref(), Some("gemini-1.5-flash"));
+        run_async(async {
+            let body = ReplayableBody::from_bytes(Bytes::from_static(b"{}"));
+            let meta = parse_request_meta_best_effort(
+                "/v1beta/models/gemini-1.5-flash:streamGenerateContent",
+                &HeaderMap::new(),
+                &body,
+            )
+            .await;
+            assert!(meta.stream);
+            assert_eq!(meta.original_model.as_deref(), Some("gemini-1.5-flash"));
+        });
+    }
+
+    #[test]
+    fn stream_hint_accept_header_for_non_json_body() {
+        run_async(async {
+            let body = ReplayableBody::from_bytes(Bytes::from_static(b"not-json"));
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                axum::http::header::ACCEPT,
+                axum::http::HeaderValue::from_static("text/event-stream"),
+            );
+            let meta = parse_request_meta_best_effort(CHAT_PATH, &headers, &body).await;
+            assert!(meta.stream);
+        });
+    }
+
+    #[test]
+    fn large_json_body_still_detects_stream_and_model() {
+        run_async(async {
+            let large_text = "a".repeat(REQUEST_META_LIMIT_BYTES + 128);
+            let payload = format!(
+                r#"{{"stream":true,"model":"gpt-4o","messages":[{{"role":"user","content":"{large_text}"}}]}}"#
+            );
+            let body = ReplayableBody::from_body(axum::body::Body::from(payload))
+                .await
+                .expect("spool body");
+            let meta = parse_request_meta_best_effort(CHAT_PATH, &HeaderMap::new(), &body).await;
+            assert!(meta.stream);
+            assert_eq!(meta.original_model.as_deref(), Some("gpt-4o"));
+            assert!(meta.estimated_input_tokens.is_none());
+        });
     }
 }

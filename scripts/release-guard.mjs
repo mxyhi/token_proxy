@@ -11,6 +11,26 @@ function setOutput(key, value) {
   }
 }
 
-const subject = execSync("git log -1 --pretty=%s", { encoding: "utf8" }).trim();
-const skip = subject.startsWith("chore: release v");
-setOutput("skip", skip);
+function readPackageVersion() {
+  const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+  return pkg.version;
+}
+
+function latestTag() {
+  const output = execSync("git tag --list 'v*' --sort=-v:refname | head -n 1", {
+    encoding: "utf8",
+  }).trim();
+  return output || "";
+}
+
+const version = readPackageVersion();
+const isPrerelease = version.includes("-");
+const currentTag = `v${version}`;
+const newestTag = latestTag();
+const isNewRelease = !isPrerelease && newestTag !== currentTag;
+
+setOutput("version", version);
+setOutput("latest_tag", newestTag);
+setOutput("is_release", isNewRelease ? "true" : "false");
+// For backward compatibility with prerelease job gating: skip prerelease when this is a new release commit.
+setOutput("skip", isNewRelease ? "true" : "false");

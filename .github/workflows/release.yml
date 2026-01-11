@@ -184,59 +184,57 @@ jobs:
           prerelease: true
           generateReleaseNotes: true
 
-  test:
-    # 手动发布时复用测试流程，保持质量闸门
-    if: github.event_name == 'workflow_dispatch'
-    uses: ./.github/workflows/test.yml
-
-  prepare_release:
-    name: Prepare release
-    if: github.event_name == 'workflow_dispatch'
-    needs: test
+  stable_tag:
+    name: Tag release (main push)
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-22.04
     permissions:
       contents: write
     outputs:
-      version: ${{ steps.versioning.outputs.version }}
-      tag: ${{ steps.versioning.outputs.tag }}
+      version: ${{ steps.release_guard.outputs.version }}
+      tag: ${{ steps.create_tag.outputs.tag }}
       release_notes: ${{ steps.release_notes.outputs.release_body }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_VERSION }}
+      - name: Release guard
+        id: release_guard
+        run: node scripts/release-guard.mjs
 
-      - name: Validate and bump version
-        id: versioning
-        run: node scripts/versioning.mjs release "${{ inputs.version }}"
+      - name: Abort if not a release commit
+        if: steps.release_guard.outputs.is_release != 'true'
+        run: |
+          echo "Not a release commit; skip tag." && exit 0
+        shell: bash
 
       - name: Resolve previous stable tag
         id: previous_tag
+        if: steps.release_guard.outputs.is_release == 'true'
         run: |
-          # Use the latest stable tag (vX.Y.Z) as release notes base.
-          tags=$(git tag --list 'v*' --sort=v:refname | grep -E '^v[0-9]+\\.[0-9]+\\.[0-9]+$' || true)
+          tags=$(git tag --list 'v*' --sort=v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
           prev=$(echo "$tags" | tail -n 1)
           echo "previous_tag=$prev" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and tag
+      - name: Create and push tag
+        id: create_tag
+        if: steps.release_guard.outputs.is_release == 'true'
         run: |
+          tag="v${{ steps.release_guard.outputs.version }}"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
-          git commit -m "chore: release v${{ steps.versioning.outputs.version }}"
-          git tag -a "${{ steps.versioning.outputs.tag }}" -m "Release ${{ steps.versioning.outputs.version }}"
-          git push
-          git push --tags
+          git tag -a "$tag" -m "Release ${{ steps.release_guard.outputs.version }}"
+          git push origin "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         id: release_notes
+        if: steps.release_guard.outputs.is_release == 'true'
         uses: actions/github-script@v7
         env:
-          RELEASE_TAG: ${{ steps.versioning.outputs.tag }}
+          RELEASE_TAG: ${{ steps.create_tag.outputs.tag }}
           PREVIOUS_TAG: ${{ steps.previous_tag.outputs.previous_tag }}
         with:
           script: |
@@ -253,10 +251,10 @@ jobs:
             const { data } = await github.rest.repos.generateReleaseNotes(params);
             core.setOutput("release_body", data.body ?? "");
 
-  release:
+  stable_release:
     name: Release (${{ matrix.platform }} / ${{ matrix.target }})
-    if: github.event_name == 'workflow_dispatch'
-    needs: prepare_release
+    needs: stable_tag
+    if: needs.stable_tag.outputs.tag != ''
     runs-on: ${{ matrix.platform }}
     permissions:
       contents: write
@@ -277,7 +275,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare_release.outputs.tag }}
+          ref: ${{ needs.stable_tag.outputs.tag }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -333,8 +331,68 @@ jobs:
         with:
           tauriScript: "pnpm tauri"
           args: "--target ${{ matrix.target }}"
-          tagName: "${{ needs.prepare_release.outputs.tag }}"
-          releaseName: "Release ${{ needs.prepare_release.outputs.version }}"
-          releaseBody: ${{ needs.prepare_release.outputs.release_notes }}
+          tagName: "${{ needs.stable_tag.outputs.tag }}"
+          releaseName: "Release ${{ needs.stable_tag.outputs.version }}"
+          releaseBody: ${{ needs.stable_tag.outputs.release_notes }}
           prerelease: false
           generateReleaseNotes: false
+
+  prepare_release_pr:
+    name: Prepare release PR
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate and bump version
+        id: versioning
+        run: node scripts/versioning.mjs release "${{ inputs.version }}"
+
+      - name: Create release branch and commit
+        id: commit
+        run: |
+          version="${{ steps.versioning.outputs.version }}"
+          branch="release/v${version}"
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git switch -c "$branch"
+          git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
+          git commit -m "chore: release v${version}"
+          git push origin "HEAD:$branch"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Create pull request
+        uses: actions/github-script@v7
+        env:
+          BRANCH: ${{ steps.commit.outputs.branch }}
+          VERSION: ${{ steps.versioning.outputs.version }}
+        with:
+          script: |
+            const branch = process.env.BRANCH;
+            const version = process.env.VERSION;
+            const title = `chore: release v${version}`;
+            const body = [
+              `## Release v${version}`,
+              "- 自动生成的发布 PR，合并后会自动打 tag 并发布正式版。",
+              "- 请确认 CI 通过后再合并。",
+            ].join("\n");
+            const { data } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              head: branch,
+              base: "main",
+              title,
+              body,
+              maintainer_can_modify: true,
+            });
+            core.setOutput("pr_url", data.html_url);

@@ -19,7 +19,7 @@ env:
 jobs:
   prerelease:
     name: Pre-release (${{ matrix.platform }} / ${{ matrix.target }})
-    # 仅在 Test workflow 对 main 的 push 成功后触发预发布
+    # Trigger prerelease only after the Test workflow succeeds on pushes to main
     if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ${{ matrix.platform }}
     permissions:
@@ -384,8 +384,8 @@ jobs:
             const title = `chore: release v${version}`;
             const body = [
               `## Release v${version}`,
-              "- 自动生成的发布 PR，合并后会自动打 tag 并发布正式版。",
-              "- 请确认 CI 通过后再合并。",
+              "- Auto-generated release PR; merging will tag and publish the final release.",
+              "- Merge only after CI passes.",
             ].join("\n");
             const { data } = await github.rest.pulls.create({
               owner: context.repo.owner,

@@ -12,7 +12,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  NODE_VERSION: 22
+  NODE_VERSION: 24
   PNPM_VERSION: 10.13.1
 
 jobs:

@@ -7,7 +7,7 @@ import {
   type SetStateAction,
 } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { check } from "@tauri-apps/plugin-updater";
+import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { AlertCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -45,14 +45,6 @@ type UpdateInfo = {
 type DownloadState = {
   downloaded: number;
   total: number;
-};
-
-type DownloadProgressEvent = {
-  event: "Started" | "Progress" | "Finished";
-  data: {
-    contentLength?: number;
-    chunkLength?: number;
-  };
 };
 
 type UpdaterCheckResult = Awaited<ReturnType<typeof check>>;
@@ -218,13 +210,13 @@ function useUpdateInstaller({ updateHandle, setState, markError }: UpdateInstall
       downloadState: { downloaded: 0, total: 0 },
     }));
 
-    const onProgress = (progress: DownloadProgressEvent) => {
+    const onProgress = (progress: DownloadEvent) => {
       if (progress.event === "Started") {
         setState((prev) => ({
           ...prev,
           downloadState: {
             downloaded: 0,
-            total: progress.data.contentLength ?? 0,
+            total: progress.data?.contentLength ?? 0,
           },
         }));
         return;
@@ -234,7 +226,7 @@ function useUpdateInstaller({ updateHandle, setState, markError }: UpdateInstall
           ...prev,
           downloadState: {
             downloaded:
-              prev.downloadState.downloaded + (progress.data.chunkLength ?? 0),
+              prev.downloadState.downloaded + (progress.data?.chunkLength ?? 0),
             total: prev.downloadState.total,
           },
         }));

@@ -20,7 +20,7 @@ import {
   formatDashboardTimestamp,
   formatInteger,
 } from "@/features/dashboard/format"
-import type { DashboardSeriesPoint } from "@/features/dashboard/types"
+import type { DashboardRange, DashboardSeriesPoint } from "@/features/dashboard/types"
 import { useI18n } from "@/lib/i18n"
 import { m } from "@/paraglide/messages.js"
 
@@ -43,12 +43,16 @@ const chartConfig = {
 
 type ChartAreaInteractiveProps = {
   series: DashboardSeriesPoint[]
+  range: DashboardRange
 }
 
 type ChartBodyProps = {
   data: ChartPoint[]
   timeFormatter: Intl.DateTimeFormat
 }
+
+const FALLBACK_RANGE_DAYS = 7
+const DAY_MS = 24 * 60 * 60 * 1000
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null
@@ -93,6 +97,28 @@ function formatTick(value: unknown, formatter: Intl.DateTimeFormat) {
     return "—"
   }
   return formatDashboardTimestamp(tsMs, formatter)
+}
+
+function resolveRangeBounds(range: DashboardRange) {
+  const now = Date.now()
+  // range=all 时用最近 7 天生成 0 线的时间范围
+  const resolvedEnd = range.toTsMs ?? now
+  const resolvedStart =
+    range.fromTsMs ?? resolvedEnd - FALLBACK_RANGE_DAYS * DAY_MS
+  const start = Math.min(resolvedStart, resolvedEnd)
+  const end = Math.max(resolvedStart, resolvedEnd)
+  if (end <= start) {
+    return { start, end: start + 60 * 1000 }
+  }
+  return { start, end }
+}
+
+function buildZeroSeries(range: DashboardRange) {
+  const { start, end } = resolveRangeBounds(range)
+  return [
+    { tsMs: start, inputTokens: 0, outputTokens: 0 },
+    { tsMs: end, inputTokens: 0, outputTokens: 0 },
+  ]
 }
 
 function ChartHeader() {
@@ -176,29 +202,29 @@ function ChartCanvas({ data, timeFormatter }: ChartBodyProps) {
 function ChartBody({ data, timeFormatter }: ChartBodyProps) {
   return (
     <CardContent className="px-2 pt-4 sm:px-6 sm:pt-6">
-      {data.length ? (
-        <ChartCanvas data={data} timeFormatter={timeFormatter} />
-      ) : (
-        <div className="h-[250px] rounded-md border border-dashed border-border/60 bg-muted/30" />
-      )}
+      <ChartCanvas data={data} timeFormatter={timeFormatter} />
     </CardContent>
   )
 }
 
-export function ChartAreaInteractive({ series }: ChartAreaInteractiveProps) {
+export function ChartAreaInteractive({ series, range }: ChartAreaInteractiveProps) {
   const { locale } = useI18n()
   const timeFormatter = React.useMemo(
     () => createDashboardMinuteFormatter(locale),
     [locale]
   )
   const chartData = React.useMemo(
-    () =>
-      series.map((item) => ({
+    () => {
+      if (!series.length) {
+        return buildZeroSeries(range)
+      }
+      return series.map((item) => ({
         tsMs: item.tsMs,
         inputTokens: item.inputTokens,
         outputTokens: item.outputTokens,
-      })),
-    [series]
+      }))
+    },
+    [range, series]
   )
 
   return (

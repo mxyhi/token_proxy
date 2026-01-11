@@ -22,7 +22,7 @@ import {
   resolveDashboardRange,
   toDashboardTimeRange,
 } from "@/features/dashboard/range"
-import type { DashboardSnapshot } from "@/features/dashboard/types"
+import type { DashboardRange, DashboardSnapshot } from "@/features/dashboard/types"
 import { parseError } from "@/lib/error"
 import { cn } from "@/lib/utils"
 import { m } from "@/paraglide/messages.js"
@@ -59,6 +59,9 @@ function usePagination(totalRequests: number) {
 function useDashboardSnapshot() {
   const [rangePreset, setRangePreset] = useState<DashboardTimeRange>("today")
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null)
+  const [activeRange, setActiveRange] = useState<DashboardRange>(() =>
+    resolveDashboardRange("today")
+  )
   const [status, setStatus] = useState<DashboardStatus>("idle")
   const [statusMessage, setStatusMessage] = useState("")
   const totalRequests = snapshot?.summary.totalRequests ?? 0
@@ -70,6 +73,7 @@ function useDashboardSnapshot() {
     setStatusMessage("")
     try {
       const range = resolveDashboardRange(rangePreset)
+      setActiveRange(range)
       const offset = (page - 1) * RECENT_PAGE_SIZE
       const data = await readDashboardSnapshot(range, offset)
       setSnapshot(data)
@@ -93,6 +97,7 @@ function useDashboardSnapshot() {
     snapshot,
     status,
     statusMessage,
+    activeRange,
     rangePreset,
     pagination: { page, totalPages, totalRequests },
     refresh: loadSnapshot,
@@ -162,6 +167,7 @@ export function DashboardPanel() {
     snapshot,
     status,
     statusMessage,
+    activeRange,
     rangePreset,
     pagination,
     refresh,
@@ -196,6 +202,7 @@ export function DashboardPanel() {
       <div className="px-4 lg:px-6">
         <ChartAreaInteractive
           series={snapshot?.series ?? []}
+          range={activeRange}
         />
       </div>
 

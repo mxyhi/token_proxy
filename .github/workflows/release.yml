@@ -20,7 +20,7 @@ jobs:
   stable_tag:
     name: Tag release (main push)
     if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
@@ -101,9 +101,9 @@ jobs:
             target: x86_64-apple-darwin
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
-          - platform: ubuntu-22.04
+          - platform: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - platform: ubuntu-22.04-arm
+          - platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
@@ -129,7 +129,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04' || matrix.platform == 'ubuntu-22.04-arm'
+        if: matrix.platform == 'ubuntu-latest' || matrix.platform == 'ubuntu-24.04-arm'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -173,7 +173,7 @@ jobs:
   prepare_release_pr:
     name: Prepare release PR
     if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write

@@ -4,7 +4,13 @@ import { promisify } from "node:util";
 
 // Ensure pnpm store path exists so setup-node cache doesn't fail when install is skipped.
 const execFileAsync = promisify(execFile);
-const { stdout } = await execFileAsync("pnpm", ["store", "path", "--silent"]);
+// Use corepack to avoid pnpm not being on PATH (e.g., Windows runners).
+const { stdout } = await execFileAsync("corepack", [
+  "pnpm",
+  "store",
+  "path",
+  "--silent",
+]);
 const storePath = stdout.trim();
 
 if (!storePath) {

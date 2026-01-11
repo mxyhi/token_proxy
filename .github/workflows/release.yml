@@ -365,10 +365,11 @@ jobs:
           branch="release/v${version}"
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git switch -c "$branch"
+          git fetch origin "$branch" || true
+          git switch -C "$branch"
           git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
           git commit -m "chore: release v${version}"
-          git push origin "HEAD:$branch"
+          git push --force-with-lease=refs/heads/$branch origin "HEAD:$branch"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"
 
       - name: Create pull request

@@ -4,3 +4,4 @@ export { StrategyCard } from "./strategy-card";
 export { UpstreamsCard } from "./upstreams-card";
 export { ConfigFileCard } from "./config-file-card";
 export { ValidationCard } from "./validation-card";
+export { UpdateCard } from "./update-card";

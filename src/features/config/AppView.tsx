@@ -11,6 +11,7 @@ import {
   ConfigFileCard,
   ProxyCoreCard,
   StrategyCard,
+  UpdateCard,
   UpstreamsCard,
   ValidationCard,
   type StatusBadge,
@@ -189,12 +190,15 @@ function ConfigSectionBody({
       );
     case "file":
       return (
-        <ConfigFileCard
-          configPath={props.configPath}
-          savedAt={props.savedAt}
-          isDirty={props.isDirty}
-          onReset={props.onReset}
-        />
+        <div className="flex flex-col gap-4">
+          <ConfigFileCard
+            configPath={props.configPath}
+            savedAt={props.savedAt}
+            isDirty={props.isDirty}
+            onReset={props.onReset}
+          />
+          <UpdateCard />
+        </div>
       );
     case "validation":
       return <ValidationCard form={props.form} validation={props.validation} />;

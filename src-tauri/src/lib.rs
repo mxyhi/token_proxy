@@ -233,6 +233,12 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
+            #[cfg(desktop)]
+            {
+                app.handle()
+                    .plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
+
             let token_rate = proxy::token_rate::TokenRateTracker::new();
             app.manage(token_rate.clone());
             let proxy_service = ProxyServiceHandle::new();

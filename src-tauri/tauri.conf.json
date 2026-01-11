@@ -23,6 +23,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",
@@ -31,5 +32,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "RWTw4jtrnMxriC5hG8swDSLY8ShZ3upi6SVds1y+M3srYmiHs8hVlGOy",
+      "endpoints": [
+        "https://github.com/mxyhi/token_proxy/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

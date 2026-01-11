@@ -11,8 +11,22 @@ const candidates = [
   { cmd: "npx", args: ["-y", "pnpm", "store", "path", "--silent"], label: "npx pnpm" },
 ];
 
+function getErrorMessage(error) {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function getErrorCode(error) {
+  if (error && typeof error === "object" && "code" in error) {
+    const code = error.code;
+    return typeof code === "string" ? code : "";
+  }
+  return "";
+}
+
 let storePath = "";
 const errors = [];
+const errorCodes = [];
 
 for (const candidate of candidates) {
   try {
@@ -21,12 +35,23 @@ for (const candidate of candidates) {
     if (storePath) break;
     errors.push(`${candidate.label}: empty stdout`);
   } catch (error) {
-    errors.push(`${candidate.label}: ${(error && error.message) || "unknown error"}`);
+    const message = getErrorMessage(error);
+    const code = getErrorCode(error);
+    if (code) errorCodes.push(code);
+    errors.push(`${candidate.label}: ${message || "unknown error"}`);
   }
 }
 
 if (!storePath) {
   const details = errors.join(" | ");
+  const allMissing =
+    errors.length === candidates.length &&
+    errorCodes.length === candidates.length &&
+    errorCodes.every((code) => code === "ENOENT");
+  if (allMissing) {
+    console.warn(`pnpm not found; skipping pnpm store initialization. Details: ${details}`);
+    process.exit(0);
+  }
   throw new Error(`Failed to resolve pnpm store path. Tried ${candidates.length} commands. Details: ${details}`);
 }
 

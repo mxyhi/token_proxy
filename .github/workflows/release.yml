@@ -156,6 +156,10 @@ jobs:
         with:
           workspaces: "src-tauri"
           cache-on-failure: true
+          # Stable cache key for prerelease/release reuse; bump suffix to invalidate.
+          shared-key: "rust-${{ runner.os }}-${{ matrix.target }}-v1"
+          add-job-id-key: "false"
+          add-rust-environment-hash-key: "false"
 
       - name: Compute prerelease version
         id: versioning
@@ -307,6 +311,10 @@ jobs:
         with:
           workspaces: "src-tauri"
           cache-on-failure: true
+          # Stable cache key for prerelease/release reuse; bump suffix to invalidate.
+          shared-key: "rust-${{ runner.os }}-${{ matrix.target }}-v1"
+          add-job-id-key: "false"
+          add-rust-environment-hash-key: "false"
 
       - name: Build and release
         uses: tauri-apps/tauri-action@v0.6.0

@@ -1,6 +1,6 @@
 [package]
 name = "token_proxy"
-version = "0.1.1"
+version = "0.1.2"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -47,3 +47,4 @@ codegen-units = 1
 strip = "symbols"
 panic = "abort"
 opt-level = "s"
+

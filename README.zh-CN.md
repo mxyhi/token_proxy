@@ -4,6 +4,15 @@
 
 中转 ai api 的工具，比如转发 openai api 格式，gemini ai api 格式，Anthropic api 格式，在本地运行，用于统计总 token 用量的、也可以负载均衡、优先级之类的
 
+## macOS 安装
+
+1. 下载应用并拖到 `/Applications`。
+2. 若系统提示无法打开，执行：
+
+```bash
+xattr -cr /Applications/Token\\ Proxy.app
+```
+
 ## 配置说明
 
 - 配置文件：`config.jsonc`（支持注释与尾随逗号）。

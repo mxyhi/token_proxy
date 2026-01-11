@@ -4,6 +4,15 @@ English | [中文](README.zh-CN.md)
 
 A tool for proxying AI APIs, such as forwarding OpenAI API format, Gemini AI API format, Anthropic API format, running locally, used for counting total token usage, and also for load balancing, priority management, and similar functions.
 
+## macOS Installation
+
+1. Download the app and move it to `/Applications`.
+2. If macOS blocks the app, run:
+
+```bash
+xattr -cr /Applications/Token\ Proxy.app
+```
+
 ## Configuration
 
 - Config file: `config.jsonc` (JSONC with comments and trailing commas).

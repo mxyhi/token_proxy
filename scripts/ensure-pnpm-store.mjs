@@ -4,17 +4,30 @@ import { promisify } from "node:util";
 
 // Ensure pnpm store path exists so setup-node cache doesn't fail when install is skipped.
 const execFileAsync = promisify(execFile);
-// Use corepack to avoid pnpm not being on PATH (e.g., Windows runners).
-const { stdout } = await execFileAsync("corepack", [
-  "pnpm",
-  "store",
-  "path",
-  "--silent",
-]);
-const storePath = stdout.trim();
+
+const candidates = [
+  { cmd: "corepack", args: ["pnpm", "store", "path", "--silent"], label: "corepack pnpm" },
+  { cmd: "pnpm", args: ["store", "path", "--silent"], label: "pnpm" },
+  { cmd: "npx", args: ["-y", "pnpm", "store", "path", "--silent"], label: "npx pnpm" },
+];
+
+let storePath = "";
+const errors = [];
+
+for (const candidate of candidates) {
+  try {
+    const { stdout } = await execFileAsync(candidate.cmd, candidate.args);
+    storePath = stdout.trim();
+    if (storePath) break;
+    errors.push(`${candidate.label}: empty stdout`);
+  } catch (error) {
+    errors.push(`${candidate.label}: ${(error && error.message) || "unknown error"}`);
+  }
+}
 
 if (!storePath) {
-  throw new Error("pnpm store path is empty.");
+  const details = errors.join(" | ");
+  throw new Error(`Failed to resolve pnpm store path. Tried ${candidates.length} commands. Details: ${details}`);
 }
 
 await mkdir(storePath, { recursive: true });

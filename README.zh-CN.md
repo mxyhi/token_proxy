@@ -10,7 +10,7 @@
 2. 若系统提示无法打开，执行：
 
 ```bash
-xattr -cr /Applications/Token\\ Proxy.app
+xattr -cr /Applications/Token\ Proxy.app
 ```
 
 ## 配置说明

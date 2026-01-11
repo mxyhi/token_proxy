@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { AlertCircle, RefreshCcw } from "lucide-react"
 
 import { ChartAreaInteractive } from "@/components/chart-area-interactive"
@@ -67,18 +67,28 @@ function useDashboardSnapshot() {
   const totalRequests = snapshot?.summary.totalRequests ?? 0
   const { page, totalPages, resetPage, onPrevPage, onNextPage } =
     usePagination(totalRequests)
+  const requestSeq = useRef(0)
 
   const loadSnapshot = useCallback(async () => {
+    // Ignore out-of-order responses; only the latest request updates state.
+    const requestId = requestSeq.current + 1
+    requestSeq.current = requestId
     setStatus("loading")
     setStatusMessage("")
     try {
       const range = resolveDashboardRange(rangePreset)
-      setActiveRange(range)
       const offset = (page - 1) * RECENT_PAGE_SIZE
       const data = await readDashboardSnapshot(range, offset)
+      if (requestSeq.current !== requestId) {
+        return
+      }
       setSnapshot(data)
+      setActiveRange(range)
       setStatus("idle")
     } catch (error) {
+      if (requestSeq.current !== requestId) {
+        return
+      }
       setStatus("error")
       setStatusMessage(parseError(error))
     }

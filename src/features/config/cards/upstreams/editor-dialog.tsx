@@ -7,6 +7,7 @@ import {
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
+  AlertDialogBody,
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
@@ -465,15 +466,17 @@ export function UpstreamEditorDialog({
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
-        {editor.open ? (
-          <UpstreamEditorFields
-            draft={editor.draft}
-            providerOptions={providerOptions}
-            showApiKeys={showApiKeys}
-            onToggleApiKeys={onToggleApiKeys}
-            onChangeDraft={onChangeDraft}
-          />
-        ) : null}
+        <AlertDialogBody className="space-y-4 pr-1">
+          {editor.open ? (
+            <UpstreamEditorFields
+              draft={editor.draft}
+              providerOptions={providerOptions}
+              showApiKeys={showApiKeys}
+              onToggleApiKeys={onToggleApiKeys}
+              onChangeDraft={onChangeDraft}
+            />
+          ) : null}
+        </AlertDialogBody>
         <AlertDialogFooter>
           <AlertDialogCancel>{m.common_cancel()}</AlertDialogCancel>
           <AlertDialogAction onClick={onSave}>

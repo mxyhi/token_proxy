@@ -87,6 +87,16 @@ function AlertDialogDescription({
   )
 }
 
+function AlertDialogBody({ className, ...props }: React.ComponentProps<"div">) {
+  return (
+    <div
+      data-slot="alert-dialog-body"
+      className={cn("max-h-[70vh] overflow-y-auto", className)}
+      {...props}
+    />
+  )
+}
+
 function AlertDialogAction({
   className,
   ...props
@@ -123,7 +133,7 @@ export {
   AlertDialogFooter,
   AlertDialogTitle,
   AlertDialogDescription,
+  AlertDialogBody,
   AlertDialogAction,
   AlertDialogCancel,
 }
-

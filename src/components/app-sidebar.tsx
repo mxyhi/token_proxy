@@ -15,6 +15,7 @@ import { CONFIG_SECTIONS, DEFAULT_CONFIG_SECTION, getSectionRoute } from "@/feat
 
 export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
+  const appTitle = import.meta.env.DEV ? "Token Proxy (dev)" : "Token Proxy"
 
   return (
     <Sidebar collapsible="offcanvas" {...props}>
@@ -26,7 +27,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
               className="data-[slot=sidebar-menu-button]:!p-1.5"
             >
               <Link to={getSectionRoute(DEFAULT_CONFIG_SECTION)}>
-                <span className="text-base font-semibold">Token Proxy</span>
+                <span className="text-base font-semibold">{appTitle}</span>
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>

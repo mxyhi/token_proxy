@@ -304,16 +304,8 @@ function UpstreamIdentityFields({
             onChange={(e) => onChangeDraft({ proxyUrl: e.target.value })}
             placeholder="http://127.0.0.1:7890"
           />
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => onChangeDraft({ proxyUrl: "" })}
-            >
-              {m.upstreams_proxy_direct()}
-            </Button>
-            {canUseAppProxy ? (
+          {canUseAppProxy ? (
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 type="button"
                 size="sm"
@@ -322,8 +314,8 @@ function UpstreamIdentityFields({
               >
                 {m.upstreams_proxy_use_app()}
               </Button>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
           <p className="text-xs text-muted-foreground">
             {m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
           </p>

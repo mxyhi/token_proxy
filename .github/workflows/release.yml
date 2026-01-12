@@ -164,11 +164,35 @@ jobs:
         with:
           tauriScript: "pnpm tauri"
           args: "--target ${{ matrix.target }}"
+          includeUpdaterJson: false
           tagName: "${{ needs.stable_tag.outputs.tag }}"
           releaseName: "Release ${{ needs.stable_tag.outputs.version }}"
           releaseBody: ${{ needs.stable_tag.outputs.release_notes }}
           prerelease: false
           generateReleaseNotes: false
+
+  stable_updater_json:
+    name: Generate updater latest.json
+    needs: [stable_tag, stable_release]
+    if: needs.stable_tag.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.stable_tag.outputs.tag }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Generate and upload latest.json
+        run: node scripts/generate-updater-json.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG_NAME: ${{ needs.stable_tag.outputs.tag }}
 
   prepare_release_pr:
     name: Prepare release PR

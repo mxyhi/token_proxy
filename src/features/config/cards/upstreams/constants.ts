@@ -26,13 +26,6 @@ export const UPSTREAM_COLUMNS: readonly UpstreamColumnDefinition[] = [
     cellClassName: "w-[8rem]",
   },
   {
-    id: "index",
-    label: () => m.upstreams_column_index(),
-    defaultVisible: false,
-    headerClassName: "w-[8rem]",
-    cellClassName: "w-[8rem]",
-  },
-  {
     id: "status",
     label: () => m.upstreams_column_status(),
     defaultVisible: true,
@@ -48,7 +41,6 @@ export function createDefaultColumnVisibility() {
     baseUrl: false,
     apiKey: false,
     priority: true,
-    index: false,
     status: true,
   };
   for (const column of UPSTREAM_COLUMNS) {

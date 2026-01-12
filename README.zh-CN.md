@@ -36,7 +36,6 @@ xattr -cr /Applications/Token\ Proxy.app
       "base_url": "https://api.openai.com",
       "api_key": null,
       "priority": 0,
-      "index": 0,
       "enabled": true,
       "model_mappings": {
         "gpt-4": "gpt-4.1",
@@ -50,7 +49,6 @@ xattr -cr /Applications/Token\ Proxy.app
       "base_url": "https://api.openai.com",
       "api_key": null,
       "priority": 0,
-      "index": 1,
       "enabled": true
     },
     {
@@ -59,7 +57,6 @@ xattr -cr /Applications/Token\ Proxy.app
       "base_url": "https://api.anthropic.com",
       "api_key": null,
       "priority": 0,
-      "index": 2,
       "enabled": true
     },
     {
@@ -68,7 +65,6 @@ xattr -cr /Applications/Token\ Proxy.app
       "base_url": "https://generativelanguage.googleapis.com",
       "api_key": null,
       "priority": 0,
-      "index": 3,
       "enabled": true
     }
   ]
@@ -79,7 +75,6 @@ xattr -cr /Applications/Token\ Proxy.app
 - 路由规则内置：`/v1/chat/completions` → `openai`，`/v1/responses` → `openai-response`，`/v1/messages`（及子路径）/`/v1/complete` → `anthropic`，`/v1beta/models/*:generateContent`/`*:streamGenerateContent` → `gemini`；OpenAI Chat/Responses 互转由 `enable_api_format_conversion` 控制（默认：`false`）。Anthropic/Gemini 不做格式转换。
 - Anthropic 鉴权使用 `x-api-key`；当请求未携带 `anthropic-version` 时，代理默认补 `2023-06-01`（可被请求头覆盖）。
 - Gemini（Google 官方 Gemini API）鉴权使用 query 参数 `key`（若请求未携带且 upstream 配置了 `api_key`，代理会自动补齐）；流式为 SSE，支持从 `usageMetadata` 统计 token。
-- `priority` 越大优先级越高；同优先级内按 `index` 升序。
-- `index` 缺失时，保存配置会在当前最大 `index` 之后按顺序全局自动补齐。
+- `priority` 越大优先级越高；同优先级时按配置文件中的列表顺序。
 - `enabled` 用于禁用某个 upstream 而不删除；禁用的 upstream 不参与负载均衡。
 - `model_mappings` 用于按 upstream 重写模型名（精确匹配、前缀通配 `*`、全量通配 `*`）；优先级：精确 > 前缀 > 通配；当映射生效时，响应会回写原始模型别名。

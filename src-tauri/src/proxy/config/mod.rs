@@ -34,9 +34,8 @@ pub(crate) async fn read_config(app: AppHandle) -> Result<ConfigResponse, String
 
 pub(crate) async fn write_config(
     app: AppHandle,
-    mut config: ProxyConfigFile,
+    config: ProxyConfigFile,
 ) -> Result<(), String> {
-    normalize::fill_missing_upstream_indices(&mut config.upstreams)?;
     build_runtime_config(&app, config.clone())?;
     io::save_config_file(&app, &config).await
 }

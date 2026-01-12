@@ -36,7 +36,6 @@ Example:
       "base_url": "https://api.openai.com",
       "api_key": null,
       "priority": 0,
-      "index": 0,
       "enabled": true,
       "model_mappings": {
         "gpt-4": "gpt-4.1",
@@ -50,7 +49,6 @@ Example:
       "base_url": "https://api.openai.com",
       "api_key": null,
       "priority": 0,
-      "index": 1,
       "enabled": true
     },
     {
@@ -59,7 +57,6 @@ Example:
       "base_url": "https://api.anthropic.com",
       "api_key": null,
       "priority": 0,
-      "index": 2,
       "enabled": true
     },
     {
@@ -68,7 +65,6 @@ Example:
       "base_url": "https://generativelanguage.googleapis.com",
       "api_key": null,
       "priority": 0,
-      "index": 3,
       "enabled": true
     }
   ]
@@ -79,7 +75,6 @@ Notes:
 - Request routing is built in: `/v1/chat/completions` → `openai`, `/v1/responses` → `openai-response`, `/v1/messages` (and subpaths) / `/v1/complete` → `anthropic`, `/v1beta/models/*:generateContent` / `*:streamGenerateContent` → `gemini`. OpenAI Chat/Responses conversion is controlled by `enable_api_format_conversion` (default: `false`). Anthropic/Gemini are pass-through (no format conversion).
 - Anthropic auth uses `x-api-key`. If `anthropic-version` is missing, the proxy injects `2023-06-01` (override by providing the header explicitly).
 - Gemini (Google AI Studio Gemini API) auth uses query parameter `key` (if missing and `api_key` is configured on the upstream, the proxy injects it). Streaming is SSE; token usage is extracted from `usageMetadata` when present.
-- `priority` sorts descending; `index` sorts ascending inside the same priority group.
-- Missing `index` values are auto-assigned globally after the current max index when saving.
+- `priority` sorts descending; within the same priority group, upstreams follow the list order in the config file.
 - `enabled` disables an upstream without deleting it; disabled upstreams are ignored during load balancing.
 - `model_mappings` rewrites model names per upstream (exact match, prefix with `*`, wildcard `*`). Priority: exact > prefix > wildcard. Responses return the original model alias when a mapping applies.

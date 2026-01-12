@@ -335,22 +335,13 @@ function UpstreamOrderFields({
 }: UpstreamOrderFieldsProps) {
   return (
     <div data-slot="upstream-order-fields" className="contents">
-      {/* Priority 和 Index 并排：四列布局 */}
       <Label htmlFor="upstream-editor-priority">{m.field_priority()}</Label>
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+      <div className="grid gap-2">
         <Input
           id="upstream-editor-priority"
           value={draft.priority}
           onChange={(e) => onChangeDraft({ priority: e.target.value })}
           placeholder="0"
-          inputMode="numeric"
-        />
-        <Label htmlFor="upstream-editor-index">{m.field_index()}</Label>
-        <Input
-          id="upstream-editor-index"
-          value={draft.index}
-          onChange={(e) => onChangeDraft({ index: e.target.value })}
-          placeholder={m.common_optional()}
           inputMode="numeric"
         />
       </div>

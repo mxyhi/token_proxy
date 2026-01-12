@@ -75,7 +75,6 @@ pub(crate) struct UpstreamConfig {
     pub(crate) base_url: String,
     pub(crate) api_key: Option<String>,
     pub(crate) priority: Option<i32>,
-    pub(crate) index: Option<i32>,
     #[serde(default = "default_enabled")]
     pub(crate) enabled: bool,
     #[serde(default)]
@@ -128,7 +127,6 @@ impl Default for ProxyConfigFile {
                     base_url: "https://api.openai.com".to_string(),
                     api_key: None,
                     priority: Some(0),
-                    index: Some(0),
                     enabled: true,
                     model_mappings: HashMap::new(),
                     overrides: None,
@@ -139,7 +137,6 @@ impl Default for ProxyConfigFile {
                     base_url: "https://api.openai.com".to_string(),
                     api_key: None,
                     priority: Some(0),
-                    index: Some(1),
                     enabled: true,
                     model_mappings: HashMap::new(),
                     overrides: None,
@@ -150,7 +147,6 @@ impl Default for ProxyConfigFile {
                     base_url: "https://api.anthropic.com".to_string(),
                     api_key: None,
                     priority: Some(0),
-                    index: Some(2),
                     enabled: true,
                     model_mappings: HashMap::new(),
                     overrides: None,
@@ -161,7 +157,6 @@ impl Default for ProxyConfigFile {
                     base_url: "https://generativelanguage.googleapis.com".to_string(),
                     api_key: None,
                     priority: Some(0),
-                    index: Some(3),
                     enabled: true,
                     model_mappings: HashMap::new(),
                     overrides: None,
@@ -200,10 +195,8 @@ pub(crate) struct UpstreamRuntime {
     pub(crate) base_url: String,
     pub(crate) api_key: Option<String>,
     pub(crate) priority: i32,
-    pub(crate) index: i32,
     pub(crate) model_mappings: Option<ModelMappingRules>,
     pub(crate) header_overrides: Option<Vec<HeaderOverride>>,
-    pub(crate) order: usize,
 }
 
 #[derive(Clone)]
@@ -227,10 +220,6 @@ impl UpstreamRuntime {
             .as_ref()
             .and_then(|rules| rules.map_model(model))
             .map(|value| value.to_string())
-    }
-
-    pub(crate) fn order(&self) -> usize {
-        self.order
     }
 }
 
@@ -333,10 +322,8 @@ mod tests {
             base_url: "https://api.example.com/openai/v1".to_string(),
             api_key: None,
             priority: 0,
-            index: 0,
             model_mappings: None,
             header_overrides: None,
-            order: 0,
         };
         assert_eq!(
             upstream.upstream_url("/v1/chat/completions"),
@@ -349,10 +336,8 @@ mod tests {
             base_url: "https://api.example.com/openai/v1".to_string(),
             api_key: None,
             priority: 0,
-            index: 0,
             model_mappings: None,
             header_overrides: None,
-            order: 0,
         };
         assert_eq!(
             upstream_responses.upstream_url("/v1/responses"),
@@ -365,10 +350,8 @@ mod tests {
             base_url: "https://api.openai.com".to_string(),
             api_key: None,
             priority: 0,
-            index: 0,
             model_mappings: None,
             header_overrides: None,
-            order: 0,
         };
         assert_eq!(
             upstream_no_path.upstream_url("/v1/chat/completions"),
@@ -385,10 +368,8 @@ mod tests {
             base_url: "https://api.example.com/openai/v1/".to_string(),
             api_key: None,
             priority: 0,
-            index: 0,
             model_mappings: None,
             header_overrides: None,
-            order: 0,
         };
         // openai: /v1/chat/completions
         assert_eq!(

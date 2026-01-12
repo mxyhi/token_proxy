@@ -26,7 +26,6 @@ export type UpstreamConfig = {
   base_url: string;
   api_key: string | null;
   priority: number | null;
-  index: number | null;
   enabled: boolean;
   model_mappings: Record<string, string>;
   overrides?: {
@@ -68,7 +67,6 @@ export type UpstreamForm = {
   baseUrl: string;
   apiKey: string;
   priority: string;
-  index: string;
   enabled: boolean;
   modelMappings: ModelMappingForm[];
   overrides: {

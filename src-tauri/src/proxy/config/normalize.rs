@@ -12,42 +12,13 @@ pub(super) struct NormalizedUpstream {
     pub(super) runtime: UpstreamRuntime,
 }
 
-pub(super) fn fill_missing_upstream_indices(
-    upstreams: &mut [UpstreamConfig],
-) -> Result<(), String> {
-    let mut max_index: Option<i32> = None;
-    for upstream in upstreams.iter() {
-        if let Some(index) = upstream.index {
-            max_index = Some(max_index.map_or(index, |current| current.max(index)));
-        }
-    }
-    let mut next_index = match max_index {
-        Some(value) => value
-            .checked_add(1)
-            .ok_or_else(|| "Upstream index is out of range.".to_string())?,
-        None => 0,
-    };
-    for upstream in upstreams.iter_mut() {
-        if upstream.index.is_none() {
-            upstream.index = Some(assign_next_index(&mut next_index)?);
-        }
-    }
-    Ok(())
-}
-
 pub(super) fn normalize_upstreams(
     upstreams: &[UpstreamConfig],
 ) -> Result<Vec<NormalizedUpstream>, String> {
-    let max_index = scan_upstream_indices(upstreams)?;
-    let mut next_index = match max_index {
-        Some(value) => value
-            .checked_add(1)
-            .ok_or_else(|| "Upstream index is out of range.".to_string())?,
-        None => 0,
-    };
+    validate_upstream_ids(upstreams)?;
     let mut normalized = Vec::with_capacity(upstreams.len());
-    for (order, upstream) in upstreams.iter().enumerate() {
-        if let Some(entry) = normalize_single_upstream(upstream, order, &mut next_index)? {
+    for upstream in upstreams {
+        if let Some(entry) = normalize_single_upstream(upstream)? {
             normalized.push(entry);
         }
     }
@@ -72,22 +43,8 @@ pub(super) fn build_provider_upstreams(
     Ok(output)
 }
 
-fn assign_next_index(next_index: &mut i32) -> Result<i32, String> {
-    let current = *next_index;
-    *next_index = next_index
-        .checked_add(1)
-        .ok_or_else(|| "Upstream index is out of range.".to_string())?;
-    Ok(current)
-}
-
 fn group_upstreams_by_priority(mut upstreams: Vec<UpstreamRuntime>) -> Vec<UpstreamGroup> {
-    upstreams.sort_by(|left, right| {
-        right
-            .priority
-            .cmp(&left.priority)
-            .then_with(|| left.index.cmp(&right.index))
-            .then_with(|| left.order().cmp(&right.order()))
-    });
+    upstreams.sort_by(|left, right| right.priority.cmp(&left.priority));
     let mut groups: Vec<UpstreamGroup> = Vec::new();
     for upstream in upstreams {
         match groups.last_mut() {
@@ -101,9 +58,8 @@ fn group_upstreams_by_priority(mut upstreams: Vec<UpstreamRuntime>) -> Vec<Upstr
     groups
 }
 
-fn scan_upstream_indices(upstreams: &[UpstreamConfig]) -> Result<Option<i32>, String> {
+fn validate_upstream_ids(upstreams: &[UpstreamConfig]) -> Result<(), String> {
     let mut seen_ids = HashSet::new();
-    let mut max_index = None::<i32>;
     for upstream in upstreams {
         let id = upstream.id.trim();
         if id.is_empty() {
@@ -112,17 +68,12 @@ fn scan_upstream_indices(upstreams: &[UpstreamConfig]) -> Result<Option<i32>, St
         if !seen_ids.insert(id.to_string()) {
             return Err(format!("Upstream id already exists: {id}."));
         }
-        if let Some(index) = upstream.index {
-            max_index = Some(max_index.map_or(index, |current| current.max(index)));
-        }
     }
-    Ok(max_index)
+    Ok(())
 }
 
 fn normalize_single_upstream(
     upstream: &UpstreamConfig,
-    order: usize,
-    next_index: &mut i32,
 ) -> Result<Option<NormalizedUpstream>, String> {
     if !upstream.enabled {
         return Ok(None);
@@ -141,11 +92,6 @@ fn normalize_single_upstream(
             upstream.id
         ));
     }
-    // When index is missing, assign sequentially after the global max for stable ordering.
-    let index = match upstream.index {
-        Some(value) => value,
-        None => assign_next_index(next_index)?,
-    };
     let api_key = upstream
         .api_key
         .as_ref()
@@ -159,10 +105,8 @@ fn normalize_single_upstream(
         base_url: base_url.to_string(),
         api_key,
         priority: upstream.priority.unwrap_or(0),
-        index,
         model_mappings,
         header_overrides,
-        order,
     };
     Ok(Some(NormalizedUpstream {
         provider: provider.to_string(),

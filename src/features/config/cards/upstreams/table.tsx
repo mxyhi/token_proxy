@@ -115,12 +115,6 @@ function renderUpstreamCell(columnId: UpstreamColumnId, upstream: UpstreamForm, 
       ) : (
         <span className="text-muted-foreground">0</span>
       );
-    case "index":
-      return upstream.index.trim() ? (
-        <span className="text-foreground">{upstream.index}</span>
-      ) : (
-        <span className="text-muted-foreground">{m.common_optional()}</span>
-      );
     case "status":
       return (
         <Badge variant={upstream.enabled ? "default" : "secondary"}>

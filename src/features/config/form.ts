@@ -16,7 +16,6 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://api.openai.com",
     apiKey: "",
     priority: "0",
-    index: "0",
     enabled: true,
     modelMappings: [],
     overrides: { header: [] },
@@ -27,7 +26,6 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://api.openai.com",
     apiKey: "",
     priority: "0",
-    index: "1",
     enabled: true,
     modelMappings: [],
     overrides: { header: [] },
@@ -38,7 +36,6 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://api.anthropic.com",
     apiKey: "",
     priority: "0",
-    index: "2",
     enabled: true,
     modelMappings: [],
     overrides: { header: [] },
@@ -49,7 +46,6 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://generativelanguage.googleapis.com",
     apiKey: "",
     priority: "0",
-    index: "3",
     enabled: true,
     modelMappings: [],
     overrides: { header: [] },
@@ -97,7 +93,6 @@ export function createEmptyUpstream(): UpstreamForm {
     baseUrl: "",
     apiKey: "",
     priority: "",
-    index: "",
     enabled: true,
     modelMappings: [],
     overrides: { header: [] },
@@ -149,7 +144,6 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
       baseUrl: upstream.base_url,
       apiKey: upstream.api_key ?? "",
       priority: upstream.priority === null ? "" : String(upstream.priority),
-      index: upstream.index === null ? "" : String(upstream.index),
       enabled: upstream.enabled,
       modelMappings: toModelMappingForm(upstream.model_mappings),
       overrides: normalizeOverrides(upstream.overrides),
@@ -173,7 +167,6 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       base_url: upstream.baseUrl.trim(),
       api_key: upstream.apiKey.trim() ? upstream.apiKey.trim() : null,
       priority: parseOptionalInt(upstream.priority),
-      index: parseOptionalInt(upstream.index),
       enabled: upstream.enabled,
       model_mappings: toModelMappingPayload(upstream.modelMappings),
       overrides: toOverridesPayload(upstream.overrides),
@@ -219,9 +212,6 @@ export function validate(form: ConfigForm) {
     }
     if (!isValidOptionalInt(upstream.priority)) {
       return { valid: false, message: m.error_upstream_priority_integer({ id }) };
-    }
-    if (!isValidOptionalInt(upstream.index)) {
-      return { valid: false, message: m.error_upstream_index_integer({ id }) };
     }
     const mappingError = validateModelMappings(upstream.modelMappings, id);
     if (mappingError) {

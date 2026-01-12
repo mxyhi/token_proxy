@@ -1,0 +1,309 @@
+use serde::Serialize;
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+};
+use tauri::AppHandle;
+use tauri::Manager;
+
+use crate::proxy::config::ProxyConfigFile;
+
+#[derive(Clone, Serialize)]
+pub(crate) struct ClientSetupInfo {
+    pub(crate) proxy_http_base_url: String,
+
+    pub(crate) claude_settings_path: String,
+    pub(crate) claude_base_url: String,
+    pub(crate) claude_auth_token_configured: bool,
+
+    pub(crate) codex_config_path: String,
+    pub(crate) codex_auth_path: String,
+    pub(crate) codex_openai_base_url: String,
+    pub(crate) codex_openai_api_key_configured: bool,
+}
+
+#[derive(Clone, Serialize)]
+pub(crate) struct ClientConfigWriteResult {
+    pub(crate) paths: Vec<String>,
+}
+
+pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
+    let config = load_proxy_config(&app).await?;
+    let proxy_http_base_url = build_proxy_http_base_url(&config)?;
+    let claude_settings_path = resolve_claude_settings_path(&app)?;
+    let codex_config_path = resolve_codex_config_path(&app)?;
+    let codex_auth_path = resolve_codex_auth_path(&app)?;
+    let has_local_key = config
+        .local_api_key
+        .as_ref()
+        .is_some_and(|key| !key.trim().is_empty());
+
+    Ok(ClientSetupInfo {
+        proxy_http_base_url: proxy_http_base_url.clone(),
+        claude_settings_path: claude_settings_path.to_string_lossy().to_string(),
+        claude_base_url: proxy_http_base_url.clone(),
+        claude_auth_token_configured: has_local_key,
+        codex_config_path: codex_config_path.to_string_lossy().to_string(),
+        codex_auth_path: codex_auth_path.to_string_lossy().to_string(),
+        codex_openai_base_url: format!("{proxy_http_base_url}/v1"),
+        codex_openai_api_key_configured: has_local_key,
+    })
+}
+
+pub(crate) async fn write_claude_code_settings(app: AppHandle) -> Result<ClientConfigWriteResult, String> {
+    let config = load_proxy_config(&app).await?;
+    let proxy_http_base_url = build_proxy_http_base_url(&config)?;
+    let settings_path = resolve_claude_settings_path(&app)?;
+
+    // Claude Code 支持在 ~/.claude/settings.json 的 `env` 字段里持久化环境变量，
+    // 这样无需改 shell profile 就能全局生效。
+    //
+    // - ANTHROPIC_BASE_URL: 指向本地代理（不带 /v1）
+    // - ANTHROPIC_AUTH_TOKEN: 用于 Authorization: Bearer <token>，与 Token Proxy 的 local_api_key 匹配
+    let mut root = read_json_object_or_default(&settings_path).await?;
+    let env = ensure_json_object_field(&mut root, "env")?;
+    env.insert(
+        "ANTHROPIC_BASE_URL".to_string(),
+        serde_json::Value::String(proxy_http_base_url),
+    );
+    match config.local_api_key.as_ref().map(|key| key.trim()).filter(|key| !key.is_empty()) {
+        Some(token) => {
+            env.insert(
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                serde_json::Value::String(token.to_string()),
+            );
+        }
+        None => {
+            // 若本地鉴权被关闭，避免继续给 Claude Code 写入 Authorization，防止误传到上游。
+            env.remove("ANTHROPIC_AUTH_TOKEN");
+        }
+    }
+    write_json_with_backup(&settings_path, &serde_json::Value::Object(root)).await?;
+
+    Ok(ClientConfigWriteResult {
+        paths: vec![settings_path.to_string_lossy().to_string()],
+    })
+}
+
+pub(crate) async fn write_codex_config(app: AppHandle) -> Result<ClientConfigWriteResult, String> {
+    let config = load_proxy_config(&app).await?;
+    let proxy_http_base_url = build_proxy_http_base_url(&config)?;
+    let config_path = resolve_codex_config_path(&app)?;
+    let auth_path = resolve_codex_auth_path(&app)?;
+
+    // Codex 默认 config 路径为 $CODEX_HOME/config.toml，其中 CODEX_HOME 默认是 ~/.codex。
+    // 为了让 Codex 直接走本地代理，我们仅 patch model_providers.openai：
+    // - base_url = http://127.0.0.1:<port>/v1
+    //
+    // 鉴权不写 experimental_bearer_token，而是写 $CODEX_HOME/auth.json 的 OPENAI_API_KEY。
+    let input = read_text_or_empty(&config_path).await?;
+    let mut doc = toml_edit::DocumentMut::from_str(&input)
+        .map_err(|err| format!("Failed to parse Codex config.toml: {err}"))?;
+
+    ensure_toml_table_path(&mut doc, &["model_providers"])?;
+    ensure_toml_table_path(&mut doc, &["model_providers", "openai"])?;
+
+    doc["model_providers"]["openai"]["base_url"] =
+        toml_edit::value(format!("{proxy_http_base_url}/v1"));
+
+    if let Some(table) = doc["model_providers"]["openai"].as_table_mut() {
+        table.remove("experimental_bearer_token");
+    }
+
+    write_text_with_backup(&config_path, doc.to_string()).await?;
+
+    let mut auth_root = read_json_object_or_default(&auth_path).await?;
+    match config
+        .local_api_key
+        .as_ref()
+        .map(|key| key.trim())
+        .filter(|key| !key.is_empty())
+    {
+        Some(token) => {
+            auth_root.insert(
+                "OPENAI_API_KEY".to_string(),
+                serde_json::Value::String(token.to_string()),
+            );
+        }
+        None => {
+            auth_root.remove("OPENAI_API_KEY");
+        }
+    }
+    write_json_with_backup(&auth_path, &serde_json::Value::Object(auth_root)).await?;
+
+    Ok(ClientConfigWriteResult {
+        paths: vec![
+            config_path.to_string_lossy().to_string(),
+            auth_path.to_string_lossy().to_string(),
+        ],
+    })
+}
+
+async fn load_proxy_config(app: &AppHandle) -> Result<ProxyConfigFile, String> {
+    Ok(crate::proxy::config::read_config(app.clone()).await?.config)
+}
+
+fn resolve_home_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(dir) = app.path().home_dir() {
+        return Ok(dir);
+    }
+    if let Some(dir) = std::env::var_os("HOME").map(PathBuf::from) {
+        return Ok(dir);
+    }
+    if cfg!(target_os = "windows") {
+        if let Some(dir) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+            return Ok(dir);
+        }
+    }
+    Err("Failed to resolve user home directory.".to_string())
+}
+
+fn resolve_claude_settings_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(resolve_home_dir(app)?.join(".claude").join("settings.json"))
+}
+
+fn resolve_codex_config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(resolve_codex_home_dir(app)?.join("config.toml"))
+}
+
+fn resolve_codex_auth_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(resolve_codex_home_dir(app)?.join("auth.json"))
+}
+
+fn resolve_codex_home_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    let home = resolve_home_dir(app)?;
+    Ok(std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".codex")))
+}
+
+fn build_proxy_http_base_url(config: &ProxyConfigFile) -> Result<String, String> {
+    let raw_host = config.host.trim();
+    let host = match raw_host {
+        "" | "0.0.0.0" | "::" => "127.0.0.1",
+        other => other,
+    };
+
+    // IPv6 URL host 需要用方括号包裹（http://[::1]:9208）。
+    let url_host = if host.contains(':') && !(host.starts_with('[') && host.ends_with(']')) {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+
+    Ok(format!("http://{url_host}:{}", config.port))
+}
+
+async fn read_text_or_empty(path: &Path) -> Result<String, String> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(contents) => Ok(contents),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(format!("Failed to read {}: {err}", path.display())),
+    }
+}
+
+async fn read_json_object_or_default(
+    path: &Path,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    let text = read_text_or_empty(path).await?;
+    if text.trim().is_empty() {
+        return Ok(serde_json::Map::new());
+    }
+    let mut value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|err| format!("Failed to parse {}: {err}", path.display()))?;
+    let Some(object) = value.as_object_mut() else {
+        return Err(format!(
+            "{} must be a JSON object.",
+            path.display()
+        ));
+    };
+    Ok(object.clone())
+}
+
+fn ensure_json_object_field<'a>(
+    root: &'a mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<&'a mut serde_json::Map<String, serde_json::Value>, String> {
+    let value = root
+        .entry(key.to_string())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    value
+        .as_object_mut()
+        .ok_or_else(|| format!("{} must be a JSON object.", key))
+}
+
+async fn write_json_with_backup(path: &Path, value: &serde_json::Value) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| "Invalid path.".to_string())?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|err| format!("Failed to create {}: {err}", parent.display()))?;
+
+    if tokio::fs::try_exists(path).await.unwrap_or(false) {
+        let backup_path = path.with_extension("json.bak");
+        let contents = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
+        tokio::fs::write(&backup_path, contents)
+            .await
+            .map_err(|err| format!("Failed to write backup {}: {err}", backup_path.display()))?;
+    }
+
+    let mut output = serde_json::to_string_pretty(value)
+        .map_err(|err| format!("Failed to serialize JSON: {err}"))?;
+    output.push('\n');
+    tokio::fs::write(path, output)
+        .await
+        .map_err(|err| format!("Failed to write {}: {err}", path.display()))?;
+    Ok(())
+}
+
+async fn write_text_with_backup(path: &Path, contents: String) -> Result<(), String> {
+    let parent = path.parent().ok_or_else(|| "Invalid path.".to_string())?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|err| format!("Failed to create {}: {err}", parent.display()))?;
+
+    if tokio::fs::try_exists(path).await.unwrap_or(false) {
+        let backup_path = path.with_extension("toml.bak");
+        let old = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
+        tokio::fs::write(&backup_path, old)
+            .await
+            .map_err(|err| format!("Failed to write backup {}: {err}", backup_path.display()))?;
+    }
+
+    let output = if contents.ends_with('\n') {
+        contents
+    } else {
+        format!("{contents}\n")
+    };
+    tokio::fs::write(path, output)
+        .await
+        .map_err(|err| format!("Failed to write {}: {err}", path.display()))?;
+    Ok(())
+}
+
+fn ensure_toml_table_path(
+    doc: &mut toml_edit::DocumentMut,
+    path: &[&str],
+) -> Result<(), String> {
+    if path.is_empty() {
+        return Ok(());
+    }
+
+    // toml_edit 的索引访问在 path 中间节点不是 table 时会产生不易读的错误；
+    // 这里显式确保每一段都是 table。
+    let mut current: &mut toml_edit::Item = doc.as_item_mut();
+    for segment in path {
+        if !current.is_table() {
+            *current = toml_edit::Item::Table(toml_edit::Table::new());
+        }
+        let table = current
+            .as_table_mut()
+            .ok_or_else(|| "Failed to build TOML table path.".to_string())?;
+        current = table.entry(*segment).or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+    }
+
+    Ok(())
+}

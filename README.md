@@ -81,3 +81,12 @@ Notes:
 - `priority` sorts descending; within the same priority group, upstreams follow the list order in the config file.
 - `enabled` disables an upstream without deleting it; disabled upstreams are ignored during load balancing.
 - `model_mappings` rewrites model names per upstream (exact match, prefix with `*`, wildcard `*`). Priority: exact > prefix > wildcard. Responses return the original model alias when a mapping applies.
+
+## Claude Code / Codex Integration
+
+The in-app **Config File** page provides one-click auto setup:
+
+- Claude Code: writes `env` in `~/.claude/settings.json` (`ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`)
+- Codex: writes `[model_providers.openai]` in `~/.codex/config.toml` (`base_url`) and writes `OPENAI_API_KEY` in `~/.codex/auth.json`
+
+A `.bak` backup file is created before overwriting. Restart the CLI for changes to take effect.

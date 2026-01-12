@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import {
+  ClientSetupCard,
   ConfigFileCard,
   ProjectLinksCard,
   ProxyCoreCard,
@@ -237,6 +238,7 @@ function ConfigSectionBody({
             isDirty={props.isDirty}
           />
           <ValidationCard form={props.form} validation={props.validation} />
+          <ClientSetupCard savedAt={props.savedAt} isDirty={props.isDirty} />
           <ProjectLinksCard />
           <UpdateCard appProxyUrl={props.form.appProxyUrl} />
         </div>

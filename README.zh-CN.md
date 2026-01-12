@@ -81,3 +81,12 @@ xattr -cr /Applications/Token\ Proxy.app
 - `priority` 越大优先级越高；同优先级时按配置文件中的列表顺序。
 - `enabled` 用于禁用某个 upstream 而不删除；禁用的 upstream 不参与负载均衡。
 - `model_mappings` 用于按 upstream 重写模型名（精确匹配、前缀通配 `*`、全量通配 `*`）；优先级：精确 > 前缀 > 通配；当映射生效时，响应会回写原始模型别名。
+
+## Claude Code / Codex 接入
+
+应用内「配置文件」页面提供一键写入自动配置：
+
+- Claude Code：写入 `~/.claude/settings.json` 的 `env`（`ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN`）
+- Codex：写入 `~/.codex/config.toml` 的 `[model_providers.openai]`（`base_url`），并写入 `~/.codex/auth.json`（`OPENAI_API_KEY`）
+
+写入前会生成 `.bak` 备份文件；修改后重启对应 CLI 生效。

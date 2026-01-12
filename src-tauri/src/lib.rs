@@ -1,4 +1,5 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod client_config;
 mod logging;
 mod proxy;
 mod tray;
@@ -70,6 +71,23 @@ pub(crate) fn show_or_create_main_window(app: &tauri::AppHandle) {
 #[tauri::command]
 async fn read_proxy_config(app: tauri::AppHandle) -> Result<proxy::config::ConfigResponse, String> {
     proxy::config::read_config(app).await
+}
+
+#[tauri::command]
+async fn preview_client_setup(app: tauri::AppHandle) -> Result<client_config::ClientSetupInfo, String> {
+    client_config::preview(app).await
+}
+
+#[tauri::command]
+async fn write_claude_code_settings(
+    app: tauri::AppHandle,
+) -> Result<client_config::ClientConfigWriteResult, String> {
+    client_config::write_claude_code_settings(app).await
+}
+
+#[tauri::command]
+async fn write_codex_config(app: tauri::AppHandle) -> Result<client_config::ClientConfigWriteResult, String> {
+    client_config::write_codex_config(app).await
 }
 
 #[tauri::command]
@@ -283,6 +301,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             read_proxy_config,
+            preview_client_setup,
+            write_claude_code_settings,
+            write_codex_config,
             write_proxy_config,
             read_dashboard_snapshot,
             proxy_status,

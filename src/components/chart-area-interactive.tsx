@@ -124,7 +124,7 @@ function buildZeroSeries(range: DashboardRange) {
 function ChartHeader() {
   return (
     <CardHeader>
-      <CardTitle>{m.dashboard_stat_total_tokens()}</CardTitle>
+      <CardTitle>{m.dashboard_chart_title_usage_trend()}</CardTitle>
     </CardHeader>
   )
 }

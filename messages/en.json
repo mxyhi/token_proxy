@@ -199,6 +199,7 @@
   "dashboard_stat_requests": "Requests",
   "dashboard_stat_errors": "Errors",
   "dashboard_stat_total_tokens": "Total Tokens",
+  "dashboard_chart_title_usage_trend": "Usage Trend",
   "dashboard_chart_input_tokens": "Input",
   "dashboard_chart_output_tokens": "Output",
   "dashboard_stat_latency_ms": "Latency (ms)",

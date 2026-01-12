@@ -188,6 +188,7 @@
   "dashboard_stat_requests": "请求数",
   "dashboard_stat_errors": "错误数",
   "dashboard_stat_total_tokens": "总 Tokens",
+  "dashboard_chart_title_usage_trend": "使用趋势",
   "dashboard_chart_input_tokens": "输入",
   "dashboard_chart_output_tokens": "输出",
   "dashboard_stat_latency_ms": "延迟 (ms)",

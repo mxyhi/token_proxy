@@ -28,6 +28,7 @@ export type DashboardSeriesPoint = {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  totalTokens: number;
 };
 
 export type DashboardRequestItem = {

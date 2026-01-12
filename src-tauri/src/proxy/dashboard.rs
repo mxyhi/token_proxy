@@ -45,6 +45,7 @@ pub(crate) struct DashboardSeriesPoint {
     pub(crate) input_tokens: u64,
     pub(crate) output_tokens: u64,
     pub(crate) cached_tokens: u64,
+    pub(crate) total_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -218,7 +219,12 @@ SELECT
   COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) AS error_requests,
   COALESCE(SUM(COALESCE(input_tokens, 0)), 0) AS input_tokens,
   COALESCE(SUM(COALESCE(output_tokens, 0)), 0) AS output_tokens,
-  COALESCE(SUM(COALESCE(cached_tokens, 0)), 0) AS cached_tokens
+  COALESCE(SUM(COALESCE(cached_tokens, 0)), 0) AS cached_tokens,
+  COALESCE(SUM(CASE
+    WHEN total_tokens IS NOT NULL THEN total_tokens
+    WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
+    ELSE 0
+  END), 0) AS total_tokens
 FROM request_logs
 WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2)
 GROUP BY bucket_ts_ms
@@ -239,6 +245,7 @@ ORDER BY bucket_ts_ms ASC;
         let input_tokens: i64 = row.try_get("input_tokens").ok()?;
         let output_tokens: i64 = row.try_get("output_tokens").ok()?;
         let cached_tokens: i64 = row.try_get("cached_tokens").ok()?;
+        let total_tokens: i64 = row.try_get("total_tokens").ok()?;
         Some(DashboardSeriesPoint {
             ts_ms: i64_to_u64(ts_ms),
             total_requests: i64_to_u64(total_requests),
@@ -246,6 +253,7 @@ ORDER BY bucket_ts_ms ASC;
             input_tokens: i64_to_u64(input_tokens),
             output_tokens: i64_to_u64(output_tokens),
             cached_tokens: i64_to_u64(cached_tokens),
+            total_tokens: i64_to_u64(total_tokens),
         })
     })
     .collect::<Vec<_>>();
@@ -309,6 +317,7 @@ fn fill_series_buckets(
                 input_tokens: 0,
                 output_tokens: 0,
                 cached_tokens: 0,
+                total_tokens: 0,
             });
         }
 
@@ -474,6 +483,7 @@ mod tests {
             input_tokens: total_requests,
             output_tokens: 0,
             cached_tokens: 0,
+            total_tokens: total_requests,
         }
     }
 

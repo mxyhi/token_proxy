@@ -191,6 +191,8 @@
   "dashboard_chart_title_usage_trend": "使用趋势",
   "dashboard_chart_input_tokens": "输入",
   "dashboard_chart_output_tokens": "输出",
+  "dashboard_chart_cached_tokens": "缓存",
+  "dashboard_chart_total_tokens": "总 Tokens",
   "dashboard_stat_latency_ms": "延迟 (ms)",
   "dashboard_hint_success_rate": "成功率 {rate}",
   "dashboard_hint_error_rate": "错误率 {rate}",

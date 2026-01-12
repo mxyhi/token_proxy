@@ -202,6 +202,8 @@
   "dashboard_chart_title_usage_trend": "Usage Trend",
   "dashboard_chart_input_tokens": "Input",
   "dashboard_chart_output_tokens": "Output",
+  "dashboard_chart_cached_tokens": "Cached",
+  "dashboard_chart_total_tokens": "Total",
   "dashboard_stat_latency_ms": "Latency (ms)",
   "dashboard_hint_success_rate": "Success rate {rate}",
   "dashboard_hint_error_rate": "Error rate {rate}",

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Area, AreaChart, CartesianGrid, XAxis } from "recharts"
+import { Area, CartesianGrid, ComposedChart, Line, XAxis } from "recharts"
 
 import {
   Card,
@@ -11,6 +11,8 @@ import {
 } from "@/components/ui/card"
 import {
   ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
   ChartTooltip,
   ChartTooltipContent,
   type ChartConfig,
@@ -28,6 +30,8 @@ type ChartPoint = {
   tsMs: number
   inputTokens: number
   outputTokens: number
+  cachedTokens: number
+  totalTokens: number
 }
 
 const chartConfig = {
@@ -38,6 +42,14 @@ const chartConfig = {
   outputTokens: {
     label: m.dashboard_chart_output_tokens(),
     color: "var(--chart-2)",
+  },
+  cachedTokens: {
+    label: m.dashboard_chart_cached_tokens(),
+    color: "var(--chart-3)",
+  },
+  totalTokens: {
+    label: m.dashboard_chart_total_tokens(),
+    color: "var(--chart-4)",
   },
 } satisfies ChartConfig
 
@@ -116,8 +128,8 @@ function resolveRangeBounds(range: DashboardRange) {
 function buildZeroSeries(range: DashboardRange) {
   const { start, end } = resolveRangeBounds(range)
   return [
-    { tsMs: start, inputTokens: 0, outputTokens: 0 },
-    { tsMs: end, inputTokens: 0, outputTokens: 0 },
+    { tsMs: start, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 },
+    { tsMs: end, inputTokens: 0, outputTokens: 0, cachedTokens: 0, totalTokens: 0 },
   ]
 }
 
@@ -147,7 +159,7 @@ function ChartDefs() {
 function ChartCanvas({ data, timeFormatter }: ChartBodyProps) {
   return (
     <ChartContainer config={chartConfig} className="aspect-auto h-[250px] w-full">
-      <AreaChart data={data}>
+      <ComposedChart data={data}>
         <ChartDefs />
         <CartesianGrid vertical={false} />
         <XAxis
@@ -178,6 +190,7 @@ function ChartCanvas({ data, timeFormatter }: ChartBodyProps) {
             />
           }
         />
+        <ChartLegend content={<ChartLegendContent />} />
         <Area
           dataKey="inputTokens"
           type="monotone"
@@ -194,7 +207,22 @@ function ChartCanvas({ data, timeFormatter }: ChartBodyProps) {
           strokeWidth={2}
           dot={false}
         />
-      </AreaChart>
+        <Line
+          dataKey="cachedTokens"
+          type="monotone"
+          stroke="var(--color-cachedTokens)"
+          strokeDasharray="5 5"
+          strokeWidth={2}
+          dot={false}
+        />
+        <Line
+          dataKey="totalTokens"
+          type="monotone"
+          stroke="var(--color-totalTokens)"
+          strokeWidth={2}
+          dot={false}
+        />
+      </ComposedChart>
     </ChartContainer>
   )
 }
@@ -222,6 +250,8 @@ export function ChartAreaInteractive({ series, range }: ChartAreaInteractiveProp
         tsMs: item.tsMs,
         inputTokens: item.inputTokens,
         outputTokens: item.outputTokens,
+        cachedTokens: item.cachedTokens,
+        totalTokens: item.totalTokens,
       }))
     },
     [range, series]

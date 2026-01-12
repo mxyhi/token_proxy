@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import {
   getUpstreamLabel,
   toMaskedApiKey,
+  toMaskedProxyUrl,
   toStatusLabel,
 } from "@/features/config/cards/upstreams/constants";
 import type { UpstreamColumnDefinition, UpstreamColumnId } from "@/features/config/cards/upstreams/types";
@@ -107,6 +108,15 @@ function renderUpstreamCell(columnId: UpstreamColumnId, upstream: UpstreamForm, 
         <span className="truncate text-foreground">{value}</span>
       ) : (
         <span className="truncate text-muted-foreground">{m.common_optional()}</span>
+      );
+    }
+    case "proxyUrl": {
+      const rawValue = upstream.proxyUrl;
+      const value = showApiKeys ? rawValue : toMaskedProxyUrl(rawValue);
+      return value.trim() ? (
+        <span className="truncate text-foreground">{value}</span>
+      ) : (
+        <span className="truncate text-muted-foreground">{m.upstreams_proxy_direct()}</span>
       );
     }
     case "priority":

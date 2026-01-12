@@ -221,6 +221,7 @@ function HeaderOverridesEditor({ overrides, onChange }: HeaderOverridesEditorPro
 type UpstreamEditorFieldsProps = {
   draft: UpstreamForm;
   providerOptions: readonly string[];
+  appProxyUrl: string;
   showApiKeys: boolean;
   onToggleApiKeys: () => void;
   onChangeDraft: (patch: Partial<UpstreamForm>) => void;
@@ -229,14 +230,17 @@ type UpstreamEditorFieldsProps = {
 type UpstreamIdentityFieldsProps = {
   draft: UpstreamForm;
   providerOptions: readonly string[];
+  appProxyUrl: string;
   onChangeDraft: (patch: Partial<UpstreamForm>) => void;
 };
 
 function UpstreamIdentityFields({
   draft,
   providerOptions,
+  appProxyUrl,
   onChangeDraft,
 }: UpstreamIdentityFieldsProps) {
+  const canUseAppProxy = !!appProxyUrl.trim();
   return (
     <div data-slot="upstream-identity-fields" className="contents">
       <EditorField label={m.field_id()} htmlFor="upstream-editor-id">
@@ -290,6 +294,40 @@ function UpstreamIdentityFields({
           onChange={(e) => onChangeDraft({ baseUrl: e.target.value })}
           placeholder="https://api.openai.com"
         />
+      </EditorField>
+
+      <EditorField label={m.field_proxy_url()} htmlFor="upstream-editor-proxyUrl">
+        <div className="grid gap-2">
+          <Input
+            id="upstream-editor-proxyUrl"
+            value={draft.proxyUrl}
+            onChange={(e) => onChangeDraft({ proxyUrl: e.target.value })}
+            placeholder="http://127.0.0.1:7890"
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() => onChangeDraft({ proxyUrl: "" })}
+            >
+              {m.upstreams_proxy_direct()}
+            </Button>
+            {canUseAppProxy ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => onChangeDraft({ proxyUrl: "$app_proxy_url" })}
+              >
+                {m.upstreams_proxy_use_app()}
+              </Button>
+            ) : null}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
+          </p>
+        </div>
       </EditorField>
     </div>
   );
@@ -392,6 +430,7 @@ function UpstreamHeaderOverrideFields({
 function UpstreamEditorFields({
   draft,
   providerOptions,
+  appProxyUrl,
   showApiKeys,
   onToggleApiKeys,
   onChangeDraft,
@@ -404,6 +443,7 @@ function UpstreamEditorFields({
       <UpstreamIdentityFields
         draft={draft}
         providerOptions={providerOptions}
+        appProxyUrl={appProxyUrl}
         onChangeDraft={onChangeDraft}
       />
       <UpstreamAuthFields
@@ -422,6 +462,7 @@ function UpstreamEditorFields({
 type UpstreamEditorDialogProps = {
   editor: UpstreamEditorState;
   providerOptions: readonly string[];
+  appProxyUrl: string;
   showApiKeys: boolean;
   onToggleApiKeys: () => void;
   onOpenChange: (open: boolean) => void;
@@ -432,6 +473,7 @@ type UpstreamEditorDialogProps = {
 export function UpstreamEditorDialog({
   editor,
   providerOptions,
+  appProxyUrl,
   showApiKeys,
   onToggleApiKeys,
   onOpenChange,
@@ -462,6 +504,7 @@ export function UpstreamEditorDialog({
             <UpstreamEditorFields
               draft={editor.draft}
               providerOptions={providerOptions}
+              appProxyUrl={appProxyUrl}
               showApiKeys={showApiKeys}
               onToggleApiKeys={onToggleApiKeys}
               onChangeDraft={onChangeDraft}

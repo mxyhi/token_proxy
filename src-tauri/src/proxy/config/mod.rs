@@ -59,7 +59,9 @@ fn build_runtime_config(app: &AppHandle, config: ProxyConfigFile) -> Result<Prox
     let log_path = io::resolve_log_path(app, &config.log_path)?;
     let log_level = config.log_level;
     let max_request_body_bytes = resolve_max_request_body_bytes(config.max_request_body_bytes);
-    let normalized_upstreams = normalize::normalize_upstreams(&config.upstreams)?;
+    let app_proxy_url = normalize_app_proxy_url(config.app_proxy_url.as_deref())?;
+    let normalized_upstreams =
+        normalize::normalize_upstreams(&config.upstreams, app_proxy_url.as_deref())?;
     let upstreams = normalize::build_provider_upstreams(normalized_upstreams)?;
     Ok(ProxyConfig {
         host: config.host,
@@ -82,4 +84,16 @@ fn resolve_max_request_body_bytes(value: Option<u64>) -> usize {
         value
     };
     usize::try_from(value).unwrap_or(usize::MAX)
+}
+
+fn normalize_app_proxy_url(value: Option<&str>) -> Result<Option<String>, String> {
+    let value = value.unwrap_or_default().trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let parsed = url::Url::parse(value).map_err(|_| "app_proxy_url is not a valid URL.".to_string())?;
+    match parsed.scheme() {
+        "http" | "https" | "socks5" | "socks5h" => Ok(Some(value.to_string())),
+        scheme => Err(format!("app_proxy_url scheme is not supported: {scheme}.")),
+    }
 }

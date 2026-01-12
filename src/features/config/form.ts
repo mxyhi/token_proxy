@@ -15,6 +15,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "openai",
     baseUrl: "https://api.openai.com",
     apiKey: "",
+    proxyUrl: "",
     priority: "0",
     enabled: true,
     modelMappings: [],
@@ -25,6 +26,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "openai-response",
     baseUrl: "https://api.openai.com",
     apiKey: "",
+    proxyUrl: "",
     priority: "0",
     enabled: true,
     modelMappings: [],
@@ -35,6 +37,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "anthropic",
     baseUrl: "https://api.anthropic.com",
     apiKey: "",
+    proxyUrl: "",
     priority: "0",
     enabled: true,
     modelMappings: [],
@@ -45,6 +48,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "gemini",
     baseUrl: "https://generativelanguage.googleapis.com",
     apiKey: "",
+    proxyUrl: "",
     priority: "0",
     enabled: true,
     modelMappings: [],
@@ -68,6 +72,7 @@ const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "host",
   "port",
   "local_api_key",
+  "app_proxy_url",
   "log_path",
   "log_level",
   "tray_token_rate",
@@ -80,6 +85,7 @@ export const EMPTY_FORM: ConfigForm = {
   host: "127.0.0.1",
   port: "9208",
   localApiKey: "",
+  appProxyUrl: "",
   logPath: "proxy.log",
   logLevel: "silent",
   trayTokenRate: { ...DEFAULT_TRAY_TOKEN_RATE },
@@ -94,6 +100,7 @@ export function createEmptyUpstream(): UpstreamForm {
     provider: "",
     baseUrl: "",
     apiKey: "",
+    proxyUrl: "",
     priority: "",
     enabled: true,
     modelMappings: [],
@@ -136,6 +143,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     host: config.host,
     port: String(config.port),
     localApiKey: config.local_api_key ?? "",
+    appProxyUrl: config.app_proxy_url ?? "",
     logPath: config.log_path,
     logLevel: config.log_level ?? "silent",
     trayTokenRate: normalizeTrayTokenRate(config.tray_token_rate),
@@ -146,6 +154,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
       provider: upstream.provider,
       baseUrl: upstream.base_url,
       apiKey: upstream.api_key ?? "",
+      proxyUrl: upstream.proxy_url ?? "",
       priority: upstream.priority === null ? "" : String(upstream.priority),
       enabled: upstream.enabled,
       modelMappings: toModelMappingForm(upstream.model_mappings),
@@ -160,6 +169,7 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     host: form.host.trim(),
     port,
     local_api_key: form.localApiKey.trim() ? form.localApiKey.trim() : null,
+    app_proxy_url: form.appProxyUrl.trim() ? form.appProxyUrl.trim() : null,
     log_path: form.logPath.trim(),
     log_level: form.logLevel,
     tray_token_rate: form.trayTokenRate,
@@ -170,6 +180,7 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       provider: upstream.provider.trim(),
       base_url: upstream.baseUrl.trim(),
       api_key: upstream.apiKey.trim() ? upstream.apiKey.trim() : null,
+      proxy_url: upstream.proxyUrl.trim() ? upstream.proxyUrl.trim() : null,
       priority: parseOptionalInt(upstream.priority),
       enabled: upstream.enabled,
       model_mappings: toModelMappingPayload(upstream.modelMappings),
@@ -185,6 +196,9 @@ export function validate(form: ConfigForm) {
   const port = Number.parseInt(form.port, 10);
   if (!Number.isFinite(port) || port < 1 || port > 65535) {
     return { valid: false, message: m.error_port_range() };
+  }
+  if (form.appProxyUrl.trim() && !isValidProxyUrl(form.appProxyUrl.trim())) {
+    return { valid: false, message: m.error_app_proxy_url_invalid() };
   }
   if (!form.logPath.trim()) {
     return { valid: false, message: m.error_log_path_required() };
@@ -214,6 +228,16 @@ export function validate(form: ConfigForm) {
     if (!upstream.baseUrl.trim()) {
       return { valid: false, message: m.error_upstream_base_url_required({ id }) };
     }
+    const upstreamProxyUrl = upstream.proxyUrl.trim();
+    if (upstreamProxyUrl) {
+      if (upstreamProxyUrl === APP_PROXY_URL_PLACEHOLDER) {
+        if (!form.appProxyUrl.trim()) {
+          return { valid: false, message: m.error_upstream_proxy_url_requires_app({ id }) };
+        }
+      } else if (!isValidProxyUrl(upstreamProxyUrl)) {
+        return { valid: false, message: m.error_upstream_proxy_url_invalid({ id }) };
+      }
+    }
     if (!isValidOptionalInt(upstream.priority)) {
       return { valid: false, message: m.error_upstream_priority_integer({ id }) };
     }
@@ -228,6 +252,24 @@ export function validate(form: ConfigForm) {
   }
 
   return { valid: true, message: "" };
+}
+
+const APP_PROXY_URL_PLACEHOLDER = "$app_proxy_url";
+
+const PROXY_URL_PROTOCOLS: ReadonlySet<string> = new Set([
+  "http:",
+  "https:",
+  "socks5:",
+  "socks5h:",
+]);
+
+function isValidProxyUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    return PROXY_URL_PROTOCOLS.has(parsed.protocol);
+  } catch (_) {
+    return false;
+  }
 }
 
 function toModelMappingForm(mappings: Record<string, string>): ModelMappingForm[] {

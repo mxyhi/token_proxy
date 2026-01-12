@@ -27,6 +27,7 @@ export type UpstreamConfig = {
   provider: string;
   base_url: string;
   api_key: string | null;
+  proxy_url: string | null;
   priority: number | null;
   enabled: boolean;
   model_mappings: Record<string, string>;
@@ -39,6 +40,7 @@ export type ProxyConfigFileBase = {
   host: string;
   port: number;
   local_api_key: string | null;
+  app_proxy_url: string | null;
   log_path: string;
   log_level?: LogLevel;
   tray_token_rate: TrayTokenRateConfig;
@@ -69,6 +71,7 @@ export type UpstreamForm = {
   provider: string;
   baseUrl: string;
   apiKey: string;
+  proxyUrl: string;
   priority: string;
   enabled: boolean;
   modelMappings: ModelMappingForm[];
@@ -94,6 +97,7 @@ export type ConfigForm = {
   host: string;
   port: string;
   localApiKey: string;
+  appProxyUrl: string;
   logPath: string;
   logLevel: LogLevel;
   trayTokenRate: TrayTokenRateConfig;

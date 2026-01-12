@@ -219,6 +219,7 @@ function ConfigSectionBody({
       return (
         <UpstreamsCard
           upstreams={props.form.upstreams}
+          appProxyUrl={props.form.appProxyUrl}
           showApiKeys={props.showUpstreamKeys}
           providerOptions={props.providerOptions}
           onToggleApiKeys={props.onToggleUpstreamKeys}
@@ -237,7 +238,7 @@ function ConfigSectionBody({
           />
           <ValidationCard form={props.form} validation={props.validation} />
           <ProjectLinksCard />
-          <UpdateCard />
+          <UpdateCard appProxyUrl={props.form.appProxyUrl} />
         </div>
       );
     default:

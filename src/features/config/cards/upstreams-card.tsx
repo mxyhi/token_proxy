@@ -21,6 +21,7 @@ import { m } from "@/paraglide/messages.js";
 
 type UpstreamsCardProps = {
   upstreams: UpstreamForm[];
+  appProxyUrl: string;
   showApiKeys: boolean;
   providerOptions: string[];
   onToggleApiKeys: () => void;
@@ -29,7 +30,7 @@ type UpstreamsCardProps = {
   onChange: (index: number, patch: Partial<UpstreamForm>) => void;
 };
 
-export function UpstreamsCard({ upstreams, showApiKeys, providerOptions, onToggleApiKeys, onAdd, onRemove, onChange }: UpstreamsCardProps) {
+export function UpstreamsCard({ upstreams, appProxyUrl, showApiKeys, providerOptions, onToggleApiKeys, onAdd, onRemove, onChange }: UpstreamsCardProps) {
   const mergedProviderOptions = useMemo(() => mergeProviderOptions(providerOptions), [providerOptions]);
   const [columnVisibility, setColumnVisibility] = useState<ColumnVisibility>(() => createDefaultColumnVisibility());
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -61,7 +62,7 @@ export function UpstreamsCard({ upstreams, showApiKeys, providerOptions, onToggl
       </CardContent>
 
       <ColumnsDialog open={columnsOpen} visibility={columnVisibility} onOpenChange={setColumnsOpen} onToggleColumn={(columnId) => setColumnVisibility((prev) => ({ ...prev, [columnId]: !prev[columnId] }))} />
-      <UpstreamEditorDialog editor={editor} providerOptions={mergedProviderOptions} showApiKeys={showApiKeys} onToggleApiKeys={onToggleApiKeys} onOpenChange={(open) => !open && setEditor({ open: false })} onChangeDraft={updateDraft} onSave={saveDraft} />
+      <UpstreamEditorDialog editor={editor} providerOptions={mergedProviderOptions} appProxyUrl={appProxyUrl} showApiKeys={showApiKeys} onToggleApiKeys={onToggleApiKeys} onOpenChange={(open) => !open && setEditor({ open: false })} onChangeDraft={updateDraft} onSave={saveDraft} />
       <DeleteUpstreamDialog dialog={deleteDialog} onOpenChange={(open) => !open && setDeleteDialog({ open: false })} onConfirm={confirmDelete} />
     </Card>
   );

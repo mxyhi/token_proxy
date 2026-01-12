@@ -1,5 +1,6 @@
 pub(crate) mod config;
 pub(crate) mod dashboard;
+mod http_client;
 pub(crate) mod service;
 mod gemini;
 mod http;
@@ -22,7 +23,7 @@ use std::{
 
 struct ProxyState {
     config: config::ProxyConfig,
-    client: reqwest::Client,
+    http_clients: http_client::ProxyHttpClients,
     log: Arc<log::LogWriter>,
     cursors: HashMap<String, Vec<AtomicUsize>>,
     token_rate: Arc<token_rate::TokenRateTracker>,

@@ -68,6 +68,18 @@ function ProxyCoreFields({ form, showLocalKey, onToggleLocalKey, onChange }: Pro
         <p className="text-xs text-muted-foreground">{m.proxy_core_local_api_key_help()}</p>
       </div>
       <div className="grid gap-2">
+        <Label htmlFor="app-proxy-url">{m.proxy_core_app_proxy_url_label()}</Label>
+        <Input
+          id="app-proxy-url"
+          value={form.appProxyUrl}
+          onChange={(event) => onChange({ appProxyUrl: event.target.value })}
+          placeholder="socks5h://127.0.0.1:7891"
+        />
+        <p className="text-xs text-muted-foreground">
+          {m.proxy_core_app_proxy_url_help({ placeholder: "$app_proxy_url" })}
+        </p>
+      </div>
+      <div className="grid gap-2">
         <Label htmlFor="proxy-log">{m.proxy_core_log_file_label()}</Label>
         <Input
           id="proxy-log"

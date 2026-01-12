@@ -6,6 +6,8 @@ use super::{
 };
 use axum::http::header::{HeaderName, HeaderValue};
 
+const APP_PROXY_URL_PLACEHOLDER: &str = "$app_proxy_url";
+
 #[derive(Clone)]
 pub(super) struct NormalizedUpstream {
     pub(super) provider: String,
@@ -14,11 +16,12 @@ pub(super) struct NormalizedUpstream {
 
 pub(super) fn normalize_upstreams(
     upstreams: &[UpstreamConfig],
+    app_proxy_url: Option<&str>,
 ) -> Result<Vec<NormalizedUpstream>, String> {
     validate_upstream_ids(upstreams)?;
     let mut normalized = Vec::with_capacity(upstreams.len());
     for upstream in upstreams {
-        if let Some(entry) = normalize_single_upstream(upstream)? {
+        if let Some(entry) = normalize_single_upstream(upstream, app_proxy_url)? {
             normalized.push(entry);
         }
     }
@@ -74,6 +77,7 @@ fn validate_upstream_ids(upstreams: &[UpstreamConfig]) -> Result<(), String> {
 
 fn normalize_single_upstream(
     upstream: &UpstreamConfig,
+    app_proxy_url: Option<&str>,
 ) -> Result<Option<NormalizedUpstream>, String> {
     if !upstream.enabled {
         return Ok(None);
@@ -98,12 +102,18 @@ fn normalize_single_upstream(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
+    let proxy_url = normalize_upstream_proxy_url(
+        upstream.proxy_url.as_deref(),
+        app_proxy_url,
+        &upstream.id,
+    )?;
     let model_mappings = compile_model_mappings(&upstream.id, &upstream.model_mappings)?;
     let header_overrides = normalize_header_overrides(upstream.overrides.as_ref())?;
     let runtime = UpstreamRuntime {
         id: upstream.id.trim().to_string(),
         base_url: base_url.to_string(),
         api_key,
+        proxy_url,
         priority: upstream.priority.unwrap_or(0),
         model_mappings,
         header_overrides,
@@ -151,4 +161,37 @@ fn normalize_header_overrides(
 
     // 用户输入大小写混合时，保持用户写法；应用阶段再做覆盖策略。
     Ok(Some(normalized))
+}
+
+fn normalize_upstream_proxy_url(
+    proxy_url: Option<&str>,
+    app_proxy_url: Option<&str>,
+    upstream_id: &str,
+) -> Result<Option<String>, String> {
+    let value = proxy_url.unwrap_or_default().trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value == APP_PROXY_URL_PLACEHOLDER {
+        let app_proxy_url = app_proxy_url.unwrap_or_default().trim();
+        if app_proxy_url.is_empty() {
+            return Err(format!(
+                "Upstream {upstream_id} proxy_url is set to {APP_PROXY_URL_PLACEHOLDER}, but app_proxy_url is empty."
+            ));
+        }
+        return Ok(Some(validate_proxy_url(app_proxy_url, upstream_id)?.to_string()));
+    }
+    Ok(Some(validate_proxy_url(value, upstream_id)?.to_string()))
+}
+
+fn validate_proxy_url<'a>(value: &'a str, upstream_id: &str) -> Result<&'a str, String> {
+    let parsed = url::Url::parse(value).map_err(|_| {
+        format!("Upstream {upstream_id} proxy_url is not a valid URL.")
+    })?;
+    match parsed.scheme() {
+        "http" | "https" | "socks5" | "socks5h" => Ok(value),
+        scheme => Err(format!(
+            "Upstream {upstream_id} proxy_url scheme is not supported: {scheme}."
+        )),
+    }
 }

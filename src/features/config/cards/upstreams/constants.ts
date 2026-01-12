@@ -18,6 +18,7 @@ export const UPSTREAM_COLUMNS: readonly UpstreamColumnDefinition[] = [
   },
   { id: "baseUrl", label: () => m.upstreams_column_base_url(), defaultVisible: false, cellClassName: "min-w-[18rem]" },
   { id: "apiKey", label: () => m.upstreams_column_api_key(), defaultVisible: false, cellClassName: "min-w-[18rem]" },
+  { id: "proxyUrl", label: () => m.upstreams_column_proxy_url(), defaultVisible: false, cellClassName: "min-w-[18rem]" },
   {
     id: "priority",
     label: () => m.upstreams_column_priority(),
@@ -40,6 +41,7 @@ export function createDefaultColumnVisibility() {
     provider: true,
     baseUrl: false,
     apiKey: false,
+    proxyUrl: false,
     priority: true,
     status: true,
   };
@@ -71,6 +73,22 @@ export function mergeProviderOptions(values: readonly string[]) {
 
 export function toMaskedApiKey(value: string) {
   return value.trim() ? "••••••••" : "";
+}
+
+export function toMaskedProxyUrl(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed === "$app_proxy_url") {
+    return trimmed;
+  }
+  try {
+    const url = new URL(trimmed);
+    return `${url.protocol}//${url.host}`;
+  } catch (_) {
+    return "••••••••";
+  }
 }
 
 export function toStatusLabel(enabled: boolean) {

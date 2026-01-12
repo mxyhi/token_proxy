@@ -338,7 +338,7 @@ async fn build_proxy_state(
             .await
             .map_err(|err| format!("Failed to open log file: {err}"))?,
     );
-    let client = reqwest::Client::new();
+    let http_clients = super::http_client::ProxyHttpClients::new()?;
     let cursors = server::build_upstream_cursors(&config);
     let token_rate = app
         .state::<Arc<super::token_rate::TokenRateTracker>>()
@@ -346,7 +346,7 @@ async fn build_proxy_state(
         .clone();
     Ok(Arc::new(ProxyState {
         config,
-        client,
+        http_clients,
         log,
         cursors,
         token_rate,

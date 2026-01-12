@@ -173,7 +173,11 @@ function useUpdaterState() {
   return { state, setState, markError };
 }
 
-function useUpdateChecker({ setState, markError }: UpdateHelpers) {
+type UpdateCheckerArgs = UpdateHelpers & {
+  appProxyUrl: string;
+};
+
+function useUpdateChecker({ setState, markError, appProxyUrl }: UpdateCheckerArgs) {
   return useCallback(async () => {
     setState((prev) => ({
       ...prev,
@@ -184,7 +188,8 @@ function useUpdateChecker({ setState, markError }: UpdateHelpers) {
       downloadState: { downloaded: 0, total: 0 },
     }));
     try {
-      const result = await check();
+      const proxy = appProxyUrl.trim();
+      const result = await check(proxy ? { proxy } : undefined);
       setState((prev) => ({
         ...prev,
         status: result ? "available" : "uptodate",
@@ -195,7 +200,7 @@ function useUpdateChecker({ setState, markError }: UpdateHelpers) {
     } catch (error) {
       markError(error);
     }
-  }, [markError, setState]);
+  }, [appProxyUrl, markError, setState]);
 }
 
 function useUpdateInstaller({ updateHandle, setState, markError }: UpdateInstallerArgs) {
@@ -265,9 +270,9 @@ function useAppRelauncher({ setState }: Pick<UpdateHelpers, "setState">) {
   }, [setState]);
 }
 
-function useUpdater() {
+function useUpdater(appProxyUrl: string) {
   const { state, setState, markError } = useUpdaterState();
-  const checkForUpdate = useUpdateChecker({ setState, markError });
+  const checkForUpdate = useUpdateChecker({ setState, markError, appProxyUrl });
   const downloadAndInstall = useUpdateInstaller({
     updateHandle: state.updateHandle,
     setState,
@@ -416,9 +421,13 @@ function resolveProgressLabel(status: UpdateStatus, downloadState: DownloadState
   });
 }
 
-export function UpdateCard() {
+type UpdateCardProps = {
+  appProxyUrl: string;
+};
+
+export function UpdateCard({ appProxyUrl }: UpdateCardProps) {
   const currentVersion = useAppVersion();
-  const { state, actions } = useUpdater();
+  const { state, actions } = useUpdater(appProxyUrl);
   const statusBadge = useMemo(() => resolveStatusBadge(state.status), [state.status]);
   const progressLabel = useMemo(
     () => resolveProgressLabel(state.status, state.downloadState),

@@ -20,6 +20,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import {
   ConfigFileCard,
+  ProjectLinksCard,
   ProxyCoreCard,
   StrategyCard,
   UpdateCard,
@@ -226,7 +227,7 @@ function ConfigSectionBody({
           onChange={props.onChangeUpstream}
         />
       );
-    case "file":
+    case "settings":
       return (
         <div className="flex flex-col gap-4">
           <ConfigFileCard
@@ -234,11 +235,11 @@ function ConfigSectionBody({
             savedAt={props.savedAt}
             isDirty={props.isDirty}
           />
+          <ValidationCard form={props.form} validation={props.validation} />
+          <ProjectLinksCard />
           <UpdateCard />
         </div>
       );
-    case "validation":
-      return <ValidationCard form={props.form} validation={props.validation} />;
     default:
       return null;
   }

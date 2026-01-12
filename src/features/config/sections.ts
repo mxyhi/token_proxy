@@ -1,9 +1,8 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  CircleCheck,
-  FileJson,
   LayoutDashboard,
   Server,
+  Settings,
   Shuffle,
   SlidersHorizontal,
 } from "lucide-react";
@@ -15,8 +14,7 @@ export type ConfigSectionId =
   | "core"
   | "strategy"
   | "upstreams"
-  | "file"
-  | "validation";
+  | "settings";
 
 export type ConfigSectionRoute = `/config/${ConfigSectionId}`;
 
@@ -58,18 +56,11 @@ export const CONFIG_SECTIONS: readonly ConfigSection[] = [
     icon: Server,
   },
   {
-    id: "file",
-    route: "/config/file",
-    label: () => m.config_section_file_label(),
-    description: () => m.config_section_file_desc(),
-    icon: FileJson,
-  },
-  {
-    id: "validation",
-    route: "/config/validation",
-    label: () => m.config_section_validation_label(),
-    description: () => m.config_section_validation_desc(),
-    icon: CircleCheck,
+    id: "settings",
+    route: "/config/settings",
+    label: () => m.config_section_settings_label(),
+    description: () => m.config_section_settings_desc(),
+    icon: Settings,
   },
 ] as const;
 

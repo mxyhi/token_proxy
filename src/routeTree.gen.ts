@@ -9,10 +9,9 @@ import { Route as ConfigRouteRouteImport } from "./routes/config/route"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ConfigIndexRouteImport } from "./routes/config/index"
 
-const ConfigValidationLazyRouteImport = createFileRoute("/config/validation")()
 const ConfigUpstreamsLazyRouteImport = createFileRoute("/config/upstreams")()
 const ConfigStrategyLazyRouteImport = createFileRoute("/config/strategy")()
-const ConfigFileLazyRouteImport = createFileRoute("/config/file")()
+const ConfigSettingsLazyRouteImport = createFileRoute("/config/settings")()
 const ConfigDashboardLazyRouteImport = createFileRoute("/config/dashboard")()
 const ConfigCoreLazyRouteImport = createFileRoute("/config/core")()
 
@@ -31,13 +30,6 @@ const ConfigIndexRoute = ConfigIndexRouteImport.update({
   path: "/",
   getParentRoute: () => ConfigRouteRoute,
 } as any)
-const ConfigValidationLazyRoute = ConfigValidationLazyRouteImport.update({
-  id: "/validation",
-  path: "/validation",
-  getParentRoute: () => ConfigRouteRoute,
-} as any).lazy(() =>
-  import("./routes/config/validation.lazy").then((d) => d.Route),
-)
 const ConfigUpstreamsLazyRoute = ConfigUpstreamsLazyRouteImport.update({
   id: "/upstreams",
   path: "/upstreams",
@@ -52,11 +44,13 @@ const ConfigStrategyLazyRoute = ConfigStrategyLazyRouteImport.update({
 } as any).lazy(() =>
   import("./routes/config/strategy.lazy").then((d) => d.Route),
 )
-const ConfigFileLazyRoute = ConfigFileLazyRouteImport.update({
-  id: "/file",
-  path: "/file",
+const ConfigSettingsLazyRoute = ConfigSettingsLazyRouteImport.update({
+  id: "/settings",
+  path: "/settings",
   getParentRoute: () => ConfigRouteRoute,
-} as any).lazy(() => import("./routes/config/file.lazy").then((d) => d.Route))
+} as any).lazy(() =>
+  import("./routes/config/settings.lazy").then((d) => d.Route),
+)
 const ConfigDashboardLazyRoute = ConfigDashboardLazyRouteImport.update({
   id: "/dashboard",
   path: "/dashboard",
@@ -75,20 +69,18 @@ export interface FileRoutesByFullPath {
   "/config": typeof ConfigRouteRouteWithChildren
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
-  "/config/file": typeof ConfigFileLazyRoute
+  "/config/settings": typeof ConfigSettingsLazyRoute
   "/config/strategy": typeof ConfigStrategyLazyRoute
   "/config/upstreams": typeof ConfigUpstreamsLazyRoute
-  "/config/validation": typeof ConfigValidationLazyRoute
   "/config/": typeof ConfigIndexRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
-  "/config/file": typeof ConfigFileLazyRoute
+  "/config/settings": typeof ConfigSettingsLazyRoute
   "/config/strategy": typeof ConfigStrategyLazyRoute
   "/config/upstreams": typeof ConfigUpstreamsLazyRoute
-  "/config/validation": typeof ConfigValidationLazyRoute
   "/config": typeof ConfigIndexRoute
 }
 export interface FileRoutesById {
@@ -97,10 +89,9 @@ export interface FileRoutesById {
   "/config": typeof ConfigRouteRouteWithChildren
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
-  "/config/file": typeof ConfigFileLazyRoute
+  "/config/settings": typeof ConfigSettingsLazyRoute
   "/config/strategy": typeof ConfigStrategyLazyRoute
   "/config/upstreams": typeof ConfigUpstreamsLazyRoute
-  "/config/validation": typeof ConfigValidationLazyRoute
   "/config/": typeof ConfigIndexRoute
 }
 export interface FileRouteTypes {
@@ -110,20 +101,18 @@ export interface FileRouteTypes {
     | "/config"
     | "/config/core"
     | "/config/dashboard"
-    | "/config/file"
+    | "/config/settings"
     | "/config/strategy"
     | "/config/upstreams"
-    | "/config/validation"
     | "/config/"
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
     | "/config/core"
     | "/config/dashboard"
-    | "/config/file"
+    | "/config/settings"
     | "/config/strategy"
     | "/config/upstreams"
-    | "/config/validation"
     | "/config"
   id:
     | "__root__"
@@ -131,10 +120,9 @@ export interface FileRouteTypes {
     | "/config"
     | "/config/core"
     | "/config/dashboard"
-    | "/config/file"
+    | "/config/settings"
     | "/config/strategy"
     | "/config/upstreams"
-    | "/config/validation"
     | "/config/"
   fileRoutesById: FileRoutesById
 }
@@ -166,13 +154,6 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ConfigIndexRouteImport
       parentRoute: typeof ConfigRouteRoute
     }
-    "/config/validation": {
-      id: "/config/validation"
-      path: "/validation"
-      fullPath: "/config/validation"
-      preLoaderRoute: typeof ConfigValidationLazyRouteImport
-      parentRoute: typeof ConfigRouteRoute
-    }
     "/config/upstreams": {
       id: "/config/upstreams"
       path: "/upstreams"
@@ -187,11 +168,11 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ConfigStrategyLazyRouteImport
       parentRoute: typeof ConfigRouteRoute
     }
-    "/config/file": {
-      id: "/config/file"
-      path: "/file"
-      fullPath: "/config/file"
-      preLoaderRoute: typeof ConfigFileLazyRouteImport
+    "/config/settings": {
+      id: "/config/settings"
+      path: "/settings"
+      fullPath: "/config/settings"
+      preLoaderRoute: typeof ConfigSettingsLazyRouteImport
       parentRoute: typeof ConfigRouteRoute
     }
     "/config/dashboard": {
@@ -214,20 +195,18 @@ declare module "@tanstack/react-router" {
 interface ConfigRouteRouteChildren {
   ConfigCoreLazyRoute: typeof ConfigCoreLazyRoute
   ConfigDashboardLazyRoute: typeof ConfigDashboardLazyRoute
-  ConfigFileLazyRoute: typeof ConfigFileLazyRoute
+  ConfigSettingsLazyRoute: typeof ConfigSettingsLazyRoute
   ConfigStrategyLazyRoute: typeof ConfigStrategyLazyRoute
   ConfigUpstreamsLazyRoute: typeof ConfigUpstreamsLazyRoute
-  ConfigValidationLazyRoute: typeof ConfigValidationLazyRoute
   ConfigIndexRoute: typeof ConfigIndexRoute
 }
 
 const ConfigRouteRouteChildren: ConfigRouteRouteChildren = {
   ConfigCoreLazyRoute: ConfigCoreLazyRoute,
   ConfigDashboardLazyRoute: ConfigDashboardLazyRoute,
-  ConfigFileLazyRoute: ConfigFileLazyRoute,
+  ConfigSettingsLazyRoute: ConfigSettingsLazyRoute,
   ConfigStrategyLazyRoute: ConfigStrategyLazyRoute,
   ConfigUpstreamsLazyRoute: ConfigUpstreamsLazyRoute,
-  ConfigValidationLazyRoute: ConfigValidationLazyRoute,
   ConfigIndexRoute: ConfigIndexRoute,
 }
 

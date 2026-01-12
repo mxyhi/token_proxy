@@ -14,6 +14,7 @@ export type ConfigSectionId =
   | "core"
   | "strategy"
   | "upstreams"
+  | "agents"
   | "settings";
 
 export type ConfigSectionRoute = `/config/${ConfigSectionId}`;
@@ -54,6 +55,13 @@ export const CONFIG_SECTIONS: readonly ConfigSection[] = [
     label: () => m.config_section_upstreams_label(),
     description: () => m.config_section_upstreams_desc(),
     icon: Server,
+  },
+  {
+    id: "agents",
+    route: "/config/agents",
+    label: () => m.config_section_agents_label(),
+    description: () => m.config_section_agents_desc(),
+    icon: Shuffle,
   },
   {
     id: "settings",

@@ -35,6 +35,8 @@
   "config_section_strategy_desc": "全局上游选择规则",
   "config_section_upstreams_label": "上游",
   "config_section_upstreams_desc": "提供商池与 API Key",
+  "config_section_agents_label": "智能体",
+  "config_section_agents_desc": "Claude Code / Codex 自动配置",
   "config_section_settings_label": "设置",
   "config_section_settings_desc": "配置文件、校验与更新",
   "proxy_core_title": "内核",

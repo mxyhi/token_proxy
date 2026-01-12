@@ -238,9 +238,14 @@ function ConfigSectionBody({
             isDirty={props.isDirty}
           />
           <ValidationCard form={props.form} validation={props.validation} />
-          <ClientSetupCard savedAt={props.savedAt} isDirty={props.isDirty} />
           <ProjectLinksCard />
           <UpdateCard appProxyUrl={props.form.appProxyUrl} />
+        </div>
+      );
+    case "agents":
+      return (
+        <div className="flex flex-col gap-4">
+          <ClientSetupCard savedAt={props.savedAt} isDirty={props.isDirty} />
         </div>
       );
     default:

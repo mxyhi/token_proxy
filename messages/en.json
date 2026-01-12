@@ -38,6 +38,8 @@
   "config_section_strategy_desc": "Global upstream selection rules",
   "config_section_upstreams_label": "Upstreams",
   "config_section_upstreams_desc": "Provider pools and API keys",
+  "config_section_agents_label": "Agents",
+  "config_section_agents_desc": "Claude Code / Codex auto-setup",
   "config_section_settings_label": "Settings",
   "config_section_settings_desc": "Config file, validation, and updates",
 

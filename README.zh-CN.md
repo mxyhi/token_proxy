@@ -27,6 +27,7 @@ xattr -cr /Applications/Token\ Proxy.app
   "port": 9208,
   "local_api_key": null,
   "log_path": "proxy.log",
+  "log_level": "silent",
   "enable_api_format_conversion": false,
   "upstream_strategy": "priority_round_robin",
   "upstreams": [
@@ -75,6 +76,8 @@ xattr -cr /Applications/Token\ Proxy.app
 - 路由规则内置：`/v1/chat/completions` → `openai`，`/v1/responses` → `openai-response`，`/v1/messages`（及子路径）/`/v1/complete` → `anthropic`，`/v1beta/models/*:generateContent`/`*:streamGenerateContent` → `gemini`；OpenAI Chat/Responses 互转由 `enable_api_format_conversion` 控制（默认：`false`）。Anthropic/Gemini 不做格式转换。
 - Anthropic 鉴权使用 `x-api-key`；当请求未携带 `anthropic-version` 时，代理默认补 `2023-06-01`（可被请求头覆盖）。
 - Gemini（Google 官方 Gemini API）鉴权使用 query 参数 `key`（若请求未携带且 upstream 配置了 `api_key`，代理会自动补齐）；流式为 SSE，支持从 `usageMetadata` 统计 token。
+- `log_level` 控制运行时 tracing 日志输出（默认：`silent`，即不输出）。可选值：`silent`/`error`/`warn`/`info`/`debug`/`trace`。
+  - 当 `log_level` 为 `debug`/`trace` 时，代理会输出请求 header（鉴权相关会打码）和小体积请求体（最多 64KiB）。
 - `priority` 越大优先级越高；同优先级时按配置文件中的列表顺序。
 - `enabled` 用于禁用某个 upstream 而不删除；禁用的 upstream 不参与负载均衡。
 - `model_mappings` 用于按 upstream 重写模型名（精确匹配、前缀通配 `*`、全量通配 `*`）；优先级：精确 > 前缀 > 通配；当映射生效时，响应会回写原始模型别名。

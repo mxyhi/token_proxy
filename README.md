@@ -27,6 +27,7 @@ Example:
   "port": 9208,
   "local_api_key": null,
   "log_path": "proxy.log",
+  "log_level": "silent",
   "enable_api_format_conversion": false,
   "upstream_strategy": "priority_round_robin",
   "upstreams": [
@@ -75,6 +76,8 @@ Notes:
 - Request routing is built in: `/v1/chat/completions` → `openai`, `/v1/responses` → `openai-response`, `/v1/messages` (and subpaths) / `/v1/complete` → `anthropic`, `/v1beta/models/*:generateContent` / `*:streamGenerateContent` → `gemini`. OpenAI Chat/Responses conversion is controlled by `enable_api_format_conversion` (default: `false`). Anthropic/Gemini are pass-through (no format conversion).
 - Anthropic auth uses `x-api-key`. If `anthropic-version` is missing, the proxy injects `2023-06-01` (override by providing the header explicitly).
 - Gemini (Google AI Studio Gemini API) auth uses query parameter `key` (if missing and `api_key` is configured on the upstream, the proxy injects it). Streaming is SSE; token usage is extracted from `usageMetadata` when present.
+- `log_level` controls runtime tracing output (default: `silent`, meaning no logs). Allowed: `silent`, `error`, `warn`, `info`, `debug`, `trace`.
+  - When `log_level` is `debug`/`trace`, the proxy logs request headers (redacting auth headers) and small request bodies (up to 64KiB).
 - `priority` sorts descending; within the same priority group, upstreams follow the list order in the config file.
 - `enabled` disables an upstream without deleting it; disabled upstreams are ignored during load balancing.
 - `model_mappings` rewrites model names per upstream (exact match, prefix with `*`, wildcard `*`). Priority: exact > prefix > wildcard. Responses return the original model alias when a mapping applies.

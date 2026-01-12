@@ -57,6 +57,7 @@ impl ProxyConfig {
 
 fn build_runtime_config(app: &AppHandle, config: ProxyConfigFile) -> Result<ProxyConfig, String> {
     let log_path = io::resolve_log_path(app, &config.log_path)?;
+    let log_level = config.log_level;
     let max_request_body_bytes = resolve_max_request_body_bytes(config.max_request_body_bytes);
     let normalized_upstreams = normalize::normalize_upstreams(&config.upstreams)?;
     let upstreams = normalize::build_provider_upstreams(normalized_upstreams)?;
@@ -65,6 +66,7 @@ fn build_runtime_config(app: &AppHandle, config: ProxyConfigFile) -> Result<Prox
         port: config.port,
         local_api_key: config.local_api_key,
         log_path,
+        log_level,
         max_request_body_bytes,
         enable_api_format_conversion: config.enable_api_format_conversion,
         upstream_strategy: config.upstream_strategy,

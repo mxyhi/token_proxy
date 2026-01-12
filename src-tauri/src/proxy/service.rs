@@ -13,6 +13,7 @@ use super::log::LogWriter;
 use super::sqlite;
 use super::server;
 use super::ProxyState;
+use crate::logging::LoggingState;
 
 /// 默认优雅停机等待时间；超时后会强制 abort server task。
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -329,6 +330,9 @@ async fn build_proxy_state(
     config: ProxyConfig,
     sqlite_pool: Option<SqlitePool>,
 ) -> Result<Arc<ProxyState>, String> {
+    if let Some(logging_state) = app.try_state::<LoggingState>() {
+        logging_state.apply_level(config.log_level);
+    }
     let log = Arc::new(
         LogWriter::new(&config.log_path, sqlite_pool)
             .await

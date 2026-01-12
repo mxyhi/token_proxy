@@ -26,6 +26,7 @@ use super::{
     upstream::forward_upstream_request,
     ProxyState, RequestMeta,
 };
+use crate::logging::LogLevel;
 
 const PROVIDER_ANTHROPIC: &str = "anthropic";
 const PROVIDER_GEMINI: &str = "gemini";
@@ -33,6 +34,7 @@ const ANTHROPIC_MESSAGES_PREFIX: &str = "/v1/messages";
 const ANTHROPIC_COMPLETE_PATH: &str = "/v1/complete";
 const REQUEST_META_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 const REQUEST_TRANSFORM_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+const DEBUG_BODY_LOG_LIMIT_BYTES: usize = 64 * 1024;
 
 type ProxyStateHandle = Arc<RwLock<Arc<ProxyState>>>;
 
@@ -201,6 +203,7 @@ async fn proxy_request(
 ) -> Response {
     // 只在此处短暂持有读锁，避免影响并发请求性能。
     let state = { state.read().await.clone() };
+    let is_debug_log = matches!(state.config.log_level, LogLevel::Debug | LogLevel::Trace);
     let path = uri.path();
     tracing::info!(method = %method, path = %path, "incoming request");
     tracing::debug!(headers = ?headers.keys().collect::<Vec<_>>(), "request headers");
@@ -230,6 +233,9 @@ async fn proxy_request(
             )
         }
     };
+    if is_debug_log {
+        log_debug_request(&headers, &body).await;
+    }
     let meta = parse_request_meta_best_effort(&path, &body).await;
     let outbound_path = plan.outbound_path.unwrap_or(path.as_str());
     let outbound_path_with_query = uri
@@ -457,6 +463,48 @@ fn sum_text_value(value: &Value, model: Option<&str>) -> u64 {
     }
 }
 
+async fn log_debug_request(headers: &HeaderMap, body: &ReplayableBody) {
+    let header_snapshot: Vec<(String, String)> = headers
+        .iter()
+        .map(|(name, value)| {
+            let redacted = if is_sensitive_header(name.as_str()) {
+                "***".to_string()
+            } else {
+                value.to_str().unwrap_or("").to_string()
+            };
+            (name.to_string(), redacted)
+        })
+        .collect();
+
+    let body_text = match body.read_bytes_if_small(DEBUG_BODY_LOG_LIMIT_BYTES).await {
+        Ok(Some(bytes)) => {
+            let text = String::from_utf8_lossy(&bytes);
+            Some(text.into_owned())
+        }
+        Ok(None) => None,
+        Err(err) => {
+            tracing::debug!(error = %err, "debug body read failed");
+            None
+        }
+    };
+
+    match body_text {
+        Some(text) => {
+            tracing::debug!(headers = ?header_snapshot, body = %text, "incoming request debug dump");
+        }
+        None => {
+            tracing::debug!(headers = ?header_snapshot, "incoming request body omitted (too large)");
+        }
+    }
+}
+
+fn is_sensitive_header(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "authorization" | "proxy-authorization" | "x-api-key"
+    )
+}
+
 async fn maybe_transform_request_body(
     transform: FormatTransform,
     body: ReplayableBody,
@@ -553,6 +601,7 @@ mod tests {
 
     use axum::body::Bytes;
     use crate::proxy::config::{ProviderUpstreams, ProxyConfig, UpstreamStrategy};
+    use crate::logging::LogLevel;
 
     fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
         tokio::runtime::Runtime::new()
@@ -570,6 +619,7 @@ mod tests {
             port: 9208,
             local_api_key: None,
             log_path: PathBuf::from("proxy.log"),
+            log_level: LogLevel::Silent,
             max_request_body_bytes: 20 * 1024 * 1024,
             enable_api_format_conversion,
             upstream_strategy: UpstreamStrategy::PriorityRoundRobin,

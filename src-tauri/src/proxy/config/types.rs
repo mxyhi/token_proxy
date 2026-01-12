@@ -1,11 +1,12 @@
 use axum::http::header::{HeaderName, HeaderValue};
-use serde::{Deserialize, Serialize};
+use serde::{de, Deserialize, Deserializer, Serialize};
 use std::{
     collections::HashMap,
     path::PathBuf,
 };
 
 use super::model_mapping::ModelMappingRules;
+use crate::logging::LogLevel;
 
 fn default_enabled() -> bool {
     true
@@ -22,6 +23,10 @@ fn default_proxy_port() -> u16 {
 
 fn default_tray_token_rate_enabled() -> bool {
     true
+}
+
+fn default_log_level() -> LogLevel {
+    LogLevel::Silent
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -95,6 +100,8 @@ pub(crate) struct ProxyConfigFile {
     pub(crate) port: u16,
     pub(crate) local_api_key: Option<String>,
     pub(crate) log_path: String,
+    #[serde(default = "default_log_level", deserialize_with = "deserialize_log_level")]
+    pub(crate) log_level: LogLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) max_request_body_bytes: Option<u64>,
     #[serde(default)]
@@ -116,6 +123,7 @@ impl Default for ProxyConfigFile {
             port: default_proxy_port(),
             local_api_key: None,
             log_path: "proxy.log".to_string(),
+            log_level: LogLevel::default(),
             max_request_body_bytes: None,
             tray_token_rate: TrayTokenRateConfig::default(),
             enable_api_format_conversion: false,
@@ -172,10 +180,31 @@ pub(crate) struct ProxyConfig {
     pub(crate) port: u16,
     pub(crate) local_api_key: Option<String>,
     pub(crate) log_path: PathBuf,
+    pub(crate) log_level: LogLevel,
     pub(crate) max_request_body_bytes: usize,
     pub(crate) enable_api_format_conversion: bool,
     pub(crate) upstream_strategy: UpstreamStrategy,
     pub(crate) upstreams: HashMap<String, ProviderUpstreams>,
+}
+
+fn deserialize_log_level<'de, D>(deserializer: D) -> Result<LogLevel, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let raw = Option::<String>::deserialize(deserializer)?;
+    let value = raw.unwrap_or_default().trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok(LogLevel::Silent);
+    }
+    match value.as_str() {
+        "silent" => Ok(LogLevel::Silent),
+        "error" => Ok(LogLevel::Error),
+        "warn" | "warning" => Ok(LogLevel::Warn),
+        "info" => Ok(LogLevel::Info),
+        "debug" => Ok(LogLevel::Debug),
+        "trace" => Ok(LogLevel::Trace),
+        other => Err(de::Error::custom(format!("invalid log_level: {other}"))),
+    }
 }
 
 #[derive(Clone)]

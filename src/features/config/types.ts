@@ -15,6 +15,8 @@ export const TRAY_TOKEN_RATE_FORMATS = [
 
 export type TrayTokenRateFormat = (typeof TRAY_TOKEN_RATE_FORMATS)[number]["value"];
 
+export type LogLevel = "silent" | "error" | "warn" | "info" | "debug" | "trace";
+
 export type TrayTokenRateConfig = {
   enabled: boolean;
   format: TrayTokenRateFormat;
@@ -38,6 +40,7 @@ export type ProxyConfigFileBase = {
   port: number;
   local_api_key: string | null;
   log_path: string;
+  log_level?: LogLevel;
   tray_token_rate: TrayTokenRateConfig;
   enable_api_format_conversion: boolean;
   upstream_strategy: UpstreamStrategy;
@@ -92,6 +95,7 @@ export type ConfigForm = {
   port: string;
   localApiKey: string;
   logPath: string;
+  logLevel: LogLevel;
   trayTokenRate: TrayTokenRateConfig;
   enableApiFormatConversion: boolean;
   upstreamStrategy: UpstreamStrategy;

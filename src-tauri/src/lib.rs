@@ -1,14 +1,14 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod logging;
 mod proxy;
 mod tray;
 
 use std::time::Instant;
 use tauri::Manager;
-#[cfg(debug_assertions)]
-use tracing_subscriber::{fmt, EnvFilter};
 
 type ProxyServiceHandle = proxy::service::ProxyServiceHandle;
 type ProxyServiceStatus = proxy::service::ProxyServiceStatus;
+type LogLevel = logging::LogLevel;
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 
@@ -77,6 +77,7 @@ async fn write_proxy_config(
     app: tauri::AppHandle,
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,
+    logging_state: tauri::State<'_, logging::LoggingState>,
     config: proxy::config::ProxyConfigFile,
 ) -> Result<ProxyServiceStatus, String> {
     tracing::debug!("write_proxy_config start");
@@ -88,6 +89,7 @@ async fn write_proxy_config(
         elapsed_ms = apply_start.elapsed().as_millis(),
         "write_proxy_config apply_config done"
     );
+    let log_level = config.log_level;
     if let Err(err) = proxy::config::write_config(app.clone(), config).await {
         tracing::error!(error = %err, "write_proxy_config save failed");
         tray_state.apply_error("保存失败", &err);
@@ -95,6 +97,7 @@ async fn write_proxy_config(
     }
     tracing::debug!(elapsed_ms = start.elapsed().as_millis(), "write_proxy_config saved");
     let reload_start = Instant::now();
+    logging_state.apply_level(log_level);
     match proxy_service.reload(app).await {
         Ok(status) => {
             tracing::debug!(
@@ -207,27 +210,10 @@ async fn proxy_reload(
     }
 }
 
-/// 初始化 tracing 日志系统
-fn init_tracing() {
-    // release 不初始化 tracing，避免任何运行时日志输出。
-    #[cfg(debug_assertions)]
-    {
-        let filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("token_proxy_lib=debug,tower_http=debug"));
-
-        fmt()
-            .with_env_filter(filter)
-            .with_target(true)
-            .with_thread_ids(false)
-            .with_file(true)
-            .with_line_number(true)
-            .init();
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    init_tracing();
+    // 默认 silent；后续加载配置后按需调整。
+    let logging_state = logging::LoggingState::init(LogLevel::Silent);
     tracing::info!("starting token_proxy application");
 
     let app = tauri::Builder::default()
@@ -244,6 +230,7 @@ pub fn run() {
             app.manage(token_rate.clone());
             let proxy_service = ProxyServiceHandle::new();
             app.manage(proxy_service.clone());
+            app.manage(logging_state.clone());
             let app_handle = app.handle().clone();
             let tray_state = tray::init_tray(&app_handle, proxy_service.clone())?;
             app.manage(tray_state.clone());
@@ -252,6 +239,7 @@ pub fn run() {
             let app_handle_for_config = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 if let Ok(response) = proxy::config::read_config(app_handle_for_config).await {
+                    logging_state.apply_level(response.config.log_level);
                     tray_state_for_config
                         .apply_config(&response.config.tray_token_rate)
                         .await;

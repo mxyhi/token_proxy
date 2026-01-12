@@ -6,8 +6,10 @@ use tauri::{AppHandle, Manager};
 use super::ProxyConfigFile;
 
 const CONFIG_FILE_NAME: &str = "config.jsonc";
-const DEFAULT_CONFIG_HEADER: &str =
-    "// Token Proxy config (JSONC). Comments and trailing commas are supported.\n";
+const DEFAULT_CONFIG_HEADER: &str = concat!(
+    "// Token Proxy config (JSONC). Comments and trailing commas are supported.\n",
+    "// log_level (optional): silent|error|warn|info|debug|trace. Default: silent.\n"
+);
 
 pub(super) async fn load_config_file(app: &AppHandle) -> Result<ProxyConfigFile, String> {
     let path = config_file_path(app)?;

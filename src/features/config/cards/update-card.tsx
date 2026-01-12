@@ -7,6 +7,7 @@ import {
   type SetStateAction,
 } from "react";
 import { getVersion } from "@tauri-apps/api/app";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { AlertCircle } from "lucide-react";
 
@@ -252,6 +253,18 @@ function useUpdateInstaller({ updateHandle, setState, markError }: UpdateInstall
   }, [markError, setState, updateHandle]);
 }
 
+function useAppRelauncher({ setState }: Pick<UpdateHelpers, "setState">) {
+  return useCallback(async () => {
+    setState((prev) => ({ ...prev, statusMessage: "" }));
+    try {
+      await relaunch();
+    } catch (error) {
+      // 安装成功但重启失败时，不应把更新状态标记为失败；仅展示错误提示。
+      setState((prev) => ({ ...prev, statusMessage: parseError(error) }));
+    }
+  }, [setState]);
+}
+
 function useUpdater() {
   const { state, setState, markError } = useUpdaterState();
   const checkForUpdate = useUpdateChecker({ setState, markError });
@@ -261,7 +274,9 @@ function useUpdater() {
     markError,
   });
 
-  return { state, actions: { checkForUpdate, downloadAndInstall } };
+  const relaunchApp = useAppRelauncher({ setState });
+
+  return { state, actions: { checkForUpdate, downloadAndInstall, relaunchApp } };
 }
 
 type UpdateStatusRowProps = {
@@ -355,11 +370,20 @@ function UpdateError({ message }: UpdateErrorProps) {
 type UpdateActionsProps = {
   canCheck: boolean;
   canInstall: boolean;
+  canRelaunch: boolean;
   onCheck: () => void;
   onInstall: () => void;
+  onRelaunch: () => void;
 };
 
-function UpdateActions({ canCheck, canInstall, onCheck, onInstall }: UpdateActionsProps) {
+function UpdateActions({
+  canCheck,
+  canInstall,
+  canRelaunch,
+  onCheck,
+  onInstall,
+  onRelaunch,
+}: UpdateActionsProps) {
   return (
     <div className="flex flex-wrap gap-2">
       <Button type="button" variant="outline" onClick={onCheck} disabled={!canCheck}>
@@ -368,6 +392,11 @@ function UpdateActions({ canCheck, canInstall, onCheck, onInstall }: UpdateActio
       <Button type="button" onClick={onInstall} disabled={!canInstall}>
         {m.update_download_install()}
       </Button>
+      {canRelaunch ? (
+        <Button type="button" variant="secondary" onClick={onRelaunch}>
+          {m.update_restart_now()}
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -398,6 +427,7 @@ export function UpdateCard() {
   const canCheck =
     state.status !== "checking" && state.status !== "downloading" && state.status !== "installing";
   const canInstall = state.status === "available" && !!state.updateHandle;
+  const canRelaunch = state.status === "installed";
 
   return (
     <Card data-slot="update-card">
@@ -420,8 +450,10 @@ export function UpdateCard() {
         <UpdateActions
           canCheck={canCheck}
           canInstall={canInstall}
+          canRelaunch={canRelaunch}
           onCheck={actions.checkForUpdate}
           onInstall={actions.downloadAndInstall}
+          onRelaunch={actions.relaunchApp}
         />
       </CardFooter>
     </Card>

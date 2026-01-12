@@ -148,6 +148,7 @@
   "update_last_checked": "Last checked: {time}",
   "update_check": "Check for updates",
   "update_download_install": "Download & install",
+  "update_restart_now": "Restart now",
   "update_status_idle": "Not checked",
   "update_status_checking": "Checking",
   "update_status_available": "Update available",

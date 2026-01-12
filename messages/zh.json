@@ -140,6 +140,7 @@
   "update_last_checked": "上次检查时间：{time}",
   "update_check": "检查更新",
   "update_download_install": "下载并安装",
+  "update_restart_now": "立即重启",
   "update_status_idle": "待检查",
   "update_status_checking": "检查中",
   "update_status_available": "可更新",

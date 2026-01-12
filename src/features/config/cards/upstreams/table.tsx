@@ -167,9 +167,9 @@ function UpstreamRowActions({
           aria-label={enabled ? m.upstreams_row_disable({ rowLabel }) : m.upstreams_row_enable({ rowLabel })}
         >
           {enabled ? (
-            <Check className="size-4 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
-          ) : (
             <Ban className="size-4 text-muted-foreground" aria-hidden="true" />
+          ) : (
+            <Check className="size-4 text-emerald-600 dark:text-emerald-400" aria-hidden="true" />
           )}
         </Button>
         <Button

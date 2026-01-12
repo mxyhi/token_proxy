@@ -1,23 +1,10 @@
-import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
   CardDescription,
-  CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
 import { m } from "@/paraglide/messages.js";
 
@@ -25,14 +12,12 @@ type ConfigFileCardProps = {
   configPath: string;
   savedAt: string;
   isDirty: boolean;
-  onReset: () => void;
 };
 
 export function ConfigFileCard({
   configPath,
   savedAt,
   isDirty,
-  onReset,
 }: ConfigFileCardProps) {
   return (
     <Card data-slot="config-file-card">
@@ -63,29 +48,6 @@ export function ConfigFileCard({
           </div>
         ) : null}
       </CardContent>
-      <CardFooter>
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button type="button" variant="outline" disabled={!isDirty}>
-              {m.config_file_discard_changes()}
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>{m.config_file_discard_title()}</AlertDialogTitle>
-              <AlertDialogDescription>
-                {m.config_file_discard_description()}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>{m.common_cancel()}</AlertDialogCancel>
-              <AlertDialogAction type="button" onClick={onReset}>
-                {m.config_file_discard_action()}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </CardFooter>
     </Card>
   );
 }

@@ -4,6 +4,17 @@ import { useMemo, type CSSProperties } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -58,7 +69,6 @@ type AppViewProps = {
     patch: Partial<ConfigForm["upstreams"][number]>
   ) => void;
   onSave: () => void;
-  onReset: () => void;
   onReload: () => void;
   onProxyServiceRefresh: () => void;
   onProxyServiceStart: () => void;
@@ -86,7 +96,7 @@ function ConfigToolbar({
 }: ConfigToolbarProps) {
   const isLoading = status === "loading";
   const isSaving = status === "saving";
-  const canReload = !isLoading && !isDirty;
+  const canReload = !isLoading && !isSaving;
 
   return (
     <div
@@ -102,19 +112,47 @@ function ConfigToolbar({
         </p>
       </div>
       <div className="flex items-center gap-2">
-        <Button
-          type="button"
-          variant="outline"
-          size="icon"
-          onClick={onReload}
-          disabled={!canReload}
-        >
-          <RefreshCw
-            className={isLoading ? "animate-spin" : undefined}
-            aria-hidden="true"
-          />
-          <span className="sr-only">{m.common_refresh()}</span>
-        </Button>
+        {isDirty ? (
+          <AlertDialog>
+            <AlertDialogTrigger asChild>
+              <Button type="button" variant="outline" size="icon" disabled={!canReload}>
+                <RefreshCw
+                  className={isLoading ? "animate-spin" : undefined}
+                  aria-hidden="true"
+                />
+                <span className="sr-only">{m.common_refresh()}</span>
+              </Button>
+            </AlertDialogTrigger>
+            <AlertDialogContent>
+              <AlertDialogHeader>
+                <AlertDialogTitle>{m.config_file_discard_title()}</AlertDialogTitle>
+                <AlertDialogDescription>
+                  {m.config_file_discard_description()}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel>{m.common_cancel()}</AlertDialogCancel>
+                <AlertDialogAction type="button" onClick={onReload}>
+                  {m.common_refresh()}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={onReload}
+            disabled={!canReload}
+          >
+            <RefreshCw
+              className={isLoading ? "animate-spin" : undefined}
+              aria-hidden="true"
+            />
+            <span className="sr-only">{m.common_refresh()}</span>
+          </Button>
+        )}
         <Button type="button" onClick={onSave} disabled={!canSave}>
           {isSaving ? (
             <Loader2 className="animate-spin" aria-hidden="true" />
@@ -195,7 +233,6 @@ function ConfigSectionBody({
             configPath={props.configPath}
             savedAt={props.savedAt}
             isDirty={props.isDirty}
-            onReset={props.onReset}
           />
           <UpdateCard />
         </div>

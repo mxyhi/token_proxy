@@ -215,7 +215,6 @@ function useConfigDerived(
 
 type ConfigActionsArgs = {
   currentPayload: ProxyConfigFile | null;
-  lastConfig: ProxyConfigFile | null;
   validation: { valid: boolean; message: string };
   setConfigPath: (path: string) => void;
   setForm: (value: ConfigForm) => void;
@@ -307,7 +306,6 @@ async function saveConfigImpl({
 
 function useConfigActions({
   currentPayload,
-  lastConfig,
   validation,
   setConfigPath,
   setForm,
@@ -364,15 +362,7 @@ function useConfigActions({
     ]
   );
 
-  const resetForm = useCallback(() => {
-    if (!lastConfig) {
-      return;
-    }
-    setForm(toForm(lastConfig));
-    setStatusMessage("");
-  }, [lastConfig, setForm, setStatusMessage]);
-
-  return { loadConfig, saveConfig, resetForm };
+  return { loadConfig, saveConfig };
 }
 
 type ConfigState = ReturnType<typeof useConfigState>;
@@ -427,7 +417,6 @@ function buildAppViewProps({
     onRemoveUpstream: listActions.removeUpstream,
     onChangeUpstream: listActions.updateUpstream,
     onSave: configActions.saveConfig,
-    onReset: configActions.resetForm,
     onReload: configActions.loadConfig,
     onProxyServiceRefresh: proxyActions.refreshProxyStatus,
     onProxyServiceStart: proxyActions.startProxy,
@@ -454,7 +443,6 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
   const { refreshProxyStatus } = proxyActions;
   const configActions = useConfigActions({
     currentPayload: derived.currentPayload,
-    lastConfig: state.lastConfig,
     validation: derived.validation,
     setConfigPath: state.setConfigPath,
     setForm: state.setForm,

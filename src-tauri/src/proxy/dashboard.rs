@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use tauri::AppHandle;
+use std::collections::HashMap;
 
 use super::sqlite;
 
@@ -89,6 +90,7 @@ pub(crate) async fn read_snapshot(
     let summary = query_summary(&pool, from_ts_ms, to_ts_ms).await?;
     let providers = query_providers(&pool, from_ts_ms, to_ts_ms).await?;
     let series = query_series(&pool, from_ts_ms, to_ts_ms, bucket_ms).await?;
+    let series = fill_series_buckets(series, from_ts_ms, to_ts_ms, bucket_ms);
     let recent = query_recent(&pool, from_ts_ms, to_ts_ms, offset).await?;
 
     Ok(DashboardSnapshot {
@@ -251,6 +253,82 @@ ORDER BY bucket_ts_ms ASC;
     Ok(series)
 }
 
+fn fill_series_buckets(
+    series: Vec<DashboardSeriesPoint>,
+    from_ts_ms: Option<i64>,
+    to_ts_ms: Option<i64>,
+    bucket_ms: u64,
+) -> Vec<DashboardSeriesPoint> {
+    if bucket_ms == 0 {
+        return series;
+    }
+
+    let resolved_from_ts_ms = from_ts_ms.or_else(|| {
+        series
+            .first()
+            .and_then(|point| i64::try_from(point.ts_ms).ok())
+    });
+    let resolved_to_ts_ms = to_ts_ms.or_else(|| {
+        series
+            .last()
+            .and_then(|point| i64::try_from(point.ts_ms).ok())
+    });
+
+    // range=all 且没有任何数据时交给前端兜底（最近 7 天 0 线）。
+    let (resolved_from_ts_ms, resolved_to_ts_ms) = match (resolved_from_ts_ms, resolved_to_ts_ms) {
+        (Some(from), Some(to)) => (from, to),
+        _ => return series,
+    };
+
+    let start_bucket_ts_ms = align_down_bucket_ts_ms(resolved_from_ts_ms, bucket_ms);
+    let end_bucket_ts_ms = align_down_bucket_ts_ms(resolved_to_ts_ms, bucket_ms);
+
+    let (start_bucket_ts_ms, end_bucket_ts_ms) = if end_bucket_ts_ms < start_bucket_ts_ms {
+        (start_bucket_ts_ms, start_bucket_ts_ms)
+    } else {
+        (start_bucket_ts_ms, end_bucket_ts_ms)
+    };
+
+    let by_bucket: HashMap<u64, DashboardSeriesPoint> = series
+        .into_iter()
+        .map(|point| (point.ts_ms, point))
+        .collect();
+
+    let expected_len = ((end_bucket_ts_ms - start_bucket_ts_ms) / bucket_ms).saturating_add(1);
+    let mut filled = Vec::with_capacity(usize::try_from(expected_len).unwrap_or(usize::MAX));
+
+    let mut cursor_ts_ms = start_bucket_ts_ms;
+    while cursor_ts_ms <= end_bucket_ts_ms {
+        if let Some(point) = by_bucket.get(&cursor_ts_ms) {
+            filled.push(point.clone());
+        } else {
+            filled.push(DashboardSeriesPoint {
+                ts_ms: cursor_ts_ms,
+                total_requests: 0,
+                error_requests: 0,
+                input_tokens: 0,
+                output_tokens: 0,
+                cached_tokens: 0,
+            });
+        }
+
+        match cursor_ts_ms.checked_add(bucket_ms) {
+            Some(next) => cursor_ts_ms = next,
+            None => break,
+        }
+    }
+
+    filled
+}
+
+fn align_down_bucket_ts_ms(ts_ms: i64, bucket_ms: u64) -> u64 {
+    let ts_ms = i64_to_u64(ts_ms);
+    if bucket_ms == 0 {
+        return ts_ms;
+    }
+    (ts_ms / bucket_ms) * bucket_ms
+}
+
 async fn query_recent(
     pool: &sqlx::SqlitePool,
     from_ts_ms: Option<i64>,
@@ -382,4 +460,68 @@ fn i64_to_u64(value: i64) -> u64 {
 
 fn i64_to_u16(value: i64) -> u16 {
     value.clamp(0, u16::MAX as i64) as u16
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn series_point(ts_ms: u64, total_requests: u64) -> DashboardSeriesPoint {
+        DashboardSeriesPoint {
+            ts_ms,
+            total_requests,
+            error_requests: 0,
+            input_tokens: total_requests,
+            output_tokens: 0,
+            cached_tokens: 0,
+        }
+    }
+
+    #[test]
+    fn fill_series_buckets_inserts_missing_points() {
+        let bucket_ms = 60_000;
+        let series = vec![series_point(0, 1), series_point(120_000, 2)];
+        let filled = fill_series_buckets(series, Some(0), Some(120_000), bucket_ms);
+        assert_eq!(filled.len(), 3);
+        assert_eq!(filled[0].ts_ms, 0);
+        assert_eq!(filled[0].total_requests, 1);
+        assert_eq!(filled[1].ts_ms, 60_000);
+        assert_eq!(filled[1].total_requests, 0);
+        assert_eq!(filled[2].ts_ms, 120_000);
+        assert_eq!(filled[2].total_requests, 2);
+    }
+
+    #[test]
+    fn fill_series_buckets_pads_start_and_end_of_range() {
+        let bucket_ms = 60_000;
+        let series = vec![series_point(120_000, 3)];
+        let filled = fill_series_buckets(series, Some(0), Some(180_000), bucket_ms);
+        assert_eq!(filled.len(), 4);
+        assert_eq!(filled[0].ts_ms, 0);
+        assert_eq!(filled[0].total_requests, 0);
+        assert_eq!(filled[1].ts_ms, 60_000);
+        assert_eq!(filled[1].total_requests, 0);
+        assert_eq!(filled[2].ts_ms, 120_000);
+        assert_eq!(filled[2].total_requests, 3);
+        assert_eq!(filled[3].ts_ms, 180_000);
+        assert_eq!(filled[3].total_requests, 0);
+    }
+
+    #[test]
+    fn fill_series_buckets_handles_empty_series_with_explicit_range() {
+        let bucket_ms = 60_000;
+        let filled = fill_series_buckets(Vec::new(), Some(0), Some(120_000), bucket_ms);
+        assert_eq!(filled.len(), 3);
+        assert_eq!(filled[0].ts_ms, 0);
+        assert_eq!(filled[1].ts_ms, 60_000);
+        assert_eq!(filled[2].ts_ms, 120_000);
+        assert!(filled.iter().all(|point| point.total_requests == 0));
+    }
+
+    #[test]
+    fn fill_series_buckets_returns_original_when_range_unknown_and_empty() {
+        let bucket_ms = 60_000;
+        let filled = fill_series_buckets(Vec::new(), None, None, bucket_ms);
+        assert!(filled.is_empty());
+    }
 }

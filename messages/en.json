@@ -39,7 +39,7 @@
   "config_section_upstreams_label": "Upstreams",
   "config_section_upstreams_desc": "Provider pools and API keys",
   "config_section_agents_label": "Agents",
-  "config_section_agents_desc": "Claude Code / Codex / OpenCode auto-setup",
+  "config_section_agents_desc": "Agents auto-setup",
   "config_section_settings_label": "Settings",
   "config_section_settings_desc": "Config file, validation, and updates",
 
@@ -158,7 +158,7 @@
   "project_links_github_label": "GitHub",
   "project_links_open": "Open",
 
-  "client_setup_title": "Claude Code / Codex / OpenCode Auto Setup",
+  "client_setup_title": "Agents Auto Setup",
   "client_setup_desc": "Write local config files so tools can use Token Proxy directly.",
   "client_setup_proxy_base_url_label": "Proxy Base URL",
   "client_setup_dirty_notice": "You have unsaved proxy changes. Save first to avoid writing stale settings.",

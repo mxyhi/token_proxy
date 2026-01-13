@@ -24,6 +24,7 @@ import {
   ProjectLinksCard,
   ProxyCoreCard,
   StrategyCard,
+  TrayTokenRateCard,
   UpdateCard,
   UpstreamsCard,
   ValidationCard,
@@ -236,6 +237,10 @@ function ConfigSectionBody({
             configPath={props.configPath}
             savedAt={props.savedAt}
             isDirty={props.isDirty}
+          />
+          <TrayTokenRateCard
+            value={props.form.trayTokenRate}
+            onChange={(nextValue) => props.onFormChange({ trayTokenRate: nextValue })}
           />
           <ValidationCard form={props.form} validation={props.validation} />
           <ProjectLinksCard />

@@ -1,3 +1,5 @@
+import { Info } from "lucide-react";
+
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -10,13 +12,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ProxyServicePanel, type ProxyServiceViewProps } from "@/features/config/cards/proxy-service-card";
-import {
-  type ConfigForm,
-  LOG_LEVELS,
-  type TrayTokenRateFormat,
-  TRAY_TOKEN_RATE_FORMATS,
-} from "@/features/config/types";
+import { type ConfigForm, LOG_LEVELS } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
 type ProxyCoreCardProps = {
@@ -91,7 +89,23 @@ function ProxyCoreFields({ form, showLocalKey, onToggleLocalKey, onChange }: Pro
           />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="proxy-log-level">{m.proxy_core_log_level_label()}</Label>
+          <div className="flex items-center gap-2">
+            <Label htmlFor="proxy-log-level">{m.proxy_core_log_level_label()}</Label>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground"
+                  aria-label={m.proxy_core_log_level_help()}
+                >
+                  <Info className="size-3.5" aria-hidden="true" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" align="start">
+                {m.proxy_core_log_level_help()}
+              </TooltipContent>
+            </Tooltip>
+          </div>
           <Select
             value={form.logLevel}
             onValueChange={(nextValue) => {
@@ -112,7 +126,6 @@ function ProxyCoreFields({ form, showLocalKey, onToggleLocalKey, onChange }: Pro
               ))}
             </SelectContent>
           </Select>
-          <p className="text-xs text-muted-foreground">{m.proxy_core_log_level_help()}</p>
         </div>
       </div>
     </>
@@ -157,70 +170,6 @@ function ProxyCoreFormatConversion({ enabled, onToggle }: ProxyCoreFormatConvers
   );
 }
 
-const TRAY_TOKEN_RATE_FORMAT_VALUES: ReadonlySet<string> = new Set(
-  TRAY_TOKEN_RATE_FORMATS.map((format) => format.value)
-);
-
-function toTrayTokenRateFormat(value: string): TrayTokenRateFormat | null {
-  return TRAY_TOKEN_RATE_FORMAT_VALUES.has(value) ? (value as TrayTokenRateFormat) : null;
-}
-
-type ProxyCoreTrayTokenRateProps = {
-  value: ConfigForm["trayTokenRate"];
-  onChange: (value: ConfigForm["trayTokenRate"]) => void;
-};
-
-function ProxyCoreTrayTokenRate({ value, onChange }: ProxyCoreTrayTokenRateProps) {
-  return (
-    <div className="rounded-md border border-border/60 bg-background/60 p-3">
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
-          <p className="text-sm font-medium text-foreground">
-            {m.proxy_core_tray_token_rate_title()}
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {m.proxy_core_tray_token_rate_desc()}
-          </p>
-        </div>
-        <Switch
-          checked={value.enabled}
-          onCheckedChange={(checked) => onChange({ ...value, enabled: checked })}
-          aria-label={m.proxy_core_tray_token_rate_aria()}
-        />
-      </div>
-      <div className="mt-3 grid gap-2">
-        <Label htmlFor="tray-token-rate-format">
-          {m.proxy_core_tray_token_rate_format_label()}
-        </Label>
-        <Select
-          value={value.format}
-          onValueChange={(nextValue) => {
-            const nextFormat = toTrayTokenRateFormat(nextValue);
-            if (nextFormat) {
-              onChange({ ...value, format: nextFormat });
-            }
-          }}
-          disabled={!value.enabled}
-        >
-          <SelectTrigger id="tray-token-rate-format">
-            <SelectValue placeholder={m.proxy_core_tray_token_rate_format_placeholder()} />
-          </SelectTrigger>
-          <SelectContent>
-            {TRAY_TOKEN_RATE_FORMATS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label()}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground">
-          {m.proxy_core_tray_token_rate_macos_only()}
-        </p>
-      </div>
-    </div>
-  );
-}
-
 type ProxyCoreServiceSectionProps = {
   proxyService: ProxyServiceViewProps;
 };
@@ -258,10 +207,6 @@ export function ProxyCoreCard({
         <ProxyCoreFormatConversion
           enabled={form.enableApiFormatConversion}
           onToggle={(checked) => onChange({ enableApiFormatConversion: checked })}
-        />
-        <ProxyCoreTrayTokenRate
-          value={form.trayTokenRate}
-          onChange={(nextValue) => onChange({ trayTokenRate: nextValue })}
         />
         <ProxyCoreServiceSection proxyService={proxyService} />
       </CardContent>

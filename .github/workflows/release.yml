@@ -97,14 +97,19 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
+            node_arch: arm64
           - platform: macos-15-intel
             target: x86_64-apple-darwin
+            node_arch: x64
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            node_arch: x64
           - platform: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            node_arch: x64
           - platform: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            node_arch: arm64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -119,8 +124,26 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
+          architecture: ${{ matrix.node_arch }}
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
+
+      # macos-latest 是 GitHub-hosted 的 Apple Silicon (arm64) runner；
+      # 显式指定 Node 为 arm64，避免在 Rosetta/x64 Node 下导致 tauri/产物架构误判。
+      - name: Verify macOS (arm64) runner & Node arch
+        if: matrix.platform == 'macos-latest'
+        shell: bash
+        run: |
+          echo "uname -m: $(uname -m)"
+          echo "node process.arch: $(node -p 'process.arch')"
+          if [ "$(uname -m)" != "arm64" ]; then
+            echo "Expected macos-latest to be arm64 (Apple Silicon) runner." >&2
+            exit 1
+          fi
+          if [ "$(node -p 'process.arch')" != "arm64" ]; then
+            echo "Expected arm64 Node on macos-latest; otherwise tauri may run under Rosetta and produce wrong artifacts." >&2
+            exit 1
+          fi
 
       - name: Ensure pnpm store directory exists
         run: node scripts/ensure-pnpm-store.mjs
@@ -170,6 +193,46 @@ jobs:
           releaseBody: ${{ needs.stable_tag.outputs.release_notes }}
           prerelease: false
           generateReleaseNotes: false
+
+      - name: Verify macOS (aarch64) updater assets uploaded
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ needs.stable_tag.outputs.tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          expected=(
+            "Token.Proxy_aarch64.app.tar.gz"
+            "Token.Proxy_aarch64.app.tar.gz.sig"
+          )
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}"
+
+          for attempt in {1..12}; do
+            names="$(
+              curl -fsSL \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "$api" \
+              | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8")); console.log((r.assets ?? []).map(a => a.name).join("\n"));'
+            )"
+
+            missing=()
+            for name in "${expected[@]}"; do
+              echo "$names" | grep -qx "$name" || missing+=("$name")
+            done
+
+            if [ ${#missing[@]} -eq 0 ]; then
+              echo "All expected macOS (aarch64) updater assets are present."
+              exit 0
+            fi
+
+            echo "Waiting for release assets: ${missing[*]} (attempt ${attempt}/12)"
+            sleep 5
+          done
+
+          echo "Missing expected macOS (aarch64) updater assets after retries: ${missing[*]}" >&2
+          exit 1
 
   stable_updater_json:
     name: Generate updater latest.json

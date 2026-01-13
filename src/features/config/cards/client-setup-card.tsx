@@ -14,9 +14,18 @@ type ClientSetupInfo = {
   claude_base_url: string;
   claude_auth_token_configured: boolean;
   codex_config_path: string;
-  codex_openai_base_url: string;
   codex_auth_path: string;
-  codex_openai_api_key_configured: boolean;
+  codex_disable_response_storage: boolean;
+  codex_model: string;
+  codex_model_provider: string;
+  codex_model_reasoning_effort: string;
+  codex_network_access: string;
+  codex_preferred_auth_method: string;
+  codex_provider_base_url: string;
+  codex_provider_name: string;
+  codex_provider_requires_openai_auth: boolean;
+  codex_provider_wire_api: string;
+  codex_api_key_configured: boolean;
 };
 
 type ClientConfigWriteResult = {
@@ -232,11 +241,22 @@ export function ClientSetupCard({ savedAt, isDirty }: ClientSetupCardProps) {
                   {m.client_setup_effective_config_label()}
                 </p>
                 <div className="space-y-1 font-mono text-xs text-foreground/80">
-                  <div>[model_providers.openai]</div>
-                  <div>base_url = "{setup.codex_openai_base_url}"</div>
+                  <div>disable_response_storage = {setup.codex_disable_response_storage ? "true" : "false"}</div>
+                  <div>model = "{setup.codex_model}"</div>
+                  <div>model_provider = "{setup.codex_model_provider}"</div>
+                  <div>model_reasoning_effort = "{setup.codex_model_reasoning_effort}"</div>
+                  <div>network_access = "{setup.codex_network_access}"</div>
+                  <div>preferred_auth_method = "{setup.codex_preferred_auth_method}"</div>
+                  <div>[model_providers.{setup.codex_model_provider}]</div>
+                  <div>base_url = "{setup.codex_provider_base_url}"</div>
+                  <div>name = "{setup.codex_provider_name}"</div>
+                  <div>
+                    requires_openai_auth = {setup.codex_provider_requires_openai_auth ? "true" : "false"}
+                  </div>
+                  <div>wire_api = "{setup.codex_provider_wire_api}"</div>
                   <div>
                     {`auth.json: OPENAI_API_KEY = "${
-                      setup.codex_openai_api_key_configured
+                      setup.codex_api_key_configured
                         ? "••••••••"
                         : m.client_setup_not_configured()
                     }"`}

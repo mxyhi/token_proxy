@@ -91,8 +91,8 @@ curl -X POST \
 
 ## 一键写 CLI 配置
 - Claude Code：写入 `~/.claude/settings.json` 的 `env`（`ANTHROPIC_BASE_URL`，若有本地密钥则写 `ANTHROPIC_AUTH_TOKEN`）
-- Codex：写入 `~/.codex/config.toml` 的 `[model_providers.openai].base_url` → `http://127.0.0.1:<port>/v1`；写入 `~/.codex/auth.json` 的 `OPENAI_API_KEY`
-- 写入前会生成 `.bak` 备份；写完重启对应 CLI 生效
+- Codex：写入 `~/.codex/config.toml` 的 `model_provider="token_proxy"` 与 `[model_providers.token_proxy].base_url` → `http://127.0.0.1:<port>/v1`；写入 `~/.codex/auth.json` 的 `OPENAI_API_KEY`
+- 写入前会生成 `.token_proxy.bak` 备份；写完重启对应 CLI 生效
 
 ## FAQ
 - **端口被占用？** 修改 `config.jsonc` 里的 `port`，并同步更新客户端 base URL

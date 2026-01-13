@@ -153,7 +153,7 @@
   "client_setup_effective_env_label": "将写入的环境变量",
   "client_setup_effective_config_label": "将写入的配置片段",
   "client_setup_not_configured": "未配置",
-  "client_setup_backup_hint": "覆盖写入前会生成 .bak 备份文件。",
+  "client_setup_backup_hint": "覆盖写入前会生成 .token_proxy.bak 备份文件。",
   "client_setup_plaintext_warning": "注意：会将 token 以明文写入磁盘。请确保本机用户目录安全。",
   "client_setup_apply": "写入",
   "client_setup_apply_success": "已写入：{path}",

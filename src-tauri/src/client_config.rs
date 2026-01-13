@@ -8,6 +8,16 @@ use tauri::Manager;
 
 use crate::proxy::config::ProxyConfigFile;
 
+const CODEX_DISABLE_RESPONSE_STORAGE: bool = true;
+const CODEX_MODEL: &str = "gpt-5.2-codex";
+const CODEX_MODEL_PROVIDER: &str = "token_proxy";
+const CODEX_MODEL_REASONING_EFFORT: &str = "xhigh";
+const CODEX_NETWORK_ACCESS: &str = "enabled";
+const CODEX_PREFERRED_AUTH_METHOD: &str = "apikey";
+const CODEX_PROVIDER_NAME: &str = "token_proxy";
+const CODEX_PROVIDER_REQUIRES_OPENAI_AUTH: bool = true;
+const CODEX_PROVIDER_WIRE_API: &str = "responses";
+
 #[derive(Clone, Serialize)]
 pub(crate) struct ClientSetupInfo {
     pub(crate) proxy_http_base_url: String,
@@ -18,8 +28,18 @@ pub(crate) struct ClientSetupInfo {
 
     pub(crate) codex_config_path: String,
     pub(crate) codex_auth_path: String,
-    pub(crate) codex_openai_base_url: String,
-    pub(crate) codex_openai_api_key_configured: bool,
+
+    pub(crate) codex_disable_response_storage: bool,
+    pub(crate) codex_model: String,
+    pub(crate) codex_model_provider: String,
+    pub(crate) codex_model_reasoning_effort: String,
+    pub(crate) codex_network_access: String,
+    pub(crate) codex_preferred_auth_method: String,
+    pub(crate) codex_provider_base_url: String,
+    pub(crate) codex_provider_name: String,
+    pub(crate) codex_provider_requires_openai_auth: bool,
+    pub(crate) codex_provider_wire_api: String,
+    pub(crate) codex_api_key_configured: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -37,6 +57,7 @@ pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
         .local_api_key
         .as_ref()
         .is_some_and(|key| !key.trim().is_empty());
+    let codex_provider_base_url = build_codex_provider_base_url(&proxy_http_base_url);
 
     Ok(ClientSetupInfo {
         proxy_http_base_url: proxy_http_base_url.clone(),
@@ -45,8 +66,17 @@ pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
         claude_auth_token_configured: has_local_key,
         codex_config_path: codex_config_path.to_string_lossy().to_string(),
         codex_auth_path: codex_auth_path.to_string_lossy().to_string(),
-        codex_openai_base_url: format!("{proxy_http_base_url}/v1"),
-        codex_openai_api_key_configured: has_local_key,
+        codex_disable_response_storage: CODEX_DISABLE_RESPONSE_STORAGE,
+        codex_model: CODEX_MODEL.to_string(),
+        codex_model_provider: CODEX_MODEL_PROVIDER.to_string(),
+        codex_model_reasoning_effort: CODEX_MODEL_REASONING_EFFORT.to_string(),
+        codex_network_access: CODEX_NETWORK_ACCESS.to_string(),
+        codex_preferred_auth_method: CODEX_PREFERRED_AUTH_METHOD.to_string(),
+        codex_provider_base_url,
+        codex_provider_name: CODEX_PROVIDER_NAME.to_string(),
+        codex_provider_requires_openai_auth: CODEX_PROVIDER_REQUIRES_OPENAI_AUTH,
+        codex_provider_wire_api: CODEX_PROVIDER_WIRE_API.to_string(),
+        codex_api_key_configured: has_local_key,
     })
 }
 
@@ -90,23 +120,35 @@ pub(crate) async fn write_codex_config(app: AppHandle) -> Result<ClientConfigWri
     let proxy_http_base_url = build_proxy_http_base_url(&config)?;
     let config_path = resolve_codex_config_path(&app)?;
     let auth_path = resolve_codex_auth_path(&app)?;
+    let codex_provider_base_url = build_codex_provider_base_url(&proxy_http_base_url);
 
     // Codex 默认 config 路径为 $CODEX_HOME/config.toml，其中 CODEX_HOME 默认是 ~/.codex。
-    // 为了让 Codex 直接走本地代理，我们仅 patch model_providers.openai：
-    // - base_url = http://127.0.0.1:<port>/v1
+    // 为了让 Codex 直接走本地代理，我们写入固定的 token_proxy provider 配置，并尽量不动其他字段。
     //
-    // 鉴权不写 experimental_bearer_token，而是写 $CODEX_HOME/auth.json 的 OPENAI_API_KEY。
+    // - base_url = http://127.0.0.1:<port>/v1
+    // - preferred_auth_method = apikey
+    // - token 写入 $CODEX_HOME/auth.json 的 OPENAI_API_KEY（而非 experimental_bearer_token）
     let input = read_text_or_empty(&config_path).await?;
     let mut doc = toml_edit::DocumentMut::from_str(&input)
         .map_err(|err| format!("Failed to parse Codex config.toml: {err}"))?;
 
+    doc["disable_response_storage"] = toml_edit::value(CODEX_DISABLE_RESPONSE_STORAGE);
+    doc["model"] = toml_edit::value(CODEX_MODEL);
+    doc["model_provider"] = toml_edit::value(CODEX_MODEL_PROVIDER);
+    doc["model_reasoning_effort"] = toml_edit::value(CODEX_MODEL_REASONING_EFFORT);
+    doc["network_access"] = toml_edit::value(CODEX_NETWORK_ACCESS);
+    doc["preferred_auth_method"] = toml_edit::value(CODEX_PREFERRED_AUTH_METHOD);
+
     ensure_toml_table_path(&mut doc, &["model_providers"])?;
-    ensure_toml_table_path(&mut doc, &["model_providers", "openai"])?;
+    ensure_toml_table_path(&mut doc, &["model_providers", CODEX_MODEL_PROVIDER])?;
 
-    doc["model_providers"]["openai"]["base_url"] =
-        toml_edit::value(format!("{proxy_http_base_url}/v1"));
+    doc["model_providers"][CODEX_MODEL_PROVIDER]["base_url"] = toml_edit::value(codex_provider_base_url);
+    doc["model_providers"][CODEX_MODEL_PROVIDER]["name"] = toml_edit::value(CODEX_PROVIDER_NAME);
+    doc["model_providers"][CODEX_MODEL_PROVIDER]["requires_openai_auth"] =
+        toml_edit::value(CODEX_PROVIDER_REQUIRES_OPENAI_AUTH);
+    doc["model_providers"][CODEX_MODEL_PROVIDER]["wire_api"] = toml_edit::value(CODEX_PROVIDER_WIRE_API);
 
-    if let Some(table) = doc["model_providers"]["openai"].as_table_mut() {
+    if let Some(table) = doc["model_providers"][CODEX_MODEL_PROVIDER].as_table_mut() {
         table.remove("experimental_bearer_token");
     }
 
@@ -194,6 +236,10 @@ fn build_proxy_http_base_url(config: &ProxyConfigFile) -> Result<String, String>
     Ok(format!("http://{url_host}:{}", config.port))
 }
 
+fn build_codex_provider_base_url(proxy_http_base_url: &str) -> String {
+    format!("{proxy_http_base_url}/v1")
+}
+
 async fn read_text_or_empty(path: &Path) -> Result<String, String> {
     match tokio::fs::read_to_string(path).await {
         Ok(contents) => Ok(contents),
@@ -239,7 +285,7 @@ async fn write_json_with_backup(path: &Path, value: &serde_json::Value) -> Resul
         .map_err(|err| format!("Failed to create {}: {err}", parent.display()))?;
 
     if tokio::fs::try_exists(path).await.unwrap_or(false) {
-        let backup_path = path.with_extension("json.bak");
+        let backup_path = build_backup_path(path);
         let contents = tokio::fs::read_to_string(path)
             .await
             .map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
@@ -264,7 +310,7 @@ async fn write_text_with_backup(path: &Path, contents: String) -> Result<(), Str
         .map_err(|err| format!("Failed to create {}: {err}", parent.display()))?;
 
     if tokio::fs::try_exists(path).await.unwrap_or(false) {
-        let backup_path = path.with_extension("toml.bak");
+        let backup_path = build_backup_path(path);
         let old = tokio::fs::read_to_string(path)
             .await
             .map_err(|err| format!("Failed to read {}: {err}", path.display()))?;
@@ -282,6 +328,17 @@ async fn write_text_with_backup(path: &Path, contents: String) -> Result<(), Str
         .await
         .map_err(|err| format!("Failed to write {}: {err}", path.display()))?;
     Ok(())
+}
+
+fn build_backup_path(path: &Path) -> PathBuf {
+    match path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .filter(|ext| !ext.is_empty())
+    {
+        Some(extension) => path.with_extension(format!("{extension}.token_proxy.bak")),
+        None => path.with_extension("token_proxy.bak"),
+    }
 }
 
 fn ensure_toml_table_path(

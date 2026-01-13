@@ -161,7 +161,7 @@
   "client_setup_effective_env_label": "Effective env",
   "client_setup_effective_config_label": "Effective config",
   "client_setup_not_configured": "not configured",
-  "client_setup_backup_hint": "A .bak file is created before overwriting.",
+  "client_setup_backup_hint": "A .token_proxy.bak file is created before overwriting.",
   "client_setup_plaintext_warning": "Note: this writes tokens to disk in plain text. Keep your home directory secure.",
   "client_setup_apply": "Write",
   "client_setup_apply_success": "Wrote: {path}",

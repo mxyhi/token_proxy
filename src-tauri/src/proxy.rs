@@ -1,6 +1,8 @@
 pub(crate) mod config;
 pub(crate) mod dashboard;
 mod http_client;
+pub(crate) mod logs;
+pub(crate) mod request_detail;
 pub(crate) mod service;
 mod gemini;
 mod http;
@@ -26,6 +28,7 @@ struct ProxyState {
     http_clients: http_client::ProxyHttpClients,
     log: Arc<log::LogWriter>,
     cursors: HashMap<String, Vec<AtomicUsize>>,
+    request_detail: Arc<request_detail::RequestDetailCapture>,
     token_rate: Arc<token_rate::TokenRateTracker>,
 }
 

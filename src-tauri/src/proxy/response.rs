@@ -13,6 +13,7 @@ use std::{
 use super::{
     http,
     log::{build_log_entry, LogContext, LogWriter},
+    request_detail::RequestDetailSnapshot,
     model,
     openai_compat::{transform_response_body, FormatTransform},
     token_rate::{RequestTokenTracker, TokenRateTracker},
@@ -24,6 +25,7 @@ const PROVIDER_OPENAI: &str = "openai";
 const PROVIDER_OPENAI_RESPONSES: &str = "openai-response";
 const PROVIDER_ANTHROPIC: &str = "anthropic";
 const PROVIDER_GEMINI: &str = "gemini";
+const RESPONSE_ERROR_LIMIT_BYTES: usize = 256 * 1024;
 
 pub(super) async fn build_proxy_response(
     meta: &RequestMeta,
@@ -35,9 +37,14 @@ pub(super) async fn build_proxy_response(
     token_rate: Arc<TokenRateTracker>,
     start: Instant,
     response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
 ) -> Response {
     let status = upstream_res.status();
     let mut response_headers = http::filter_response_headers(upstream_res.headers());
+    let capture_active = request_detail.is_some();
+    let (request_headers, request_body) = request_detail
+        .map(|detail| (detail.request_headers, detail.request_body))
+        .unwrap_or((None, None));
     let context = LogContext {
         path: inbound_path.to_string(),
         provider: provider.to_string(),
@@ -47,6 +54,8 @@ pub(super) async fn build_proxy_response(
         stream: meta.stream,
         status: status.as_u16(),
         upstream_request_id: http::extract_request_id(upstream_res.headers()),
+        request_headers,
+        request_body,
         start,
     };
     let model_override = meta.model_override();
@@ -62,7 +71,8 @@ pub(super) async fn build_proxy_response(
     let request_tracker = token_rate
         .register(model_for_tokens, meta.estimated_input_tokens)
         .await;
-    if meta.stream {
+    let should_stream = meta.stream && !status.is_client_error() && !status.is_server_error();
+    if should_stream {
         build_stream_response(
             status,
             upstream_res,
@@ -84,6 +94,7 @@ pub(super) async fn build_proxy_response(
             request_tracker,
             response_transform,
             model_override,
+            capture_active,
         )
         .await
     }
@@ -99,9 +110,14 @@ pub(super) async fn build_proxy_response_buffered(
     token_rate: Arc<TokenRateTracker>,
     start: Instant,
     response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
 ) -> Response {
     let status = upstream_res.status();
     let mut response_headers = http::filter_response_headers(upstream_res.headers());
+    let capture_active = request_detail.is_some();
+    let (request_headers, request_body) = request_detail
+        .map(|detail| (detail.request_headers, detail.request_body))
+        .unwrap_or((None, None));
     let context = LogContext {
         path: inbound_path.to_string(),
         provider: provider.to_string(),
@@ -111,6 +127,8 @@ pub(super) async fn build_proxy_response_buffered(
         stream: meta.stream,
         status: status.as_u16(),
         upstream_request_id: http::extract_request_id(upstream_res.headers()),
+        request_headers,
+        request_body,
         start,
     };
     let model_override = meta.model_override();
@@ -134,6 +152,7 @@ pub(super) async fn build_proxy_response_buffered(
         request_tracker,
         response_transform,
         model_override,
+        capture_active,
     )
     .await
 }
@@ -206,6 +225,7 @@ async fn build_buffered_response(
     request_tracker: RequestTokenTracker,
     response_transform: FormatTransform,
     model_override: Option<&str>,
+    capture_active: bool,
 ) -> Response {
     let bytes = match upstream_res.bytes().await {
         Ok(bytes) => bytes,
@@ -217,7 +237,12 @@ async fn build_buffered_response(
         }
     };
     let usage = extract_usage_from_response(&bytes);
-    let entry = build_log_entry(&context, usage);
+    let response_error = if capture_active && (status.is_client_error() || status.is_server_error()) {
+        Some(response_error_text(&bytes))
+    } else {
+        None
+    };
+    let entry = build_log_entry(&context, usage, response_error);
     log.clone().write_detached(entry);
 
     let output = if response_transform != FormatTransform::None && status.is_success() {
@@ -361,6 +386,15 @@ fn collect_gemini_output(candidates: &[Value], texts: &mut Vec<String>) {
             }
         }
     }
+}
+
+fn response_error_text(bytes: &Bytes) -> String {
+    let slice = bytes.as_ref();
+    if slice.len() <= RESPONSE_ERROR_LIMIT_BYTES {
+        return String::from_utf8_lossy(slice).to_string();
+    }
+    let truncated = &slice[..RESPONSE_ERROR_LIMIT_BYTES];
+    format!("{}... (truncated)", String::from_utf8_lossy(truncated))
 }
 
 mod chat_to_responses;

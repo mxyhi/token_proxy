@@ -5,6 +5,7 @@ mod logging;
 mod proxy;
 mod tray;
 
+use std::sync::Arc;
 use std::time::Instant;
 use tauri::Manager;
 
@@ -156,6 +157,34 @@ async fn read_dashboard_snapshot(
 }
 
 #[tauri::command]
+async fn read_request_log_detail(
+    app: tauri::AppHandle,
+    id: u64,
+) -> Result<proxy::logs::RequestLogDetail, String> {
+    proxy::logs::read_request_log_detail(app, id).await
+}
+
+#[tauri::command]
+fn read_request_detail_capture(
+    capture_state: tauri::State<'_, Arc<proxy::request_detail::RequestDetailCapture>>,
+) -> bool {
+    capture_state.is_armed()
+}
+
+#[tauri::command]
+fn set_request_detail_capture(
+    capture_state: tauri::State<'_, Arc<proxy::request_detail::RequestDetailCapture>>,
+    enabled: bool,
+) -> bool {
+    if enabled {
+        capture_state.arm();
+    } else {
+        capture_state.disarm();
+    }
+    capture_state.is_armed()
+}
+
+#[tauri::command]
 async fn proxy_status(
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,
@@ -254,6 +283,8 @@ pub fn run() {
 
             let token_rate = proxy::token_rate::TokenRateTracker::new();
             app.manage(token_rate.clone());
+            let request_detail = Arc::new(proxy::request_detail::RequestDetailCapture::default());
+            app.manage(request_detail);
             let proxy_service = ProxyServiceHandle::new();
             app.manage(proxy_service.clone());
             app.manage(logging_state.clone());
@@ -315,6 +346,9 @@ pub fn run() {
             write_opencode_config,
             write_proxy_config,
             read_dashboard_snapshot,
+            read_request_log_detail,
+            read_request_detail_capture,
+            set_request_detail_capture,
             proxy_status,
             proxy_start,
             proxy_stop,

@@ -87,6 +87,9 @@ CREATE TABLE IF NOT EXISTS request_logs (
   cached_tokens INTEGER,
   usage_json TEXT,
   upstream_request_id TEXT,
+  request_headers TEXT,
+  request_body TEXT,
+  response_error TEXT,
   latency_ms INTEGER NOT NULL
 );
 "#,
@@ -140,6 +143,27 @@ async fn ensure_request_logs_columns(pool: &SqlitePool) -> Result<(), String> {
             .execute(pool)
             .await
             .map_err(|err| format!("Failed to add usage_json column: {err}"))?;
+    }
+
+    if !columns.contains("request_headers") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN request_headers TEXT;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add request_headers column: {err}"))?;
+    }
+
+    if !columns.contains("request_body") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN request_body TEXT;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add request_body column: {err}"))?;
+    }
+
+    if !columns.contains("response_error") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN response_error TEXT;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add response_error column: {err}"))?;
     }
 
     Ok(())

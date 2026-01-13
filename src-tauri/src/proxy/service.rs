@@ -10,6 +10,7 @@ use tokio::time::timeout;
 
 use super::config::ProxyConfig;
 use super::log::LogWriter;
+use super::request_detail::RequestDetailCapture;
 use super::sqlite;
 use super::server;
 use super::ProxyState;
@@ -336,6 +337,10 @@ async fn build_proxy_state(
     let log = Arc::new(LogWriter::new(sqlite_pool));
     let http_clients = super::http_client::ProxyHttpClients::new()?;
     let cursors = server::build_upstream_cursors(&config);
+    let request_detail = app
+        .state::<Arc<RequestDetailCapture>>()
+        .inner()
+        .clone();
     let token_rate = app
         .state::<Arc<super::token_rate::TokenRateTracker>>()
         .inner()
@@ -345,6 +350,7 @@ async fn build_proxy_state(
         http_clients,
         log,
         cursors,
+        request_detail,
         token_rate,
     }))
 }

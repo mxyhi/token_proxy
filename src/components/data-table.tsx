@@ -22,6 +22,7 @@ type DataTableProps = {
   scrollKey: string
   onPrevPage: () => void
   onNextPage: () => void
+  onSelectItem?: (item: DashboardRequestItem) => void
 }
 
 export function DataTable({
@@ -34,6 +35,7 @@ export function DataTable({
   scrollKey,
   onPrevPage,
   onNextPage,
+  onSelectItem,
 }: DataTableProps) {
   return (
     <div className="px-4 lg:px-6">
@@ -77,7 +79,11 @@ export function DataTable({
         </CardHeader>
         <CardContent className="pt-0">
           {items.length ? (
-            <RecentRequestsTable items={items} scrollKey={scrollKey} />
+            <RecentRequestsTable
+              items={items}
+              scrollKey={scrollKey}
+              onSelectItem={onSelectItem}
+            />
           ) : (
             <p className="text-sm text-muted-foreground">{m.dashboard_no_data()}</p>
           )}

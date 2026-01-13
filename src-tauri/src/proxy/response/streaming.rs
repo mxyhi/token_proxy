@@ -52,7 +52,7 @@ pub(super) fn stream_with_logging(
                     for text in texts {
                         token_tracker.add_output_text(&text).await;
                     }
-                    let entry = build_log_entry(&context, collector.finish());
+                    let entry = build_log_entry(&context, collector.finish(), None);
                     log.clone().write_detached(entry);
                     Err(std::io::Error::new(std::io::ErrorKind::Other, err))
                 }
@@ -67,7 +67,7 @@ pub(super) fn stream_with_logging(
                     for text in texts {
                         token_tracker.add_output_text(&text).await;
                     }
-                    let entry = build_log_entry(&context, collector.finish());
+                    let entry = build_log_entry(&context, collector.finish(), None);
                     log.clone().write_detached(entry);
                     Ok(None)
                 }
@@ -186,7 +186,7 @@ where
         if self.logged {
             return;
         }
-        let entry = build_log_entry(&self.context, self.collector.finish());
+        let entry = build_log_entry(&self.context, self.collector.finish(), None);
         self.log.clone().write_detached(entry);
         self.logged = true;
     }

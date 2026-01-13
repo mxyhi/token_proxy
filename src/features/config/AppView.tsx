@@ -42,6 +42,7 @@ import type {
   ProxyServiceStatus,
 } from "@/features/config/types";
 import { DashboardPanel } from "@/features/dashboard/DashboardPanel";
+import { LogsPanel } from "@/features/logs/LogsPanel";
 import { m } from "@/paraglide/messages.js";
 
 type AppViewProps = {
@@ -265,6 +266,9 @@ function ConfigSectionContent({
 }: ConfigSectionContentProps) {
   if (activeSectionId === "dashboard") {
     return <DashboardPanel />;
+  }
+  if (activeSectionId === "logs") {
+    return <LogsPanel />;
   }
 
   return (

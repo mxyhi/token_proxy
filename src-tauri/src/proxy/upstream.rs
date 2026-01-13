@@ -16,6 +16,7 @@ const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const GEMINI_API_KEY_QUERY: &str = "key";
 const GEMINI_API_KEY_HEADER: HeaderName = HeaderName::from_static("x-goog-api-key");
+const LOCAL_UPSTREAM_ID: &str = "local";
 
 mod utils;
 
@@ -32,9 +33,10 @@ use super::{
     gemini,
     http,
     http::RequestAuth,
-    log::LogWriter,
+    log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     model,
     openai_compat::FormatTransform,
+    request_detail::RequestDetailSnapshot,
     request_body::ReplayableBody,
     response::{build_proxy_response, build_proxy_response_buffered},
     ProxyState,
@@ -54,6 +56,7 @@ pub(super) async fn forward_upstream_request(
     meta: RequestMeta,
     request_auth: RequestAuth,
     response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
 ) -> Response {
     let mut last_retry_error: Option<String> = None;
     let mut last_retry_response: Option<Response> = None;
@@ -62,7 +65,20 @@ pub(super) async fn forward_upstream_request(
 
     let upstreams = match state.config.provider_upstreams(provider) {
         Some(upstreams) => upstreams,
-        None => return http::error_response(StatusCode::BAD_GATEWAY, "No available upstream configured."),
+        None => {
+            log_upstream_error_if_needed(
+                &state.log,
+                request_detail.as_ref(),
+                &meta,
+                provider,
+                LOCAL_UPSTREAM_ID,
+                inbound_path,
+                StatusCode::BAD_GATEWAY,
+                "No available upstream configured.".to_string(),
+                Instant::now(),
+            );
+            return http::error_response(StatusCode::BAD_GATEWAY, "No available upstream configured.");
+        }
     };
 
     for (group_index, group) in upstreams.groups.iter().enumerate() {
@@ -83,6 +99,7 @@ pub(super) async fn forward_upstream_request(
             &meta,
             &request_auth,
             response_transform,
+            request_detail.clone(),
         )
         .await;
         attempted += result.attempted;
@@ -99,6 +116,17 @@ pub(super) async fn forward_upstream_request(
     }
 
     if attempted == 0 && missing_auth {
+        log_upstream_error_if_needed(
+            &state.log,
+            request_detail.as_ref(),
+            &meta,
+            provider,
+            LOCAL_UPSTREAM_ID,
+            inbound_path,
+            StatusCode::UNAUTHORIZED,
+            "Missing upstream API key.".to_string(),
+            Instant::now(),
+        );
         return http::error_response(StatusCode::UNAUTHORIZED, "Missing upstream API key.");
     }
     if let Some(response) = last_retry_response {
@@ -148,6 +176,7 @@ async fn try_group_upstreams(
     meta: &RequestMeta,
     request_auth: &RequestAuth,
     response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
 ) -> GroupAttemptResult {
     let mut last_retry_error = None;
     let mut last_retry_response = None;
@@ -168,6 +197,7 @@ async fn try_group_upstreams(
             meta,
             request_auth,
             response_transform,
+            request_detail.clone(),
         )
         .await;
         if !matches!(outcome, AttemptOutcome::SkippedAuth) {
@@ -215,6 +245,7 @@ async fn attempt_upstream(
     meta: &RequestMeta,
     request_auth: &RequestAuth,
     response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
 ) -> AttemptOutcome {
     let prepared = match prepare_upstream_request(
         provider,
@@ -256,6 +287,7 @@ async fn attempt_upstream(
         state.token_rate.clone(),
         start_time,
         response_transform,
+        request_detail,
     )
     .await
 }
@@ -323,6 +355,7 @@ async fn handle_upstream_result(
     token_rate: Arc<super::token_rate::TokenRateTracker>,
     start_time: Instant,
     response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
 ) -> AttemptOutcome {
     match upstream_res {
         Ok(res) if is_retryable_status(res.status()) => {
@@ -336,6 +369,7 @@ async fn handle_upstream_result(
                 token_rate,
                 start_time,
                 response_transform,
+                request_detail.clone(),
             )
             .await;
             AttemptOutcome::Retryable {
@@ -354,19 +388,84 @@ async fn handle_upstream_result(
                 token_rate,
                 start_time,
                 response_transform,
+                request_detail.clone(),
             )
             .await;
             AttemptOutcome::Success(response)
         }
-        Err(err) if is_retryable_error(&err) => AttemptOutcome::Retryable {
-            message: sanitize_upstream_error(provider, &err),
-            response: None,
-        },
-        Err(err) => AttemptOutcome::Fatal(http::error_response(
-            StatusCode::BAD_GATEWAY,
-            format!("Upstream request failed: {}", sanitize_upstream_error(provider, &err)),
-        )),
+        Err(err) if is_retryable_error(&err) => {
+            let message = sanitize_upstream_error(provider, &err);
+            log_upstream_error_if_needed(
+                &log,
+                request_detail.as_ref(),
+                meta,
+                provider,
+                upstream_id,
+                inbound_path,
+                StatusCode::BAD_GATEWAY,
+                message.clone(),
+                start_time,
+            );
+            AttemptOutcome::Retryable {
+                message,
+                response: None,
+            }
+        }
+        Err(err) => {
+            let message = sanitize_upstream_error(provider, &err);
+            log_upstream_error_if_needed(
+                &log,
+                request_detail.as_ref(),
+                meta,
+                provider,
+                upstream_id,
+                inbound_path,
+                StatusCode::BAD_GATEWAY,
+                format!("Upstream request failed: {message}"),
+                start_time,
+            );
+            AttemptOutcome::Fatal(http::error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("Upstream request failed: {message}"),
+            ))
+        }
     }
+}
+
+fn log_upstream_error_if_needed(
+    log: &Arc<LogWriter>,
+    request_detail: Option<&RequestDetailSnapshot>,
+    meta: &RequestMeta,
+    provider: &str,
+    upstream_id: &str,
+    inbound_path: &str,
+    status: StatusCode,
+    response_error: String,
+    start_time: Instant,
+) {
+    let Some(detail) = request_detail else {
+        return;
+    };
+    let context = LogContext {
+        path: inbound_path.to_string(),
+        provider: provider.to_string(),
+        upstream_id: upstream_id.to_string(),
+        model: meta.original_model.clone(),
+        mapped_model: meta.mapped_model.clone(),
+        stream: meta.stream,
+        status: status.as_u16(),
+        upstream_request_id: None,
+        request_headers: detail.request_headers.clone(),
+        request_body: detail.request_body.clone(),
+        start: start_time,
+    };
+    let usage = UsageSnapshot {
+        usage: None,
+        cached_tokens: None,
+        usage_json: None,
+    };
+    let entry = build_log_entry(&context, usage, Some(response_error));
+    log.clone().write_detached(entry);
 }
 
 fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestMeta {

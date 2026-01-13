@@ -53,6 +53,8 @@ async fn setup_responses_stream() -> (Arc<LogWriter>, LogContext, SqlitePool) {
         stream: true,
         status: 200,
         upstream_request_id: None,
+        request_headers: None,
+        request_body: None,
         start: Instant::now(),
     };
     (log, context, sqlite_pool)
@@ -256,11 +258,13 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
             upstream_id: "unit-test".to_string(),
             model: Some("unit-model".to_string()),
             mapped_model: Some("unit-model".to_string()),
-            stream: true,
-            status: 200,
-            upstream_request_id: None,
-            start: Instant::now(),
-        };
+        stream: true,
+        status: 200,
+        upstream_request_id: None,
+        request_headers: None,
+        request_body: None,
+        start: Instant::now(),
+    };
 
         let first_event = "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n";
         let (first_a, first_b) = first_event.split_at(12);
@@ -367,11 +371,13 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
             upstream_id: "unit-test".to_string(),
             model: Some("unit-model".to_string()),
             mapped_model: Some("unit-model".to_string()),
-            stream: true,
-            status: 200,
-            upstream_request_id: None,
-            start: Instant::now(),
-        };
+        stream: true,
+        status: 200,
+        upstream_request_id: None,
+        request_headers: None,
+        request_body: None,
+        start: Instant::now(),
+    };
 
         let upstream = futures_util::stream::iter(vec![
             Ok(Bytes::from(

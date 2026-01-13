@@ -574,7 +574,7 @@ where
             return;
         }
         self.logged = true;
-        let entry = build_log_entry(&self.context, self.collector.finish());
+        let entry = build_log_entry(&self.context, self.collector.finish(), None);
         self.log.clone().write_detached(entry);
     }
 

@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 use std::{
     collections::HashMap,
     sync::{atomic::AtomicUsize, Arc},
+    time::Instant,
 };
 use tokio::sync::RwLock;
 
@@ -17,10 +18,12 @@ use super::{
     config::ProxyConfig,
     gemini,
     http,
+    log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     openai_compat::{
         inbound_format, transform_request_body, ApiFormat, FormatTransform, CHAT_PATH,
         PROVIDER_CHAT, PROVIDER_RESPONSES, RESPONSES_PATH,
     },
+    request_detail::{capture_request_detail, serialize_request_headers, RequestDetailSnapshot},
     request_body::ReplayableBody,
     token_rate,
     upstream::forward_upstream_request,
@@ -30,6 +33,8 @@ use crate::logging::LogLevel;
 
 const PROVIDER_ANTHROPIC: &str = "anthropic";
 const PROVIDER_GEMINI: &str = "gemini";
+const PROVIDER_PROXY: &str = "proxy";
+const LOCAL_UPSTREAM_ID: &str = "local";
 const ANTHROPIC_MESSAGES_PREFIX: &str = "/v1/messages";
 const ANTHROPIC_COMPLETE_PATH: &str = "/v1/complete";
 const REQUEST_META_LIMIT_BYTES: usize = 2 * 1024 * 1024;
@@ -45,7 +50,7 @@ struct DispatchPlan {
     response_transform: FormatTransform,
 }
 
-fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPlan, Response> {
+fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPlan, String> {
     let has_chat = config.provider_upstreams(PROVIDER_CHAT).is_some();
     let has_responses = config.provider_upstreams(PROVIDER_RESPONSES).is_some();
     let has_anthropic = config.provider_upstreams(PROVIDER_ANTHROPIC).is_some();
@@ -61,10 +66,7 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
                 response_transform: FormatTransform::None,
             });
         }
-        return Err(http::error_response(
-            StatusCode::BAD_GATEWAY,
-            "No available upstream configured.",
-        ));
+        return Err("No available upstream configured.".to_string());
     }
 
     if is_anthropic_path(path) {
@@ -76,10 +78,7 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
                 response_transform: FormatTransform::None,
             });
         }
-        return Err(http::error_response(
-            StatusCode::BAD_GATEWAY,
-            "No available upstream configured.",
-        ));
+        return Err("No available upstream configured.".to_string());
     }
 
     let Some(format) = inbound_format(path) else {
@@ -107,10 +106,7 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
                 response_transform: FormatTransform::None,
             });
         }
-        return Err(http::error_response(
-            StatusCode::BAD_GATEWAY,
-            "No available upstream configured.",
-        ));
+        return Err("No available upstream configured.".to_string());
     };
 
     match format {
@@ -125,10 +121,7 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
             }
             if has_responses {
                 if !allow_format_conversion {
-                    return Err(http::error_response(
-                        StatusCode::BAD_GATEWAY,
-                        "OpenAI format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai\" for /v1/chat/completions or enable conversion.",
-                    ));
+                    return Err("OpenAI format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai\" for /v1/chat/completions or enable conversion.".to_string());
                 }
                 return Ok(DispatchPlan {
                     provider: PROVIDER_RESPONSES,
@@ -149,10 +142,7 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
             }
             if has_chat {
                 if !allow_format_conversion {
-                    return Err(http::error_response(
-                        StatusCode::BAD_GATEWAY,
-                        "OpenAI format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai-response\" for /v1/responses or enable conversion.",
-                    ));
+                    return Err("OpenAI format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai-response\" for /v1/responses or enable conversion.".to_string());
                 }
                 return Ok(DispatchPlan {
                     provider: PROVIDER_CHAT,
@@ -164,10 +154,7 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
         }
     }
 
-    Err(http::error_response(
-        StatusCode::BAD_GATEWAY,
-        "No available upstream configured.",
-    ))
+    Err("No available upstream configured.".to_string())
 }
 
 pub(crate) fn build_upstream_cursors(config: &ProxyConfig) -> HashMap<String, Vec<AtomicUsize>> {
@@ -194,6 +181,70 @@ pub(crate) fn build_router(
         .with_state(state)
 }
 
+#[derive(Debug)]
+struct RequestError {
+    status: StatusCode,
+    message: String,
+}
+
+impl RequestError {
+    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            message: message.into(),
+        }
+    }
+}
+
+async fn capture_detail_from_body(
+    headers: &HeaderMap,
+    body: Body,
+    max_body_bytes: usize,
+) -> RequestDetailSnapshot {
+    match ReplayableBody::from_body(body).await {
+        Ok(replayable) => capture_request_detail(headers, &replayable, max_body_bytes).await,
+        Err(err) => RequestDetailSnapshot {
+            request_headers: serialize_request_headers(headers),
+            request_body: Some(format!("Failed to read request body: {err}")),
+        },
+    }
+}
+
+fn log_request_error(
+    log: &Arc<LogWriter>,
+    detail: Option<RequestDetailSnapshot>,
+    path: &str,
+    provider: &str,
+    upstream_id: &str,
+    status: StatusCode,
+    response_error: String,
+    start: Instant,
+) {
+    let Some(detail) = detail else {
+        return;
+    };
+    let context = LogContext {
+        path: path.to_string(),
+        provider: provider.to_string(),
+        upstream_id: upstream_id.to_string(),
+        model: None,
+        mapped_model: None,
+        stream: false,
+        status: status.as_u16(),
+        upstream_request_id: None,
+        request_headers: detail.request_headers,
+        request_body: detail.request_body,
+        start,
+    };
+    let usage = UsageSnapshot {
+        usage: None,
+        cached_tokens: None,
+        usage_json: None,
+    };
+    let entry = build_log_entry(&context, usage, Some(response_error));
+    log.clone().write_detached(entry);
+}
+
 async fn proxy_request(
     State(state): State<ProxyStateHandle>,
     method: Method,
@@ -203,15 +254,31 @@ async fn proxy_request(
 ) -> Response {
     // 只在此处短暂持有读锁，避免影响并发请求性能。
     let state = { state.read().await.clone() };
+    let request_start = Instant::now();
+    let capture_next = state.request_detail.take();
     let is_debug_log = cfg!(debug_assertions)
         && matches!(state.config.log_level, LogLevel::Debug | LogLevel::Trace);
     let path = uri.path();
     tracing::info!(method = %method, path = %path, "incoming request");
     tracing::debug!(headers = ?headers.keys().collect::<Vec<_>>(), "request headers");
 
-    if let Err(response) = http::ensure_local_auth(&state.config, &headers) {
+    if let Err(message) = http::ensure_local_auth(&state.config, &headers) {
         tracing::warn!("local auth failed");
-        return response;
+        if capture_next {
+            let detail =
+                capture_detail_from_body(&headers, body, state.config.max_request_body_bytes).await;
+            log_request_error(
+                &state.log,
+                Some(detail),
+                path,
+                PROVIDER_PROXY,
+                LOCAL_UPSTREAM_ID,
+                StatusCode::UNAUTHORIZED,
+                message.clone(),
+                request_start,
+            );
+        }
+        return http::error_response(StatusCode::UNAUTHORIZED, message);
     }
     let (path, _) = extract_request_path(&uri);
     let plan = match resolve_dispatch_plan(&state.config, &path) {
@@ -219,25 +286,63 @@ async fn proxy_request(
             tracing::debug!(provider = %plan.provider, "dispatch plan resolved");
             plan
         }
-        Err(response) => {
+        Err(message) => {
             tracing::warn!("no dispatch plan found");
-            return response;
+            if capture_next {
+                let detail =
+                    capture_detail_from_body(&headers, body, state.config.max_request_body_bytes)
+                        .await;
+                log_request_error(
+                    &state.log,
+                    Some(detail),
+                    &path,
+                    PROVIDER_PROXY,
+                    LOCAL_UPSTREAM_ID,
+                    StatusCode::BAD_GATEWAY,
+                    message.clone(),
+                    request_start,
+                );
+            }
+            return http::error_response(StatusCode::BAD_GATEWAY, message);
         }
     };
 
     let body = match ReplayableBody::from_body(body).await {
         Ok(body) => body,
         Err(err) => {
-            return http::error_response(
-                StatusCode::BAD_REQUEST,
-                format!("Failed to read request body: {err}"),
-            )
+            let message = format!("Failed to read request body: {err}");
+            if capture_next {
+                let detail = RequestDetailSnapshot {
+                    request_headers: serialize_request_headers(&headers),
+                    request_body: Some(message.clone()),
+                };
+                log_request_error(
+                    &state.log,
+                    Some(detail),
+                    &path,
+                    PROVIDER_PROXY,
+                    LOCAL_UPSTREAM_ID,
+                    StatusCode::BAD_REQUEST,
+                    message.clone(),
+                    request_start,
+                );
+            }
+            return http::error_response(StatusCode::BAD_REQUEST, message);
         }
     };
     if is_debug_log {
         log_debug_request(&headers, &body).await;
     }
     let meta = parse_request_meta_best_effort(&path, &body).await;
+    let request_detail = if capture_next {
+        Some(capture_request_detail(
+            &headers,
+            &body,
+            state.config.max_request_body_bytes,
+        ).await)
+    } else {
+        None
+    };
     let outbound_path = plan.outbound_path.unwrap_or(path.as_str());
     let outbound_path_with_query = uri
         .query()
@@ -246,7 +351,19 @@ async fn proxy_request(
 
     let outbound_body = match maybe_transform_request_body(plan.request_transform, body).await {
         Ok(body) => body,
-        Err(response) => return response,
+        Err(err) => {
+            log_request_error(
+                &state.log,
+                request_detail.clone(),
+                &path,
+                plan.provider,
+                LOCAL_UPSTREAM_ID,
+                err.status,
+                err.message.clone(),
+                request_start,
+            );
+            return http::error_response(err.status, err.message);
+        }
     };
     let outbound_body = match maybe_force_openai_stream_options_include_usage(
         plan.provider,
@@ -257,11 +374,35 @@ async fn proxy_request(
     .await
     {
         Ok(body) => body,
-        Err(response) => return response,
+        Err(err) => {
+            log_request_error(
+                &state.log,
+                request_detail.clone(),
+                &path,
+                plan.provider,
+                LOCAL_UPSTREAM_ID,
+                err.status,
+                err.message.clone(),
+                request_start,
+            );
+            return http::error_response(err.status, err.message);
+        }
     };
     let request_auth = match http::resolve_request_auth(&state.config, &headers) {
         Ok(auth) => auth,
-        Err(response) => return response,
+        Err(message) => {
+            log_request_error(
+                &state.log,
+                request_detail.clone(),
+                &path,
+                plan.provider,
+                LOCAL_UPSTREAM_ID,
+                StatusCode::UNAUTHORIZED,
+                message.clone(),
+                request_start,
+            );
+            return http::error_response(StatusCode::UNAUTHORIZED, message);
+        }
     };
     forward_upstream_request(
         state,
@@ -274,6 +415,7 @@ async fn proxy_request(
         meta,
         request_auth,
         plan.response_transform,
+        request_detail,
     )
     .await
 }
@@ -509,7 +651,7 @@ fn is_sensitive_header(name: &str) -> bool {
 async fn maybe_transform_request_body(
     transform: FormatTransform,
     body: ReplayableBody,
-) -> Result<ReplayableBody, Response> {
+) -> Result<ReplayableBody, RequestError> {
     if transform == FormatTransform::None {
         return Ok(body);
     }
@@ -518,20 +660,20 @@ async fn maybe_transform_request_body(
         .read_bytes_if_small(REQUEST_TRANSFORM_LIMIT_BYTES)
         .await
         .map_err(|err| {
-            http::error_response(
+            RequestError::new(
                 StatusCode::BAD_REQUEST,
                 format!("Failed to read request body: {err}"),
             )
         })?
     else {
-        return Err(http::error_response(
+        return Err(RequestError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "Request body is too large to transform.",
         ));
     };
 
     let outbound_bytes = transform_request_body(transform, &bytes)
-        .map_err(|message| http::error_response(StatusCode::BAD_REQUEST, message))?;
+        .map_err(|message| RequestError::new(StatusCode::BAD_REQUEST, message))?;
     Ok(ReplayableBody::from_bytes(outbound_bytes))
 }
 
@@ -540,7 +682,7 @@ async fn maybe_force_openai_stream_options_include_usage(
     outbound_path: &str,
     meta: &RequestMeta,
     body: ReplayableBody,
-) -> Result<ReplayableBody, Response> {
+) -> Result<ReplayableBody, RequestError> {
     if provider != PROVIDER_CHAT || outbound_path != CHAT_PATH || !meta.stream {
         return Ok(body);
     }
@@ -549,7 +691,7 @@ async fn maybe_force_openai_stream_options_include_usage(
         .read_bytes_if_small(REQUEST_TRANSFORM_LIMIT_BYTES)
         .await
         .map_err(|err| {
-            http::error_response(
+            RequestError::new(
                 StatusCode::BAD_REQUEST,
                 format!("Failed to read request body: {err}"),
             )
@@ -590,7 +732,12 @@ async fn maybe_force_openai_stream_options_include_usage(
 
     let outbound_bytes = serde_json::to_vec(&value)
         .map(Bytes::from)
-        .map_err(|err| http::error_response(StatusCode::BAD_REQUEST, format!("Failed to serialize request: {err}")))?;
+        .map_err(|err| {
+            RequestError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Failed to serialize request: {err}"),
+            )
+        })?;
     Ok(ReplayableBody::from_bytes(outbound_bytes))
 }
 
@@ -630,10 +777,10 @@ mod tests {
     #[test]
     fn chat_fallback_requires_format_conversion_enabled() {
         let config = config_with_providers(&[PROVIDER_RESPONSES], false);
-        let response = resolve_dispatch_plan(&config, CHAT_PATH)
+        let error = resolve_dispatch_plan(&config, CHAT_PATH)
             .err()
             .expect("should reject");
-        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert!(error.contains("format conversion is disabled"));
 
         let config = config_with_providers(&[PROVIDER_RESPONSES], true);
         let plan = resolve_dispatch_plan(&config, CHAT_PATH).expect("should fallback");
@@ -646,10 +793,10 @@ mod tests {
     #[test]
     fn responses_fallback_requires_format_conversion_enabled() {
         let config = config_with_providers(&[PROVIDER_CHAT], false);
-        let response = resolve_dispatch_plan(&config, RESPONSES_PATH)
+        let error = resolve_dispatch_plan(&config, RESPONSES_PATH)
             .err()
             .expect("should reject");
-        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert!(error.contains("format conversion is disabled"));
 
         let config = config_with_providers(&[PROVIDER_CHAT], true);
         let plan = resolve_dispatch_plan(&config, RESPONSES_PATH).expect("should fallback");
@@ -691,10 +838,10 @@ mod tests {
     #[test]
     fn gemini_route_requires_gemini_provider() {
         let config = config_with_providers(&[PROVIDER_CHAT], false);
-        let response = resolve_dispatch_plan(&config, "/v1beta/models/gemini-1.5-flash:generateContent")
+        let error = resolve_dispatch_plan(&config, "/v1beta/models/gemini-1.5-flash:generateContent")
             .err()
             .expect("should reject");
-        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(error, "No available upstream configured.");
     }
 
     #[test]

@@ -46,6 +46,9 @@ pub(crate) struct LogEntry {
     pub(crate) cached_tokens: Option<u64>,
     pub(crate) usage_json: Option<Value>,
     pub(crate) upstream_request_id: Option<String>,
+    pub(crate) request_headers: Option<String>,
+    pub(crate) request_body: Option<String>,
+    pub(crate) response_error: Option<String>,
     pub(crate) latency_ms: u128,
 }
 
@@ -59,6 +62,8 @@ pub(crate) struct LogContext {
     pub(crate) stream: bool,
     pub(crate) status: u16,
     pub(crate) upstream_request_id: Option<String>,
+    pub(crate) request_headers: Option<String>,
+    pub(crate) request_body: Option<String>,
     pub(crate) start: Instant,
 }
 
@@ -88,7 +93,11 @@ impl LogWriter {
     }
 }
 
-pub(crate) fn build_log_entry(context: &LogContext, usage: UsageSnapshot) -> LogEntry {
+pub(crate) fn build_log_entry(
+    context: &LogContext,
+    usage: UsageSnapshot,
+    response_error: Option<String>,
+) -> LogEntry {
     LogEntry {
         ts_ms: now_ms(),
         path: context.path.clone(),
@@ -102,6 +111,9 @@ pub(crate) fn build_log_entry(context: &LogContext, usage: UsageSnapshot) -> Log
         cached_tokens: usage.cached_tokens,
         usage_json: usage.usage_json,
         upstream_request_id: context.upstream_request_id.clone(),
+        request_headers: context.request_headers.clone(),
+        request_body: context.request_body.clone(),
+        response_error,
         latency_ms: context.start.elapsed().as_millis(),
     }
 }
@@ -138,8 +150,11 @@ INSERT INTO request_logs (
   cached_tokens,
   usage_json,
   upstream_request_id,
+  request_headers,
+  request_body,
+  response_error,
   latency_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 "#,
     )
     .bind(to_i64_u128(entry.ts_ms))
@@ -156,6 +171,9 @@ INSERT INTO request_logs (
     .bind(cached_tokens)
     .bind(usage_json.as_deref())
     .bind(entry.upstream_request_id.as_deref())
+    .bind(entry.request_headers.as_deref())
+    .bind(entry.request_body.as_deref())
+    .bind(entry.response_error.as_deref())
     .bind(to_i64_u128(entry.latency_ms))
     .execute(pool)
     .await?;

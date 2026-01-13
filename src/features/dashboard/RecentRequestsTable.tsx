@@ -142,6 +142,7 @@ function rowCellClass(columnId: string) {
 type RecentRequestsTableProps = {
   items: DashboardRequestItem[];
   scrollKey: string;
+  onSelectItem?: (item: DashboardRequestItem) => void;
 };
 
 function RecentRequestsHeader({ table }: { table: Table<DashboardRequestItem> }) {
@@ -179,15 +180,18 @@ function useRecentRowVirtualizer(rows: Row<DashboardRequestItem>[], scrollKey: s
 function RecentRequestsRows({
   rows,
   virtualRows,
+  onSelectItem,
 }: {
   rows: Row<DashboardRequestItem>[];
   virtualRows: VirtualItem[];
+  onSelectItem?: (item: DashboardRequestItem) => void;
 }) {
   return virtualRows.map((virtualRow) => {
     const row = rows[virtualRow.index];
     if (!row) {
       return null;
     }
+    const isInteractive = Boolean(onSelectItem);
 
     return (
       <div
@@ -195,10 +199,23 @@ function RecentRequestsRows({
         className={cn(
           "absolute inset-x-0 grid items-center border-t border-border/60 bg-background/70 text-sm hover:bg-accent/30",
           GRID_COLS,
+          isInteractive && "cursor-pointer"
         )}
         style={{
           transform: `translateY(${virtualRow.start}px)`,
           height: `${virtualRow.size}px`,
+        }}
+        role={isInteractive ? "button" : undefined}
+        tabIndex={isInteractive ? 0 : undefined}
+        onClick={isInteractive ? () => onSelectItem?.(row.original) : undefined}
+        onKeyDown={(event) => {
+          if (!isInteractive) {
+            return;
+          }
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelectItem?.(row.original);
+          }
         }}
       >
         {row.getVisibleCells().map((cell) => (
@@ -211,7 +228,15 @@ function RecentRequestsRows({
   });
 }
 
-function RecentRequestsBody({ rows, scrollKey }: { rows: Row<DashboardRequestItem>[]; scrollKey: string }) {
+function RecentRequestsBody({
+  rows,
+  scrollKey,
+  onSelectItem,
+}: {
+  rows: Row<DashboardRequestItem>[];
+  scrollKey: string;
+  onSelectItem?: (item: DashboardRequestItem) => void;
+}) {
   const { scrollRef, rowVirtualizer, virtualRows } = useRecentRowVirtualizer(rows, scrollKey);
 
   return (
@@ -221,13 +246,17 @@ function RecentRequestsBody({ rows, scrollKey }: { rows: Row<DashboardRequestIte
       style={{ height: TABLE_HEIGHT_PX }}
     >
       <div className="relative" style={{ height: rowVirtualizer.getTotalSize() }}>
-        <RecentRequestsRows rows={rows} virtualRows={virtualRows} />
+        <RecentRequestsRows
+          rows={rows}
+          virtualRows={virtualRows}
+          onSelectItem={onSelectItem}
+        />
       </div>
     </div>
   );
 }
 
-export function RecentRequestsTable({ items, scrollKey }: RecentRequestsTableProps) {
+export function RecentRequestsTable({ items, scrollKey, onSelectItem }: RecentRequestsTableProps) {
   const { locale } = useI18n();
   const formatter = createDashboardTimeFormatter(locale);
   const columns = buildColumns(formatter);
@@ -242,7 +271,11 @@ export function RecentRequestsTable({ items, scrollKey }: RecentRequestsTablePro
   return (
     <div data-slot="recent-requests-table" className="overflow-hidden rounded-lg border border-border/60">
       <RecentRequestsHeader table={table} />
-      <RecentRequestsBody rows={table.getRowModel().rows} scrollKey={scrollKey} />
+      <RecentRequestsBody
+        rows={table.getRowModel().rows}
+        scrollKey={scrollKey}
+        onSelectItem={onSelectItem}
+      />
     </div>
   );
 }

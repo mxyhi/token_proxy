@@ -20,7 +20,7 @@ const X_API_KEY: &str = "x-api-key";
 const X_ANTHROPIC_API_KEY: &str = "x-anthropic-api-key";
 const X_GOOG_API_KEY: &str = "x-goog-api-key";
 
-pub(crate) fn ensure_local_auth(config: &ProxyConfig, headers: &HeaderMap) -> Result<(), Response> {
+pub(crate) fn ensure_local_auth(config: &ProxyConfig, headers: &HeaderMap) -> Result<(), String> {
     let Some(expected) = config.local_api_key.as_ref() else {
         tracing::debug!("no local_api_key configured, skipping local auth");
         return Ok(());
@@ -28,17 +28,11 @@ pub(crate) fn ensure_local_auth(config: &ProxyConfig, headers: &HeaderMap) -> Re
     tracing::debug!("local auth required, checking Authorization header");
     let Some(header) = headers.get(AUTHORIZATION) else {
         tracing::warn!("missing Authorization header");
-        return Err(error_response(
-            StatusCode::UNAUTHORIZED,
-            "Missing local access key.",
-        ));
+        return Err("Missing local access key.".to_string());
     };
     let Ok(value) = header.to_str() else {
         tracing::warn!("Authorization header is not valid UTF-8");
-        return Err(error_response(
-            StatusCode::UNAUTHORIZED,
-            "Local access key is invalid.",
-        ));
+        return Err("Local access key is invalid.".to_string());
     };
     let expected_value = format!("Bearer {expected}");
     if value != expected_value {
@@ -47,10 +41,7 @@ pub(crate) fn ensure_local_auth(config: &ProxyConfig, headers: &HeaderMap) -> Re
             expected = %mask_key(&expected_value),
             "authorization mismatch"
         );
-        return Err(error_response(
-            StatusCode::UNAUTHORIZED,
-            "Local access key is invalid.",
-        ));
+        return Err("Local access key is invalid.".to_string());
     }
     tracing::debug!("local auth passed");
     Ok(())
@@ -80,21 +71,15 @@ pub(crate) struct UpstreamAuthHeader {
 pub(crate) fn resolve_request_auth(
     config: &ProxyConfig,
     headers: &HeaderMap,
-) -> Result<RequestAuth, Response> {
+) -> Result<RequestAuth, String> {
     let mut auth = RequestAuth::default();
 
     if let Some(value) = headers.get(X_OPENAI_API_KEY) {
         let Ok(value) = value.to_str() else {
-            return Err(error_response(
-                StatusCode::UNAUTHORIZED,
-                "Upstream API key is invalid.",
-            ));
+            return Err("Upstream API key is invalid.".to_string());
         };
         auth.openai_bearer = Some(bearer_header(value).ok_or_else(|| {
-            error_response(
-                StatusCode::UNAUTHORIZED,
-                "Upstream API key contains invalid characters.",
-            )
+            "Upstream API key contains invalid characters.".to_string()
         })?);
     }
 
@@ -104,10 +89,7 @@ pub(crate) fn resolve_request_auth(
         .or_else(|| headers.get(X_ANTHROPIC_API_KEY))
     {
         let Ok(_) = value.to_str() else {
-            return Err(error_response(
-                StatusCode::UNAUTHORIZED,
-                "Upstream API key is invalid.",
-            ));
+            return Err("Upstream API key is invalid.".to_string());
         };
         auth.anthropic_api_key = Some(value.clone());
     }
@@ -120,10 +102,7 @@ pub(crate) fn resolve_request_auth(
 
     if let Some(value) = headers.get(X_GOOG_API_KEY) {
         let Ok(value) = value.to_str() else {
-            return Err(error_response(
-                StatusCode::UNAUTHORIZED,
-                "Upstream API key is invalid.",
-            ));
+            return Err("Upstream API key is invalid.".to_string());
         };
         let value = value.trim();
         if !value.is_empty() {

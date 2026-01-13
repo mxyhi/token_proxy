@@ -26,6 +26,12 @@ type ClientSetupInfo = {
   codex_provider_requires_openai_auth: boolean;
   codex_provider_wire_api: string;
   codex_api_key_configured: boolean;
+  opencode_config_path: string;
+  opencode_auth_path: string;
+  opencode_provider_id: string;
+  opencode_provider_base_url: string;
+  opencode_models: string[];
+  opencode_api_key_configured: boolean;
 };
 
 type ClientConfigWriteResult = {
@@ -69,12 +75,14 @@ export function ClientSetupCard({ savedAt, isDirty }: ClientSetupCardProps) {
   const [setup, setSetup] = useState<ClientSetupInfo | null>(null);
   const [claudeAction, setClaudeAction] = useState<ActionState>(toActionState);
   const [codexAction, setCodexAction] = useState<ActionState>(toActionState);
+  const [opencodeAction, setOpencodeAction] = useState<ActionState>(toActionState);
 
   const canApply = useMemo(() => !isDirty, [isDirty]);
   const isWorking =
     previewState === "working" ||
     claudeAction.state === "working" ||
-    codexAction.state === "working";
+    codexAction.state === "working" ||
+    opencodeAction.state === "working";
 
   const loadPreview = useCallback(async () => {
     setPreviewState("working");
@@ -125,6 +133,28 @@ export function ClientSetupCard({ savedAt, isDirty }: ClientSetupCardProps) {
     }
   }, [loadPreview]);
 
+  const applyOpenCodeConfig = useCallback(async () => {
+    setOpencodeAction({ state: "working", message: "", lastPath: "" });
+    try {
+      const result = await invoke<ClientConfigWriteResult>("write_opencode_config");
+      const path = result.paths.join(", ");
+      setOpencodeAction({
+        state: "success",
+        message: m.client_setup_apply_success({ path }),
+        lastPath: path,
+      });
+      await loadPreview();
+    } catch (error) {
+      setOpencodeAction({ state: "error", message: parseError(error), lastPath: "" });
+    }
+  }, [loadPreview]);
+
+  const opencodeModels = useMemo(() => setup?.opencode_models ?? [], [setup?.opencode_models]);
+  const canApplyOpenCode = useMemo(
+    () => canApply && opencodeModels.length > 0,
+    [canApply, opencodeModels.length]
+  );
+
   return (
     <Card data-slot="client-setup-card">
       <CardHeader>
@@ -162,120 +192,201 @@ export function ClientSetupCard({ savedAt, isDirty }: ClientSetupCardProps) {
           </div>
         ) : null}
 
+        <div className="grid gap-4 lg:grid-cols-3">
+          <Card data-slot="client-setup-tool-claude" className="border-border/60 bg-background/60">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <CardTitle className="text-base">{m.client_setup_claude_title()}</CardTitle>
+                  <CardDescription>{m.client_setup_claude_desc()}</CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={toBadgeVariant(claudeAction.state)}>{toBadgeLabel(claudeAction.state)}</Badge>
+                  <Button type="button" onClick={applyClaudeConfig} disabled={!canApply || isWorking || !setup}>
+                    {m.client_setup_apply()}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {setup ? (
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                      {m.client_setup_target_file_label()}
+                    </p>
+                    <p className="font-mono text-xs text-foreground/80">{setup.claude_settings_path}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                      {m.client_setup_effective_env_label()}
+                    </p>
+                    <div className="space-y-1 font-mono text-xs text-foreground/80">
+                      <div>ANTHROPIC_BASE_URL={setup.claude_base_url}</div>
+                      <div>
+                        ANTHROPIC_AUTH_TOKEN=
+                        {setup.claude_auth_token_configured ? "••••••••" : m.client_setup_not_configured()}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {claudeAction.message ? (
+                <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
+                  {claudeAction.message}
+                </div>
+              ) : null}
+
+              <p className="text-xs text-muted-foreground">{m.client_setup_backup_hint()}</p>
+            </CardContent>
+          </Card>
+
+          <Card data-slot="client-setup-tool-codex" className="border-border/60 bg-background/60">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <CardTitle className="text-base">{m.client_setup_codex_title()}</CardTitle>
+                  <CardDescription>{m.client_setup_codex_desc()}</CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={toBadgeVariant(codexAction.state)}>{toBadgeLabel(codexAction.state)}</Badge>
+                  <Button type="button" onClick={applyCodexConfig} disabled={!canApply || isWorking || !setup}>
+                    {m.client_setup_apply()}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {setup ? (
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                      {m.client_setup_target_file_label()}
+                    </p>
+                    <p className="font-mono text-xs text-foreground/80">{setup.codex_config_path}</p>
+                    <p className="font-mono text-xs text-foreground/80">{setup.codex_auth_path}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                      {m.client_setup_effective_config_label()}
+                    </p>
+                    <div className="space-y-1 font-mono text-xs text-foreground/80">
+                      <div>disable_response_storage = {setup.codex_disable_response_storage ? "true" : "false"}</div>
+                      <div>model = "{setup.codex_model}"</div>
+                      <div>model_provider = "{setup.codex_model_provider}"</div>
+                      <div>model_reasoning_effort = "{setup.codex_model_reasoning_effort}"</div>
+                      <div>network_access = "{setup.codex_network_access}"</div>
+                      <div>preferred_auth_method = "{setup.codex_preferred_auth_method}"</div>
+                      <div>[model_providers.{setup.codex_model_provider}]</div>
+                      <div>base_url = "{setup.codex_provider_base_url}"</div>
+                      <div>name = "{setup.codex_provider_name}"</div>
+                      <div>
+                        requires_openai_auth = {setup.codex_provider_requires_openai_auth ? "true" : "false"}
+                      </div>
+                      <div>wire_api = "{setup.codex_provider_wire_api}"</div>
+                      <div>
+                        {`auth.json: OPENAI_API_KEY = "${
+                          setup.codex_api_key_configured
+                            ? "••••••••"
+                            : m.client_setup_not_configured()
+                        }"`}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+
+              {codexAction.message ? (
+                <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
+                  {codexAction.message}
+                </div>
+              ) : null}
+
+              <p className="text-xs text-muted-foreground">{m.client_setup_backup_hint()}</p>
+            </CardContent>
+          </Card>
+
+          <Card data-slot="client-setup-tool-opencode" className="border-border/60 bg-background/60">
+            <CardHeader>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <CardTitle className="text-base">{m.client_setup_opencode_title()}</CardTitle>
+                  <CardDescription>{m.client_setup_opencode_desc()}</CardDescription>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant={toBadgeVariant(opencodeAction.state)}>{toBadgeLabel(opencodeAction.state)}</Badge>
+                  <Button
+                    type="button"
+                    onClick={applyOpenCodeConfig}
+                    disabled={!canApplyOpenCode || isWorking || !setup}
+                  >
+                    {m.client_setup_apply()}
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {setup ? (
+                <div className="space-y-2">
+                  <div className="space-y-1">
+                    <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                      {m.client_setup_target_file_label()}
+                    </p>
+                    <p className="font-mono text-xs text-foreground/80">{setup.opencode_config_path}</p>
+                    <p className="font-mono text-xs text-foreground/80">{setup.opencode_auth_path}</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                      {m.client_setup_effective_config_label()}
+                    </p>
+                    <div className="space-y-1 font-mono text-xs text-foreground/80">
+                      <div>provider.{setup.opencode_provider_id}.npm = "@ai-sdk/openai-compatible"</div>
+                      <div>provider.{setup.opencode_provider_id}.options.baseURL = "{setup.opencode_provider_base_url}"</div>
+                      <div>
+                        {`auth.json: ${setup.opencode_provider_id}.key = "${
+                          setup.opencode_api_key_configured ? "••••••••" : m.client_setup_not_configured()
+                        }"`}
+                      </div>
+                    </div>
+                  </div>
+
+                  {setup.opencode_models.length > 0 ? (
+                    <div className="space-y-1">
+                      <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+                        {m.client_setup_opencode_models_label()}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {setup.opencode_models.map((model) => (
+                          <Badge key={model} variant="outline" className="font-mono text-xs">
+                            {model}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
+                      {m.client_setup_opencode_models_empty()}
+                    </div>
+                  )}
+                </div>
+              ) : null}
+
+              {opencodeAction.message ? (
+                <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
+                  {opencodeAction.message}
+                </div>
+              ) : null}
+
+              <p className="text-xs text-muted-foreground">{m.client_setup_backup_hint()}</p>
+            </CardContent>
+          </Card>
+        </div>
+
         <Separator />
 
-        <div className="grid gap-3">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-foreground">{m.client_setup_claude_title()}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {m.client_setup_claude_desc()}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant={toBadgeVariant(claudeAction.state)}>{toBadgeLabel(claudeAction.state)}</Badge>
-              <Button type="button" onClick={applyClaudeConfig} disabled={!canApply || isWorking || !setup}>
-                {m.client_setup_apply()}
-              </Button>
-            </div>
-          </div>
-
-          {setup ? (
-            <div className="space-y-2 rounded-md border border-border/60 bg-background/60 p-3">
-              <div className="space-y-1">
-                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                  {m.client_setup_target_file_label()}
-                </p>
-                <p className="font-mono text-xs text-foreground/80">{setup.claude_settings_path}</p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                  {m.client_setup_effective_env_label()}
-                </p>
-                <div className="space-y-1 font-mono text-xs text-foreground/80">
-                  <div>ANTHROPIC_BASE_URL={setup.claude_base_url}</div>
-                  <div>
-                    ANTHROPIC_AUTH_TOKEN=
-                    {setup.claude_auth_token_configured ? "••••••••" : m.client_setup_not_configured()}
-                  </div>
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">{m.client_setup_backup_hint()}</p>
-            </div>
-          ) : null}
-
-          {claudeAction.message ? (
-            <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
-              {claudeAction.message}
-            </div>
-          ) : null}
-
-          <Separator />
-
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-foreground">{m.client_setup_codex_title()}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {m.client_setup_codex_desc()}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <Badge variant={toBadgeVariant(codexAction.state)}>{toBadgeLabel(codexAction.state)}</Badge>
-              <Button type="button" onClick={applyCodexConfig} disabled={!canApply || isWorking || !setup}>
-                {m.client_setup_apply()}
-              </Button>
-            </div>
-          </div>
-
-          {setup ? (
-            <div className="space-y-2 rounded-md border border-border/60 bg-background/60 p-3">
-              <div className="space-y-1">
-                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                  {m.client_setup_target_file_label()}
-                </p>
-                <p className="font-mono text-xs text-foreground/80">{setup.codex_config_path}</p>
-                <p className="font-mono text-xs text-foreground/80">{setup.codex_auth_path}</p>
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
-                  {m.client_setup_effective_config_label()}
-                </p>
-                <div className="space-y-1 font-mono text-xs text-foreground/80">
-                  <div>disable_response_storage = {setup.codex_disable_response_storage ? "true" : "false"}</div>
-                  <div>model = "{setup.codex_model}"</div>
-                  <div>model_provider = "{setup.codex_model_provider}"</div>
-                  <div>model_reasoning_effort = "{setup.codex_model_reasoning_effort}"</div>
-                  <div>network_access = "{setup.codex_network_access}"</div>
-                  <div>preferred_auth_method = "{setup.codex_preferred_auth_method}"</div>
-                  <div>[model_providers.{setup.codex_model_provider}]</div>
-                  <div>base_url = "{setup.codex_provider_base_url}"</div>
-                  <div>name = "{setup.codex_provider_name}"</div>
-                  <div>
-                    requires_openai_auth = {setup.codex_provider_requires_openai_auth ? "true" : "false"}
-                  </div>
-                  <div>wire_api = "{setup.codex_provider_wire_api}"</div>
-                  <div>
-                    {`auth.json: OPENAI_API_KEY = "${
-                      setup.codex_api_key_configured
-                        ? "••••••••"
-                        : m.client_setup_not_configured()
-                    }"`}
-                  </div>
-                </div>
-              </div>
-              <p className="text-xs text-muted-foreground">{m.client_setup_backup_hint()}</p>
-            </div>
-          ) : null}
-
-          {codexAction.message ? (
-            <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
-              {codexAction.message}
-            </div>
-          ) : null}
-
-          <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
-            {m.client_setup_plaintext_warning()}
-          </div>
+        <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
+          {m.client_setup_plaintext_warning()}
         </div>
       </CardContent>
     </Card>

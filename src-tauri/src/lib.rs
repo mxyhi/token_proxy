@@ -1,5 +1,6 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod client_config;
+mod jsonc;
 mod logging;
 mod proxy;
 mod tray;
@@ -88,6 +89,13 @@ async fn write_claude_code_settings(
 #[tauri::command]
 async fn write_codex_config(app: tauri::AppHandle) -> Result<client_config::ClientConfigWriteResult, String> {
     client_config::write_codex_config(app).await
+}
+
+#[tauri::command]
+async fn write_opencode_config(
+    app: tauri::AppHandle,
+) -> Result<client_config::ClientConfigWriteResult, String> {
+    client_config::write_opencode_config(app).await
 }
 
 #[tauri::command]
@@ -304,6 +312,7 @@ pub fn run() {
             preview_client_setup,
             write_claude_code_settings,
             write_codex_config,
+            write_opencode_config,
             write_proxy_config,
             read_dashboard_snapshot,
             proxy_status,

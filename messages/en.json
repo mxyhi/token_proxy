@@ -189,6 +189,9 @@
   "update_status_installed": "Installed. Restart the app to finish.",
   "update_status_error": "Update failed",
   "update_download_progress": "Download: {downloaded} / {total}",
+  "update_toast_view_details": "View details",
+  "update_restart_prompt_title": "Update ready",
+  "update_restart_prompt_desc": "Restart now to finish installing the update?",
 
   "proxy_service_title": "Proxy Service",
   "proxy_service_desc": "Safe stop/restart and manual config reload.",

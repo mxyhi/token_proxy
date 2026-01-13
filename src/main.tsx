@@ -6,6 +6,7 @@ import { routeTree } from "./routeTree.gen";
 
 import { I18nProvider } from "@/lib/i18n";
 import { LanguageObserver } from "@/components/LanguageObserver";
+import { Toaster } from "@/components/ui/sonner";
 
 const router = createRouter({ routeTree });
 
@@ -27,6 +28,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
         disableTransitionOnChange
       >
         <RouterProvider router={router} />
+        <Toaster position="bottom-right" closeButton richColors />
         {/* Isolated language subscription - prevents global re-renders when language changes */}
         <LanguageObserver />
       </ThemeProvider>

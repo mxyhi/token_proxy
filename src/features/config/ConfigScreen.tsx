@@ -20,6 +20,7 @@ import type {
   ProxyServiceRequestState,
   ProxyServiceStatus,
 } from "@/features/config/types";
+import { useUpdater } from "@/features/update/updater";
 import { parseError } from "@/lib/error";
 import { useI18n } from "@/lib/i18n";
 import { m } from "@/paraglide/messages.js";
@@ -456,10 +457,20 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
   });
   const { loadConfig } = configActions;
   const listActions = useConfigListActions(state.setForm);
+  const {
+    actions: { setAppProxyUrl },
+  } = useUpdater();
 
   useEffect(() => {
     void loadConfig();
   }, [loadConfig]);
+
+  useEffect(() => {
+    if (!state.lastConfig) {
+      return;
+    }
+    setAppProxyUrl(state.lastConfig.app_proxy_url ?? "");
+  }, [setAppProxyUrl, state.lastConfig?.app_proxy_url]);
 
   useEffect(() => {
     void refreshProxyStatus();

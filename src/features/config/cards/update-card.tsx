@@ -3,12 +3,8 @@ import {
   useEffect,
   useMemo,
   useState,
-  type Dispatch,
-  type SetStateAction,
 } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { relaunch } from "@tauri-apps/plugin-process";
-import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 import { AlertCircle } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -22,67 +18,16 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { parseError } from "@/lib/error";
+import {
+  formatBytes,
+  useUpdater,
+  type DownloadState,
+  type UpdateInfo,
+  type UpdateStatus,
+} from "@/features/update/updater";
 import { m } from "@/paraglide/messages.js";
 
-type UpdateStatus =
-  | "idle"
-  | "checking"
-  | "available"
-  | "uptodate"
-  | "downloading"
-  | "installing"
-  | "installed"
-  | "error";
-
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
-
-type UpdateInfo = {
-  version: string;
-  date?: string;
-  body?: string;
-};
-
-type DownloadState = {
-  downloaded: number;
-  total: number;
-};
-
-type UpdaterCheckResult = Awaited<ReturnType<typeof check>>;
-
-type UpdateState = {
-  status: UpdateStatus;
-  statusMessage: string;
-  lastCheckedAt: string;
-  updateInfo: UpdateInfo | null;
-  updateHandle: UpdaterCheckResult;
-  downloadState: DownloadState;
-};
-
-type UpdateStateSetter = Dispatch<SetStateAction<UpdateState>>;
-
-type UpdateHelpers = {
-  setState: UpdateStateSetter;
-  markError: (error: unknown) => void;
-};
-
-type UpdateInstallerArgs = UpdateHelpers & {
-  updateHandle: UpdaterCheckResult;
-};
-
-function formatBytes(bytes: number) {
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "0 B";
-  }
-  const units = ["B", "KB", "MB", "GB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unitIndex]}`;
-}
 
 function resolveStatusBadge(status: UpdateStatus) {
   let label = m.update_status_idle();
@@ -124,14 +69,6 @@ function resolveStatusBadge(status: UpdateStatus) {
   return { label, variant };
 }
 
-function toUpdateInfo(update: NonNullable<UpdaterCheckResult>): UpdateInfo {
-  return {
-    version: update.version,
-    date: update.date,
-    body: update.body,
-  };
-}
-
 function useAppVersion() {
   const [currentVersion, setCurrentVersion] = useState("");
 
@@ -150,138 +87,6 @@ function useAppVersion() {
   }, []);
 
   return currentVersion;
-}
-
-function useUpdaterState() {
-  const [state, setState] = useState<UpdateState>({
-    status: "idle",
-    statusMessage: "",
-    lastCheckedAt: "",
-    updateInfo: null,
-    updateHandle: null,
-    downloadState: { downloaded: 0, total: 0 },
-  });
-
-  const markError = useCallback((error: unknown) => {
-    setState((prev) => ({
-      ...prev,
-      status: "error",
-      statusMessage: parseError(error),
-    }));
-  }, []);
-
-  return { state, setState, markError };
-}
-
-type UpdateCheckerArgs = UpdateHelpers & {
-  appProxyUrl: string;
-};
-
-function useUpdateChecker({ setState, markError, appProxyUrl }: UpdateCheckerArgs) {
-  return useCallback(async () => {
-    setState((prev) => ({
-      ...prev,
-      status: "checking",
-      statusMessage: "",
-      updateInfo: null,
-      updateHandle: null,
-      downloadState: { downloaded: 0, total: 0 },
-    }));
-    try {
-      const proxy = appProxyUrl.trim();
-      const result = await check(proxy ? { proxy } : undefined);
-      setState((prev) => ({
-        ...prev,
-        status: result ? "available" : "uptodate",
-        updateInfo: result ? toUpdateInfo(result) : null,
-        updateHandle: result,
-        lastCheckedAt: new Date().toLocaleString(),
-      }));
-    } catch (error) {
-      markError(error);
-    }
-  }, [appProxyUrl, markError, setState]);
-}
-
-function useUpdateInstaller({ updateHandle, setState, markError }: UpdateInstallerArgs) {
-  return useCallback(async () => {
-    if (!updateHandle) {
-      return;
-    }
-
-    setState((prev) => ({
-      ...prev,
-      status: "downloading",
-      statusMessage: "",
-      downloadState: { downloaded: 0, total: 0 },
-    }));
-
-    const onProgress = (progress: DownloadEvent) => {
-      if (progress.event === "Started") {
-        setState((prev) => ({
-          ...prev,
-          downloadState: {
-            downloaded: 0,
-            total: progress.data?.contentLength ?? 0,
-          },
-        }));
-        return;
-      }
-      if (progress.event === "Progress") {
-        setState((prev) => ({
-          ...prev,
-          downloadState: {
-            downloaded:
-              prev.downloadState.downloaded + (progress.data?.chunkLength ?? 0),
-            total: prev.downloadState.total,
-          },
-        }));
-        return;
-      }
-      if (progress.event === "Finished") {
-        setState((prev) => ({ ...prev, status: "installing" }));
-      }
-    };
-
-    try {
-      await updateHandle.downloadAndInstall(onProgress);
-      setState((prev) => ({ ...prev, status: "installed" }));
-    } catch (error) {
-      markError(error);
-    } finally {
-      try {
-        await updateHandle.close();
-      } catch (_) {
-        // ignore updater close errors to avoid masking update failures
-      }
-    }
-  }, [markError, setState, updateHandle]);
-}
-
-function useAppRelauncher({ setState }: Pick<UpdateHelpers, "setState">) {
-  return useCallback(async () => {
-    setState((prev) => ({ ...prev, statusMessage: "" }));
-    try {
-      await relaunch();
-    } catch (error) {
-      // 安装成功但重启失败时，不应把更新状态标记为失败；仅展示错误提示。
-      setState((prev) => ({ ...prev, statusMessage: parseError(error) }));
-    }
-  }, [setState]);
-}
-
-function useUpdater(appProxyUrl: string) {
-  const { state, setState, markError } = useUpdaterState();
-  const checkForUpdate = useUpdateChecker({ setState, markError, appProxyUrl });
-  const downloadAndInstall = useUpdateInstaller({
-    updateHandle: state.updateHandle,
-    setState,
-    markError,
-  });
-
-  const relaunchApp = useAppRelauncher({ setState });
-
-  return { state, actions: { checkForUpdate, downloadAndInstall, relaunchApp } };
 }
 
 type UpdateStatusRowProps = {
@@ -422,12 +227,12 @@ function resolveProgressLabel(status: UpdateStatus, downloadState: DownloadState
 }
 
 type UpdateCardProps = {
-  appProxyUrl: string;
+  // keep slot stable for future expansion
 };
 
-export function UpdateCard({ appProxyUrl }: UpdateCardProps) {
+export function UpdateCard(_: UpdateCardProps) {
   const currentVersion = useAppVersion();
-  const { state, actions } = useUpdater(appProxyUrl);
+  const { state, actions } = useUpdater();
   const statusBadge = useMemo(() => resolveStatusBadge(state.status), [state.status]);
   const progressLabel = useMemo(
     () => resolveProgressLabel(state.status, state.downloadState),
@@ -437,6 +242,9 @@ export function UpdateCard({ appProxyUrl }: UpdateCardProps) {
     state.status !== "checking" && state.status !== "downloading" && state.status !== "installing";
   const canInstall = state.status === "available" && !!state.updateHandle;
   const canRelaunch = state.status === "installed";
+  const triggerManualCheck = useCallback(() => {
+    void actions.checkForUpdate({ source: "manual" });
+  }, [actions]);
 
   return (
     <Card data-slot="update-card">
@@ -460,7 +268,7 @@ export function UpdateCard({ appProxyUrl }: UpdateCardProps) {
           canCheck={canCheck}
           canInstall={canInstall}
           canRelaunch={canRelaunch}
-          onCheck={actions.checkForUpdate}
+          onCheck={triggerManualCheck}
           onInstall={actions.downloadAndInstall}
           onRelaunch={actions.relaunchApp}
         />

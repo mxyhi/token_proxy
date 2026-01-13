@@ -239,7 +239,7 @@ function ConfigSectionBody({
           />
           <ValidationCard form={props.form} validation={props.validation} />
           <ProjectLinksCard />
-          <UpdateCard appProxyUrl={props.form.appProxyUrl} />
+          <UpdateCard />
         </div>
       );
     case "agents":

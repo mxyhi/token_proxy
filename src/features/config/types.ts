@@ -50,7 +50,6 @@ export type ProxyConfigFileBase = {
   port: number;
   local_api_key: string | null;
   app_proxy_url: string | null;
-  log_path: string;
   log_level?: LogLevel;
   tray_token_rate: TrayTokenRateConfig;
   enable_api_format_conversion: boolean;
@@ -107,7 +106,6 @@ export type ConfigForm = {
   port: string;
   localApiKey: string;
   appProxyUrl: string;
-  logPath: string;
   logLevel: LogLevel;
   trayTokenRate: TrayTokenRateConfig;
   enableApiFormatConversion: boolean;

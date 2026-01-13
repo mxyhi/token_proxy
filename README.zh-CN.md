@@ -41,8 +41,7 @@ curl -X POST \
 | `port` | `9208`（release）/`19208`（debug） | 端口冲突时修改 |
 | `local_api_key` | `null` | 设置后，入站必须带 `Authorization: Bearer <key>`；此头**不会**再转给上游 |
 | `app_proxy_url` | `null` | 应用更新 & 上游可复用的代理；支持 `http/https/socks5/socks5h`；可在 upstream `proxy_url` 用 `"$app_proxy_url"` 占位 |
-| `log_path` | `proxy.log` | 相对配置目录；**release 构建不写此文件**（仅写 SQLite） |
-| `log_level` | `silent` | `silent|error|warn|info|debug|trace`；debug/trace 会记录请求头（鉴权打码）与小体积请求体（≤64KiB） |
+| `log_level` | `silent` | `silent|error|warn|info|debug|trace`；debug/trace 会记录请求头（鉴权打码）与小体积请求体（≤64KiB）；release 强制 `silent` |
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 表示回落到默认；保护入站体积 |
 | `tray_token_rate.enabled` | `true` | macOS 托盘实时速率；其他平台无害 |
 | `tray_token_rate.format` | `split` | `combined`(总数) / `split`(↑入 ↓出) / `both`(总数 | ↑入 ↓出) |
@@ -82,7 +81,6 @@ curl -X POST \
 
 ## 可观测性
 - SQLite 日志：`data.db` 位于配置目录，记录每次请求（tokens、cached tokens、延迟、模型、上游）
-- `proxy.log`：仅 debug 构建写入；release 不写文件
 - Token 速率：macOS 托盘可显示总速率或分向（由 `tray_token_rate` 决定）
 - debug/trace 日志的请求体最大 64KiB
 

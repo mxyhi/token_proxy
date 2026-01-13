@@ -315,7 +315,7 @@ src-tauri/src/
 ### 后端调试
 
 - 使用 `println!` 或 `eprintln!` 输出日志
-- 查看 `proxy.log`（代理日志文件）
+- 查看 `data.db`（SQLite 请求统计）
 - 使用 Rust 调试器（如 VS Code 的 rust-analyzer）
 
 ---

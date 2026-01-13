@@ -2,11 +2,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sqlx::SqlitePool;
 use std::{
-    path::PathBuf,
     sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::{io::AsyncWriteExt, sync::Mutex};
 
 #[cfg(debug_assertions)]
 macro_rules! debug_log_error {
@@ -65,17 +63,12 @@ pub(crate) struct LogContext {
 }
 
 pub(crate) struct LogWriter {
-    file: Option<Mutex<tokio::fs::File>>,
     sqlite: Option<SqlitePool>,
 }
 
 impl LogWriter {
-    pub(crate) async fn new(path: &PathBuf, sqlite: Option<SqlitePool>) -> std::io::Result<Self> {
-        let file = open_log_file(path).await?;
-        Ok(Self {
-            file,
-            sqlite,
-        })
+    pub(crate) fn new(sqlite: Option<SqlitePool>) -> Self {
+        Self { sqlite }
     }
 
     // Fire-and-forget logging to avoid blocking the request path.
@@ -86,19 +79,6 @@ impl LogWriter {
     }
 
     pub(crate) async fn write(&self, entry: &LogEntry) {
-        if let Some(file) = self.file.as_ref() {
-            let line = serde_json::to_string(entry)
-                .unwrap_or_else(|_| "{\"error\":\"proxy_log_serialize_failed\"}".to_string());
-            {
-                let mut file = file.lock().await;
-                if let Err(_err) = file.write_all(line.as_bytes()).await {
-                    debug_log_error!("proxy log write failed: {_err}");
-                } else if let Err(_err) = file.write_all(b"\n").await {
-                    debug_log_error!("proxy log write failed: {_err}");
-                }
-            }
-        }
-
         let Some(pool) = self.sqlite.as_ref() else {
             return;
         };
@@ -106,27 +86,6 @@ impl LogWriter {
             debug_log_error!("proxy sqlite write failed: {_err}");
         }
     }
-}
-
-#[cfg(debug_assertions)]
-async fn open_log_file(path: &PathBuf) -> std::io::Result<Option<Mutex<tokio::fs::File>>> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-    }
-    let file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-        .await?;
-    Ok(Some(Mutex::new(file)))
-}
-
-#[cfg(not(debug_assertions))]
-async fn open_log_file(_path: &PathBuf) -> std::io::Result<Option<Mutex<tokio::fs::File>>> {
-    // Release 构建禁用 .log 文件写入，仅保留 SQLite 统计。
-    Ok(None)
 }
 
 pub(crate) fn build_log_entry(context: &LogContext, usage: UsageSnapshot) -> LogEntry {

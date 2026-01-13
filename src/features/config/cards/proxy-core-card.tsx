@@ -78,55 +78,44 @@ function ProxyCoreFields({ form, showLocalKey, onToggleLocalKey, onChange }: Pro
           {m.proxy_core_app_proxy_url_help({ placeholder: "$app_proxy_url" })}
         </p>
       </div>
-      <div className="grid gap-4 sm:grid-cols-2">
-        <div className="grid gap-2">
-          <Label htmlFor="proxy-log">{m.proxy_core_log_file_label()}</Label>
-          <Input
-            id="proxy-log"
-            value={form.logPath}
-            onChange={(event) => onChange({ logPath: event.target.value })}
-            placeholder="proxy.log"
-          />
+      <div className="grid gap-2">
+        <div className="flex items-center gap-2">
+          <Label htmlFor="proxy-log-level">{m.proxy_core_log_level_label()}</Label>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground"
+                aria-label={m.proxy_core_log_level_help()}
+              >
+                <Info className="size-3.5" aria-hidden="true" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" align="start">
+              {m.proxy_core_log_level_help()}
+            </TooltipContent>
+          </Tooltip>
         </div>
-        <div className="grid gap-2">
-          <div className="flex items-center gap-2">
-            <Label htmlFor="proxy-log-level">{m.proxy_core_log_level_label()}</Label>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button
-                  type="button"
-                  className="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground"
-                  aria-label={m.proxy_core_log_level_help()}
-                >
-                  <Info className="size-3.5" aria-hidden="true" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top" align="start">
-                {m.proxy_core_log_level_help()}
-              </TooltipContent>
-            </Tooltip>
-          </div>
-          <Select
-            value={form.logLevel}
-            onValueChange={(nextValue) => {
-              const nextLevel = toLogLevel(nextValue);
-              if (nextLevel) {
-                onChange({ logLevel: nextLevel });
-              }
-            }}
-          >
-            <SelectTrigger id="proxy-log-level">
-              <SelectValue placeholder={m.proxy_core_log_level_placeholder()} />
-            </SelectTrigger>
-            <SelectContent>
-              {LOG_LEVELS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label()}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <Select
+          value={form.logLevel}
+          onValueChange={(nextValue) => {
+            const nextLevel = toLogLevel(nextValue);
+            if (nextLevel) {
+              onChange({ logLevel: nextLevel });
+            }
+          }}
+        >
+          <SelectTrigger id="proxy-log-level">
+            <SelectValue placeholder={m.proxy_core_log_level_placeholder()} />
+          </SelectTrigger>
+          <SelectContent>
+            {LOG_LEVELS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label()}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     </>
   );

@@ -333,11 +333,7 @@ async fn build_proxy_state(
     if let Some(logging_state) = app.try_state::<LoggingState>() {
         logging_state.apply_level(config.log_level);
     }
-    let log = Arc::new(
-        LogWriter::new(&config.log_path, sqlite_pool)
-            .await
-            .map_err(|err| format!("Failed to open log file: {err}"))?,
-    );
+    let log = Arc::new(LogWriter::new(sqlite_pool));
     let http_clients = super::http_client::ProxyHttpClients::new()?;
     let cursors = server::build_upstream_cursors(&config);
     let token_rate = app

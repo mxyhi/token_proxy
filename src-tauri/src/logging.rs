@@ -49,7 +49,12 @@ pub(crate) struct LoggingState {
 impl LoggingState {
     /// 初始化全局 tracing。若已存在全局订阅者则静默跳过。
     pub(crate) fn init(initial_level: LogLevel) -> Self {
-        let filter = EnvFilter::new(initial_level.as_directive());
+        let level = if cfg!(debug_assertions) {
+            initial_level
+        } else {
+            LogLevel::Silent
+        };
+        let filter = EnvFilter::new(level.as_directive());
         let (filter_layer, handle) = reload::Layer::new(filter);
 
         let subscriber = tracing_subscriber::registry()
@@ -72,6 +77,9 @@ impl LoggingState {
     }
 
     pub(crate) fn apply_level(&self, level: LogLevel) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
         if let Some(handle) = &self.handle {
             let _ = handle.modify(|filter| *filter = EnvFilter::new(level.as_directive()));
         }

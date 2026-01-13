@@ -2,10 +2,10 @@ use super::*;
 use axum::body::Bytes;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
+use sqlx::{sqlite::SqlitePoolOptions, Row, SqlitePool};
 use std::{
-    path::PathBuf,
     sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use super::super::log::{LogContext, LogWriter};
@@ -17,12 +17,16 @@ fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
         .block_on(future)
 }
 
-fn unique_log_path(prefix: &str) -> PathBuf {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    PathBuf::from(format!("target/test-logs/{prefix}_{now}.log"))
+async fn create_test_sqlite_pool() -> SqlitePool {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("connect sqlite");
+    crate::proxy::sqlite::init_schema(&pool)
+        .await
+        .expect("init sqlite schema");
+    pool
 }
 
 fn parse_sse_json(bytes: &Bytes) -> Option<Value> {
@@ -37,13 +41,9 @@ fn parse_sse_json(bytes: &Bytes) -> Option<Value> {
     Some(serde_json::from_str::<Value>(data).expect("parse SSE JSON"))
 }
 
-async fn setup_responses_stream(prefix: &str) -> (Arc<LogWriter>, LogContext, PathBuf) {
-    let log_path = unique_log_path(prefix);
-    let log = Arc::new(
-        LogWriter::new(&log_path, None)
-            .await
-            .expect("create log writer"),
-    );
+async fn setup_responses_stream() -> (Arc<LogWriter>, LogContext, SqlitePool) {
+    let sqlite_pool = create_test_sqlite_pool().await;
+    let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
     let context = LogContext {
         path: "/v1/responses".to_string(),
         provider: "openai-response".to_string(),
@@ -55,7 +55,7 @@ async fn setup_responses_stream(prefix: &str) -> (Arc<LogWriter>, LogContext, Pa
         upstream_request_id: None,
         start: Instant::now(),
     };
-    (log, context, log_path)
+    (log, context, sqlite_pool)
 }
 
 async fn collect_responses_to_chat_chunks(
@@ -75,25 +75,37 @@ async fn collect_responses_to_chat_chunks(
         .await
 }
 
-async fn read_first_log_line(path: &PathBuf) -> String {
+async fn read_first_usage_tokens(
+    pool: &SqlitePool,
+) -> (Option<i64>, Option<i64>, Option<i64>) {
     let deadline = TokioInstant::now() + std::time::Duration::from_secs(2);
     loop {
-        if let Ok(contents) = tokio::fs::read_to_string(path).await {
-            if let Some(line) = contents.lines().next() {
-                return line.to_string();
-            }
+        let row = sqlx::query(
+            "SELECT input_tokens, output_tokens, total_tokens FROM request_logs ORDER BY id LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await
+        .ok()
+        .flatten();
+        if let Some(row) = row {
+            let input_tokens = row.try_get::<Option<i64>, _>("input_tokens").unwrap_or_default();
+            let output_tokens = row
+                .try_get::<Option<i64>, _>("output_tokens")
+                .unwrap_or_default();
+            let total_tokens = row.try_get::<Option<i64>, _>("total_tokens").unwrap_or_default();
+            return (input_tokens, output_tokens, total_tokens);
         }
         if TokioInstant::now() >= deadline {
-            panic!("log line");
+            panic!("log entry");
         }
-        sleep(std::time::Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
     }
 }
 
 #[test]
 fn stream_responses_to_chat_emits_role_delta_and_done_and_logs_usage() {
     run_async(async {
-        let (log, context, log_path) = setup_responses_stream("responses_to_chat").await;
+        let (log, context, sqlite_pool) = setup_responses_stream().await;
 
         let upstream = futures_util::stream::iter(vec![
             Ok(Bytes::from(
@@ -134,19 +146,18 @@ fn stream_responses_to_chat_emits_role_delta_and_done_and_logs_usage() {
 
         assert_eq!(String::from_utf8_lossy(&chunks[4]), "data: [DONE]\n\n");
 
-        let line = read_first_log_line(&log_path).await;
-        let entry: Value = serde_json::from_str(&line).expect("parse log entry");
-        assert_eq!(entry["usage"]["input_tokens"], json!(1));
-        assert_eq!(entry["usage"]["output_tokens"], json!(2));
-        assert_eq!(entry["usage"]["total_tokens"], json!(3));
+        let (input_tokens, output_tokens, total_tokens) =
+            read_first_usage_tokens(&sqlite_pool).await;
+        assert_eq!(input_tokens, Some(1));
+        assert_eq!(output_tokens, Some(2));
+        assert_eq!(total_tokens, Some(3));
     });
 }
 
 #[test]
 fn stream_responses_to_chat_emits_tool_call_deltas_and_finish_reason() {
     run_async(async {
-        let (log, context, _log_path) =
-            setup_responses_stream("responses_to_chat_tool_calls").await;
+        let (log, context, _sqlite_pool) = setup_responses_stream().await;
 
         let upstream = futures_util::stream::iter(vec![
             Ok(Bytes::from(
@@ -201,8 +212,7 @@ fn stream_responses_to_chat_emits_tool_call_deltas_and_finish_reason() {
 #[test]
 fn stream_responses_to_chat_emits_content_parts_for_non_text() {
     run_async(async {
-        let (log, context, _log_path) =
-            setup_responses_stream("responses_to_chat_content_parts").await;
+        let (log, context, _sqlite_pool) = setup_responses_stream().await;
 
         let upstream = futures_util::stream::iter(vec![
             Ok(Bytes::from(
@@ -238,12 +248,8 @@ fn stream_responses_to_chat_emits_content_parts_for_non_text() {
 #[test]
 fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_done_and_logs_usage() {
     run_async(async {
-        let log_path = unique_log_path("chat_to_responses");
-        let log = Arc::new(
-            LogWriter::new(&log_path, None)
-                .await
-                .expect("create log writer"),
-        );
+        let sqlite_pool = create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
         let context = LogContext {
             path: "/v1/chat/completions".to_string(),
             provider: "openai".to_string(),
@@ -342,23 +348,19 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
 
         assert_eq!(String::from_utf8_lossy(&chunks[9]), "data: [DONE]\n\n");
 
-        let line = read_first_log_line(&log_path).await;
-        let entry: Value = serde_json::from_str(&line).expect("parse log entry");
-        assert_eq!(entry["usage"]["input_tokens"], json!(1));
-        assert_eq!(entry["usage"]["output_tokens"], json!(2));
-        assert_eq!(entry["usage"]["total_tokens"], json!(3));
+        let (input_tokens, output_tokens, total_tokens) =
+            read_first_usage_tokens(&sqlite_pool).await;
+        assert_eq!(input_tokens, Some(1));
+        assert_eq!(output_tokens, Some(2));
+        assert_eq!(total_tokens, Some(3));
     });
 }
 
 #[test]
 fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_completed_response() {
     run_async(async {
-        let log_path = unique_log_path("chat_to_responses_tool_calls");
-        let log = Arc::new(
-            LogWriter::new(&log_path, None)
-                .await
-                .expect("create log writer"),
-        );
+        let sqlite_pool = create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
         let context = LogContext {
             path: "/v1/chat/completions".to_string(),
             provider: "openai".to_string(),
@@ -453,10 +455,10 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
 
         assert_eq!(String::from_utf8_lossy(&chunks[7]), "data: [DONE]\n\n");
 
-        let line = read_first_log_line(&log_path).await;
-        let entry: Value = serde_json::from_str(&line).expect("parse log entry");
-        assert_eq!(entry["usage"]["input_tokens"], json!(1));
-        assert_eq!(entry["usage"]["output_tokens"], json!(2));
-        assert_eq!(entry["usage"]["total_tokens"], json!(3));
+        let (input_tokens, output_tokens, total_tokens) =
+            read_first_usage_tokens(&sqlite_pool).await;
+        assert_eq!(input_tokens, Some(1));
+        assert_eq!(output_tokens, Some(2));
+        assert_eq!(total_tokens, Some(3));
     });
 }

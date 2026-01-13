@@ -1,9 +1,6 @@
 use axum::http::header::{HeaderName, HeaderValue};
 use serde::{de, Deserialize, Deserializer, Serialize};
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-};
+use std::collections::HashMap;
 
 use super::model_mapping::ModelMappingRules;
 use crate::logging::LogLevel;
@@ -101,7 +98,6 @@ pub(crate) struct ProxyConfigFile {
     pub(crate) port: u16,
     pub(crate) local_api_key: Option<String>,
     pub(crate) app_proxy_url: Option<String>,
-    pub(crate) log_path: String,
     #[serde(default = "default_log_level", deserialize_with = "deserialize_log_level")]
     pub(crate) log_level: LogLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -125,7 +121,6 @@ impl Default for ProxyConfigFile {
             port: default_proxy_port(),
             local_api_key: None,
             app_proxy_url: None,
-            log_path: "proxy.log".to_string(),
             log_level: LogLevel::default(),
             max_request_body_bytes: None,
             tray_token_rate: TrayTokenRateConfig::default(),
@@ -186,7 +181,6 @@ pub(crate) struct ProxyConfig {
     pub(crate) host: String,
     pub(crate) port: u16,
     pub(crate) local_api_key: Option<String>,
-    pub(crate) log_path: PathBuf,
     pub(crate) log_level: LogLevel,
     pub(crate) max_request_body_bytes: usize,
     pub(crate) enable_api_format_conversion: bool,

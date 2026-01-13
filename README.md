@@ -41,8 +41,7 @@ curl -X POST \
 | `port` | `9208` release / `19208` debug | Change if the port is taken |
 | `local_api_key` | `null` | When set: incoming requests must send `Authorization: Bearer <key>`; the same header will **not** forward upstream. |
 | `app_proxy_url` | `null` | Proxy for app updater & as placeholder for upstreams (`"$app_proxy_url"`). Supports `http/https/socks5/socks5h`. |
-| `log_path` | `proxy.log` | Relative to config dir. **Release builds do not write this file** (only SQLite). |
-| `log_level` | `silent` | `silent|error|warn|info|debug|trace`; debug/trace log request headers (auth redacted) and small bodies (≤64KiB). |
+| `log_level` | `silent` | `silent|error|warn|info|debug|trace`; debug/trace log request headers (auth redacted) and small bodies (≤64KiB). Release builds force `silent`. |
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 = fallback to default. Protects inbound body size. |
 | `tray_token_rate.enabled` | `true` | macOS tray live rate; harmless elsewhere. |
 | `tray_token_rate.format` | `split` | `combined` (`total`), `split` (`↑in ↓out`), `both` (`total | ↑in ↓out`). |
@@ -82,7 +81,6 @@ curl -X POST \
 
 ## Observability
 - SQLite log: `data.db` in config dir. Stores per-request stats (tokens, cached tokens, latency, model, upstream).
-- `proxy.log`: only written in debug builds; release skips file logging.
 - Token rate: macOS tray shows live total or split rates (configurable via `tray_token_rate`).
 - Debug/trace log bodies capped at 64KiB.
 

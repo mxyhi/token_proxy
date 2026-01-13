@@ -68,7 +68,7 @@ async fn connect_pool(path: &PathBuf) -> Result<SqlitePool, String> {
         .map_err(|err| format!("Failed to connect sqlite: {err}"))
 }
 
-async fn init_schema(pool: &SqlitePool) -> Result<(), String> {
+pub(crate) async fn init_schema(pool: &SqlitePool) -> Result<(), String> {
     sqlx::query(
         r#"
 CREATE TABLE IF NOT EXISTS request_logs (

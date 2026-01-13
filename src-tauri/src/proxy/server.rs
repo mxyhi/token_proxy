@@ -203,7 +203,8 @@ async fn proxy_request(
 ) -> Response {
     // 只在此处短暂持有读锁，避免影响并发请求性能。
     let state = { state.read().await.clone() };
-    let is_debug_log = matches!(state.config.log_level, LogLevel::Debug | LogLevel::Trace);
+    let is_debug_log = cfg!(debug_assertions)
+        && matches!(state.config.log_level, LogLevel::Debug | LogLevel::Trace);
     let path = uri.path();
     tracing::info!(method = %method, path = %path, "incoming request");
     tracing::debug!(headers = ?headers.keys().collect::<Vec<_>>(), "request headers");
@@ -597,7 +598,7 @@ async fn maybe_force_openai_stream_options_include_usage(
 mod tests {
     use super::*;
 
-    use std::{collections::HashMap, path::PathBuf};
+    use std::collections::HashMap;
 
     use axum::body::Bytes;
     use crate::proxy::config::{ProviderUpstreams, ProxyConfig, UpstreamStrategy};
@@ -618,7 +619,6 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 9208,
             local_api_key: None,
-            log_path: PathBuf::from("proxy.log"),
             log_level: LogLevel::Silent,
             max_request_body_bytes: 20 * 1024 * 1024,
             enable_api_format_conversion,

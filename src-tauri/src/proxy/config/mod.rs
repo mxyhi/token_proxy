@@ -36,7 +36,7 @@ pub(crate) async fn write_config(
     app: AppHandle,
     config: ProxyConfigFile,
 ) -> Result<(), String> {
-    build_runtime_config(&app, config.clone())?;
+    build_runtime_config(config.clone())?;
     io::save_config_file(&app, &config).await
 }
 
@@ -47,7 +47,7 @@ impl ProxyConfig {
 
     pub(crate) async fn load(app: &AppHandle) -> Result<Self, String> {
         let config = io::load_config_file(app).await?;
-        build_runtime_config(app, config)
+        build_runtime_config(config)
     }
 
     pub(crate) fn provider_upstreams(&self, provider: &str) -> Option<&ProviderUpstreams> {
@@ -55,8 +55,7 @@ impl ProxyConfig {
     }
 }
 
-fn build_runtime_config(app: &AppHandle, config: ProxyConfigFile) -> Result<ProxyConfig, String> {
-    let log_path = io::resolve_log_path(app, &config.log_path)?;
+fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> {
     let log_level = config.log_level;
     let max_request_body_bytes = resolve_max_request_body_bytes(config.max_request_body_bytes);
     let app_proxy_url = normalize_app_proxy_url(config.app_proxy_url.as_deref())?;
@@ -67,7 +66,6 @@ fn build_runtime_config(app: &AppHandle, config: ProxyConfigFile) -> Result<Prox
         host: config.host,
         port: config.port,
         local_api_key: config.local_api_key,
-        log_path,
         log_level,
         max_request_body_bytes,
         enable_api_format_conversion: config.enable_api_format_conversion,

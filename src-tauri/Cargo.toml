@@ -42,7 +42,7 @@ sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }
 tiktoken-rs = "0.9.1"
 toml_edit = "0.22"
 url = "2.5.8"
-tracing = "0.1.44"
+tracing = { version = "0.1.44", features = ["release_max_level_off"] }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 
 [target."cfg(not(any(target_os = \"android\", target_os = \"ios\")))".dependencies]

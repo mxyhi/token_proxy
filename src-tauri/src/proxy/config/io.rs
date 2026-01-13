@@ -96,15 +96,6 @@ pub(super) fn config_file_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(config_dir_path(app)?.join(CONFIG_FILE_NAME))
 }
 
-/// Log path: relative paths are based on the config directory
-pub(super) fn resolve_log_path(app: &AppHandle, log_path: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(log_path);
-    if path.is_absolute() {
-        return Ok(path);
-    }
-    Ok(config_dir_path(app)?.join(log_path))
-}
-
 fn parse_config_file(contents: &str, path: &Path) -> Result<ProxyConfigFile, String> {
     let sanitized = crate::jsonc::sanitize_jsonc(contents);
     serde_json::from_str(&sanitized)

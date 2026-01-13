@@ -73,7 +73,6 @@ const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "port",
   "local_api_key",
   "app_proxy_url",
-  "log_path",
   "log_level",
   "tray_token_rate",
   "enable_api_format_conversion",
@@ -86,7 +85,6 @@ export const EMPTY_FORM: ConfigForm = {
   port: "9208",
   localApiKey: "",
   appProxyUrl: "",
-  logPath: "proxy.log",
   logLevel: "silent",
   trayTokenRate: { ...DEFAULT_TRAY_TOKEN_RATE },
   enableApiFormatConversion: false,
@@ -144,7 +142,6 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     port: String(config.port),
     localApiKey: config.local_api_key ?? "",
     appProxyUrl: config.app_proxy_url ?? "",
-    logPath: config.log_path,
     logLevel: config.log_level ?? "silent",
     trayTokenRate: normalizeTrayTokenRate(config.tray_token_rate),
     enableApiFormatConversion: config.enable_api_format_conversion,
@@ -170,7 +167,6 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     port,
     local_api_key: form.localApiKey.trim() ? form.localApiKey.trim() : null,
     app_proxy_url: form.appProxyUrl.trim() ? form.appProxyUrl.trim() : null,
-    log_path: form.logPath.trim(),
     log_level: form.logLevel,
     tray_token_rate: form.trayTokenRate,
     enable_api_format_conversion: form.enableApiFormatConversion,
@@ -199,9 +195,6 @@ export function validate(form: ConfigForm) {
   }
   if (form.appProxyUrl.trim() && !isValidProxyUrl(form.appProxyUrl.trim())) {
     return { valid: false, message: m.error_app_proxy_url_invalid() };
-  }
-  if (!form.logPath.trim()) {
-    return { valid: false, message: m.error_log_path_required() };
   }
   if (!form.upstreams.length) {
     return { valid: false, message: m.error_upstream_at_least_one() };

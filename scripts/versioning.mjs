@@ -22,8 +22,18 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function ensureSingleTrailingNewline(text) {
+  const normalized = text.replace(/\r\n/g, "\n");
+  const withoutTrailingBlankLines = normalized.replace(/(?:\n[ \t]*)+$/u, "");
+  return `${withoutTrailingBlankLines}\n`;
+}
+
+function writeText(filePath, content) {
+  fs.writeFileSync(filePath, ensureSingleTrailingNewline(content));
+}
+
 function writeJson(filePath, data) {
-  fs.writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`);
+  writeText(filePath, JSON.stringify(data, null, 2));
 }
 
 function parseCoreVersion(version) {
@@ -143,10 +153,10 @@ function applyVersion(version) {
   writeJson(PATHS.tauriConf, tauriConf);
 
   const cargoToml = fs.readFileSync(PATHS.cargoToml, "utf8");
-  fs.writeFileSync(PATHS.cargoToml, `${updateCargoToml(cargoToml, version)}\n`);
+  writeText(PATHS.cargoToml, updateCargoToml(cargoToml, version));
 
   const cargoLock = fs.readFileSync(PATHS.cargoLock, "utf8");
-  fs.writeFileSync(PATHS.cargoLock, `${updateCargoLock(cargoLock, version)}\n`);
+  writeText(PATHS.cargoLock, updateCargoLock(cargoLock, version));
 }
 
 function setOutput(key, value) {

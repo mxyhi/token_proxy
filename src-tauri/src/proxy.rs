@@ -12,6 +12,7 @@ mod openai_compat;
 mod request_body;
 mod response;
 mod server;
+mod server_helpers;
 mod sse;
 mod sqlite;
 pub(crate) mod token_rate;

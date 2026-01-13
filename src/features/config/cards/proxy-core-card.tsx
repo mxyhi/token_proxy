@@ -13,6 +13,7 @@ import {
 import { ProxyServicePanel, type ProxyServiceViewProps } from "@/features/config/cards/proxy-service-card";
 import {
   type ConfigForm,
+  LOG_LEVELS,
   type TrayTokenRateFormat,
   TRAY_TOKEN_RATE_FORMATS,
 } from "@/features/config/types";
@@ -79,17 +80,49 @@ function ProxyCoreFields({ form, showLocalKey, onToggleLocalKey, onChange }: Pro
           {m.proxy_core_app_proxy_url_help({ placeholder: "$app_proxy_url" })}
         </p>
       </div>
-      <div className="grid gap-2">
-        <Label htmlFor="proxy-log">{m.proxy_core_log_file_label()}</Label>
-        <Input
-          id="proxy-log"
-          value={form.logPath}
-          onChange={(event) => onChange({ logPath: event.target.value })}
-          placeholder="proxy.log"
-        />
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="proxy-log">{m.proxy_core_log_file_label()}</Label>
+          <Input
+            id="proxy-log"
+            value={form.logPath}
+            onChange={(event) => onChange({ logPath: event.target.value })}
+            placeholder="proxy.log"
+          />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="proxy-log-level">{m.proxy_core_log_level_label()}</Label>
+          <Select
+            value={form.logLevel}
+            onValueChange={(nextValue) => {
+              const nextLevel = toLogLevel(nextValue);
+              if (nextLevel) {
+                onChange({ logLevel: nextLevel });
+              }
+            }}
+          >
+            <SelectTrigger id="proxy-log-level">
+              <SelectValue placeholder={m.proxy_core_log_level_placeholder()} />
+            </SelectTrigger>
+            <SelectContent>
+              {LOG_LEVELS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label()}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">{m.proxy_core_log_level_help()}</p>
+        </div>
       </div>
     </>
   );
+}
+
+const LOG_LEVEL_VALUES: ReadonlySet<string> = new Set(LOG_LEVELS.map((level) => level.value));
+
+function toLogLevel(value: string): ConfigForm["logLevel"] | null {
+  return LOG_LEVEL_VALUES.has(value) ? (value as ConfigForm["logLevel"]) : null;
 }
 
 type ProxyCoreFormatConversionProps = {

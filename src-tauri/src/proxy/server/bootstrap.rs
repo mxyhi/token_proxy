@@ -3,19 +3,15 @@ use axum::{
     routing::any,
     Router,
 };
-use std::{
-    collections::HashMap,
-    sync::atomic::AtomicUsize,
-};
+use std::{collections::HashMap, sync::atomic::AtomicUsize};
 
-use super::{
-    config::ProxyConfig,
-    proxy_request,
-    ProxyStateHandle,
-};
+use crate::proxy::config::ProxyConfig;
+use super::{proxy_request, ProxyStateHandle};
 
-pub(super) fn build_upstream_cursors(config: &ProxyConfig) -> HashMap<String, Vec<AtomicUsize>> {
-    let mut cursors = HashMap::new();
+pub(crate) fn build_upstream_cursors(
+    config: &ProxyConfig,
+) -> HashMap<String, Vec<AtomicUsize>> {
+    let mut cursors: HashMap<String, Vec<AtomicUsize>> = HashMap::new();
     for (provider, upstreams) in &config.upstreams {
         let group_cursors = upstreams
             .groups
@@ -27,7 +23,7 @@ pub(super) fn build_upstream_cursors(config: &ProxyConfig) -> HashMap<String, Ve
     cursors
 }
 
-pub(super) fn build_router(
+pub(crate) fn build_router(
     state: ProxyStateHandle,
     max_request_body_bytes: usize,
 ) -> Router<ProxyStateHandle> {

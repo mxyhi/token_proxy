@@ -18,6 +18,7 @@ const REQUEST_META_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 const REQUEST_TRANSFORM_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 const DEBUG_BODY_LOG_LIMIT_BYTES: usize = 64 * 1024;
 
+#[derive(Debug)]
 pub(crate) struct RequestError {
     pub(crate) status: StatusCode,
     pub(crate) message: String,
@@ -61,7 +62,7 @@ pub(crate) async fn parse_request_meta_best_effort(
     let model_from_path = gemini::parse_gemini_model_from_path(path);
     let fallback_meta = RequestMeta {
         stream: stream_from_path,
-        original_model: model_from_path,
+        original_model: model_from_path.clone(),
         mapped_model: None,
         estimated_input_tokens: None,
     };

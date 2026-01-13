@@ -20,7 +20,12 @@ tauri-build = { version = "2.5.3", features = [] }
 [dependencies]
 axum = "0.8.8"
 futures-util = "0.3.31"
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "socks"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls",
+    "socks",
+] }
 tauri = { version = "2.9.5", features = ["image-png", "tray-icon"] }
 tauri-plugin-opener = "2.5.3"
 tokio = { version = "1.49.0", features = [
@@ -49,5 +54,3 @@ codegen-units = 1
 strip = "symbols"
 panic = "abort"
 opt-level = "s"
-
-

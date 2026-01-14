@@ -6,6 +6,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type DownloadEvent } from "@tauri-apps/plugin-updater";
 
@@ -209,6 +210,12 @@ export function UpdaterProvider({ children }: UpdaterProviderProps) {
   const relaunchApp = useCallback(async () => {
     setState((prev) => ({ ...prev, statusMessage: "" }));
     try {
+      // Best-effort graceful shutdown before relaunching.
+      try {
+        await invoke<void>("prepare_relaunch");
+      } catch (error) {
+        setState((prev) => ({ ...prev, statusMessage: parseError(error) }));
+      }
       await relaunch();
     } catch (error) {
       // 安装成功但重启失败时，不应把更新状态标记为失败；仅展示错误提示。

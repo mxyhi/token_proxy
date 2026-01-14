@@ -230,6 +230,16 @@ async fn proxy_stop(
 }
 
 #[tauri::command]
+async fn prepare_relaunch(
+    proxy_service: tauri::State<'_, ProxyServiceHandle>,
+    tray_state: tauri::State<'_, tray::TrayState>,
+) -> Result<(), String> {
+    // Allow the app to exit even if the window is closed during relaunch.
+    tray_state.mark_quit();
+    proxy_service.stop().await.map(|_| ())
+}
+
+#[tauri::command]
 async fn proxy_restart(
     app: tauri::AppHandle,
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
@@ -353,6 +363,7 @@ pub fn run() {
             proxy_status,
             proxy_start,
             proxy_stop,
+            prepare_relaunch,
             proxy_restart,
             proxy_reload,
         ])

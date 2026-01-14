@@ -12,7 +12,7 @@ use std::{
 
 use super::{
     http,
-    log::{build_log_entry, LogContext, LogWriter},
+    log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     request_detail::RequestDetailSnapshot,
     model,
     openai_compat::{transform_response_body, FormatTransform},
@@ -41,7 +41,6 @@ pub(super) async fn build_proxy_response(
 ) -> Response {
     let status = upstream_res.status();
     let mut response_headers = http::filter_response_headers(upstream_res.headers());
-    let capture_active = request_detail.is_some();
     let (request_headers, request_body) = request_detail
         .map(|detail| (detail.request_headers, detail.request_body))
         .unwrap_or((None, None));
@@ -94,7 +93,6 @@ pub(super) async fn build_proxy_response(
             request_tracker,
             response_transform,
             model_override,
-            capture_active,
         )
         .await
     }
@@ -114,7 +112,6 @@ pub(super) async fn build_proxy_response_buffered(
 ) -> Response {
     let status = upstream_res.status();
     let mut response_headers = http::filter_response_headers(upstream_res.headers());
-    let capture_active = request_detail.is_some();
     let (request_headers, request_body) = request_detail
         .map(|detail| (detail.request_headers, detail.request_body))
         .unwrap_or((None, None));
@@ -152,7 +149,6 @@ pub(super) async fn build_proxy_response_buffered(
         request_tracker,
         response_transform,
         model_override,
-        capture_active,
     )
     .await
 }
@@ -225,39 +221,46 @@ async fn build_buffered_response(
     request_tracker: RequestTokenTracker,
     response_transform: FormatTransform,
     model_override: Option<&str>,
-    capture_active: bool,
 ) -> Response {
+    let mut context = context;
     let bytes = match upstream_res.bytes().await {
         Ok(bytes) => bytes,
         Err(err) => {
-            return http::error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("Failed to read upstream response: {err}"),
-            )
+            let message = format!("Failed to read upstream response: {err}");
+            context.status = StatusCode::BAD_GATEWAY.as_u16();
+            let empty_usage = UsageSnapshot {
+                usage: None,
+                cached_tokens: None,
+                usage_json: None,
+            };
+            let entry = build_log_entry(&context, empty_usage, Some(message.clone()));
+            log.clone().write_detached(entry);
+            return http::error_response(StatusCode::BAD_GATEWAY, message);
         }
     };
     let usage = extract_usage_from_response(&bytes);
-    let response_error = if capture_active && (status.is_client_error() || status.is_server_error()) {
+    let response_error = if status.is_client_error() || status.is_server_error() {
         Some(response_error_text(&bytes))
     } else {
         None
     };
-    let entry = build_log_entry(&context, usage, response_error);
-    log.clone().write_detached(entry);
-
     let output = if response_transform != FormatTransform::None && status.is_success() {
         match transform_response_body(response_transform, &bytes, context.model.as_deref()) {
             Ok(converted) => converted,
             Err(message) => {
-                return http::error_response(
-                    StatusCode::BAD_GATEWAY,
-                    format!("Failed to transform upstream response: {message}"),
-                )
+                let error_message = format!("Failed to transform upstream response: {message}");
+                context.status = StatusCode::BAD_GATEWAY.as_u16();
+                let entry = build_log_entry(&context, usage, Some(error_message.clone()));
+                log.clone().write_detached(entry);
+                return http::error_response(StatusCode::BAD_GATEWAY, error_message);
             }
         }
     } else {
         bytes
     };
+
+    let entry = build_log_entry(&context, usage, response_error);
+    log.clone().write_detached(entry);
 
     let output = maybe_override_response_model(output, model_override);
     apply_output_tokens_from_response(&request_tracker, &context.provider, &output).await;

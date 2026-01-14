@@ -217,9 +217,8 @@ fn log_request_error(
     response_error: String,
     start: Instant,
 ) {
-    let Some(detail) = detail else {
-        return;
-    };
+    let (request_headers, request_body) =
+        detail.map(|detail| (detail.request_headers, detail.request_body)).unwrap_or((None, None));
     let context = LogContext {
         path: path.to_string(),
         provider: provider.to_string(),
@@ -229,8 +228,8 @@ fn log_request_error(
         stream: false,
         status: status.as_u16(),
         upstream_request_id: None,
-        request_headers: detail.request_headers,
-        request_body: detail.request_body,
+        request_headers,
+        request_body,
         start,
     };
     let usage = UsageSnapshot {
@@ -254,19 +253,21 @@ async fn ensure_local_auth_or_respond(
 ) -> Result<Body, Response> {
     if let Err(message) = http::ensure_local_auth(config, headers) {
         tracing::warn!("local auth failed");
-        if capture_next {
-            let detail = capture_detail_from_body(headers, body, max_body_bytes).await;
-            log_request_error(
-                log,
-                Some(detail),
-                path,
-                PROVIDER_PROXY,
-                LOCAL_UPSTREAM_ID,
-                StatusCode::UNAUTHORIZED,
-                message.clone(),
-                request_start,
-            );
-        }
+        let detail = if capture_next {
+            Some(capture_detail_from_body(headers, body, max_body_bytes).await)
+        } else {
+            None
+        };
+        log_request_error(
+            log,
+            detail,
+            path,
+            PROVIDER_PROXY,
+            LOCAL_UPSTREAM_ID,
+            StatusCode::UNAUTHORIZED,
+            message.clone(),
+            request_start,
+        );
         return Err(http::error_response(StatusCode::UNAUTHORIZED, message));
     }
     Ok(body)
@@ -289,19 +290,21 @@ async fn resolve_plan_or_respond(
         }
         Err(message) => {
             tracing::warn!("no dispatch plan found");
-            if capture_next {
-                let detail = capture_detail_from_body(headers, body, max_body_bytes).await;
-                log_request_error(
-                    log,
-                    Some(detail),
-                    path,
-                    PROVIDER_PROXY,
-                    LOCAL_UPSTREAM_ID,
-                    StatusCode::BAD_GATEWAY,
-                    message.clone(),
-                    request_start,
-                );
-            }
+            let detail = if capture_next {
+                Some(capture_detail_from_body(headers, body, max_body_bytes).await)
+            } else {
+                None
+            };
+            log_request_error(
+                log,
+                detail,
+                path,
+                PROVIDER_PROXY,
+                LOCAL_UPSTREAM_ID,
+                StatusCode::BAD_GATEWAY,
+                message.clone(),
+                request_start,
+            );
             Err(http::error_response(StatusCode::BAD_GATEWAY, message))
         }
     }
@@ -319,22 +322,24 @@ async fn read_body_or_respond(
         Ok(body) => Ok(body),
         Err(err) => {
             let message = format!("Failed to read request body: {err}");
-            if capture_next {
-                let detail = RequestDetailSnapshot {
+            let detail = if capture_next {
+                Some(RequestDetailSnapshot {
                     request_headers: serialize_request_headers(headers),
                     request_body: Some(message.clone()),
-                };
-                log_request_error(
-                    log,
-                    Some(detail),
-                    path,
-                    PROVIDER_PROXY,
-                    LOCAL_UPSTREAM_ID,
-                    StatusCode::BAD_REQUEST,
-                    message.clone(),
-                    request_start,
-                );
-            }
+                })
+            } else {
+                None
+            };
+            log_request_error(
+                log,
+                detail,
+                path,
+                PROVIDER_PROXY,
+                LOCAL_UPSTREAM_ID,
+                StatusCode::BAD_REQUEST,
+                message.clone(),
+                request_start,
+            );
             Err(http::error_response(StatusCode::BAD_REQUEST, message))
         }
     }

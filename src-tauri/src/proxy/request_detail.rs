@@ -1,6 +1,7 @@
 use axum::http::HeaderMap;
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::{AppHandle, Emitter};
 
 use super::request_body::ReplayableBody;
 
@@ -12,26 +13,60 @@ pub(crate) struct RequestDetailSnapshot {
     pub(crate) request_body: Option<String>,
 }
 
-#[derive(Default)]
+const REQUEST_DETAIL_CAPTURE_EVENT: &str = "request-detail-capture-changed";
+
 pub(crate) struct RequestDetailCapture {
     armed: AtomicBool,
+    app: Option<AppHandle>,
 }
 
 impl RequestDetailCapture {
+    pub(crate) fn new(app: AppHandle) -> Self {
+        Self {
+            armed: AtomicBool::new(false),
+            app: Some(app),
+        }
+    }
+
     pub(crate) fn arm(&self) {
         self.armed.store(true, Ordering::SeqCst);
+        self.emit(true);
     }
 
     pub(crate) fn disarm(&self) {
         self.armed.store(false, Ordering::SeqCst);
+        self.emit(false);
     }
 
     pub(crate) fn take(&self) -> bool {
-        self.armed.swap(false, Ordering::SeqCst)
+        let was_armed = self.armed.swap(false, Ordering::SeqCst);
+        if was_armed {
+            self.emit(false);
+        }
+        was_armed
     }
 
     pub(crate) fn is_armed(&self) -> bool {
         self.armed.load(Ordering::SeqCst)
+    }
+
+    fn emit(&self, enabled: bool) {
+        let Some(app) = self.app.as_ref() else {
+            return;
+        };
+        let _ = app.emit(
+            REQUEST_DETAIL_CAPTURE_EVENT,
+            RequestDetailCaptureEvent { enabled },
+        );
+    }
+}
+
+impl Default for RequestDetailCapture {
+    fn default() -> Self {
+        Self {
+            armed: AtomicBool::new(false),
+            app: None,
+        }
     }
 }
 
@@ -68,4 +103,9 @@ pub(crate) async fn capture_request_detail(
 struct HeaderEntry {
     name: String,
     value: String,
+}
+
+#[derive(Clone, Serialize)]
+struct RequestDetailCaptureEvent {
+    enabled: bool,
 }

@@ -283,7 +283,8 @@ pub fn run() {
 
             let token_rate = proxy::token_rate::TokenRateTracker::new();
             app.manage(token_rate.clone());
-            let request_detail = Arc::new(proxy::request_detail::RequestDetailCapture::default());
+            let request_detail =
+                Arc::new(proxy::request_detail::RequestDetailCapture::new(app.handle().clone()));
             app.manage(request_detail);
             let proxy_service = ProxyServiceHandle::new();
             app.manage(proxy_service.clone());

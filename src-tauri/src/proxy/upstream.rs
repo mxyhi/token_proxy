@@ -443,9 +443,9 @@ fn log_upstream_error_if_needed(
     response_error: String,
     start_time: Instant,
 ) {
-    let Some(detail) = request_detail else {
-        return;
-    };
+    let (request_headers, request_body) = request_detail
+        .map(|detail| (detail.request_headers.clone(), detail.request_body.clone()))
+        .unwrap_or((None, None));
     let context = LogContext {
         path: inbound_path.to_string(),
         provider: provider.to_string(),
@@ -455,8 +455,8 @@ fn log_upstream_error_if_needed(
         stream: meta.stream,
         status: status.as_u16(),
         upstream_request_id: None,
-        request_headers: detail.request_headers.clone(),
-        request_body: detail.request_body.clone(),
+        request_headers,
+        request_body,
         start: start_time,
     };
     let usage = UsageSnapshot {

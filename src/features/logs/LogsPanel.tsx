@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { AlertCircle } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
@@ -35,8 +36,13 @@ import { parseError } from "@/lib/error";
 import { m } from "@/paraglide/messages.js";
 
 const DETAIL_PLACEHOLDER = "—";
+const REQUEST_DETAIL_CAPTURE_EVENT = "request-detail-capture-changed";
 
 type DetailStatus = "idle" | "loading" | "error";
+
+type RequestDetailCaptureEvent = {
+  enabled: boolean;
+};
 
 type DetailSectionProps = {
   title: string;
@@ -155,6 +161,44 @@ export function LogsPanel() {
   useEffect(() => {
     void loadCaptureState();
   }, [loadCaptureState]);
+
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | null = null;
+
+    const setupListener = async () => {
+      try {
+        const stop = await listen<RequestDetailCaptureEvent>(
+          REQUEST_DETAIL_CAPTURE_EVENT,
+          (event) => {
+            if (!active) {
+              return;
+            }
+            setCaptureEnabled(event.payload.enabled);
+          }
+        );
+        if (!active) {
+          stop();
+          return;
+        }
+        unlisten = stop;
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        setCaptureMessage(parseError(error));
+      }
+    };
+
+    void setupListener();
+
+    return () => {
+      active = false;
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (status === "idle") {

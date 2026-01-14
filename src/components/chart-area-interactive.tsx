@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Area, CartesianGrid, ComposedChart, Line, XAxis } from "recharts"
+import { CartesianGrid, Line, LineChart, XAxis } from "recharts"
 
 import {
   Card,
@@ -141,26 +141,10 @@ function ChartHeader() {
   )
 }
 
-function ChartDefs() {
-  return (
-    <defs>
-      <linearGradient id="fillInput" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="5%" stopColor="var(--color-inputTokens)" stopOpacity={0.3} />
-        <stop offset="95%" stopColor="var(--color-inputTokens)" stopOpacity={0.02} />
-      </linearGradient>
-      <linearGradient id="fillOutput" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="5%" stopColor="var(--color-outputTokens)" stopOpacity={0.28} />
-        <stop offset="95%" stopColor="var(--color-outputTokens)" stopOpacity={0.02} />
-      </linearGradient>
-    </defs>
-  )
-}
-
 function ChartCanvas({ data, timeFormatter }: ChartBodyProps) {
   return (
     <ChartContainer config={chartConfig} className="aspect-auto h-[250px] w-full">
-      <ComposedChart data={data}>
-        <ChartDefs />
+      <LineChart data={data}>
         <CartesianGrid vertical={false} />
         <XAxis
           dataKey="tsMs"
@@ -191,19 +175,17 @@ function ChartCanvas({ data, timeFormatter }: ChartBodyProps) {
           }
         />
         <ChartLegend content={<ChartLegendContent />} />
-        <Area
+        <Line
           dataKey="inputTokens"
           type="monotone"
           stroke="var(--color-inputTokens)"
-          fill="url(#fillInput)"
           strokeWidth={2}
           dot={false}
         />
-        <Area
+        <Line
           dataKey="outputTokens"
           type="monotone"
           stroke="var(--color-outputTokens)"
-          fill="url(#fillOutput)"
           strokeWidth={2}
           dot={false}
         />
@@ -222,7 +204,7 @@ function ChartCanvas({ data, timeFormatter }: ChartBodyProps) {
           strokeWidth={2}
           dot={false}
         />
-      </ComposedChart>
+      </LineChart>
     </ChartContainer>
   )
 }

@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { RouterProvider, createRouter } from "@tanstack/react-router";
 import { ThemeProvider } from "next-themes";
+import { VibeKanbanWebCompanion } from "vibe-kanban-web-companion";
 import { routeTree } from "./routeTree.gen";
 
 import { I18nProvider } from "@/lib/i18n";
@@ -28,6 +29,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
         disableTransitionOnChange
       >
         <RouterProvider router={router} />
+        <VibeKanbanWebCompanion />
         <Toaster position="bottom-right" closeButton richColors />
         {/* Isolated language subscription - prevents global re-renders when language changes */}
         <LanguageObserver />

@@ -20,13 +20,13 @@ fn json_from_bytes(bytes: Bytes) -> Value {
 #[test]
 fn chat_request_to_responses_maps_common_fields() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
-    let input_messages = json!([
+    let chat_messages = json!([
         { "role": "user", "content": "hi" },
         { "role": "assistant", "content": "hello" }
     ]);
     let input = bytes_from_json(json!({
         "model": "gpt-4.1",
-        "messages": input_messages,
+        "messages": chat_messages,
         "stream": true,
         "temperature": 0.7,
         "top_p": 0.9,
@@ -42,8 +42,21 @@ fn chat_request_to_responses_maps_common_fields() {
     });
     let value = json_from_bytes(output);
 
+    let expected_input = json!([
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{ "type": "input_text", "text": "hi" }]
+        },
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{ "type": "input_text", "text": "hello" }]
+        }
+    ]);
+
     assert_eq!(value["model"], json!("gpt-4.1"));
-    assert_eq!(value["input"], input_messages);
+    assert_eq!(value["input"], expected_input);
     assert_eq!(value["stream"], json!(true));
     assert_eq!(value["temperature"], json!(0.7));
     assert_eq!(value["top_p"], json!(0.9));

@@ -227,6 +227,46 @@ async fn build_stream_response(
             )
                 .boxed()
         }
+        FormatTransform::ChatToAnthropic => {
+            // Two-stage conversion: OpenAI Chat stream -> OpenAI Responses stream -> Claude stream.
+            // Only the final stage writes logs / token usage to avoid duplication.
+            let intermediate_log = Arc::new(LogWriter::new(None));
+            let intermediate_tracker = RequestTokenTracker::disabled();
+            let responses_stream = chat_to_responses::stream_chat_to_responses(
+                upstream_res.bytes_stream(),
+                context.clone(),
+                intermediate_log,
+                intermediate_tracker,
+            )
+            .boxed();
+            responses_to_anthropic::stream_responses_to_anthropic(
+                responses_stream,
+                context,
+                log,
+                request_tracker,
+            )
+                .boxed()
+        }
+        FormatTransform::AnthropicToChat => {
+            // Two-stage conversion: Claude stream -> OpenAI Responses stream -> OpenAI Chat stream.
+            // Only the final stage writes logs / token usage to avoid duplication.
+            let intermediate_log = Arc::new(LogWriter::new(None));
+            let intermediate_tracker = RequestTokenTracker::disabled();
+            let responses_stream = anthropic_to_responses::stream_anthropic_to_responses(
+                upstream_res.bytes_stream(),
+                context.clone(),
+                intermediate_log,
+                intermediate_tracker,
+            )
+            .boxed();
+            responses_to_chat::stream_responses_to_chat(
+                responses_stream,
+                context,
+                log,
+                request_tracker,
+            )
+                .boxed()
+        }
     };
     let body = Body::from_stream(stream);
     http::build_response(status, headers, body)

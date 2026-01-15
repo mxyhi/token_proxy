@@ -14,11 +14,11 @@ fn responses_input_item_to_chat_message(item: &Value) -> Result<Value, String> {
     };
 
     // Cherry Studio / Codex CLI 可能会直接传 `[{ role, content:[{type,text}...] }]`，
-    // 这里需要把 content parts 归一化成 Chat API 需要的字符串。
+    // 这里需要把 content parts 归一化成 Chat API 需要的字符串/多模态数组。
     if item.get("role").and_then(Value::as_str).is_some() {
         let mut output = item.clone();
-        if let Some(content) = item.get("content").and_then(responses_message_content_to_text) {
-            output.insert("content".to_string(), Value::String(content));
+        if let Some(content) = item.get("content").and_then(responses_message_content_to_chat_content) {
+            output.insert("content".to_string(), content);
         }
         return Ok(Value::Object(output));
     }
@@ -42,8 +42,8 @@ fn responses_message_item_to_chat_message(item: &Map<String, Value>) -> Result<V
         .ok_or_else(|| "Responses message item must include role.".to_string())?;
     let content = item
         .get("content")
-        .and_then(responses_message_content_to_text)
-        .unwrap_or_default();
+        .and_then(responses_message_content_to_chat_content)
+        .unwrap_or_else(|| Value::String(String::new()));
     Ok(json!({ "role": role, "content": content }))
 }
 
@@ -80,26 +80,51 @@ fn responses_function_call_item_to_chat_message(item: &Map<String, Value>) -> Re
     }))
 }
 
-fn responses_message_content_to_text(value: &Value) -> Option<String> {
+fn responses_message_content_to_chat_content(value: &Value) -> Option<Value> {
     match value {
-        Value::String(text) => Some(text.to_string()),
+        Value::String(text) => Some(Value::String(text.to_string())),
         Value::Array(parts) => {
+            let mut output_parts = Vec::new();
             let mut combined = String::new();
+            let mut text_only = true;
             for part in parts {
                 let Some(part) = part.as_object() else {
                     continue;
                 };
                 let part_type = part.get("type").and_then(Value::as_str);
-                if !matches!(part_type, Some("input_text") | Some("text")) {
-                    continue;
-                }
-                if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    combined.push_str(text);
+                match part_type {
+                    Some("input_text") | Some("text") => {
+                        if let Some(text) = part.get("text").and_then(Value::as_str) {
+                            combined.push_str(text);
+                            output_parts.push(json!({ "type": "text", "text": text }));
+                        }
+                    }
+                    Some("input_image") => {
+                        // Chat Completions expects `{type:"image_url", image_url:{url:"..."}}`.
+                        let url = match part.get("image_url") {
+                            Some(Value::String(url)) => Some(json!({ "url": url })),
+                            Some(Value::Object(object)) => object.get("url").and_then(Value::as_str).map(|url| json!({ "url": url })),
+                            _ => None,
+                        };
+                        let Some(image_url) = url else {
+                            continue;
+                        };
+                        text_only = false;
+                        output_parts.push(json!({ "type": "image_url", "image_url": image_url }));
+                    }
+                    Some("input_file") => {
+                        // Chat Completions doesn't have a standardized file/document part; skip for now.
+                        text_only = false;
+                    }
+                    _ => continue,
                 }
             }
-            Some(combined)
+            if text_only {
+                Some(Value::String(combined))
+            } else {
+                Some(Value::Array(output_parts))
+            }
         }
-        _ => None,
+        _ => Some(Value::String(String::new())),
     }
 }
-

@@ -357,6 +357,19 @@ impl RequestWindow {
 }
 
 impl RequestTokenTracker {
+    pub(crate) fn disabled() -> Self {
+        // `generation=None` makes `can_record()` return false, so this tracker is a no-op.
+        // We still need a TokenRateTracker instance to satisfy the struct layout.
+        let tracker = TokenRateTracker::new();
+        Self {
+            id: None,
+            window: None,
+            tracker: tracker.as_ref().clone(),
+            model: None,
+            generation: None,
+        }
+    }
+
     pub(crate) async fn add_input_tokens(&self, tokens: u64) {
         if !self.can_record() {
             return;

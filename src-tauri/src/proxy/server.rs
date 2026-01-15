@@ -83,6 +83,32 @@ fn base_plan(provider: &'static str) -> DispatchPlan {
     }
 }
 
+fn provider_priority(config: &ProxyConfig, provider: &str) -> Option<i32> {
+    config
+        .provider_upstreams(provider)
+        .map(|upstreams| upstreams.groups.first().map(|group| group.priority).unwrap_or(0))
+}
+
+fn choose_provider_by_priority(
+    config: &ProxyConfig,
+    candidates: &[&'static str],
+) -> Option<&'static str> {
+    let mut selected: Option<(&'static str, i32)> = None;
+    for candidate in candidates {
+        let Some(priority) = provider_priority(config, candidate) else {
+            continue;
+        };
+        match selected {
+            None => selected = Some((candidate, priority)),
+            Some((_, best_priority)) if priority > best_priority => {
+                selected = Some((candidate, priority));
+            }
+            _ => {}
+        }
+    }
+    selected.map(|(provider, _)| provider)
+}
+
 fn resolve_gemini_plan(has_gemini: bool, path: &str) -> Option<Result<DispatchPlan, String>> {
     if !gemini::is_gemini_path(path) {
         return None;
@@ -94,135 +120,128 @@ fn resolve_gemini_plan(has_gemini: bool, path: &str) -> Option<Result<DispatchPl
 }
 
 fn resolve_anthropic_plan(
-    has_anthropic: bool,
-    has_responses: bool,
-    allow_format_conversion: bool,
+    config: &ProxyConfig,
     path: &str,
 ) -> Option<Result<DispatchPlan, String>> {
     if !is_anthropic_path(path) {
         return None;
     }
-    if has_anthropic {
+    if config.provider_upstreams(PROVIDER_ANTHROPIC).is_some() {
         return Some(Ok(base_plan(PROVIDER_ANTHROPIC)));
     }
 
     // Claude Code uses /v1/messages. If Anthropic upstream is missing but Responses is available,
     // fall back to OpenAI Responses format conversion when enabled (new-api style).
-    if path == "/v1/messages" && has_responses {
-        if !allow_format_conversion {
+    if path == "/v1/messages" {
+        let fallback = choose_provider_by_priority(config, &[PROVIDER_RESPONSES, PROVIDER_CHAT]);
+        let Some(fallback) = fallback else {
+            return Some(Err(ERROR_NO_UPSTREAM.to_string()));
+        };
+        if !config.enable_api_format_conversion {
             return Some(Err(ERROR_ANTHROPIC_CONVERSION_DISABLED.to_string()));
         }
-        return Some(Ok(DispatchPlan {
-            provider: PROVIDER_RESPONSES,
-            outbound_path: Some(RESPONSES_PATH),
-            request_transform: FormatTransform::AnthropicToResponses,
-            response_transform: FormatTransform::ResponsesToAnthropic,
+        return Some(Ok(match fallback {
+            PROVIDER_RESPONSES => DispatchPlan {
+                provider: PROVIDER_RESPONSES,
+                outbound_path: Some(RESPONSES_PATH),
+                request_transform: FormatTransform::AnthropicToResponses,
+                response_transform: FormatTransform::ResponsesToAnthropic,
+            },
+            PROVIDER_CHAT => DispatchPlan {
+                provider: PROVIDER_CHAT,
+                outbound_path: Some(CHAT_PATH),
+                request_transform: FormatTransform::AnthropicToChat,
+                response_transform: FormatTransform::ChatToAnthropic,
+            },
+            _ => base_plan(PROVIDER_RESPONSES),
         }));
     }
 
     Some(Err(ERROR_NO_UPSTREAM.to_string()))
 }
 
-fn resolve_formatless_plan(
-    has_chat: bool,
-    has_responses: bool,
-    has_anthropic: bool,
-) -> Result<DispatchPlan, String> {
-    if has_chat {
-        return Ok(base_plan(PROVIDER_CHAT));
-    }
-    if has_responses {
-        return Ok(base_plan(PROVIDER_RESPONSES));
-    }
-    if has_anthropic {
-        return Ok(base_plan(PROVIDER_ANTHROPIC));
-    }
-    Err(ERROR_NO_UPSTREAM.to_string())
+fn resolve_formatless_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
+    let provider = choose_provider_by_priority(
+        config,
+        &[PROVIDER_CHAT, PROVIDER_RESPONSES, PROVIDER_ANTHROPIC],
+    )
+    .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
+    Ok(base_plan(provider))
 }
 
-fn resolve_chat_plan(
-    has_chat: bool,
-    has_responses: bool,
-    allow_format_conversion: bool,
-) -> Result<DispatchPlan, String> {
-    if has_chat {
+fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
+    if config.provider_upstreams(PROVIDER_CHAT).is_some() {
         return Ok(base_plan(PROVIDER_CHAT));
     }
-    if has_responses {
-        if !allow_format_conversion {
-            return Err(ERROR_CHAT_CONVERSION_DISABLED.to_string());
-        }
-        return Ok(DispatchPlan {
+
+    let fallback = choose_provider_by_priority(config, &[PROVIDER_RESPONSES, PROVIDER_ANTHROPIC])
+        .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
+    if !config.enable_api_format_conversion {
+        return Err(ERROR_CHAT_CONVERSION_DISABLED.to_string());
+    }
+
+    Ok(match fallback {
+        PROVIDER_RESPONSES => DispatchPlan {
             provider: PROVIDER_RESPONSES,
             outbound_path: Some(RESPONSES_PATH),
             request_transform: FormatTransform::ChatToResponses,
             response_transform: FormatTransform::ResponsesToChat,
-        });
-    }
-    Err(ERROR_NO_UPSTREAM.to_string())
+        },
+        PROVIDER_ANTHROPIC => DispatchPlan {
+            provider: PROVIDER_ANTHROPIC,
+            outbound_path: Some("/v1/messages"),
+            request_transform: FormatTransform::ChatToAnthropic,
+            response_transform: FormatTransform::AnthropicToChat,
+        },
+        _ => base_plan(PROVIDER_RESPONSES),
+    })
 }
 
-fn resolve_responses_plan(
-    has_responses: bool,
-    has_chat: bool,
-    has_anthropic: bool,
-    allow_format_conversion: bool,
-) -> Result<DispatchPlan, String> {
-    if has_responses {
+fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
+    if config.provider_upstreams(PROVIDER_RESPONSES).is_some() {
         return Ok(base_plan(PROVIDER_RESPONSES));
     }
-    if has_chat {
-        if !allow_format_conversion {
-            return Err(ERROR_RESPONSES_CONVERSION_DISABLED.to_string());
-        }
-        return Ok(DispatchPlan {
+
+    let fallback = choose_provider_by_priority(config, &[PROVIDER_CHAT, PROVIDER_ANTHROPIC])
+        .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
+    if !config.enable_api_format_conversion {
+        return Err(ERROR_RESPONSES_CONVERSION_DISABLED.to_string());
+    }
+
+    Ok(match fallback {
+        PROVIDER_CHAT => DispatchPlan {
             provider: PROVIDER_CHAT,
             outbound_path: Some(CHAT_PATH),
             request_transform: FormatTransform::ResponsesToChat,
             response_transform: FormatTransform::ChatToResponses,
-        });
-    }
-    if has_anthropic {
-        if !allow_format_conversion {
-            return Err(ERROR_RESPONSES_CONVERSION_DISABLED.to_string());
-        }
-        return Ok(DispatchPlan {
+        },
+        PROVIDER_ANTHROPIC => DispatchPlan {
             provider: PROVIDER_ANTHROPIC,
             outbound_path: Some("/v1/messages"),
             request_transform: FormatTransform::ResponsesToAnthropic,
             response_transform: FormatTransform::AnthropicToResponses,
-        });
-    }
-    Err(ERROR_NO_UPSTREAM.to_string())
+        },
+        _ => base_plan(PROVIDER_CHAT),
+    })
 }
 
 fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPlan, String> {
-    let has_chat = config.provider_upstreams(PROVIDER_CHAT).is_some();
-    let has_responses = config.provider_upstreams(PROVIDER_RESPONSES).is_some();
-    let has_anthropic = config.provider_upstreams(PROVIDER_ANTHROPIC).is_some();
     let has_gemini = config.provider_upstreams(PROVIDER_GEMINI).is_some();
-    let allow_format_conversion = config.enable_api_format_conversion;
 
     if let Some(plan) = resolve_gemini_plan(has_gemini, path) {
         return plan;
     }
-    if let Some(plan) =
-        resolve_anthropic_plan(has_anthropic, has_responses, allow_format_conversion, path)
-    {
+    if let Some(plan) = resolve_anthropic_plan(config, path) {
         return plan;
     }
 
     let Some(format) = inbound_format(path) else {
-        return resolve_formatless_plan(has_chat, has_responses, has_anthropic);
+        return resolve_formatless_plan(config);
     };
 
     match format {
-        ApiFormat::ChatCompletions => {
-            resolve_chat_plan(has_chat, has_responses, allow_format_conversion)
-        }
-        ApiFormat::Responses => {
-            resolve_responses_plan(has_responses, has_chat, has_anthropic, allow_format_conversion)
-        }
+        ApiFormat::ChatCompletions => resolve_chat_plan(config),
+        ApiFormat::Responses => resolve_responses_plan(config),
     }
 }
 

@@ -47,7 +47,7 @@ pub(super) async fn responses_request_to_anthropic(
     out.insert("messages".to_string(), Value::Array(messages));
 
     if let Some(system) = join_system_texts(system_texts) {
-        out.insert("system".to_string(), Value::String(system));
+        out.insert("system".to_string(), system_blocks_from_text(system));
     }
 
     if let Some(temperature) = object.get("temperature") {
@@ -396,19 +396,14 @@ fn claude_system_to_text(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => Some(text.to_string()),
         Value::Array(items) => {
-            let mut combined = String::new();
-            for item in items {
-                let Some(item) = item.as_object() else {
-                    continue;
-                };
-                if item.get("type").and_then(Value::as_str) != Some("text") {
-                    continue;
-                }
-                if let Some(text) = item.get("text").and_then(Value::as_str) {
-                    combined.push_str(text);
-                }
-            }
-            Some(combined)
+            let texts = items
+                .iter()
+                .filter_map(|item| item.as_object())
+                .filter(|item| item.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+                .map(|text| text.to_string())
+                .collect::<Vec<_>>();
+            join_system_texts(texts)
         }
         _ => None,
     }
@@ -426,6 +421,12 @@ fn join_system_texts(texts: Vec<String>) -> Option<String> {
     } else {
         Some(combined)
     }
+}
+
+fn system_blocks_from_text(text: String) -> Value {
+    // new-api style: `system` uses array blocks for better compatibility.
+    // Keep the original newlines inside the single block (avoid splitting).
+    json!([{ "type": "text", "text": text }])
 }
 
 fn extract_text_from_any_content(value: Option<&Value>) -> Option<String> {
@@ -516,4 +517,3 @@ fn ensure_claude_content_array_in_place(content: &mut Value) {
     }
     *content = Value::Array(Vec::new());
 }
-

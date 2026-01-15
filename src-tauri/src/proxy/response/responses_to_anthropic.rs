@@ -11,15 +11,18 @@ use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 
-pub(super) fn stream_responses_to_anthropic(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, reqwest::Error>>
+pub(super) fn stream_responses_to_anthropic<E>(
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
         + Unpin
         + Send
         + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     token_tracker: RequestTokenTracker,
-) -> impl futures_util::stream::Stream<Item = Result<Bytes, std::io::Error>> + Send {
+) -> impl futures_util::stream::Stream<Item = Result<Bytes, std::io::Error>> + Send
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
     let state = ResponsesToAnthropicState::new(upstream, context, log, token_tracker);
     try_unfold(state, |state| async move { state.step().await })
 }
@@ -57,9 +60,10 @@ struct ResponsesToAnthropicState<S> {
     saw_tool_use: bool,
 }
 
-impl<S> ResponsesToAnthropicState<S>
+impl<S, E> ResponsesToAnthropicState<S>
 where
-    S: futures_util::stream::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin + Send + 'static,
+    S: futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn new(
         upstream: S,

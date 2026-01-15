@@ -66,7 +66,7 @@ curl -X POST \
 - Anthropic：`/v1/messages`（含子路径）与 `/v1/complete` → `anthropic`
 - OpenAI：`/v1/chat/completions` → `openai`；`/v1/responses` → `openai-response`
 - 其他路径：按已配置的 provider 依次匹配（优先 `openai`，再 `openai-response`，再 `anthropic`）
-- 若缺少对应 OpenAI provider 且 `enable_api_format_conversion=true`，将自动在 Chat/Responses 之间转换请求与响应（含流式）
+- 若首选 provider 缺失且 `enable_api_format_conversion=true`，将自动在已支持的格式之间转换请求与响应（含流式）
 - 若 `/v1/messages` 缺少 `anthropic` 但存在 `openai-response` 且 `enable_api_format_conversion=true`，将自动在 Claude Messages 与 OpenAI Responses 之间互转（含 SSE）
 - 若 `/v1/responses` 缺少 `openai-response` 但存在 `anthropic` 且 `enable_api_format_conversion=true`，将自动在 OpenAI Responses 与 Claude Messages 之间互转（含 SSE）
 

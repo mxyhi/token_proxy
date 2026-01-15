@@ -142,6 +142,7 @@ function ProxyCoreFormatConversion({ enabled, onToggle }: ProxyCoreFormatConvers
             {m.proxy_core_format_conversion_desc({
               chat: "/v1/chat/completions",
               responses: "/v1/responses",
+              messages: "/v1/messages",
             })}
           </p>
         </div>

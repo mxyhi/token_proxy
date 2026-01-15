@@ -66,7 +66,7 @@ curl -X POST \
 - Anthropic: `/v1/messages` (and subpaths) and `/v1/complete` → `anthropic`.
 - OpenAI: `/v1/chat/completions` → `openai`; `/v1/responses` → `openai-response`.
 - Other paths: first provider with upstreams wins (prefers `openai`, then `openai-response`, then `anthropic`).
-- If the needed OpenAI provider is missing but `enable_api_format_conversion=true`, the proxy auto-converts request/response bodies and streams between Chat and Responses.
+- If the preferred provider is missing but `enable_api_format_conversion=true`, the proxy auto-converts request/response bodies and streams between supported formats.
 - If `anthropic` is missing for `/v1/messages` but `openai-response` exists and `enable_api_format_conversion=true`, the proxy auto-converts between Claude Messages and OpenAI Responses (including SSE).
 - If `openai-response` is missing for `/v1/responses` but `anthropic` exists and `enable_api_format_conversion=true`, the proxy auto-converts between OpenAI Responses and Claude Messages (including SSE).
 

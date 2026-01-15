@@ -68,11 +68,11 @@ struct InboundRequest {
 
 const ERROR_NO_UPSTREAM: &str = "No available upstream configured.";
 const ERROR_CHAT_CONVERSION_DISABLED: &str =
-    "OpenAI format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai\" for /v1/chat/completions or enable conversion.";
+    "API format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai\" for /v1/chat/completions or enable conversion.";
 const ERROR_RESPONSES_CONVERSION_DISABLED: &str =
-    "OpenAI format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai-response\" for /v1/responses or enable conversion.";
+    "API format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai-response\" for /v1/responses or enable conversion.";
 const ERROR_ANTHROPIC_CONVERSION_DISABLED: &str =
-    "OpenAI format conversion is disabled (enable_api_format_conversion=false). Configure provider \"anthropic\" for /v1/messages or enable conversion.";
+    "API format conversion is disabled (enable_api_format_conversion=false). Configure provider \"anthropic\" for /v1/messages or enable conversion.";
 
 fn base_plan(provider: &'static str) -> DispatchPlan {
     DispatchPlan {

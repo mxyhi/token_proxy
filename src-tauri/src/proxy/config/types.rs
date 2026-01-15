@@ -104,7 +104,7 @@ pub(crate) struct ProxyConfigFile {
     pub(crate) max_request_body_bytes: Option<u64>,
     #[serde(default)]
     pub(crate) tray_token_rate: TrayTokenRateConfig,
-    /// 是否允许在 OpenAI Chat Completions 与 Responses API 之间自动互转。
+    /// 是否允许在不同 API 格式之间自动互转（例如 OpenAI Chat↔Responses、Claude Messages↔OpenAI Responses）。
     /// 默认为关闭；关闭时将严格按 provider 路由，不做格式转换。
     #[serde(default)]
     pub(crate) enable_api_format_conversion: bool,

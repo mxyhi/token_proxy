@@ -196,13 +196,6 @@ export function validate(form: ConfigForm) {
   if (form.appProxyUrl.trim() && !isValidProxyUrl(form.appProxyUrl.trim())) {
     return { valid: false, message: m.error_app_proxy_url_invalid() };
   }
-  if (!form.upstreams.length) {
-    return { valid: false, message: m.error_upstream_at_least_one() };
-  }
-  const hasEnabledUpstream = form.upstreams.some((upstream) => upstream.enabled);
-  if (!hasEnabledUpstream) {
-    return { valid: false, message: m.error_upstream_at_least_one_enabled() };
-  }
 
   const ids = new Set<string>();
   for (const upstream of form.upstreams) {
@@ -214,6 +207,12 @@ export function validate(form: ConfigForm) {
       return { valid: false, message: m.error_upstream_id_unique({ id }) };
     }
     ids.add(id);
+
+    // 允许上游为空 / 全部禁用：仅对启用中的上游做强校验；禁用项保留为“草稿”。
+    if (!upstream.enabled) {
+      continue;
+    }
+
     const provider = upstream.provider.trim();
     if (!provider) {
       return { valid: false, message: m.error_upstream_provider_required({ id }) };

@@ -9,8 +9,9 @@ type ValidationCardProps = {
 };
 
 export function ValidationCard({ form, validation }: ValidationCardProps) {
-  const hasUpstreams = form.upstreams.length > 0;
   const hasEnabledUpstreams = form.upstreams.some((upstream) => upstream.enabled);
+  const upstreamBadgeVariant = hasEnabledUpstreams ? "default" : "secondary";
+  const upstreamBadgeLabel = hasEnabledUpstreams ? m.validation_ready() : m.validation_disabled();
   return (
     <Card data-slot="validation-card">
       <CardHeader>
@@ -32,15 +33,7 @@ export function ValidationCard({ form, validation }: ValidationCardProps) {
         </div>
         <div className="flex items-center justify-between">
           <span>{m.validation_upstreams_row()}</span>
-          <Badge
-            variant={!hasUpstreams ? "destructive" : hasEnabledUpstreams ? "default" : "secondary"}
-          >
-            {!hasUpstreams
-              ? m.validation_missing()
-              : hasEnabledUpstreams
-                ? m.validation_ready()
-                : m.validation_disabled()}
-          </Badge>
+          <Badge variant={upstreamBadgeVariant}>{upstreamBadgeLabel}</Badge>
         </div>
       </CardContent>
     </Card>

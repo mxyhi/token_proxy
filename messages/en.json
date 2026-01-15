@@ -101,6 +101,7 @@
   "upstreams_column_status": "Status",
   "upstreams_upstream_n": "Upstream {number}",
   "upstreams_row_edit": "Edit {rowLabel}",
+  "upstreams_row_copy": "Copy {rowLabel}",
   "upstreams_row_enable": "Enable {rowLabel}",
   "upstreams_row_disable": "Disable {rowLabel}",
   "upstreams_row_delete": "Delete {rowLabel}",

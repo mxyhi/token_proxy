@@ -1,4 +1,4 @@
-import { Ban, Check, Columns3, Eye, EyeOff, Pencil, Trash2 } from "lucide-react";
+import { Ban, Check, Columns3, Copy, Eye, EyeOff, Pencil, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -139,6 +139,7 @@ type UpstreamRowActionsProps = {
   enabled: boolean;
   disableDelete: boolean;
   onEdit: () => void;
+  onCopy: () => void;
   onToggleEnabled: () => void;
   onDelete: () => void;
 };
@@ -148,6 +149,7 @@ function UpstreamRowActions({
   enabled,
   disableDelete,
   onEdit,
+  onCopy,
   onToggleEnabled,
   onDelete,
 }: UpstreamRowActionsProps) {
@@ -162,6 +164,15 @@ function UpstreamRowActions({
           aria-label={m.upstreams_row_edit({ rowLabel })}
         >
           <Pencil className="size-4" aria-hidden="true" />
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          onClick={onCopy}
+          aria-label={m.upstreams_row_copy({ rowLabel })}
+        >
+          <Copy className="size-4" aria-hidden="true" />
         </Button>
         <Button
           type="button"
@@ -198,6 +209,7 @@ type UpstreamsTableRowProps = {
   showApiKeys: boolean;
   disableDelete: boolean;
   onEdit: (index: number) => void;
+  onCopy: (index: number) => void;
   onToggleEnabled: (index: number) => void;
   onDelete: (index: number) => void;
 };
@@ -209,6 +221,7 @@ function UpstreamsTableRow({
   showApiKeys,
   disableDelete,
   onEdit,
+  onCopy,
   onToggleEnabled,
   onDelete,
 }: UpstreamsTableRowProps) {
@@ -230,6 +243,7 @@ function UpstreamsTableRow({
         enabled={upstream.enabled}
         disableDelete={disableDelete}
         onEdit={() => onEdit(index)}
+        onCopy={() => onCopy(index)}
         onToggleEnabled={() => onToggleEnabled(index)}
         onDelete={() => onDelete(index)}
       />
@@ -243,6 +257,7 @@ export type UpstreamsTableProps = {
   showApiKeys: boolean;
   disableDelete: boolean;
   onEdit: (index: number) => void;
+  onCopy: (index: number) => void;
   onToggleEnabled: (index: number) => void;
   onDelete: (index: number) => void;
 };
@@ -253,6 +268,7 @@ export function UpstreamsTable({
   showApiKeys,
   disableDelete,
   onEdit,
+  onCopy,
   onToggleEnabled,
   onDelete,
 }: UpstreamsTableProps) {
@@ -270,6 +286,7 @@ export function UpstreamsTable({
               showApiKeys={showApiKeys}
               disableDelete={disableDelete}
               onEdit={onEdit}
+              onCopy={onCopy}
               onToggleEnabled={onToggleEnabled}
               onDelete={onDelete}
             />

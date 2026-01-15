@@ -94,6 +94,7 @@
   "upstreams_column_status": "状态",
   "upstreams_upstream_n": "上游 {number}",
   "upstreams_row_edit": "编辑 {rowLabel}",
+  "upstreams_row_copy": "复制 {rowLabel}",
   "upstreams_row_enable": "启用 {rowLabel}",
   "upstreams_row_disable": "禁用 {rowLabel}",
   "upstreams_row_delete": "删除 {rowLabel}",

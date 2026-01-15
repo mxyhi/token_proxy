@@ -2,7 +2,7 @@
 
 [English](README.md) | 中文
 
-本地 AI API 网关，支持 OpenAI / Gemini / Anthropic。本地运行、记录 Token（SQLite），按优先级负载均衡，可选 OpenAI Chat↔Responses 互转，并提供 Claude Code / Codex 一键配置。
+本地 AI API 网关，支持 OpenAI / Gemini / Anthropic。本地运行、记录 Token（SQLite），按优先级负载均衡，支持可选的 API 格式互转（OpenAI Chat/Responses ↔ Anthropic Messages，含 SSE/工具/图片），并提供 Claude Code / Codex 一键配置。
 
 > 默认监听端口：**9208**（release）/ **19208**（debug 构建）。
 
@@ -10,7 +10,7 @@
 
 ## 你能得到什么
 - 多提供商：`openai`、`openai-response`、`anthropic`、`gemini`
-- 内置路由，支持可选的 OpenAI Chat ⇄ Responses 自动转换
+- 内置路由，支持可选的 API 格式互转（OpenAI Chat ⇄ Responses；Anthropic Messages ↔ OpenAI Responses；OpenAI Chat ↔ Anthropic Messages，含 SSE）
 - 上游优先级 + 两种策略（填满优先级组 / 轮询）
 - 模型别名映射（精确 / 前缀* / 通配*），响应会回写原始别名
 - 本地访问密钥（Authorization）+ 上游密钥自动注入
@@ -30,6 +30,15 @@ curl -X POST \
   -d '{"model":"gpt-4.1-mini","messages":[{"role":"user","content":"hi"}]}'
 ```
 
+也可以直接用 Anthropic Messages 格式（用于 Claude Code 等客户端）：
+```bash
+curl -X POST \
+  -H "Authorization: Bearer 你的本地密钥" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:9208/v1/messages \
+  -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":256,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}'
+```
+
 ## 配置参考
 - 文件：`config.jsonc`（支持注释与尾随逗号）
 - 位置：Tauri **AppConfig** 目录（应用自动解析）
@@ -45,7 +54,7 @@ curl -X POST \
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 表示回落到默认；保护入站体积 |
 | `tray_token_rate.enabled` | `true` | macOS 托盘实时速率；其他平台无害 |
 | `tray_token_rate.format` | `split` | `combined`(总数) / `split`(↑入 ↓出) / `both`(总数 | ↑入 ↓出) |
-| `enable_api_format_conversion` | `false` | 允许 OpenAI Chat↔Responses 与 Anthropic Messages↔OpenAI Responses 自动 fallback（含流式/体转换） |
+| `enable_api_format_conversion` | `false` | 允许 OpenAI Chat/Responses ↔ Anthropic Messages 自动 fallback（含请求/响应体转换与 SSE 流式转换） |
 | `upstream_strategy` | `priority_fill_first` | `priority_fill_first` 默认先填满高优先级；`priority_round_robin` 在同组内轮询 |
 
 ### 上游条目（`upstreams[]`）
@@ -65,10 +74,11 @@ curl -X POST \
 - Gemini：`/v1beta/models/*:generateContent`、`*:streamGenerateContent` → `gemini`（支持 SSE）
 - Anthropic：`/v1/messages`（含子路径）与 `/v1/complete` → `anthropic`
 - OpenAI：`/v1/chat/completions` → `openai`；`/v1/responses` → `openai-response`
-- 其他路径：按已配置的 provider 依次匹配（优先 `openai`，再 `openai-response`，再 `anthropic`）
-- 若首选 provider 缺失且 `enable_api_format_conversion=true`，将自动在已支持的格式之间转换请求与响应（含流式）
-- 若 `/v1/messages` 缺少 `anthropic` 但存在 `openai-response` 且 `enable_api_format_conversion=true`，将自动在 Claude Messages 与 OpenAI Responses 之间互转（含 SSE）
-- 若 `/v1/responses` 缺少 `openai-response` 但存在 `anthropic` 且 `enable_api_format_conversion=true`，将自动在 OpenAI Responses 与 Claude Messages 之间互转（含 SSE）
+- 其他路径：按已配置 provider 的最高优先级选择；优先级相同则按 `openai` > `openai-response` > `anthropic` 打破平局
+- 若首选 provider 缺失且 `enable_api_format_conversion=true`，将自动在已支持的格式之间转换请求与响应（含 SSE 流式）
+- `/v1/chat/completions` 缺少 `openai`：可 fallback 到 `openai-response` 或 `anthropic`（按优先级选择，平级优先 `openai-response`）
+- `/v1/messages` 缺少 `anthropic`：可 fallback 到 `openai-response` 或 `openai`（按优先级选择，平级优先 `openai-response`）
+- `/v1/responses` 缺少 `openai-response`：可 fallback 到 `openai` 或 `anthropic`（按优先级选择，平级优先 `openai`）
 
 ## 鉴权规则（重要）
 - 本地访问：设置了 `local_api_key` 必须带 `Authorization: Bearer <key>`；此头不会被转发给上游

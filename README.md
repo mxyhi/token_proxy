@@ -2,7 +2,7 @@
 
 English | [中文](README.zh-CN.md)
 
-Local AI API gateway for OpenAI / Gemini / Anthropic. Runs on your machine, keeps tokens counted (SQLite), offers priority-based load balancing, optional OpenAI Chat↔Responses format conversion, and one-click setup for Claude Code / Codex.
+Local AI API gateway for OpenAI / Gemini / Anthropic. Runs on your machine, keeps tokens counted (SQLite), offers priority-based load balancing, optional API format conversion (OpenAI Chat/Responses ↔ Anthropic Messages, including SSE/tools/images), and one-click setup for Claude Code / Codex.
 
 > Default listen port: **9208** (release) / **19208** (debug builds).
 
@@ -10,7 +10,7 @@ Local AI API gateway for OpenAI / Gemini / Anthropic. Runs on your machine, keep
 
 ## What you get
 - Multiple providers: `openai`, `openai-response`, `anthropic`, `gemini`
-- Built-in routing + optional OpenAI Chat ⇄ Responses conversion
+- Built-in routing + optional format conversion (OpenAI Chat ⇄ Responses; Anthropic Messages ↔ OpenAI Responses; OpenAI Chat ↔ Anthropic Messages; SSE supported)
 - Per-upstream priority + two balancing strategies (fill-first / round-robin)
 - Model alias mapping (exact / prefix* / wildcard*) and response model rewrite
 - Local access key (Authorization) + upstream key injection
@@ -30,6 +30,15 @@ curl -X POST \
   -d '{"model":"gpt-4.1-mini","messages":[{"role":"user","content":"hi"}]}'
 ```
 
+You can also call using the Anthropic Messages format (useful for Claude Code clients):
+```bash
+curl -X POST \
+  -H "Authorization: Bearer YOUR_LOCAL_KEY" \
+  -H "Content-Type: application/json" \
+  http://127.0.0.1:9208/v1/messages \
+  -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":256,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}'
+```
+
 ## Configuration reference
 - File: `config.jsonc` (comments + trailing commas allowed)
 - Location: Tauri **AppConfig** directory (resolved automatically by the app)
@@ -45,7 +54,7 @@ curl -X POST \
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 = fallback to default. Protects inbound body size. |
 | `tray_token_rate.enabled` | `true` | macOS tray live rate; harmless elsewhere. |
 | `tray_token_rate.format` | `split` | `combined` (`total`), `split` (`↑in ↓out`), `both` (`total | ↑in ↓out`). |
-| `enable_api_format_conversion` | `false` | Allow OpenAI Chat↔Responses and Anthropic Messages↔OpenAI Responses fallback with body/stream conversion. |
+| `enable_api_format_conversion` | `false` | Allow OpenAI Chat/Responses ↔ Anthropic Messages fallback with request/response body and SSE stream conversion. |
 | `upstream_strategy` | `priority_fill_first` | `priority_fill_first` (default) keeps trying the highest-priority group in list order; `priority_round_robin` rotates within each priority group. |
 
 ### Upstream entries (`upstreams[]`)
@@ -65,10 +74,11 @@ curl -X POST \
 - Gemini: `/v1beta/models/*:generateContent` and `*:streamGenerateContent` → `gemini` (SSE supported).
 - Anthropic: `/v1/messages` (and subpaths) and `/v1/complete` → `anthropic`.
 - OpenAI: `/v1/chat/completions` → `openai`; `/v1/responses` → `openai-response`.
-- Other paths: first provider with upstreams wins (prefers `openai`, then `openai-response`, then `anthropic`).
-- If the preferred provider is missing but `enable_api_format_conversion=true`, the proxy auto-converts request/response bodies and streams between supported formats.
-- If `anthropic` is missing for `/v1/messages` but `openai-response` exists and `enable_api_format_conversion=true`, the proxy auto-converts between Claude Messages and OpenAI Responses (including SSE).
-- If `openai-response` is missing for `/v1/responses` but `anthropic` exists and `enable_api_format_conversion=true`, the proxy auto-converts between OpenAI Responses and Claude Messages (including SSE).
+- Other paths: choose the provider with the highest configured priority; tie-break is `openai` > `openai-response` > `anthropic`.
+- If the preferred provider is missing but `enable_api_format_conversion=true`, the proxy auto-converts request/response bodies and streams between supported formats (including SSE).
+- If `openai` is missing for `/v1/chat/completions`: fallback can be `openai-response` or `anthropic` (priority-based; tie-break prefers `openai-response`).
+- If `anthropic` is missing for `/v1/messages`: fallback can be `openai-response` or `openai` (priority-based; tie-break prefers `openai-response`).
+- If `openai-response` is missing for `/v1/responses`: fallback can be `openai` or `anthropic` (priority-based; tie-break prefers `openai`).
 
 ## Auth rules (important)
 - Local access: `local_api_key` enabled → require `Authorization: Bearer <key>`; this header will **not** be forwarded upstream.

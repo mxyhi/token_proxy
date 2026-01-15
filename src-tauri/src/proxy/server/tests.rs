@@ -58,6 +58,38 @@ fn responses_fallback_requires_format_conversion_enabled() {
 }
 
 #[test]
+fn anthropic_messages_fallback_requires_format_conversion_enabled() {
+    let config = config_with_providers(&[PROVIDER_RESPONSES], false);
+    let error = resolve_dispatch_plan(&config, "/v1/messages")
+        .err()
+        .expect("should reject");
+    assert!(error.contains("format conversion is disabled"));
+
+    let config = config_with_providers(&[PROVIDER_RESPONSES], true);
+    let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should fallback");
+    assert_eq!(plan.provider, PROVIDER_RESPONSES);
+    assert_eq!(plan.outbound_path, Some(RESPONSES_PATH));
+    assert_eq!(plan.request_transform, FormatTransform::AnthropicToResponses);
+    assert_eq!(plan.response_transform, FormatTransform::ResponsesToAnthropic);
+}
+
+#[test]
+fn responses_fallback_to_anthropic_requires_format_conversion_enabled() {
+    let config = config_with_providers(&[PROVIDER_ANTHROPIC], false);
+    let error = resolve_dispatch_plan(&config, RESPONSES_PATH)
+        .err()
+        .expect("should reject");
+    assert!(error.contains("format conversion is disabled"));
+
+    let config = config_with_providers(&[PROVIDER_ANTHROPIC], true);
+    let plan = resolve_dispatch_plan(&config, RESPONSES_PATH).expect("should fallback");
+    assert_eq!(plan.provider, PROVIDER_ANTHROPIC);
+    assert_eq!(plan.outbound_path, Some("/v1/messages"));
+    assert_eq!(plan.request_transform, FormatTransform::ResponsesToAnthropic);
+    assert_eq!(plan.response_transform, FormatTransform::AnthropicToResponses);
+}
+
+#[test]
 fn gemini_route_requires_gemini_provider() {
     let config = config_with_providers(&[PROVIDER_CHAT], false);
     let error = resolve_dispatch_plan(&config, "/v1beta/models/gemini-1.5-flash:generateContent")

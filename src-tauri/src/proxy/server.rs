@@ -71,6 +71,8 @@ const ERROR_CHAT_CONVERSION_DISABLED: &str =
     "OpenAI format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai\" for /v1/chat/completions or enable conversion.";
 const ERROR_RESPONSES_CONVERSION_DISABLED: &str =
     "OpenAI format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai-response\" for /v1/responses or enable conversion.";
+const ERROR_ANTHROPIC_CONVERSION_DISABLED: &str =
+    "OpenAI format conversion is disabled (enable_api_format_conversion=false). Configure provider \"anthropic\" for /v1/messages or enable conversion.";
 
 fn base_plan(provider: &'static str) -> DispatchPlan {
     DispatchPlan {
@@ -93,6 +95,8 @@ fn resolve_gemini_plan(has_gemini: bool, path: &str) -> Option<Result<DispatchPl
 
 fn resolve_anthropic_plan(
     has_anthropic: bool,
+    has_responses: bool,
+    allow_format_conversion: bool,
     path: &str,
 ) -> Option<Result<DispatchPlan, String>> {
     if !is_anthropic_path(path) {
@@ -101,6 +105,21 @@ fn resolve_anthropic_plan(
     if has_anthropic {
         return Some(Ok(base_plan(PROVIDER_ANTHROPIC)));
     }
+
+    // Claude Code uses /v1/messages. If Anthropic upstream is missing but Responses is available,
+    // fall back to OpenAI Responses format conversion when enabled (new-api style).
+    if path == "/v1/messages" && has_responses {
+        if !allow_format_conversion {
+            return Some(Err(ERROR_ANTHROPIC_CONVERSION_DISABLED.to_string()));
+        }
+        return Some(Ok(DispatchPlan {
+            provider: PROVIDER_RESPONSES,
+            outbound_path: Some(RESPONSES_PATH),
+            request_transform: FormatTransform::AnthropicToResponses,
+            response_transform: FormatTransform::ResponsesToAnthropic,
+        }));
+    }
+
     Some(Err(ERROR_NO_UPSTREAM.to_string()))
 }
 
@@ -146,6 +165,7 @@ fn resolve_chat_plan(
 fn resolve_responses_plan(
     has_responses: bool,
     has_chat: bool,
+    has_anthropic: bool,
     allow_format_conversion: bool,
 ) -> Result<DispatchPlan, String> {
     if has_responses {
@@ -162,6 +182,17 @@ fn resolve_responses_plan(
             response_transform: FormatTransform::ChatToResponses,
         });
     }
+    if has_anthropic {
+        if !allow_format_conversion {
+            return Err(ERROR_RESPONSES_CONVERSION_DISABLED.to_string());
+        }
+        return Ok(DispatchPlan {
+            provider: PROVIDER_ANTHROPIC,
+            outbound_path: Some("/v1/messages"),
+            request_transform: FormatTransform::ResponsesToAnthropic,
+            response_transform: FormatTransform::AnthropicToResponses,
+        });
+    }
     Err(ERROR_NO_UPSTREAM.to_string())
 }
 
@@ -175,7 +206,9 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
     if let Some(plan) = resolve_gemini_plan(has_gemini, path) {
         return plan;
     }
-    if let Some(plan) = resolve_anthropic_plan(has_anthropic, path) {
+    if let Some(plan) =
+        resolve_anthropic_plan(has_anthropic, has_responses, allow_format_conversion, path)
+    {
         return plan;
     }
 
@@ -188,7 +221,7 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
             resolve_chat_plan(has_chat, has_responses, allow_format_conversion)
         }
         ApiFormat::Responses => {
-            resolve_responses_plan(has_responses, has_chat, allow_format_conversion)
+            resolve_responses_plan(has_responses, has_chat, has_anthropic, allow_format_conversion)
         }
     }
 }
@@ -346,6 +379,7 @@ async fn read_body_or_respond(
 }
 
 async fn build_outbound_body_or_respond(
+    http_clients: &super::http_client::ProxyHttpClients,
     log: &Arc<LogWriter>,
     request_detail: Option<RequestDetailSnapshot>,
     path: &str,
@@ -354,7 +388,7 @@ async fn build_outbound_body_or_respond(
     body: ReplayableBody,
     request_start: Instant,
 ) -> Result<ReplayableBody, Response> {
-    let body = match maybe_transform_request_body(plan.request_transform, body).await {
+    let body = match maybe_transform_request_body(http_clients, plan.request_transform, body).await {
         Ok(body) => body,
         Err(err) => {
             log_request_error(
@@ -492,6 +526,7 @@ async fn finalize_prepared_request(
     let outbound_path = inbound.plan.outbound_path.unwrap_or(inbound.path.as_str());
     let outbound_path_with_query = build_outbound_path_with_query(outbound_path, uri);
     let outbound_body = build_outbound_body_or_respond(
+        &state.http_clients,
         &state.log,
         inbound.request_detail.clone(),
         &inbound.path,

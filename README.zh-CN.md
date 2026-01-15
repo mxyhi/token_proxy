@@ -45,7 +45,7 @@ curl -X POST \
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 表示回落到默认；保护入站体积 |
 | `tray_token_rate.enabled` | `true` | macOS 托盘实时速率；其他平台无害 |
 | `tray_token_rate.format` | `split` | `combined`(总数) / `split`(↑入 ↓出) / `both`(总数 | ↑入 ↓出) |
-| `enable_api_format_conversion` | `false` | 允许 OpenAI Chat↔Responses 自动 fallback 与流式/体转换 |
+| `enable_api_format_conversion` | `false` | 允许 OpenAI Chat↔Responses 与 Anthropic Messages↔OpenAI Responses 自动 fallback（含流式/体转换） |
 | `upstream_strategy` | `priority_fill_first` | `priority_fill_first` 默认先填满高优先级；`priority_round_robin` 在同组内轮询 |
 
 ### 上游条目（`upstreams[]`）
@@ -67,6 +67,8 @@ curl -X POST \
 - OpenAI：`/v1/chat/completions` → `openai`；`/v1/responses` → `openai-response`
 - 其他路径：按已配置的 provider 依次匹配（优先 `openai`，再 `openai-response`，再 `anthropic`）
 - 若缺少对应 OpenAI provider 且 `enable_api_format_conversion=true`，将自动在 Chat/Responses 之间转换请求与响应（含流式）
+- 若 `/v1/messages` 缺少 `anthropic` 但存在 `openai-response` 且 `enable_api_format_conversion=true`，将自动在 Claude Messages 与 OpenAI Responses 之间互转（含 SSE）
+- 若 `/v1/responses` 缺少 `openai-response` 但存在 `anthropic` 且 `enable_api_format_conversion=true`，将自动在 OpenAI Responses 与 Claude Messages 之间互转（含 SSE）
 
 ## 鉴权规则（重要）
 - 本地访问：设置了 `local_api_key` 必须带 `Authorization: Bearer <key>`；此头不会被转发给上游

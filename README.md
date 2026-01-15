@@ -45,7 +45,7 @@ curl -X POST \
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 = fallback to default. Protects inbound body size. |
 | `tray_token_rate.enabled` | `true` | macOS tray live rate; harmless elsewhere. |
 | `tray_token_rate.format` | `split` | `combined` (`total`), `split` (`↑in ↓out`), `both` (`total | ↑in ↓out`). |
-| `enable_api_format_conversion` | `false` | Allow OpenAI Chat↔Responses fallback with body/stream conversion. |
+| `enable_api_format_conversion` | `false` | Allow OpenAI Chat↔Responses and Anthropic Messages↔OpenAI Responses fallback with body/stream conversion. |
 | `upstream_strategy` | `priority_fill_first` | `priority_fill_first` (default) keeps trying the highest-priority group in list order; `priority_round_robin` rotates within each priority group. |
 
 ### Upstream entries (`upstreams[]`)
@@ -67,6 +67,8 @@ curl -X POST \
 - OpenAI: `/v1/chat/completions` → `openai`; `/v1/responses` → `openai-response`.
 - Other paths: first provider with upstreams wins (prefers `openai`, then `openai-response`, then `anthropic`).
 - If the needed OpenAI provider is missing but `enable_api_format_conversion=true`, the proxy auto-converts request/response bodies and streams between Chat and Responses.
+- If `anthropic` is missing for `/v1/messages` but `openai-response` exists and `enable_api_format_conversion=true`, the proxy auto-converts between Claude Messages and OpenAI Responses (including SSE).
+- If `openai-response` is missing for `/v1/responses` but `anthropic` exists and `enable_api_format_conversion=true`, the proxy auto-converts between OpenAI Responses and Claude Messages (including SSE).
 
 ## Auth rules (important)
 - Local access: `local_api_key` enabled → require `Authorization: Bearer <key>`; this header will **not** be forwarded upstream.

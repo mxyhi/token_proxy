@@ -1,6 +1,8 @@
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 
+use super::{anthropic_compat, http_client::ProxyHttpClients};
+
 mod extract;
 mod input;
 mod tools;
@@ -23,6 +25,8 @@ pub(crate) enum FormatTransform {
     None,
     ChatToResponses,
     ResponsesToChat,
+    ResponsesToAnthropic,
+    AnthropicToResponses,
 }
 
 pub(crate) fn inbound_format(path: &str) -> Option<ApiFormat> {
@@ -33,11 +37,21 @@ pub(crate) fn inbound_format(path: &str) -> Option<ApiFormat> {
     }
 }
 
-pub(crate) fn transform_request_body(transform: FormatTransform, body: &Bytes) -> Result<Bytes, String> {
+pub(crate) async fn transform_request_body(
+    transform: FormatTransform,
+    body: &Bytes,
+    http_clients: &ProxyHttpClients,
+) -> Result<Bytes, String> {
     match transform {
         FormatTransform::None => Ok(body.clone()),
         FormatTransform::ChatToResponses => chat_request_to_responses(body),
         FormatTransform::ResponsesToChat => responses_request_to_chat(body),
+        FormatTransform::ResponsesToAnthropic => {
+            anthropic_compat::responses_request_to_anthropic(body, http_clients).await
+        }
+        FormatTransform::AnthropicToResponses => {
+            anthropic_compat::anthropic_request_to_responses(body, http_clients).await
+        }
     }
 }
 
@@ -50,6 +64,10 @@ pub(crate) fn transform_response_body(
         FormatTransform::None => Ok(bytes.clone()),
         FormatTransform::ChatToResponses => chat_response_to_responses(bytes),
         FormatTransform::ResponsesToChat => responses_response_to_chat(bytes, model_hint),
+        FormatTransform::ResponsesToAnthropic => {
+            anthropic_compat::responses_response_to_anthropic(bytes, model_hint)
+        }
+        FormatTransform::AnthropicToResponses => anthropic_compat::anthropic_response_to_responses(bytes),
     }
 }
 

@@ -8,6 +8,7 @@ mod gemini;
 mod http;
 mod log;
 mod model;
+mod anthropic_compat;
 mod openai_compat;
 mod request_body;
 mod response;

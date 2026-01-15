@@ -20,6 +20,7 @@ tauri-build = { version = "2.5.3", features = [] }
 [dependencies]
 axum = "0.8.8"
 futures-util = "0.3.31"
+base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "stream",

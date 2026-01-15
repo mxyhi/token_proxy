@@ -1,6 +1,13 @@
 use super::*;
 use axum::body::Bytes;
 use serde_json::{json, Value};
+use crate::proxy::http_client::ProxyHttpClients;
+
+fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
+    tokio::runtime::Runtime::new()
+        .expect("create tokio runtime")
+        .block_on(future)
+}
 
 fn bytes_from_json(value: Value) -> Bytes {
     Bytes::from(serde_json::to_vec(&value).expect("serialize JSON"))
@@ -12,6 +19,7 @@ fn json_from_bytes(bytes: Bytes) -> Value {
 
 #[test]
 fn chat_request_to_responses_maps_common_fields() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
     let input_messages = json!([
         { "role": "user", "content": "hi" },
         { "role": "assistant", "content": "hello" }
@@ -27,7 +35,11 @@ fn chat_request_to_responses_maps_common_fields() {
         "max_completion_tokens": 222
     }));
 
-    let output = transform_request_body(FormatTransform::ChatToResponses, &input).expect("transform");
+    let output = run_async(async {
+        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients)
+            .await
+            .expect("transform")
+    });
     let value = json_from_bytes(output);
 
     assert_eq!(value["model"], json!("gpt-4.1"));
@@ -41,6 +53,7 @@ fn chat_request_to_responses_maps_common_fields() {
 
 #[test]
 fn responses_request_to_chat_maps_tools_and_tool_choice() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
     let parameters = json!({
         "type": "object",
         "properties": { "q": { "type": "string" } },
@@ -61,7 +74,11 @@ fn responses_request_to_chat_maps_tools_and_tool_choice() {
         "stream": false
     }));
 
-    let output = transform_request_body(FormatTransform::ResponsesToChat, &input).expect("transform");
+    let output = run_async(async {
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients)
+            .await
+            .expect("transform")
+    });
     let value = json_from_bytes(output);
 
     assert_eq!(value["tools"][0]["type"], json!("function"));
@@ -74,6 +91,7 @@ fn responses_request_to_chat_maps_tools_and_tool_choice() {
 
 #[test]
 fn chat_request_to_responses_maps_tools_and_tool_choice() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
     let parameters = json!({
         "type": "object",
         "properties": { "q": { "type": "string" } },
@@ -96,7 +114,11 @@ fn chat_request_to_responses_maps_tools_and_tool_choice() {
         "stream": false
     }));
 
-    let output = transform_request_body(FormatTransform::ChatToResponses, &input).expect("transform");
+    let output = run_async(async {
+        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients)
+            .await
+            .expect("transform")
+    });
     let value = json_from_bytes(output);
 
     assert_eq!(value["tools"][0]["type"], json!("function"));
@@ -109,6 +131,7 @@ fn chat_request_to_responses_maps_tools_and_tool_choice() {
 
 #[test]
 fn responses_request_to_chat_instructions_becomes_system_message() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = bytes_from_json(json!({
         "model": "gpt-4.1",
         "input": "hello",
@@ -117,7 +140,11 @@ fn responses_request_to_chat_instructions_becomes_system_message() {
         "max_output_tokens": 99
     }));
 
-    let output = transform_request_body(FormatTransform::ResponsesToChat, &input).expect("transform");
+    let output = run_async(async {
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients)
+            .await
+            .expect("transform")
+    });
     let value = json_from_bytes(output);
     let messages = value["messages"].as_array().expect("messages array");
 
@@ -133,6 +160,7 @@ fn responses_request_to_chat_instructions_becomes_system_message() {
 
 #[test]
 fn responses_request_to_chat_accepts_message_array_input() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
     let input_messages = json!([{ "role": "user", "content": "hi" }]);
     let input = bytes_from_json(json!({
         "model": "gpt-4.1",
@@ -140,7 +168,11 @@ fn responses_request_to_chat_accepts_message_array_input() {
         "stream": true
     }));
 
-    let output = transform_request_body(FormatTransform::ResponsesToChat, &input).expect("transform");
+    let output = run_async(async {
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients)
+            .await
+            .expect("transform")
+    });
     let value = json_from_bytes(output);
 
     assert_eq!(value["model"], json!("gpt-4.1"));
@@ -150,6 +182,7 @@ fn responses_request_to_chat_accepts_message_array_input() {
 
 #[test]
 fn responses_request_to_chat_converts_input_text_content_parts_to_string() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
     let input_messages = json!([{
         "role": "user",
         "content": [
@@ -162,7 +195,11 @@ fn responses_request_to_chat_converts_input_text_content_parts_to_string() {
         "stream": false
     }));
 
-    let output = transform_request_body(FormatTransform::ResponsesToChat, &input).expect("transform");
+    let output = run_async(async {
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients)
+            .await
+            .expect("transform")
+    });
     let value = json_from_bytes(output);
 
     assert_eq!(value["messages"][0]["role"], json!("user"));
@@ -275,6 +312,7 @@ fn chat_response_to_responses_extracts_choice_text_and_maps_usage() {
 
 #[test]
 fn responses_request_to_chat_converts_function_call_output_to_tool_message() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = bytes_from_json(json!({
         "model": "gpt-4.1",
         "input": [
@@ -283,7 +321,11 @@ fn responses_request_to_chat_converts_function_call_output_to_tool_message() {
         "stream": false
     }));
 
-    let output = transform_request_body(FormatTransform::ResponsesToChat, &input).expect("transform");
+    let output = run_async(async {
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients)
+            .await
+            .expect("transform")
+    });
     let value = json_from_bytes(output);
     let messages = value["messages"].as_array().expect("messages array");
 
@@ -339,14 +381,24 @@ fn chat_response_to_responses_maps_tool_calls_into_output() {
 
 #[test]
 fn chat_request_to_responses_rejects_missing_messages() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = bytes_from_json(json!({ "model": "gpt-4.1" }));
-    let err = transform_request_body(FormatTransform::ChatToResponses, &input).expect_err("should fail");
+    let err = run_async(async {
+        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients)
+            .await
+            .expect_err("should fail")
+    });
     assert!(err.contains("messages"));
 }
 
 #[test]
 fn transform_request_body_rejects_non_json() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = Bytes::from_static(b"not-json");
-    let err = transform_request_body(FormatTransform::ChatToResponses, &input).expect_err("should fail");
+    let err = run_async(async {
+        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients)
+            .await
+            .expect_err("should fail")
+    });
     assert!(err.contains("JSON"));
 }

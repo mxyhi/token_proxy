@@ -6,6 +6,7 @@ use serde_json::{Map, Value};
 
 use super::{
     gemini,
+    http_client::ProxyHttpClients,
     openai_compat::{transform_request_body, FormatTransform, CHAT_PATH, PROVIDER_CHAT},
     request_body::ReplayableBody,
     token_rate,
@@ -15,7 +16,8 @@ use super::{
 const ANTHROPIC_MESSAGES_PREFIX: &str = "/v1/messages";
 const ANTHROPIC_COMPLETE_PATH: &str = "/v1/complete";
 const REQUEST_META_LIMIT_BYTES: usize = 2 * 1024 * 1024;
-const REQUEST_TRANSFORM_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+// Format conversion needs the full JSON body; allow up to the default max_request_body_bytes (20 MiB).
+const REQUEST_TRANSFORM_LIMIT_BYTES: usize = 20 * 1024 * 1024;
 const DEBUG_BODY_LOG_LIMIT_BYTES: usize = 64 * 1024;
 
 #[derive(Debug)]
@@ -284,6 +286,7 @@ fn is_sensitive_header(name: &str) -> bool {
 }
 
 pub(crate) async fn maybe_transform_request_body(
+    http_clients: &ProxyHttpClients,
     transform: FormatTransform,
     body: ReplayableBody,
 ) -> Result<ReplayableBody, RequestError> {
@@ -307,7 +310,8 @@ pub(crate) async fn maybe_transform_request_body(
         ));
     };
 
-    let outbound_bytes = transform_request_body(transform, &bytes)
+    let outbound_bytes = transform_request_body(transform, &bytes, http_clients)
+        .await
         .map_err(|message| RequestError::new(StatusCode::BAD_REQUEST, message))?;
     Ok(ReplayableBody::from_bytes(outbound_bytes))
 }

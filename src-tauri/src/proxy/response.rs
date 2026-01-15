@@ -207,6 +207,24 @@ async fn build_stream_response(
             stream_chat_to_responses(upstream_res.bytes_stream(), context, log, request_tracker)
                 .boxed()
         }
+        FormatTransform::ResponsesToAnthropic => {
+            responses_to_anthropic::stream_responses_to_anthropic(
+                upstream_res.bytes_stream(),
+                context,
+                log,
+                request_tracker,
+            )
+                .boxed()
+        }
+        FormatTransform::AnthropicToResponses => {
+            anthropic_to_responses::stream_anthropic_to_responses(
+                upstream_res.bytes_stream(),
+                context,
+                log,
+                request_tracker,
+            )
+                .boxed()
+        }
     };
     let body = Body::from_stream(stream);
     http::build_response(status, headers, body)
@@ -296,6 +314,10 @@ fn stream_chat_to_responses(
 
 fn responses_event_sse(event: Value) -> Bytes {
     Bytes::from(format!("data: {}\n\n", event.to_string()))
+}
+
+fn anthropic_event_sse(event_type: &str, event: Value) -> Bytes {
+    Bytes::from(format!("event: {event_type}\ndata: {}\n\n", event.to_string()))
 }
 
 fn now_ms() -> u64 {
@@ -401,7 +423,9 @@ fn response_error_text(bytes: &Bytes) -> String {
 }
 
 mod chat_to_responses;
+mod anthropic_to_responses;
 mod responses_to_chat;
+mod responses_to_anthropic;
 mod streaming;
 
 #[cfg(test)]

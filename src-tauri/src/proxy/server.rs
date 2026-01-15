@@ -230,6 +230,7 @@ fn log_request_error(
         upstream_request_id: None,
         request_headers,
         request_body,
+        ttfb_ms: None,
         start,
     };
     let usage = UsageSnapshot {

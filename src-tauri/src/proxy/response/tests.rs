@@ -55,6 +55,7 @@ async fn setup_responses_stream() -> (Arc<LogWriter>, LogContext, SqlitePool) {
         upstream_request_id: None,
         request_headers: None,
         request_body: None,
+        ttfb_ms: None,
         start: Instant::now(),
     };
     (log, context, sqlite_pool)
@@ -263,6 +264,7 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
         upstream_request_id: None,
         request_headers: None,
         request_body: None,
+        ttfb_ms: None,
         start: Instant::now(),
     };
 
@@ -376,6 +378,7 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
         upstream_request_id: None,
         request_headers: None,
         request_body: None,
+        ttfb_ms: None,
         start: Instant::now(),
     };
 

@@ -101,6 +101,9 @@ where
 
             match self.upstream.next().await {
                 Some(Ok(chunk)) => {
+                    if self.context.ttfb_ms.is_none() {
+                        self.context.ttfb_ms = Some(self.context.start.elapsed().as_millis());
+                    }
                     self.collector.push_chunk(&chunk);
                     let mut events = Vec::new();
                     self.parser.push_chunk(&chunk, |data| events.push(data));

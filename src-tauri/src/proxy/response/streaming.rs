@@ -25,9 +25,12 @@ pub(super) fn stream_with_logging(
     let parser = SseEventParser::new();
     try_unfold(
         (upstream, collector, parser, log, context, token_tracker),
-        |(mut upstream, mut collector, mut parser, log, context, token_tracker)| async move {
+        |(mut upstream, mut collector, mut parser, log, mut context, token_tracker)| async move {
             match upstream.next().await {
                 Some(Ok(chunk)) => {
+                    if context.ttfb_ms.is_none() {
+                        context.ttfb_ms = Some(context.start.elapsed().as_millis());
+                    }
                     collector.push_chunk(&chunk);
                     let provider = context.provider.as_str();
                     let mut texts = Vec::new();
@@ -140,6 +143,9 @@ where
 
             match self.upstream.next().await {
                 Some(Ok(chunk)) => {
+                    if self.context.ttfb_ms.is_none() {
+                        self.context.ttfb_ms = Some(self.context.start.elapsed().as_millis());
+                    }
                     self.collector.push_chunk(&chunk);
                     let mut events = Vec::new();
                     self.parser.push_chunk(&chunk, |data| events.push(data));

@@ -457,6 +457,7 @@ fn log_upstream_error_if_needed(
         upstream_request_id: None,
         request_headers,
         request_body,
+        ttfb_ms: None,
         start: start_time,
     };
     let usage = UsageSnapshot {

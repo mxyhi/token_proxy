@@ -55,6 +55,7 @@ pub(super) async fn build_proxy_response(
         upstream_request_id: http::extract_request_id(upstream_res.headers()),
         request_headers,
         request_body,
+        ttfb_ms: None,
         start,
     };
     let model_override = meta.model_override();
@@ -126,6 +127,7 @@ pub(super) async fn build_proxy_response_buffered(
         upstream_request_id: http::extract_request_id(upstream_res.headers()),
         request_headers,
         request_body,
+        ttfb_ms: None,
         start,
     };
     let model_override = meta.model_override();
@@ -223,7 +225,7 @@ async fn build_buffered_response(
     model_override: Option<&str>,
 ) -> Response {
     let mut context = context;
-    let bytes = match upstream_res.bytes().await {
+    let bytes = match read_upstream_bytes_with_ttfb(upstream_res, &mut context).await {
         Ok(bytes) => bytes,
         Err(err) => {
             let message = format!("Failed to read upstream response: {err}");
@@ -266,6 +268,22 @@ async fn build_buffered_response(
     apply_output_tokens_from_response(&request_tracker, &context.provider, &output).await;
 
     http::build_response(status, headers, Body::from(output))
+}
+
+async fn read_upstream_bytes_with_ttfb(
+    upstream_res: reqwest::Response,
+    context: &mut LogContext,
+) -> Result<Bytes, reqwest::Error> {
+    let mut stream = upstream_res.bytes_stream();
+    let mut out = Vec::new();
+    while let Some(item) = stream.next().await {
+        let chunk = item?;
+        if context.ttfb_ms.is_none() {
+            context.ttfb_ms = Some(context.start.elapsed().as_millis());
+        }
+        out.extend_from_slice(chunk.as_ref());
+    }
+    Ok(Bytes::from(out))
 }
 
 // 只对 data-only SSE 的提供商做行级重写，避免破坏带 event: 行的流。

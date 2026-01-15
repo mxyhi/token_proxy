@@ -64,6 +64,9 @@ pub(crate) struct LogContext {
     pub(crate) upstream_request_id: Option<String>,
     pub(crate) request_headers: Option<String>,
     pub(crate) request_body: Option<String>,
+    // Time-to-first-byte (TTFB) measured from `start`.
+    // For streaming responses, this is recorded when we receive the first upstream chunk.
+    pub(crate) ttfb_ms: Option<u128>,
     pub(crate) start: Instant,
 }
 
@@ -114,7 +117,9 @@ pub(crate) fn build_log_entry(
         request_headers: context.request_headers.clone(),
         request_body: context.request_body.clone(),
         response_error,
-        latency_ms: context.start.elapsed().as_millis(),
+        latency_ms: context
+            .ttfb_ms
+            .unwrap_or_else(|| context.start.elapsed().as_millis()),
     }
 }
 

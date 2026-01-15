@@ -93,11 +93,24 @@ fn responses_message_content_to_chat_content(value: &Value) -> Option<Value> {
                 };
                 let part_type = part.get("type").and_then(Value::as_str);
                 match part_type {
-                    Some("input_text") | Some("text") => {
+                    Some("input_text") | Some("text") | Some("output_text") => {
                         if let Some(text) = part.get("text").and_then(Value::as_str) {
                             combined.push_str(text);
                             output_parts.push(json!({ "type": "text", "text": text }));
                         }
+                    }
+                    Some("refusal") => {
+                        // Responses may represent refusals as a dedicated content part.
+                        let text = part
+                            .get("refusal")
+                            .or_else(|| part.get("text"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        if text.is_empty() {
+                            continue;
+                        }
+                        combined.push_str(text);
+                        output_parts.push(json!({ "type": "text", "text": text }));
                     }
                     Some("input_image") => {
                         // Chat Completions expects `{type:"image_url", image_url:{url:"..."}}`.

@@ -233,7 +233,7 @@ fn push_chat_user_message(
     has_user_message: &mut bool,
     message: &Map<String, Value>,
 ) -> Result<(), String> {
-    let parts = chat_content_to_responses_message_parts(message.get("content"))?;
+    let parts = chat_content_to_responses_message_parts(message.get("content"), "input_text")?;
     if parts.is_empty() {
         return Ok(());
     }
@@ -247,7 +247,9 @@ fn push_chat_assistant_message(
     has_user_message: &mut bool,
     message: &Map<String, Value>,
 ) -> Result<(), String> {
-    let parts = chat_content_to_responses_message_parts(message.get("content"))?;
+    // Responses API expects assistant message content parts to use output types.
+    // This matches OpenAI's schema and avoids errors like: "supported values are output_text/refusal".
+    let parts = chat_content_to_responses_message_parts(message.get("content"), "output_text")?;
     let tool_calls = chat_tool_calls_to_responses_items(message.get("tool_calls"));
     let legacy_call = chat_function_call_to_responses_item(message.get("function_call"));
 
@@ -305,12 +307,15 @@ fn extract_text_from_chat_content(content: Option<&Value>) -> Option<String> {
     }
 }
 
-fn chat_content_to_responses_message_parts(content: Option<&Value>) -> Result<Vec<Value>, String> {
+fn chat_content_to_responses_message_parts(
+    content: Option<&Value>,
+    text_part_type: &str,
+) -> Result<Vec<Value>, String> {
     let Some(content) = content else {
         return Ok(Vec::new());
     };
     match content {
-        Value::String(text) => Ok(vec![json!({ "type": "input_text", "text": text })]),
+        Value::String(text) => Ok(vec![json!({ "type": text_part_type, "text": text })]),
         Value::Array(parts) => {
             let mut out = Vec::new();
             for part in parts {
@@ -321,7 +326,7 @@ fn chat_content_to_responses_message_parts(content: Option<&Value>) -> Result<Ve
                 match part_type {
                     "text" | "input_text" => {
                         if let Some(text) = part.get("text").and_then(Value::as_str) {
-                            out.push(json!({ "type": "input_text", "text": text }));
+                            out.push(json!({ "type": text_part_type, "text": text }));
                         }
                     }
                     "image_url" => {

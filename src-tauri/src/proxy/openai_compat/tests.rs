@@ -51,7 +51,7 @@ fn chat_request_to_responses_maps_common_fields() {
         {
             "type": "message",
             "role": "assistant",
-            "content": [{ "type": "input_text", "text": "hello" }]
+            "content": [{ "type": "output_text", "text": "hello" }]
         }
     ]);
 

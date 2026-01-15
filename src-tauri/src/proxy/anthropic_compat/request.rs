@@ -283,8 +283,19 @@ async fn responses_message_content_to_claude_blocks(
                 };
                 let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
                 match part_type {
-                    "input_text" | "text" => {
+                    "input_text" | "output_text" | "text" => {
                         if let Some(text) = part.get("text").and_then(Value::as_str) {
+                            blocks.push(json!({ "type": "text", "text": text }));
+                        }
+                    }
+                    "refusal" => {
+                        // Some OpenAI Responses payloads represent refusals as dedicated parts.
+                        let text = part
+                            .get("refusal")
+                            .or_else(|| part.get("text"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        if !text.is_empty() {
                             blocks.push(json!({ "type": "text", "text": text }));
                         }
                     }
@@ -320,6 +331,12 @@ fn claude_message_to_responses_input_items(message: &Value, input_items: &mut Ve
     let blocks = claude_content_to_blocks(content);
 
     let mut message_parts = Vec::new();
+    let text_part_type = match role {
+        // OpenAI Responses schema expects assistant messages in `input` to use output types.
+        // This avoids errors like: "Invalid value: 'input_text'. Supported values are: 'output_text' and 'refusal'."
+        "assistant" => "output_text",
+        _ => "input_text",
+    };
     for block in &blocks {
         let Some(block) = block.as_object() else {
             continue;
@@ -328,7 +345,7 @@ fn claude_message_to_responses_input_items(message: &Value, input_items: &mut Ve
         match block_type {
             "text" => {
                 if let Some(text) = block.get("text").and_then(Value::as_str) {
-                    message_parts.push(json!({ "type": "input_text", "text": text }));
+                    message_parts.push(json!({ "type": text_part_type, "text": text }));
                 }
             }
             "image" => {

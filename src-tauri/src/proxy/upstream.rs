@@ -318,7 +318,8 @@ async fn prepare_upstream_request(
         auth,
         upstream.header_overrides.as_deref(),
     );
-    let upstream_body = build_upstream_body(body, &mapped_meta).await?;
+    let upstream_body =
+        build_upstream_body(provider, &upstream_path_with_query, body, &mapped_meta).await?;
     Ok(PreparedUpstreamRequest {
         upstream_url,
         request_headers,
@@ -474,12 +475,35 @@ fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestM
         .original_model
         .as_deref()
         .map(|original| upstream.map_model(original).unwrap_or_else(|| original.to_string()));
+    let (mapped_model, reasoning_effort) = normalize_mapped_model_reasoning_suffix(
+        mapped_model,
+        meta.reasoning_effort.clone(),
+    );
     RequestMeta {
         stream: meta.stream,
         original_model: meta.original_model.clone(),
         mapped_model,
+        reasoning_effort,
         estimated_input_tokens: meta.estimated_input_tokens,
     }
+}
+
+fn normalize_mapped_model_reasoning_suffix(
+    mapped_model: Option<String>,
+    reasoning_effort: Option<String>,
+) -> (Option<String>, Option<String>) {
+    let Some(mapped_model) = mapped_model else {
+        return (None, reasoning_effort);
+    };
+    let Some((base_model, mapped_effort)) =
+        super::server_helpers::parse_openai_reasoning_effort_from_model_suffix(&mapped_model)
+    else {
+        return (Some(mapped_model), reasoning_effort);
+    };
+
+    // If the user already specified an explicit effort in the incoming `model`, keep it.
+    let reasoning_effort = reasoning_effort.or(Some(mapped_effort));
+    (Some(base_model), reasoning_effort)
 }
 
 fn resolve_upstream_path_with_query(
@@ -555,11 +579,31 @@ fn build_request_headers(
 }
 
 async fn build_upstream_body(
+    provider: &str,
+    upstream_path_with_query: &str,
     body: &ReplayableBody,
     meta: &RequestMeta,
 ) -> Result<reqwest::Body, AttemptOutcome> {
     let mapped_body = maybe_rewrite_request_body_model(body, meta).await?;
-    let source = mapped_body.as_ref().unwrap_or(body);
+    let mapped_source = mapped_body.as_ref().unwrap_or(body);
+    let upstream_path = split_path_query(upstream_path_with_query).0;
+    let reasoning_body = match super::server_helpers::maybe_rewrite_openai_reasoning_effort_from_model_suffix(
+        provider,
+        upstream_path,
+        meta,
+        mapped_source,
+    )
+    .await
+    {
+        Ok(body) => body,
+        Err(err) => {
+            return Err(AttemptOutcome::Fatal(http::error_response(err.status, err.message)))
+        }
+    };
+    let source = reasoning_body
+        .as_ref()
+        .or(mapped_body.as_ref())
+        .unwrap_or(body);
     source
         .to_reqwest_body()
         .await

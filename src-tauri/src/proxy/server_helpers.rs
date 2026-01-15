@@ -7,7 +7,10 @@ use serde_json::{Map, Value};
 use super::{
     gemini,
     http_client::ProxyHttpClients,
-    openai_compat::{transform_request_body, FormatTransform, CHAT_PATH, PROVIDER_CHAT},
+    openai_compat::{
+        transform_request_body, FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES,
+        RESPONSES_PATH,
+    },
     request_body::ReplayableBody,
     token_rate,
     RequestMeta,
@@ -19,6 +22,7 @@ const REQUEST_META_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 // Format conversion needs the full JSON body; allow up to the default max_request_body_bytes (20 MiB).
 const REQUEST_TRANSFORM_LIMIT_BYTES: usize = 20 * 1024 * 1024;
 const DEBUG_BODY_LOG_LIMIT_BYTES: usize = 64 * 1024;
+const OPENAI_REASONING_MODEL_SUFFIX_PREFIX: &str = "-reasoning-";
 
 #[derive(Debug)]
 pub(crate) struct RequestError {
@@ -66,6 +70,7 @@ pub(crate) async fn parse_request_meta_best_effort(
         stream: stream_from_path,
         original_model: model_from_path.clone(),
         mapped_model: None,
+        reasoning_effort: None,
         estimated_input_tokens: None,
     };
 
@@ -85,17 +90,48 @@ pub(crate) async fn parse_request_meta_best_effort(
         .and_then(Value::as_bool)
         .unwrap_or(false)
         || stream_from_path;
-    let original_model = value
+    let mut original_model = value
         .get("model")
         .and_then(Value::as_str)
         .map(|value| value.to_string())
         .or(model_from_path);
+
+    // KISS: only support the explicit `-reasoning-<effort>` suffix to avoid ambiguity.
+    // This mirrors new-api behavior: strip the suffix from `model` and translate it into
+    // OpenAI reasoning parameters when dispatching to OpenAI providers.
+    let mut reasoning_effort = None;
+    if let Some(model) = original_model.as_deref() {
+        if let Some((base_model, effort)) = parse_openai_reasoning_effort_from_model_suffix(model) {
+            original_model = Some(base_model);
+            reasoning_effort = Some(effort);
+        }
+    }
+
     let estimated_input_tokens = estimate_input_tokens(&value, original_model.as_deref());
     RequestMeta {
         stream,
         original_model,
         mapped_model: None,
+        reasoning_effort,
         estimated_input_tokens,
+    }
+}
+
+pub(crate) fn parse_openai_reasoning_effort_from_model_suffix(
+    model: &str,
+) -> Option<(String, String)> {
+    let (base, effort_raw) = model.rsplit_once(OPENAI_REASONING_MODEL_SUFFIX_PREFIX)?;
+    let base = base.trim();
+    let effort = effort_raw.trim().to_ascii_lowercase();
+    if base.is_empty() || effort.is_empty() {
+        return None;
+    }
+
+    match effort.as_str() {
+        "low" | "medium" | "high" | "minimal" | "none" | "xhigh" => {
+            Some((base.to_string(), effort))
+        }
+        _ => None,
     }
 }
 
@@ -361,54 +397,105 @@ pub(crate) async fn maybe_force_openai_stream_options_include_usage(
     Ok(ReplayableBody::from_bytes(outbound_bytes))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use axum::body::Bytes;
-
-    #[test]
-    fn force_openai_chat_stream_usage_inserts_stream_options_include_usage() {
-        let rt = tokio::runtime::Runtime::new().expect("runtime");
-        rt.block_on(async {
-            let input = Bytes::from_static(br#"{"stream":true,"messages":[]}"#);
-            let meta = RequestMeta {
-                stream: true,
-                original_model: None,
-                mapped_model: None,
-                estimated_input_tokens: None,
-            };
-            let body = ReplayableBody::from_bytes(input);
-            let output = maybe_force_openai_stream_options_include_usage(
-                PROVIDER_CHAT,
-                CHAT_PATH,
-                &meta,
-                body,
-            )
-            .await
-            .expect("ok");
-            let bytes = output
-                .read_bytes_if_small(1024)
-                .await
-                .expect("read")
-                .expect("bytes");
-            let value: Value = serde_json::from_slice(&bytes).expect("json");
-            assert_eq!(value["stream_options"]["include_usage"], Value::Bool(true));
-        });
+pub(crate) async fn maybe_rewrite_openai_reasoning_effort_from_model_suffix(
+    provider: &str,
+    outbound_path: &str,
+    meta: &RequestMeta,
+    body: &ReplayableBody,
+) -> Result<Option<ReplayableBody>, RequestError> {
+    let Some(effort) = meta.reasoning_effort.as_deref() else {
+        return Ok(None);
+    };
+    if !should_apply_openai_reasoning_effort(provider, outbound_path) {
+        return Ok(None);
     }
 
-    #[test]
-    fn gemini_meta_prefers_path_for_stream_and_model() {
-        let rt = tokio::runtime::Runtime::new().expect("runtime");
-        rt.block_on(async {
-            let body = ReplayableBody::from_bytes(Bytes::from_static(b"{}"));
-            let meta = parse_request_meta_best_effort(
-                "/v1beta/models/gemini-1.5-flash:streamGenerateContent",
-                &body,
+    let Some(bytes) = body
+        .read_bytes_if_small(REQUEST_TRANSFORM_LIMIT_BYTES)
+        .await
+        .map_err(|err| {
+            RequestError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Failed to read request body: {err}"),
             )
-            .await;
-            assert!(meta.stream);
-            assert_eq!(meta.original_model.as_deref(), Some("gemini-1.5-flash"));
-        });
+        })?
+    else {
+        // Best-effort: request body too large, keep original.
+        return Ok(None);
+    };
+
+    let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(None);
+    };
+    let Some(object) = value.as_object_mut() else {
+        return Ok(None);
+    };
+
+    let model_for_upstream = meta
+        .mapped_model
+        .as_deref()
+        .or(meta.original_model.as_deref());
+    apply_openai_reasoning_effort_to_body(
+        provider,
+        outbound_path,
+        model_for_upstream,
+        effort,
+        object,
+    );
+
+    let outbound_bytes = serde_json::to_vec(&value)
+        .map(Bytes::from)
+        .map_err(|err| {
+            RequestError::new(
+                StatusCode::BAD_REQUEST,
+                format!("Failed to serialize request: {err}"),
+            )
+        })?;
+    Ok(Some(ReplayableBody::from_bytes(outbound_bytes)))
+}
+
+fn should_apply_openai_reasoning_effort(provider: &str, outbound_path: &str) -> bool {
+    (provider == PROVIDER_CHAT && outbound_path == CHAT_PATH)
+        || (provider == PROVIDER_RESPONSES && outbound_path == RESPONSES_PATH)
+}
+
+fn apply_openai_reasoning_effort_to_body(
+    provider: &str,
+    outbound_path: &str,
+    normalized_model: Option<&str>,
+    effort: &str,
+    object: &mut Map<String, Value>,
+) {
+    // Ensure the upstream sees the normalized base model (without the `-reasoning-...` suffix).
+    if let Some(model) = normalized_model {
+        object.insert("model".to_string(), Value::String(model.to_string()));
+    }
+
+    if provider == PROVIDER_CHAT && outbound_path == CHAT_PATH {
+        object.insert(
+            "reasoning_effort".to_string(),
+            Value::String(effort.to_string()),
+        );
+        return;
+    }
+    if provider == PROVIDER_RESPONSES && outbound_path == RESPONSES_PATH {
+        let reasoning = ensure_json_object_field(object, "reasoning");
+        reasoning.insert("effort".to_string(), Value::String(effort.to_string()));
     }
 }
+
+fn ensure_json_object_field<'a>(
+    object: &'a mut Map<String, Value>,
+    key: &str,
+) -> &'a mut Map<String, Value> {
+    if !matches!(object.get(key), Some(Value::Object(_))) {
+        object.insert(key.to_string(), Value::Object(Map::new()));
+    }
+    object
+        .get_mut(key)
+        .and_then(Value::as_object_mut)
+        .expect("inserted value must be object")
+}
+
+#[cfg(test)]
+mod tests;

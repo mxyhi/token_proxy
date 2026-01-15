@@ -87,3 +87,23 @@ fn apply_header_overrides_sets_and_removes() {
     assert!(!headers.contains_key(HOST));
     assert!(!headers.contains_key(CONTENT_LENGTH));
 }
+
+#[test]
+fn mapped_model_reasoning_suffix_is_stripped_and_becomes_effort() {
+    let (model, effort) = normalize_mapped_model_reasoning_suffix(
+        Some("gpt-4.1-reasoning-high".to_string()),
+        None,
+    );
+    assert_eq!(model.as_deref(), Some("gpt-4.1"));
+    assert_eq!(effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn mapped_model_reasoning_suffix_does_not_override_existing_effort() {
+    let (model, effort) = normalize_mapped_model_reasoning_suffix(
+        Some("gpt-4.1-reasoning-high".to_string()),
+        Some("low".to_string()),
+    );
+    assert_eq!(model.as_deref(), Some("gpt-4.1"));
+    assert_eq!(effort.as_deref(), Some("low"));
+}

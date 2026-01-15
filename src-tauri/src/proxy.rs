@@ -38,6 +38,7 @@ struct RequestMeta {
     stream: bool,
     original_model: Option<String>,
     mapped_model: Option<String>,
+    reasoning_effort: Option<String>,
     estimated_input_tokens: Option<u64>,
 }
 

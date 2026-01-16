@@ -40,7 +40,7 @@ pub(crate) fn ensure_local_auth(
         tracing::warn!(path = %path, "missing local access key");
         return Err("Missing local access key.".to_string());
     };
-    if provided != expected {
+    if provided != expected.as_str() {
         tracing::warn!(
             path = %path,
             got = %mask_key(&provided),

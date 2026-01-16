@@ -11,6 +11,7 @@ use std::{
 };
 
 use super::{
+    gemini_compat,
     http,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     request_detail::RequestDetailSnapshot,
@@ -261,6 +262,26 @@ async fn build_stream_response(
             .boxed();
             responses_to_chat::stream_responses_to_chat(
                 responses_stream,
+                context,
+                log,
+                request_tracker,
+            )
+                .boxed()
+        }
+        FormatTransform::GeminiToChat => {
+            gemini_compat::stream_gemini_to_chat(
+                upstream_res.bytes_stream(),
+                context,
+                log,
+                request_tracker,
+            )
+                .boxed()
+        }
+        FormatTransform::ChatToGemini => {
+            // Chat -> Gemini 的响应转换：Gemini 上游返回的是 Gemini 格式，需要转为 Chat 格式
+            // 注意：这里实际上应该是 GeminiToChat，因为我们需要把 Gemini 响应转为 Chat
+            gemini_compat::stream_gemini_to_chat(
+                upstream_res.bytes_stream(),
                 context,
                 log,
                 request_tracker,

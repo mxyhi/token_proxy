@@ -1,7 +1,7 @@
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 
-use super::{anthropic_compat, http_client::ProxyHttpClients};
+use super::{anthropic_compat, gemini_compat, http_client::ProxyHttpClients};
 
 mod extract;
 mod input;
@@ -29,6 +29,8 @@ pub(crate) enum FormatTransform {
     AnthropicToResponses,
     ChatToAnthropic,
     AnthropicToChat,
+    ChatToGemini,
+    GeminiToChat,
 }
 
 pub(crate) fn inbound_format(path: &str) -> Option<ApiFormat> {
@@ -62,6 +64,11 @@ pub(crate) async fn transform_request_body(
             let intermediate = anthropic_compat::anthropic_request_to_responses(body, http_clients).await?;
             responses_request_to_chat(&intermediate)
         }
+        FormatTransform::ChatToGemini => gemini_compat::chat_request_to_gemini(body),
+        FormatTransform::GeminiToChat => {
+            // Gemini 请求格式通常不会直接作为入站，这个分支主要用于完整性
+            Ok(body.clone())
+        }
     }
 }
 
@@ -86,6 +93,11 @@ pub(crate) fn transform_response_body(
             let intermediate = anthropic_compat::anthropic_response_to_responses(bytes)?;
             responses_response_to_chat(&intermediate, model_hint)
         }
+        FormatTransform::ChatToGemini => {
+            // Chat 响应格式通常不需要转换为 Gemini，这个分支主要用于完整性
+            Ok(bytes.clone())
+        }
+        FormatTransform::GeminiToChat => gemini_compat::gemini_response_to_chat(bytes, model_hint),
     }
 }
 

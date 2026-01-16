@@ -1,29 +1,52 @@
-# Task Plan: Chat ↔ Claude Messages 互转（对齐 new-api，含流式/图片/工具）
+转换实现情况矩阵
+┌───────────────────────┬─────────────┬───────────┬─────────────┬───────────┐
+│ 源格式 ↓ / 目标格式 → │ Chat        │ Responses │ Anthropic   │ Gemini    │
+├───────────────────────┼─────────────┼───────────┼─────────────┼───────────┤
+│ Chat                  │ -           │ ✅ 已实现  │ ✅ 中转实现  │ ✅ 已实现  │
+├───────────────────────┼─────────────┼───────────┼─────────────┼───────────┤
+│ Responses             │ ✅ 已实现    │ -         │ ✅ 已实现    │ ❌ 未实现  │
+├───────────────────────┼─────────────┼───────────┼─────────────┼───────────┤
+│ Anthropic             │ ✅ 中转实现  │ ✅ 已实现  │ -           │ ❌ 未实现  │
+├───────────────────────┼─────────────┼───────────┼─────────────┼───────────┤
+│ Gemini                │ ✅ 已实现    │ ❌ 未实现  │ ❌ 未实现    │ -         │
+└───────────────────────┴─────────────┴───────────┴─────────────┴───────────┘
 
-## Goal
-在 `token_proxy` 中实现 OpenAI `/v1/chat/completions` ↔ Anthropic `/v1/messages` 的双向互转与自动 fallback（含 SSE 流式、图片、tools/tool_choice/parallel_tool_calls），行为尽量对齐 `QuantumNous/new-api`。
+新增实现 (本次)
+┌──────┬────────────────────┬────────────────────────────────────────────────┐
+│ 编号 │ 转换方向           │ 说明                                           │
+├──────┼────────────────────┼────────────────────────────────────────────────┤
+│ 1    │ Gemini → Chat      │ ✅ 将 Gemini 响应转为 OpenAI Chat 格式         │
+├──────┼────────────────────┼────────────────────────────────────────────────┤
+│ 2    │ Chat → Gemini      │ ✅ 将 OpenAI Chat 请求发送到 Gemini 上游       │
+└──────┴────────────────────┴────────────────────────────────────────────────┘
 
-## Phases
-- [x] Phase 1: 明确方案细节与落点（含优先级规则），整理测试用例
-- [x] Phase 2: 请求体转换：Chat ↔ Responses（补齐 tool/image/tool_result/system），Responses ↔ Anthropic（system 按 new-api 输出为数组 blocks）
-- [x] Phase 3: 流式转换管道：统一错误类型以支持 Chat↔Claude 的组合流式转换；避免重复日志/重复 token 统计
-- [x] Phase 4: 路由 fallback：/v1/chat/completions 与 /v1/messages 双向 fallback（按“优先级”选择）
-- [x] Phase 5: 测试与回归：新增单测覆盖（请求体 + SSE）；跑 cargo test / tsc
-- [x] Phase 6: 文档/配置说明更新（README.zh-CN.md / README.md），收尾
+未实现的转换 (共 4 种)
+┌──────┬────────────────────┬────────────────────────────────────────────────┐
+│ 编号 │ 转换方向           │ 说明                                           │
+├──────┼────────────────────┼────────────────────────────────────────────────┤
+│ 1    │ Gemini → Responses │ 无法将 Gemini 响应转为 OpenAI Responses 格式   │
+├──────┼────────────────────┼────────────────────────────────────────────────┤
+│ 2    │ Responses → Gemini │ 无法将 OpenAI Responses 请求发送到 Gemini 上游 │
+├──────┼────────────────────┼────────────────────────────────────────────────┤
+│ 3    │ Gemini → Anthropic │ 无法将 Gemini 响应转为 Anthropic Messages 格式 │
+├──────┼────────────────────┼────────────────────────────────────────────────┤
+│ 4    │ Anthropic → Gemini │ 无法将 Anthropic 请求发送到 Gemini 上游        │
+└──────┴────────────────────┴────────────────────────────────────────────────┘
 
-## Key Questions
-1. “按优先级”在跨 provider fallback 时的精确定义：是否按各 provider 的最高 upstream.priority 选择，平级再按默认顺序？
-2. Chat↔Claude 的 system 归一化：对外（Claude）按 new-api 输出 `system: [{type:text,text:...}]`；对内（Responses）用 `instructions`，是否需要保留分段信息？
-3. 图片与文件：Chat `image_url` ↔ Claude `image`，以及 `input_file/document` 是否一并对齐 new-api？
+实现文件
+- src-tauri/src/proxy/gemini_compat/mod.rs     - 模块入口
+- src-tauri/src/proxy/gemini_compat/request.rs - Chat → Gemini 请求转换
+- src-tauri/src/proxy/gemini_compat/response.rs - Gemini → Chat 响应转换（非流式）
+- src-tauri/src/proxy/gemini_compat/stream.rs  - Gemini → Chat 流式转换
+- src-tauri/src/proxy/gemini_compat/tools.rs   - 工具定义转换
 
-## Decisions Made
-- 采用方案 A：以 OpenAI Responses 作为内部中间格式，复用既有转换链，避免双份映射逻辑。
-- system 输出按 new-api：Claude 请求的 `system` 使用数组 blocks（`[{type:text,text:...}]`），并支持输入为 string/array 两种形式。
-- 跨 provider fallback “按优先级”定义：在候选 provider 中选取其 `ProviderUpstreams.groups[0].priority` 最大者；若相同则按固定顺序打破平局（/v1/chat：openai-response > anthropic；/v1/messages：openai-response > openai；/v1/responses：openai > anthropic）。
-
-## Errors Encountered
-- SSE 串联时遇到 Stream `Unpin` 约束报错，已通过 `.boxed()` 固定中间流类型解决。
-- 前端 `tsc --noEmit` 需要先生成 `src/paraglide/*`（先跑 `pnpm run i18n:compile`）。
-
-## Status
-**Done** - 代码、测试与 README/配置说明已更新。
+支持的功能
+- 文本消息转换
+- 系统提示转换 (system → systemInstruction)
+- 工具/函数调用转换
+- 工具结果转换
+- 流式 SSE 转换
+- 安全设置默认配置
+- usage 统计转换
+- finishReason 映射
+- 图片 base64 内联数据转换

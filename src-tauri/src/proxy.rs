@@ -5,6 +5,7 @@ pub(crate) mod logs;
 pub(crate) mod request_detail;
 pub(crate) mod service;
 mod gemini;
+mod gemini_compat;
 mod http;
 mod log;
 mod model;

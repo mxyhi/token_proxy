@@ -174,8 +174,12 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
         return Ok(base_plan(PROVIDER_CHAT));
     }
 
-    let fallback = choose_provider_by_priority(config, &[PROVIDER_RESPONSES, PROVIDER_ANTHROPIC])
-        .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
+    // 包含 Gemini 作为可选的转换目标
+    let fallback = choose_provider_by_priority(
+        config,
+        &[PROVIDER_RESPONSES, PROVIDER_ANTHROPIC, PROVIDER_GEMINI],
+    )
+    .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
     if !config.enable_api_format_conversion {
         return Err(ERROR_CHAT_CONVERSION_DISABLED.to_string());
     }
@@ -192,6 +196,12 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
             outbound_path: Some("/v1/messages"),
             request_transform: FormatTransform::ChatToAnthropic,
             response_transform: FormatTransform::AnthropicToChat,
+        },
+        PROVIDER_GEMINI => DispatchPlan {
+            provider: PROVIDER_GEMINI,
+            outbound_path: None, // Gemini 路径需要在 upstream 层根据 model 动态构建
+            request_transform: FormatTransform::ChatToGemini,
+            response_transform: FormatTransform::GeminiToChat,
         },
         _ => base_plan(PROVIDER_RESPONSES),
     })
@@ -546,8 +556,27 @@ async fn finalize_prepared_request(
     inbound: InboundRequest,
     request_start: Instant,
 ) -> Result<PreparedRequest, Response> {
-    let outbound_path = inbound.plan.outbound_path.unwrap_or(inbound.path.as_str());
-    let outbound_path_with_query = build_outbound_path_with_query(outbound_path, uri);
+    // 对于 ChatToGemini 转换，需要根据 model 动态构建 Gemini 路径
+    let outbound_path = match (inbound.plan.outbound_path, inbound.plan.provider) {
+        (Some(path), _) => path.to_string(),
+        (None, PROVIDER_GEMINI) if inbound.plan.request_transform != FormatTransform::None => {
+            // 从 meta 中获取 model，构建 Gemini API 路径
+            let model = inbound
+                .meta
+                .mapped_model
+                .as_deref()
+                .or(inbound.meta.original_model.as_deref())
+                .unwrap_or("gemini-1.5-flash");
+            let suffix = if inbound.meta.stream {
+                ":streamGenerateContent"
+            } else {
+                ":generateContent"
+            };
+            format!("{}{}{}", gemini::GEMINI_MODELS_PREFIX, model, suffix)
+        }
+        (None, _) => inbound.path.clone(),
+    };
+    let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, uri);
     let outbound_body = build_outbound_body_or_respond(
         &state.http_clients,
         &state.log,

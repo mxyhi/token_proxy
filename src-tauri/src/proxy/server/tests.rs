@@ -110,6 +110,27 @@ fn gemini_route_fallbacks_to_chat() {
 }
 
 #[test]
+fn gemini_route_fallbacks_to_anthropic() {
+    let config = config_with_providers(&[PROVIDER_ANTHROPIC], true);
+    let plan = resolve_dispatch_plan(&config, "/v1beta/models/gemini-1.5-flash:generateContent")
+        .expect("should fallback");
+    assert_eq!(plan.provider, PROVIDER_ANTHROPIC);
+    assert_eq!(plan.outbound_path, Some("/v1/messages"));
+    assert_eq!(plan.request_transform, FormatTransform::GeminiToAnthropic);
+    assert_eq!(plan.response_transform, FormatTransform::AnthropicToGemini);
+}
+
+#[test]
+fn anthropic_messages_fallbacks_to_gemini() {
+    let config = config_with_providers(&[PROVIDER_GEMINI], true);
+    let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should fallback");
+    assert_eq!(plan.provider, PROVIDER_GEMINI);
+    assert_eq!(plan.outbound_path, None);
+    assert_eq!(plan.request_transform, FormatTransform::AnthropicToGemini);
+    assert_eq!(plan.response_transform, FormatTransform::GeminiToAnthropic);
+}
+
+#[test]
 fn gemini_route_dispatches_to_gemini() {
     let config = config_with_providers(&[PROVIDER_GEMINI], false);
     let plan = resolve_dispatch_plan(&config, "/v1beta/models/gemini-1.5-flash:generateContent")

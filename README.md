@@ -2,7 +2,7 @@
 
 English | [中文](README.zh-CN.md)
 
-Local AI API gateway for OpenAI / Gemini / Anthropic. Runs on your machine, keeps tokens counted (SQLite), offers priority-based load balancing, optional API format conversion (OpenAI Chat/Responses ↔ Anthropic Messages, plus Gemini ↔ OpenAI formats, including SSE/tools/images), and one-click setup for Claude Code / Codex.
+Local AI API gateway for OpenAI / Gemini / Anthropic. Runs on your machine, keeps tokens counted (SQLite), offers priority-based load balancing, optional API format conversion (OpenAI Chat/Responses ↔ Anthropic Messages, plus Gemini ↔ OpenAI/Anthropic, including SSE/tools/images), and one-click setup for Claude Code / Codex.
 
 > Default listen port: **9208** (release) / **19208** (debug builds).
 
@@ -10,7 +10,7 @@ Local AI API gateway for OpenAI / Gemini / Anthropic. Runs on your machine, keep
 
 ## What you get
 - Multiple providers: `openai`, `openai-response`, `anthropic`, `gemini`
-- Built-in routing + optional format conversion (OpenAI Chat ⇄ Responses; Anthropic Messages ↔ OpenAI Responses; OpenAI Chat ↔ Anthropic Messages; Gemini ↔ OpenAI; SSE supported)
+- Built-in routing + optional format conversion (OpenAI Chat ⇄ Responses; Anthropic Messages ↔ OpenAI; Gemini ↔ OpenAI/Anthropic; SSE supported)
 - Per-upstream priority + two balancing strategies (fill-first / round-robin)
 - Model alias mapping (exact / prefix* / wildcard*) and response model rewrite
 - Local access key (Authorization) + upstream key injection
@@ -77,9 +77,9 @@ curl -X POST \
 - Other paths: choose the provider with the highest configured priority; tie-break is `openai` > `openai-response` > `anthropic`.
 - If the preferred provider is missing but `enable_api_format_conversion=true`, the proxy auto-converts request/response bodies and streams between supported formats (including SSE).
 - If `openai` is missing for `/v1/chat/completions`: fallback can be `openai-response`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai-response`).
-- If `anthropic` is missing for `/v1/messages`: fallback can be `openai-response` or `openai` (priority-based; tie-break prefers `openai-response`).
+- If `anthropic` is missing for `/v1/messages`: fallback can be `openai-response`, `openai`, or `gemini` (priority-based; tie-break prefers `openai-response`).
 - If `openai-response` is missing for `/v1/responses`: fallback can be `openai`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai`).
-- If `gemini` is missing for `/v1beta/models/*:generateContent`: fallback can be `openai-response` or `openai` (priority-based; tie-break prefers `openai-response`).
+- If `gemini` is missing for `/v1beta/models/*:generateContent`: fallback can be `openai-response`, `openai`, or `anthropic` (priority-based; tie-break prefers `openai-response`).
 
 ## Auth rules (important)
 - Local access: `local_api_key` enabled → require format-specific key. These local auth inputs are stripped and **not** forwarded upstream.

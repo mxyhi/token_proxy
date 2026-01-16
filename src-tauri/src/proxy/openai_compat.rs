@@ -29,6 +29,8 @@ pub(crate) enum FormatTransform {
     AnthropicToResponses,
     ChatToAnthropic,
     AnthropicToChat,
+    GeminiToAnthropic,
+    AnthropicToGemini,
     ChatToGemini,
     GeminiToChat,
     ResponsesToGemini,
@@ -67,6 +69,10 @@ pub(crate) async fn transform_request_body(
             let intermediate = anthropic_compat::anthropic_request_to_responses(body, http_clients).await?;
             responses_request_to_chat(&intermediate)
         }
+        FormatTransform::GeminiToAnthropic => {
+            gemini_request_to_anthropic(body, http_clients, model_hint).await
+        }
+        FormatTransform::AnthropicToGemini => anthropic_request_to_gemini(body, http_clients).await,
         FormatTransform::ChatToGemini => gemini_compat::chat_request_to_gemini(body),
         FormatTransform::GeminiToChat => gemini_compat::gemini_request_to_chat(body, model_hint),
         FormatTransform::ResponsesToGemini => responses_request_to_gemini(body),
@@ -95,6 +101,8 @@ pub(crate) fn transform_response_body(
             let intermediate = anthropic_compat::anthropic_response_to_responses(bytes)?;
             responses_response_to_chat(&intermediate, model_hint)
         }
+        FormatTransform::GeminiToAnthropic => gemini_response_to_anthropic(bytes, model_hint),
+        FormatTransform::AnthropicToGemini => anthropic_response_to_gemini(bytes, model_hint),
         FormatTransform::ChatToGemini => gemini_compat::chat_response_to_gemini(bytes, model_hint),
         FormatTransform::GeminiToChat => gemini_compat::gemini_response_to_chat(bytes, model_hint),
         FormatTransform::ResponsesToGemini => responses_response_to_gemini(bytes, model_hint),
@@ -227,6 +235,43 @@ fn responses_response_to_gemini(bytes: &Bytes, model_hint: Option<&str>) -> Resu
 fn gemini_response_to_responses(bytes: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {
     let intermediate = gemini_compat::gemini_response_to_chat(bytes, model_hint)?;
     chat_response_to_responses(&intermediate)
+}
+
+async fn gemini_request_to_anthropic(
+    body: &Bytes,
+    http_clients: &ProxyHttpClients,
+    model_hint: Option<&str>,
+) -> Result<Bytes, String> {
+    let intermediate = gemini_compat::gemini_request_to_chat(body, model_hint)?;
+    let intermediate = chat_request_to_responses(&intermediate)?;
+    anthropic_compat::responses_request_to_anthropic(&intermediate, http_clients).await
+}
+
+async fn anthropic_request_to_gemini(
+    body: &Bytes,
+    http_clients: &ProxyHttpClients,
+) -> Result<Bytes, String> {
+    let intermediate = anthropic_compat::anthropic_request_to_responses(body, http_clients).await?;
+    let intermediate = responses_request_to_chat(&intermediate)?;
+    gemini_compat::chat_request_to_gemini(&intermediate)
+}
+
+fn gemini_response_to_anthropic(
+    bytes: &Bytes,
+    model_hint: Option<&str>,
+) -> Result<Bytes, String> {
+    let intermediate = gemini_compat::gemini_response_to_chat(bytes, model_hint)?;
+    let intermediate = chat_response_to_responses(&intermediate)?;
+    anthropic_compat::responses_response_to_anthropic(&intermediate, model_hint)
+}
+
+fn anthropic_response_to_gemini(
+    bytes: &Bytes,
+    model_hint: Option<&str>,
+) -> Result<Bytes, String> {
+    let intermediate = anthropic_compat::anthropic_response_to_responses(bytes)?;
+    let intermediate = responses_response_to_chat(&intermediate, model_hint)?;
+    gemini_compat::chat_response_to_gemini(&intermediate, model_hint)
 }
 
 fn chat_messages_to_responses_input(

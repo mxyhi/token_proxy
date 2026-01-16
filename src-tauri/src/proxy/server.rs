@@ -118,7 +118,10 @@ fn resolve_gemini_plan(config: &ProxyConfig, path: &str) -> Option<Result<Dispat
     if config.provider_upstreams(PROVIDER_GEMINI).is_some() {
         return Some(Ok(base_plan(PROVIDER_GEMINI)));
     }
-    let fallback = choose_provider_by_priority(config, &[PROVIDER_RESPONSES, PROVIDER_CHAT]);
+    let fallback = choose_provider_by_priority(
+        config,
+        &[PROVIDER_RESPONSES, PROVIDER_CHAT, PROVIDER_ANTHROPIC],
+    );
     let Some(fallback) = fallback else {
         return Some(Err(ERROR_NO_UPSTREAM.to_string()));
     };
@@ -138,6 +141,12 @@ fn resolve_gemini_plan(config: &ProxyConfig, path: &str) -> Option<Result<Dispat
             request_transform: FormatTransform::GeminiToChat,
             response_transform: FormatTransform::ChatToGemini,
         },
+        PROVIDER_ANTHROPIC => DispatchPlan {
+            provider: PROVIDER_ANTHROPIC,
+            outbound_path: Some("/v1/messages"),
+            request_transform: FormatTransform::GeminiToAnthropic,
+            response_transform: FormatTransform::AnthropicToGemini,
+        },
         _ => base_plan(PROVIDER_RESPONSES),
     }))
 }
@@ -156,7 +165,10 @@ fn resolve_anthropic_plan(
     // Claude Code uses /v1/messages. If Anthropic upstream is missing but Responses is available,
     // fall back to OpenAI Responses format conversion when enabled (new-api style).
     if path == "/v1/messages" {
-        let fallback = choose_provider_by_priority(config, &[PROVIDER_RESPONSES, PROVIDER_CHAT]);
+        let fallback = choose_provider_by_priority(
+            config,
+            &[PROVIDER_RESPONSES, PROVIDER_CHAT, PROVIDER_GEMINI],
+        );
         let Some(fallback) = fallback else {
             return Some(Err(ERROR_NO_UPSTREAM.to_string()));
         };
@@ -175,6 +187,12 @@ fn resolve_anthropic_plan(
                 outbound_path: Some(CHAT_PATH),
                 request_transform: FormatTransform::AnthropicToChat,
                 response_transform: FormatTransform::ChatToAnthropic,
+            },
+            PROVIDER_GEMINI => DispatchPlan {
+                provider: PROVIDER_GEMINI,
+                outbound_path: None,
+                request_transform: FormatTransform::AnthropicToGemini,
+                response_transform: FormatTransform::GeminiToAnthropic,
             },
             _ => base_plan(PROVIDER_RESPONSES),
         }));

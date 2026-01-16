@@ -54,7 +54,7 @@
   "proxy_core_app_proxy_url_label": "App Proxy URL",
   "proxy_core_app_proxy_url_help": "Used by the app and optional upstream proxy reuse. Supports http(s)://, socks5://, socks5h://. Upstreams can use {placeholder} to reference this proxy. Leave empty to skip proxy.",
   "proxy_core_format_conversion_title": "Format Conversion",
-  "proxy_core_format_conversion_desc": "Translate between {chat}↔{responses}, {messages}↔{responses}, and Gemini↔OpenAI when the preferred provider is missing.",
+  "proxy_core_format_conversion_desc": "Auto-convert OpenAI/Anthropic/Gemini formats when the preferred provider is missing.",
   "proxy_core_format_conversion_aria": "Enable format conversion",
   "proxy_core_format_conversion_default_disabled": "Default: disabled.",
   "proxy_core_tray_token_rate_title": "Tray token rate",

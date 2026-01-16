@@ -268,6 +268,58 @@ async fn build_stream_response(
             )
                 .boxed()
         }
+        FormatTransform::GeminiToAnthropic => {
+            // Three-stage conversion: Gemini stream -> OpenAI Chat stream -> OpenAI Responses stream -> Claude stream.
+            // Only the final stage writes logs / token usage to avoid duplication.
+            let first_log = Arc::new(LogWriter::new(None));
+            let first_tracker = RequestTokenTracker::disabled();
+            let chat_stream = gemini_compat::stream_gemini_to_chat(
+                upstream_res.bytes_stream(),
+                context.clone(),
+                first_log,
+                first_tracker,
+            )
+            .boxed();
+            let second_log = Arc::new(LogWriter::new(None));
+            let second_tracker = RequestTokenTracker::disabled();
+            let responses_stream = chat_to_responses::stream_chat_to_responses(
+                chat_stream,
+                context.clone(),
+                second_log,
+                second_tracker,
+            )
+            .boxed();
+            responses_to_anthropic::stream_responses_to_anthropic(
+                responses_stream,
+                context,
+                log,
+                request_tracker,
+            )
+            .boxed()
+        }
+        FormatTransform::AnthropicToGemini => {
+            // Three-stage conversion: Claude stream -> OpenAI Responses stream -> OpenAI Chat stream -> Gemini stream.
+            // Only the final stage writes logs / token usage to avoid duplication.
+            let first_log = Arc::new(LogWriter::new(None));
+            let first_tracker = RequestTokenTracker::disabled();
+            let responses_stream = anthropic_to_responses::stream_anthropic_to_responses(
+                upstream_res.bytes_stream(),
+                context.clone(),
+                first_log,
+                first_tracker,
+            )
+            .boxed();
+            let second_log = Arc::new(LogWriter::new(None));
+            let second_tracker = RequestTokenTracker::disabled();
+            let chat_stream = responses_to_chat::stream_responses_to_chat(
+                responses_stream,
+                context.clone(),
+                second_log,
+                second_tracker,
+            )
+            .boxed();
+            gemini_compat::stream_chat_to_gemini(chat_stream, context, log, request_tracker).boxed()
+        }
         FormatTransform::GeminiToChat => {
             gemini_compat::stream_gemini_to_chat(
                 upstream_res.bytes_stream(),

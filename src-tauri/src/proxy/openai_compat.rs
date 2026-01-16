@@ -31,6 +31,8 @@ pub(crate) enum FormatTransform {
     AnthropicToChat,
     ChatToGemini,
     GeminiToChat,
+    ResponsesToGemini,
+    GeminiToResponses,
 }
 
 pub(crate) fn inbound_format(path: &str) -> Option<ApiFormat> {
@@ -45,6 +47,7 @@ pub(crate) async fn transform_request_body(
     transform: FormatTransform,
     body: &Bytes,
     http_clients: &ProxyHttpClients,
+    model_hint: Option<&str>,
 ) -> Result<Bytes, String> {
     match transform {
         FormatTransform::None => Ok(body.clone()),
@@ -65,10 +68,9 @@ pub(crate) async fn transform_request_body(
             responses_request_to_chat(&intermediate)
         }
         FormatTransform::ChatToGemini => gemini_compat::chat_request_to_gemini(body),
-        FormatTransform::GeminiToChat => {
-            // Gemini 请求格式通常不会直接作为入站，这个分支主要用于完整性
-            Ok(body.clone())
-        }
+        FormatTransform::GeminiToChat => gemini_compat::gemini_request_to_chat(body, model_hint),
+        FormatTransform::ResponsesToGemini => responses_request_to_gemini(body),
+        FormatTransform::GeminiToResponses => gemini_request_to_responses(body, model_hint),
     }
 }
 
@@ -93,11 +95,10 @@ pub(crate) fn transform_response_body(
             let intermediate = anthropic_compat::anthropic_response_to_responses(bytes)?;
             responses_response_to_chat(&intermediate, model_hint)
         }
-        FormatTransform::ChatToGemini => {
-            // Chat 响应格式通常不需要转换为 Gemini，这个分支主要用于完整性
-            Ok(bytes.clone())
-        }
+        FormatTransform::ChatToGemini => gemini_compat::chat_response_to_gemini(bytes, model_hint),
         FormatTransform::GeminiToChat => gemini_compat::gemini_response_to_chat(bytes, model_hint),
+        FormatTransform::ResponsesToGemini => responses_response_to_gemini(bytes, model_hint),
+        FormatTransform::GeminiToResponses => gemini_response_to_responses(bytes, model_hint),
     }
 }
 
@@ -206,6 +207,26 @@ fn responses_request_to_chat(body: &Bytes) -> Result<Bytes, String> {
     serde_json::to_vec(&Value::Object(output))
         .map(Bytes::from)
         .map_err(|err| format!("Failed to serialize request: {err}"))
+}
+
+fn responses_request_to_gemini(body: &Bytes) -> Result<Bytes, String> {
+    let intermediate = responses_request_to_chat(body)?;
+    gemini_compat::chat_request_to_gemini(&intermediate)
+}
+
+fn gemini_request_to_responses(body: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {
+    let intermediate = gemini_compat::gemini_request_to_chat(body, model_hint)?;
+    chat_request_to_responses(&intermediate)
+}
+
+fn responses_response_to_gemini(bytes: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {
+    let intermediate = responses_response_to_chat(bytes, model_hint)?;
+    gemini_compat::chat_response_to_gemini(&intermediate, model_hint)
+}
+
+fn gemini_response_to_responses(bytes: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {
+    let intermediate = gemini_compat::gemini_response_to_chat(bytes, model_hint)?;
+    chat_response_to_responses(&intermediate)
 }
 
 fn chat_messages_to_responses_input(

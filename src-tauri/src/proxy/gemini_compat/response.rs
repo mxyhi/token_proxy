@@ -5,6 +5,56 @@ use serde_json::{json, Map, Value};
 
 use super::tools::gemini_function_call_to_chat_tool_call;
 
+/// 将 OpenAI Chat 响应转换为 Gemini 格式
+pub(crate) fn chat_response_to_gemini(
+    bytes: &Bytes,
+    _model_hint: Option<&str>,
+) -> Result<Bytes, String> {
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|_| "Upstream response must be JSON.".to_string())?;
+    let Some(object) = value.as_object() else {
+        return Err("Upstream response must be a JSON object.".to_string());
+    };
+
+    let choices = object
+        .get("choices")
+        .and_then(Value::as_array)
+        .map(|arr| arr.as_slice())
+        .unwrap_or(&[]);
+
+    let mut candidates = Vec::new();
+    for (index, choice) in choices.iter().enumerate() {
+        if let Some(candidate) = chat_choice_to_gemini_candidate(choice, index) {
+            candidates.push(candidate);
+        }
+    }
+    if candidates.is_empty() {
+        candidates.push(json!({
+            "index": 0,
+            "content": { "role": "model", "parts": [] },
+            "finishReason": "STOP"
+        }));
+    }
+
+    let usage = object
+        .get("usage")
+        .and_then(Value::as_object)
+        .and_then(map_chat_usage_to_gemini_usage);
+
+    let mut output = json!({
+        "candidates": candidates
+    });
+    if let Some(usage) = usage {
+        if let Some(obj) = output.as_object_mut() {
+            obj.insert("usageMetadata".to_string(), usage);
+        }
+    }
+
+    serde_json::to_vec(&output)
+        .map(Bytes::from)
+        .map_err(|err| format!("Failed to serialize Gemini response: {err}"))
+}
+
 /// 将 Gemini 响应转换为 OpenAI Chat 格式
 pub(crate) fn gemini_response_to_chat(bytes: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {
     let value: Value =
@@ -208,4 +258,184 @@ fn gemini_usage_to_chat_usage(usage: &Map<String, Value>) -> Value {
     }
 
     result
+}
+
+fn chat_choice_to_gemini_candidate(choice: &Value, index: usize) -> Option<Value> {
+    let choice = choice.as_object()?;
+    let message = choice.get("message").and_then(Value::as_object)?;
+
+    let content_parts = message.get("content_parts").and_then(Value::as_array);
+    let content = if let Some(parts) = content_parts {
+        map_chat_content_parts_to_gemini_parts(parts)
+    } else {
+        map_chat_content_to_gemini_parts(message.get("content"))
+    };
+
+    let tool_calls = message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .map(|calls| map_chat_tool_calls_to_gemini_parts(calls))
+        .unwrap_or_default();
+
+    let mut parts = Vec::new();
+    parts.extend(content);
+    parts.extend(tool_calls);
+
+    let finish_reason = choice
+        .get("finish_reason")
+        .and_then(Value::as_str)
+        .map(chat_finish_reason_to_gemini);
+
+    let mut candidate = json!({
+        "index": index,
+        "content": { "role": "model", "parts": parts }
+    });
+    if let Some(reason) = finish_reason {
+        if let Some(obj) = candidate.as_object_mut() {
+            obj.insert("finishReason".to_string(), Value::String(reason.to_string()));
+        }
+    }
+    Some(candidate)
+}
+
+fn map_chat_content_to_gemini_parts(content: Option<&Value>) -> Vec<Value> {
+    let Some(content) = content else {
+        return Vec::new();
+    };
+    match content {
+        Value::String(text) => vec![json!({ "text": text })],
+        Value::Array(parts) => map_chat_content_parts_to_gemini_parts(parts),
+        _ => Vec::new(),
+    }
+}
+
+fn map_chat_content_parts_to_gemini_parts(parts: &[Value]) -> Vec<Value> {
+    let mut output = Vec::new();
+    for part in parts {
+        let Some(part) = part.as_object() else {
+            continue;
+        };
+        let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
+        match part_type {
+            "text" | "input_text" | "output_text" => {
+                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                    output.push(json!({ "text": text }));
+                }
+            }
+            "image_url" => {
+                if let Some(url) = extract_image_url(part.get("image_url")) {
+                    output.push(url);
+                }
+            }
+            "input_image" | "output_image" => {
+                if let Some(url) = extract_image_url(part.get("image_url")) {
+                    output.push(url);
+                }
+            }
+            _ => {}
+        }
+    }
+    output
+}
+
+fn extract_image_url(value: Option<&Value>) -> Option<Value> {
+    let url = match value {
+        Some(Value::String(url)) => Some(url.as_str()),
+        Some(Value::Object(obj)) => obj.get("url").and_then(Value::as_str),
+        _ => None,
+    }?;
+    if let Some(rest) = url.strip_prefix("data:") {
+        if let Some((mime_type, data)) = rest.split_once(";base64,") {
+            return Some(json!({ "inlineData": { "mimeType": mime_type, "data": data } }));
+        }
+    }
+    Some(json!({ "fileData": { "fileUri": url } }))
+}
+
+fn map_chat_tool_calls_to_gemini_parts(tool_calls: &[Value]) -> Vec<Value> {
+    let mut output = Vec::new();
+    for call in tool_calls {
+        let Some(call) = call.as_object() else {
+            continue;
+        };
+        let function = call.get("function").and_then(Value::as_object);
+        let name = function
+            .and_then(|function| function.get("name"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let arguments = function
+            .and_then(|function| function.get("arguments"))
+            .and_then(Value::as_str)
+            .unwrap_or("{}");
+        if name.is_empty() {
+            continue;
+        }
+        let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+        output.push(json!({
+            "functionCall": {
+                "name": name,
+                "args": args
+            }
+        }));
+    }
+    output
+}
+
+fn map_chat_usage_to_gemini_usage(usage: &Map<String, Value>) -> Option<Value> {
+    let prompt_tokens = usage.get("prompt_tokens").and_then(Value::as_u64);
+    let completion_tokens = usage.get("completion_tokens").and_then(Value::as_u64);
+    let total_tokens = usage.get("total_tokens").and_then(Value::as_u64);
+    if prompt_tokens.is_none() && completion_tokens.is_none() && total_tokens.is_none() {
+        return None;
+    }
+    Some(json!({
+        "promptTokenCount": prompt_tokens.unwrap_or(0),
+        "candidatesTokenCount": completion_tokens.unwrap_or(0),
+        "totalTokenCount": total_tokens.unwrap_or_else(|| prompt_tokens.unwrap_or(0) + completion_tokens.unwrap_or(0))
+    }))
+}
+
+fn chat_finish_reason_to_gemini(reason: &str) -> &'static str {
+    match reason {
+        "stop" => "STOP",
+        "length" => "MAX_TOKENS",
+        "content_filter" => "SAFETY",
+        _ => "STOP",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chat_response_to_gemini_maps_tool_calls_and_text() {
+        let input = json!({
+            "id": "chatcmpl_x",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "hello",
+                    "tool_calls": [{
+                        "id": "call_1",
+                        "type": "function",
+                        "function": { "name": "getFoo", "arguments": "{\"a\":1}" }
+                    }]
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3 }
+        });
+
+        let output = chat_response_to_gemini(&Bytes::from(serde_json::to_vec(&input).unwrap()), None)
+            .expect("convert");
+        let value: Value = serde_json::from_slice(&output).expect("json");
+        assert_eq!(value["candidates"][0]["content"]["parts"][0]["text"], json!("hello"));
+        assert_eq!(
+            value["candidates"][0]["content"]["parts"][1]["functionCall"]["name"],
+            json!("getFoo")
+        );
+        assert_eq!(value["usageMetadata"]["totalTokenCount"], json!(3));
+    }
 }

@@ -324,6 +324,7 @@ fn is_sensitive_header(name: &str) -> bool {
 pub(crate) async fn maybe_transform_request_body(
     http_clients: &ProxyHttpClients,
     transform: FormatTransform,
+    model_hint: Option<&str>,
     body: ReplayableBody,
 ) -> Result<ReplayableBody, RequestError> {
     if transform == FormatTransform::None {
@@ -346,7 +347,7 @@ pub(crate) async fn maybe_transform_request_body(
         ));
     };
 
-    let outbound_bytes = transform_request_body(transform, &bytes, http_clients)
+    let outbound_bytes = transform_request_body(transform, &bytes, http_clients, model_hint)
         .await
         .map_err(|message| RequestError::new(StatusCode::BAD_REQUEST, message))?;
     Ok(ReplayableBody::from_bytes(outbound_bytes))

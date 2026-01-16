@@ -3,7 +3,10 @@
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 
-use super::tools::{map_chat_tool_choice_to_gemini, map_chat_tools_to_gemini};
+use super::tools::{
+    map_chat_tool_choice_to_gemini, map_chat_tools_to_gemini, map_gemini_tool_config_to_chat,
+    map_gemini_tools_to_chat, gemini_function_call_to_chat_tool_call,
+};
 
 /// 将 OpenAI Chat 请求转换为 Gemini 格式
 pub(crate) fn chat_request_to_gemini(body: &Bytes) -> Result<Bytes, String> {
@@ -121,6 +124,53 @@ pub(crate) fn chat_request_to_gemini(body: &Bytes) -> Result<Bytes, String> {
         .map_err(|err| format!("Failed to serialize Gemini request: {err}"))
 }
 
+/// 将 Gemini 请求转换为 OpenAI Chat 格式
+pub(crate) fn gemini_request_to_chat(
+    body: &Bytes,
+    model_hint: Option<&str>,
+) -> Result<Bytes, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|_| "Request body must be JSON.".to_string())?;
+    let Some(object) = value.as_object() else {
+        return Err("Request body must be a JSON object.".to_string());
+    };
+
+    let Some(contents) = object.get("contents").and_then(Value::as_array) else {
+        return Err("Gemini request must include contents.".to_string());
+    };
+
+    let mut messages = gemini_contents_to_chat_messages(contents)?;
+    if let Some(system) = extract_system_instruction(object.get("systemInstruction")) {
+        messages.insert(0, json!({ "role": "system", "content": system }));
+    }
+
+    let mut out = Map::new();
+    if let Some(model) = object.get("model").and_then(Value::as_str).or(model_hint) {
+        out.insert("model".to_string(), Value::String(model.to_string()));
+    }
+    out.insert("messages".to_string(), Value::Array(messages));
+
+    if let Some(gen_config) = object.get("generationConfig").and_then(Value::as_object) {
+        map_generation_config_to_chat(gen_config, &mut out);
+    }
+
+    if let Some(tools) = object.get("tools") {
+        let tools = map_gemini_tools_to_chat(tools);
+        if tools.as_array().is_some_and(|arr| !arr.is_empty()) {
+            out.insert("tools".to_string(), tools);
+        }
+    }
+    if let Some(tool_config) = object.get("toolConfig") {
+        if let Some(tool_choice) = map_gemini_tool_config_to_chat(tool_config) {
+            out.insert("tool_choice".to_string(), tool_choice);
+        }
+    }
+
+    serde_json::to_vec(&Value::Object(out))
+        .map(Bytes::from)
+        .map_err(|err| format!("Failed to serialize Chat request: {err}"))
+}
+
 /// 将 Chat messages 转换为 Gemini contents，并提取系统指令
 fn chat_messages_to_gemini_contents(
     messages: &[Value],
@@ -204,6 +254,225 @@ fn chat_messages_to_gemini_contents(
     };
 
     Ok((contents, system_instruction))
+}
+
+fn gemini_contents_to_chat_messages(contents: &[Value]) -> Result<Vec<Value>, String> {
+    let mut messages = Vec::new();
+    for content in contents {
+        let Some(content) = content.as_object() else {
+            continue;
+        };
+        let mut converted = gemini_content_to_chat_messages(content)?;
+        messages.append(&mut converted);
+    }
+    Ok(messages)
+}
+
+fn gemini_content_to_chat_messages(content: &serde_json::Map<String, Value>) -> Result<Vec<Value>, String> {
+    let role = content.get("role").and_then(Value::as_str).unwrap_or("user");
+    let role = if role == "model" { "assistant" } else { role };
+    let parts = content
+        .get("parts")
+        .and_then(Value::as_array)
+        .map(|value| value.as_slice())
+        .unwrap_or(&[]);
+
+    let mut messages = Vec::new();
+    let mut content_parts: Vec<Value> = Vec::new();
+    let mut tool_calls: Vec<Value> = Vec::new();
+
+    for part in parts {
+        let Some(part) = part.as_object() else {
+            continue;
+        };
+        if let Some(tool_message) = function_response_to_chat_message(part) {
+            if !content_parts.is_empty() || !tool_calls.is_empty() {
+                messages.push(build_chat_message(role, &content_parts, &tool_calls));
+                content_parts.clear();
+                tool_calls.clear();
+            }
+            messages.push(tool_message);
+            continue;
+        }
+        if let Some(function_call) = part.get("functionCall").and_then(Value::as_object) {
+            let tool_call =
+                gemini_function_call_to_chat_tool_call(function_call, tool_calls.len());
+            tool_calls.push(tool_call);
+            continue;
+        }
+        if let Some(content_part) = gemini_part_to_chat_content_part(part) {
+            content_parts.push(content_part);
+        }
+    }
+
+    if !content_parts.is_empty() || !tool_calls.is_empty() {
+        messages.push(build_chat_message(role, &content_parts, &tool_calls));
+    }
+
+    Ok(messages)
+}
+
+fn build_chat_message(role: &str, content_parts: &[Value], tool_calls: &[Value]) -> Value {
+    let content = build_chat_content(content_parts);
+    let mut message = json!({ "role": role, "content": content });
+    if !tool_calls.is_empty() {
+        if let Some(message) = message.as_object_mut() {
+            message.insert("tool_calls".to_string(), Value::Array(tool_calls.to_vec()));
+        }
+    }
+    message
+}
+
+fn build_chat_content(parts: &[Value]) -> Value {
+    if parts.is_empty() {
+        return Value::String(String::new());
+    }
+    let mut combined = String::new();
+    let mut text_only = true;
+    for part in parts {
+        let Some(part) = part.as_object() else {
+            continue;
+        };
+        if part.get("type").and_then(Value::as_str) != Some("text") {
+            text_only = false;
+        }
+        if let Some(text) = part.get("text").and_then(Value::as_str) {
+            combined.push_str(text);
+        }
+    }
+    if text_only {
+        Value::String(combined)
+    } else {
+        Value::Array(parts.to_vec())
+    }
+}
+
+fn gemini_part_to_chat_content_part(part: &serde_json::Map<String, Value>) -> Option<Value> {
+    if let Some(text) = part.get("text").and_then(Value::as_str) {
+        return Some(json!({ "type": "text", "text": text }));
+    }
+    if let Some(inline) = part.get("inlineData").and_then(Value::as_object) {
+        return gemini_inline_data_to_image_url(inline);
+    }
+    if let Some(file_data) = part.get("fileData").and_then(Value::as_object) {
+        return gemini_file_data_to_image_url(file_data);
+    }
+    None
+}
+
+fn gemini_inline_data_to_image_url(data: &serde_json::Map<String, Value>) -> Option<Value> {
+    let mime = data
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream");
+    let payload = data.get("data").and_then(Value::as_str)?;
+    let url = format!("data:{mime};base64,{payload}");
+    Some(json!({ "type": "image_url", "image_url": { "url": url } }))
+}
+
+fn gemini_file_data_to_image_url(data: &serde_json::Map<String, Value>) -> Option<Value> {
+    let uri = data.get("fileUri").and_then(Value::as_str)?;
+    Some(json!({ "type": "image_url", "image_url": { "url": uri } }))
+}
+
+fn function_response_to_chat_message(part: &serde_json::Map<String, Value>) -> Option<Value> {
+    let response = part.get("functionResponse")?.as_object()?;
+    let name = response.get("name").and_then(Value::as_str).unwrap_or("");
+    let payload = response.get("response").cloned().unwrap_or_else(|| json!({}));
+    let content = match payload {
+        Value::String(text) => text,
+        other => serde_json::to_string(&other).unwrap_or_else(|_| "{}".to_string()),
+    };
+    let mut message = json!({ "role": "tool", "content": content });
+    if !name.is_empty() {
+        if let Some(message) = message.as_object_mut() {
+            message.insert("name".to_string(), Value::String(name.to_string()));
+        }
+    }
+    Some(message)
+}
+
+fn extract_system_instruction(value: Option<&Value>) -> Option<String> {
+    let Some(value) = value else {
+        return None;
+    };
+    let parts = value.get("parts").and_then(Value::as_array)?;
+    let mut texts = Vec::new();
+    for part in parts {
+        let Some(text) = part.get("text").and_then(Value::as_str) else {
+            continue;
+        };
+        if !text.trim().is_empty() {
+            texts.push(text.to_string());
+        }
+    }
+    if texts.is_empty() {
+        None
+    } else {
+        Some(texts.join("\n"))
+    }
+}
+
+fn map_generation_config_to_chat(
+    gen_config: &serde_json::Map<String, Value>,
+    out: &mut Map<String, Value>,
+) {
+    if let Some(temperature) = gen_config.get("temperature").and_then(Value::as_f64) {
+        out.insert("temperature".to_string(), json!(temperature));
+    }
+    if let Some(top_p) = gen_config.get("topP").and_then(Value::as_f64) {
+        out.insert("top_p".to_string(), json!(top_p));
+    }
+    if let Some(max_tokens) = gen_config.get("maxOutputTokens").and_then(Value::as_i64) {
+        out.insert(
+            "max_completion_tokens".to_string(),
+            Value::Number(max_tokens.into()),
+        );
+    }
+    if let Some(stop) = map_stop_sequences(gen_config.get("stopSequences")) {
+        out.insert("stop".to_string(), stop);
+    }
+    if let Some(seed) = gen_config.get("seed").and_then(Value::as_i64) {
+        out.insert("seed".to_string(), json!(seed));
+    }
+    if let Some(response_format) = map_gemini_response_format(gen_config) {
+        out.insert("response_format".to_string(), response_format);
+    }
+}
+
+fn map_stop_sequences(value: Option<&Value>) -> Option<Value> {
+    let Some(sequences) = value.and_then(Value::as_array) else {
+        return None;
+    };
+    let items = sequences
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|item| Value::String(item.to_string()))
+        .collect::<Vec<_>>();
+    if items.is_empty() {
+        None
+    } else if items.len() == 1 {
+        items.first().cloned()
+    } else {
+        Some(Value::Array(items))
+    }
+}
+
+fn map_gemini_response_format(gen_config: &serde_json::Map<String, Value>) -> Option<Value> {
+    if let Some(schema) = gen_config.get("responseSchema") {
+        return Some(json!({
+            "type": "json_schema",
+            "json_schema": { "schema": schema.clone() }
+        }));
+    }
+    let mime = gen_config
+        .get("responseMimeType")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if mime.contains("json") {
+        return Some(json!({ "type": "json_object" }));
+    }
+    None
 }
 
 /// 从 content 中提取纯文本
@@ -335,5 +604,64 @@ fn parse_tool_response_content(content: Option<&Value>) -> Value {
             serde_json::from_str(s).unwrap_or_else(|_| json!({ "result": s }))
         }
         other => other.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn gemini_request_to_chat_maps_system_tools_and_format() {
+        let input = json!({
+            "systemInstruction": { "parts": [{ "text": "sys" }] },
+            "contents": [
+                { "role": "user", "parts": [{ "text": "hi" }] }
+            ],
+            "generationConfig": {
+                "temperature": 0.2,
+                "topP": 0.8,
+                "maxOutputTokens": 12,
+                "responseMimeType": "application/json"
+            },
+            "tools": [{
+                "functionDeclarations": [
+                    { "name": "getFoo", "description": "x", "parameters": { "type": "object" } }
+                ]
+            }],
+            "toolConfig": { "functionCallingConfig": { "mode": "ANY", "allowedFunctionNames": ["getFoo"] } }
+        });
+
+        let output = gemini_request_to_chat(&Bytes::from(serde_json::to_vec(&input).unwrap()), Some("gemini-1.5-flash"))
+            .expect("convert");
+        let value: Value = serde_json::from_slice(&output).expect("json");
+        assert_eq!(value["model"], json!("gemini-1.5-flash"));
+        assert_eq!(value["messages"][0]["role"], json!("system"));
+        assert_eq!(value["messages"][1]["role"], json!("user"));
+        assert_eq!(value["messages"][1]["content"], json!("hi"));
+        assert_eq!(value["tools"][0]["function"]["name"], json!("getFoo"));
+        assert_eq!(value["tool_choice"]["function"]["name"], json!("getFoo"));
+        assert_eq!(value["response_format"]["type"], json!("json_object"));
+        assert_eq!(value["max_completion_tokens"], json!(12));
+    }
+
+    #[test]
+    fn gemini_request_to_chat_maps_function_response() {
+        let input = json!({
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        { "functionResponse": { "name": "getFoo", "response": { "ok": true } } }
+                    ]
+                }
+            ]
+        });
+        let output = gemini_request_to_chat(&Bytes::from(serde_json::to_vec(&input).unwrap()), None)
+            .expect("convert");
+        let value: Value = serde_json::from_slice(&output).expect("json");
+        assert_eq!(value["messages"][0]["role"], json!("tool"));
+        assert_eq!(value["messages"][0]["name"], json!("getFoo"));
     }
 }

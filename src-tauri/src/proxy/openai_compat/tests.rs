@@ -36,7 +36,7 @@ fn chat_request_to_responses_maps_common_fields() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients)
+        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients, None)
             .await
             .expect("transform")
     });
@@ -88,7 +88,7 @@ fn responses_request_to_chat_maps_tools_and_tool_choice() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients)
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
             .await
             .expect("transform")
     });
@@ -128,7 +128,7 @@ fn chat_request_to_responses_maps_tools_and_tool_choice() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients)
+        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients, None)
             .await
             .expect("transform")
     });
@@ -154,7 +154,7 @@ fn responses_request_to_chat_instructions_becomes_system_message() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients)
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
             .await
             .expect("transform")
     });
@@ -182,7 +182,7 @@ fn responses_request_to_chat_accepts_message_array_input() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients)
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
             .await
             .expect("transform")
     });
@@ -209,7 +209,7 @@ fn responses_request_to_chat_converts_input_text_content_parts_to_string() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients)
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
             .await
             .expect("transform")
     });
@@ -335,7 +335,7 @@ fn responses_request_to_chat_converts_function_call_output_to_tool_message() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients)
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
             .await
             .expect("transform")
     });
@@ -397,7 +397,7 @@ fn chat_request_to_responses_rejects_missing_messages() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = bytes_from_json(json!({ "model": "gpt-4.1" }));
     let err = run_async(async {
-        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients)
+        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients, None)
             .await
             .expect_err("should fail")
     });
@@ -409,7 +409,7 @@ fn transform_request_body_rejects_non_json() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = Bytes::from_static(b"not-json");
     let err = run_async(async {
-        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients)
+        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients, None)
             .await
             .expect_err("should fail")
     });

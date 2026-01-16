@@ -90,12 +90,23 @@ fn responses_fallback_to_anthropic_requires_format_conversion_enabled() {
 }
 
 #[test]
-fn gemini_route_requires_gemini_provider() {
+fn gemini_route_requires_format_conversion_for_fallback() {
     let config = config_with_providers(&[PROVIDER_CHAT], false);
     let error = resolve_dispatch_plan(&config, "/v1beta/models/gemini-1.5-flash:generateContent")
         .err()
         .expect("should reject");
-    assert_eq!(error, "No available upstream configured.");
+    assert!(error.contains("format conversion is disabled"));
+}
+
+#[test]
+fn gemini_route_fallbacks_to_chat() {
+    let config = config_with_providers(&[PROVIDER_CHAT], true);
+    let plan = resolve_dispatch_plan(&config, "/v1beta/models/gemini-1.5-flash:generateContent")
+        .expect("should fallback");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+    assert_eq!(plan.outbound_path, Some(CHAT_PATH));
+    assert_eq!(plan.request_transform, FormatTransform::GeminiToChat);
+    assert_eq!(plan.response_transform, FormatTransform::ChatToGemini);
 }
 
 #[test]

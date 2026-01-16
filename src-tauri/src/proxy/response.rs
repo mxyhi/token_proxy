@@ -278,14 +278,39 @@ async fn build_stream_response(
                 .boxed()
         }
         FormatTransform::ChatToGemini => {
-            // Chat -> Gemini 的响应转换：Gemini 上游返回的是 Gemini 格式，需要转为 Chat 格式
-            // 注意：这里实际上应该是 GeminiToChat，因为我们需要把 Gemini 响应转为 Chat
-            gemini_compat::stream_gemini_to_chat(
+            gemini_compat::stream_chat_to_gemini(
                 upstream_res.bytes_stream(),
                 context,
                 log,
                 request_tracker,
             )
+                .boxed()
+        }
+        FormatTransform::ResponsesToGemini => {
+            // Two-stage conversion: Responses stream -> Chat stream -> Gemini stream.
+            let intermediate_log = Arc::new(LogWriter::new(None));
+            let intermediate_tracker = RequestTokenTracker::disabled();
+            let chat_stream = responses_to_chat::stream_responses_to_chat(
+                upstream_res.bytes_stream(),
+                context.clone(),
+                intermediate_log,
+                intermediate_tracker,
+            )
+            .boxed();
+            gemini_compat::stream_chat_to_gemini(chat_stream, context, log, request_tracker).boxed()
+        }
+        FormatTransform::GeminiToResponses => {
+            // Two-stage conversion: Gemini stream -> Chat stream -> Responses stream.
+            let intermediate_log = Arc::new(LogWriter::new(None));
+            let intermediate_tracker = RequestTokenTracker::disabled();
+            let chat_stream = gemini_compat::stream_gemini_to_chat(
+                upstream_res.bytes_stream(),
+                context.clone(),
+                intermediate_log,
+                intermediate_tracker,
+            )
+            .boxed();
+            chat_to_responses::stream_chat_to_responses(chat_stream, context, log, request_tracker)
                 .boxed()
         }
     };

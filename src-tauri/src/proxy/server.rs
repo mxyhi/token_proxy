@@ -73,6 +73,8 @@ const ERROR_RESPONSES_CONVERSION_DISABLED: &str =
     "API format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai-response\" for /v1/responses or enable conversion.";
 const ERROR_ANTHROPIC_CONVERSION_DISABLED: &str =
     "API format conversion is disabled (enable_api_format_conversion=false). Configure provider \"anthropic\" for /v1/messages or enable conversion.";
+const ERROR_GEMINI_CONVERSION_DISABLED: &str =
+    "API format conversion is disabled (enable_api_format_conversion=false). Configure provider \"gemini\" for Gemini paths or enable conversion.";
 
 fn base_plan(provider: &'static str) -> DispatchPlan {
     DispatchPlan {
@@ -109,14 +111,35 @@ fn choose_provider_by_priority(
     selected.map(|(provider, _)| provider)
 }
 
-fn resolve_gemini_plan(has_gemini: bool, path: &str) -> Option<Result<DispatchPlan, String>> {
+fn resolve_gemini_plan(config: &ProxyConfig, path: &str) -> Option<Result<DispatchPlan, String>> {
     if !gemini::is_gemini_path(path) {
         return None;
     }
-    if has_gemini {
+    if config.provider_upstreams(PROVIDER_GEMINI).is_some() {
         return Some(Ok(base_plan(PROVIDER_GEMINI)));
     }
-    Some(Err(ERROR_NO_UPSTREAM.to_string()))
+    let fallback = choose_provider_by_priority(config, &[PROVIDER_RESPONSES, PROVIDER_CHAT]);
+    let Some(fallback) = fallback else {
+        return Some(Err(ERROR_NO_UPSTREAM.to_string()));
+    };
+    if !config.enable_api_format_conversion {
+        return Some(Err(ERROR_GEMINI_CONVERSION_DISABLED.to_string()));
+    }
+    Some(Ok(match fallback {
+        PROVIDER_RESPONSES => DispatchPlan {
+            provider: PROVIDER_RESPONSES,
+            outbound_path: Some(RESPONSES_PATH),
+            request_transform: FormatTransform::GeminiToResponses,
+            response_transform: FormatTransform::ResponsesToGemini,
+        },
+        PROVIDER_CHAT => DispatchPlan {
+            provider: PROVIDER_CHAT,
+            outbound_path: Some(CHAT_PATH),
+            request_transform: FormatTransform::GeminiToChat,
+            response_transform: FormatTransform::ChatToGemini,
+        },
+        _ => base_plan(PROVIDER_RESPONSES),
+    }))
 }
 
 fn resolve_anthropic_plan(
@@ -212,7 +235,10 @@ fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> 
         return Ok(base_plan(PROVIDER_RESPONSES));
     }
 
-    let fallback = choose_provider_by_priority(config, &[PROVIDER_CHAT, PROVIDER_ANTHROPIC])
+    let fallback = choose_provider_by_priority(
+        config,
+        &[PROVIDER_CHAT, PROVIDER_ANTHROPIC, PROVIDER_GEMINI],
+    )
         .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
     if !config.enable_api_format_conversion {
         return Err(ERROR_RESPONSES_CONVERSION_DISABLED.to_string());
@@ -231,14 +257,18 @@ fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> 
             request_transform: FormatTransform::ResponsesToAnthropic,
             response_transform: FormatTransform::AnthropicToResponses,
         },
+        PROVIDER_GEMINI => DispatchPlan {
+            provider: PROVIDER_GEMINI,
+            outbound_path: None,
+            request_transform: FormatTransform::ResponsesToGemini,
+            response_transform: FormatTransform::GeminiToResponses,
+        },
         _ => base_plan(PROVIDER_CHAT),
     })
 }
 
 fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPlan, String> {
-    let has_gemini = config.provider_upstreams(PROVIDER_GEMINI).is_some();
-
-    if let Some(plan) = resolve_gemini_plan(has_gemini, path) {
+    if let Some(plan) = resolve_gemini_plan(config, path) {
         return plan;
     }
     if let Some(plan) = resolve_anthropic_plan(config, path) {
@@ -419,7 +449,14 @@ async fn build_outbound_body_or_respond(
     body: ReplayableBody,
     request_start: Instant,
 ) -> Result<ReplayableBody, Response> {
-    let body = match maybe_transform_request_body(http_clients, plan.request_transform, body).await {
+    let body = match maybe_transform_request_body(
+        http_clients,
+        plan.request_transform,
+        meta.original_model.as_deref(),
+        body,
+    )
+    .await
+    {
         Ok(body) => body,
         Err(err) => {
             log_request_error(

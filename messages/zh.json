@@ -50,7 +50,7 @@
   "proxy_core_app_proxy_url_label": "应用代理 URL",
   "proxy_core_app_proxy_url_help": "用于应用使用与上游代理复用。支持 http(s)://、socks5://、socks5h://。上游可填写 {placeholder} 引用应用代理；留空不使用代理。",
   "proxy_core_format_conversion_title": "格式转换",
-  "proxy_core_format_conversion_desc": "当首选提供商缺失时，在 {chat}/{messages} 与 {responses} 之间进行转换。",
+  "proxy_core_format_conversion_desc": "当首选提供商缺失时，在 {chat}/{messages} 与 {responses} 之间进行转换，并支持 Gemini ↔ OpenAI。",
   "proxy_core_format_conversion_aria": "启用格式转换",
   "proxy_core_format_conversion_default_disabled": "默认：关闭。",
   "proxy_core_tray_token_rate_title": "状态栏实时 Token",

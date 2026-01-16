@@ -61,6 +61,91 @@ pub(super) fn map_chat_tool_choice_to_gemini(tool_choice: &Value) -> Option<Valu
     }
 }
 
+/// 将 Gemini 格式的 tools 转换为 OpenAI Chat 格式的 tools
+pub(super) fn map_gemini_tools_to_chat(value: &Value) -> Value {
+    let Some(groups) = value.as_array() else {
+        return json!([]);
+    };
+
+    let mut tools = Vec::new();
+    for group in groups {
+        let Some(group) = group.as_object() else {
+            continue;
+        };
+        let Some(declarations) = group.get("functionDeclarations").and_then(Value::as_array) else {
+            continue;
+        };
+        for declaration in declarations {
+            let Some(declaration) = declaration.as_object() else {
+                continue;
+            };
+            let name = declaration.get("name").and_then(Value::as_str).unwrap_or("");
+            if name.is_empty() {
+                continue;
+            }
+            let description = declaration
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let parameters = declaration
+                .get("parameters")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
+            tools.push(json!({
+                "type": "function",
+                "function": {
+                    "name": name,
+                    "description": description,
+                    "parameters": parameters
+                }
+            }));
+        }
+    }
+
+    Value::Array(tools)
+}
+
+/// 将 Gemini 格式的 toolConfig 转换为 OpenAI Chat 格式的 tool_choice
+pub(super) fn map_gemini_tool_config_to_chat(value: &Value) -> Option<Value> {
+    let Some(tool_config) = value.as_object() else {
+        return None;
+    };
+    let Some(config) = tool_config
+        .get("functionCallingConfig")
+        .and_then(Value::as_object)
+    else {
+        return None;
+    };
+
+    let mode = config.get("mode").and_then(Value::as_str).unwrap_or("");
+    match mode {
+        "NONE" => Some(Value::String("none".to_string())),
+        "AUTO" => Some(Value::String("auto".to_string())),
+        "ANY" => {
+            let allowed = config
+                .get("allowedFunctionNames")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            if allowed.len() == 1 {
+                let name = allowed
+                    .first()
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string();
+                if !name.is_empty() {
+                    return Some(json!({
+                        "type": "function",
+                        "function": { "name": name }
+                    }));
+                }
+            }
+            Some(Value::String("required".to_string()))
+        }
+        _ => None,
+    }
+}
+
 /// 将 Gemini 格式的 functionCall 转换为 OpenAI Chat 格式的 tool_call
 pub(super) fn gemini_function_call_to_chat_tool_call(
     function_call: &serde_json::Map<String, Value>,

@@ -2,6 +2,8 @@ use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::proxy::compat_reason;
+
 fn now_s() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -75,13 +77,12 @@ pub(super) fn responses_response_to_anthropic(
     if !combined_text.trim().is_empty() || tool_uses.is_empty() {
         content.push(json!({ "type": "text", "text": combined_text }));
     }
+    let has_tool_uses = !tool_uses.is_empty();
     content.extend(tool_uses);
 
-    let stop_reason = if content.iter().any(|v| v.get("type").and_then(Value::as_str) == Some("tool_use")) {
-        "tool_use"
-    } else {
-        "end_turn"
-    };
+    let finish_reason =
+        compat_reason::chat_finish_reason_from_response_object(object, has_tool_uses);
+    let stop_reason = compat_reason::anthropic_stop_reason_from_chat_finish_reason(finish_reason);
 
     let out = json!({
         "id": id,

@@ -238,8 +238,11 @@ fn stream_responses_to_chat_emits_content_parts_for_non_text() {
         assert_eq!(text_delta["choices"][0]["delta"]["content"], json!("Hello"));
 
         let parts_delta = parse_sse_json(&chunks[2]).expect("json");
-        assert_eq!(parts_delta["choices"][0]["delta"]["content_parts"][0]["type"], json!("output_text"));
-        assert_eq!(parts_delta["choices"][0]["delta"]["content_parts"][1]["type"], json!("output_image"));
+        assert_eq!(parts_delta["choices"][0]["delta"]["content"][0]["type"], json!("image_url"));
+        assert_eq!(
+            parts_delta["choices"][0]["delta"]["content"][0]["image_url"]["url"],
+            json!("https://example.com/a.png")
+        );
 
         let done = parse_sse_json(&chunks[3]).expect("json");
         assert_eq!(done["choices"][0]["finish_reason"], json!("stop"));

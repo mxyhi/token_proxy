@@ -6,6 +6,7 @@ use std::{
     sync::Arc,
 };
 
+use super::super::compat_reason;
 use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
@@ -58,6 +59,7 @@ struct ResponsesToAnthropicState<S> {
     next_block_index: usize,
     tool_uses: HashMap<String, ToolUseState>,
     saw_tool_use: bool,
+    stop_reason_override: Option<&'static str>,
 }
 
 impl<S, E> ResponsesToAnthropicState<S>
@@ -94,6 +96,7 @@ where
             next_block_index: 0,
             tool_uses: HashMap::new(),
             saw_tool_use: false,
+            stop_reason_override: None,
         }
     }
 
@@ -183,6 +186,10 @@ where
         }
         if event_type.ends_with("response.completed") {
             self.handle_response_completed(&value);
+            return;
+        }
+        if event_type.ends_with("response.incomplete") {
+            self.handle_response_incomplete(&value);
             return;
         }
     }
@@ -281,6 +288,23 @@ where
         let Some(response) = value.get("response").and_then(Value::as_object) else {
             return;
         };
+        self.handle_response_output_items(response);
+        self.stop_reason_override = Some(compat_reason::anthropic_stop_reason_from_chat_finish_reason(
+            compat_reason::chat_finish_reason_from_response_object(response, self.saw_tool_use),
+        ));
+    }
+
+    fn handle_response_incomplete(&mut self, value: &Value) {
+        let Some(response) = value.get("response").and_then(Value::as_object) else {
+            return;
+        };
+        self.handle_response_output_items(response);
+        self.stop_reason_override = Some(compat_reason::anthropic_stop_reason_from_chat_finish_reason(
+            compat_reason::chat_finish_reason_from_response_object(response, self.saw_tool_use),
+        ));
+    }
+
+    fn handle_response_output_items(&mut self, response: &Map<String, Value>) {
         let Some(output) = response.get("output").and_then(Value::as_array) else {
             return;
         };
@@ -486,11 +510,13 @@ where
         self.ensure_message_start();
         self.stop_active_block();
 
-        let stop_reason = if self.saw_tool_use {
-            "tool_use"
-        } else {
-            "end_turn"
-        };
+        let stop_reason = self.stop_reason_override.unwrap_or_else(|| {
+            if self.saw_tool_use {
+                "tool_use"
+            } else {
+                "end_turn"
+            }
+        });
         let usage = self.collector.finish();
         let (input_tokens, output_tokens) = usage
             .usage

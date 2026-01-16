@@ -241,6 +241,51 @@ fn responses_request_to_chat_converts_input_text_content_parts_to_string() {
 }
 
 #[test]
+fn chat_request_to_responses_maps_response_format() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let input = bytes_from_json(json!({
+        "model": "gpt-4.1",
+        "messages": [{ "role": "user", "content": "hi" }],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "example",
+                "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
+            }
+        }
+    }));
+
+    let output = run_async(async {
+        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients, None)
+            .await
+            .expect("transform")
+    });
+    let value = json_from_bytes(output);
+
+    assert_eq!(value["text"]["format"]["type"], json!("json_schema"));
+    assert_eq!(value["text"]["format"]["json_schema"]["name"], json!("example"));
+}
+
+#[test]
+fn responses_request_to_chat_maps_text_format_to_response_format() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let input = bytes_from_json(json!({
+        "model": "gpt-4.1",
+        "input": "hi",
+        "text": { "format": { "type": "json_object" } }
+    }));
+
+    let output = run_async(async {
+        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
+            .await
+            .expect("transform")
+    });
+    let value = json_from_bytes(output);
+
+    assert_eq!(value["response_format"]["type"], json!("json_object"));
+}
+
+#[test]
 fn responses_response_to_chat_extracts_output_text_and_maps_usage() {
     let input = bytes_from_json(json!({
         "id": "resp_123",
@@ -275,7 +320,7 @@ fn responses_response_to_chat_extracts_output_text_and_maps_usage() {
 }
 
 #[test]
-fn responses_response_to_chat_includes_tool_calls_and_content_parts() {
+fn responses_response_to_chat_includes_tool_calls_and_multimodal_content() {
     let input = bytes_from_json(json!({
         "id": "resp_456",
         "created_at": 1700000001,
@@ -304,12 +349,16 @@ fn responses_response_to_chat_includes_tool_calls_and_content_parts() {
 
     let message = &value["choices"][0]["message"];
     assert_eq!(message["role"], json!("assistant"));
-    assert_eq!(message["content"], json!("Hello"));
+    assert_eq!(message["content"][0]["type"], json!("text"));
+    assert_eq!(message["content"][0]["text"], json!("Hello"));
+    assert_eq!(message["content"][1]["type"], json!("image_url"));
+    assert_eq!(
+        message["content"][1]["image_url"]["url"],
+        json!("https://example.com/a.png")
+    );
     assert_eq!(message["tool_calls"][0]["id"], json!("call_foo"));
     assert_eq!(message["tool_calls"][0]["function"]["name"], json!("doThing"));
     assert_eq!(message["tool_calls"][0]["function"]["arguments"], json!("{\"a\":1}"));
-    assert_eq!(message["content_parts"][0]["type"], json!("output_text"));
-    assert_eq!(message["content_parts"][1]["type"], json!("output_image"));
     assert_eq!(value["choices"][0]["finish_reason"], json!("tool_calls"));
 }
 
@@ -339,6 +388,25 @@ fn chat_response_to_responses_extracts_choice_text_and_maps_usage() {
     assert_eq!(value["usage"]["input_tokens"], json!(1));
     assert_eq!(value["usage"]["output_tokens"], json!(2));
     assert_eq!(value["usage"]["total_tokens"], json!(3));
+}
+
+#[test]
+fn chat_response_to_responses_maps_finish_reason_to_incomplete_details() {
+    let input = bytes_from_json(json!({
+        "id": "chatcmpl_456",
+        "created": 1700000002,
+        "model": "gpt-4.1",
+        "choices": [
+            { "index": 0, "message": { "role": "assistant", "content": "Hello" }, "finish_reason": "length" }
+        ],
+        "usage": { "prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3 }
+    }));
+
+    let output = transform_response_body(FormatTransform::ChatToResponses, &input, None).expect("transform");
+    let value = json_from_bytes(output);
+
+    assert_eq!(value["status"], json!("incomplete"));
+    assert_eq!(value["incomplete_details"]["reason"], json!("max_tokens"));
 }
 
 #[test]

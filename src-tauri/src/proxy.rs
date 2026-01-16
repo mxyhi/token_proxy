@@ -10,6 +10,8 @@ mod http;
 mod log;
 mod model;
 mod anthropic_compat;
+mod compat_content;
+mod compat_reason;
 mod openai_compat;
 mod request_body;
 mod response;

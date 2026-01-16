@@ -6,6 +6,8 @@ use std::{
     sync::Arc,
 };
 
+use super::super::compat_content;
+use super::super::compat_reason;
 use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
@@ -44,8 +46,10 @@ struct ResponsesToChatState<S> {
     upstream_ended: bool,
     tool_calls: Vec<ToolCallState>,
     tool_calls_by_item_id: HashMap<String, usize>,
-    // 非文本输出只透传一次，避免重复注入 content_parts。
+    // 非文本输出只透传一次，避免重复注入。
     content_parts_sent: bool,
+    finish_reason_override: Option<&'static str>,
+    saw_text_delta: bool,
 }
 
 struct ToolCallState {
@@ -90,6 +94,8 @@ where
             tool_calls: Vec::new(),
             tool_calls_by_item_id: HashMap::new(),
             content_parts_sent: false,
+            finish_reason_override: None,
+            saw_text_delta: false,
         }
     }
 
@@ -182,6 +188,10 @@ where
         }
         if event_type.ends_with("response.completed") {
             self.handle_response_completed(&value);
+            return;
+        }
+        if event_type.ends_with("response.incomplete") {
+            self.handle_response_incomplete(&value);
         }
     }
 
@@ -189,6 +199,7 @@ where
         let Some(delta) = value.get("delta").and_then(Value::as_str) else {
             return;
         };
+        self.saw_text_delta = true;
         token_texts.push(delta.to_string());
         self.ensure_role_sent();
         self.out.push_back(chat_chunk_sse(
@@ -297,6 +308,25 @@ where
         let Some(response) = value.get("response").and_then(Value::as_object) else {
             return;
         };
+        self.handle_response_output_items(response);
+        self.finish_reason_override = Some(compat_reason::chat_finish_reason_from_response_object(
+            response,
+            !self.tool_calls.is_empty(),
+        ));
+    }
+
+    fn handle_response_incomplete(&mut self, value: &Value) {
+        let Some(response) = value.get("response").and_then(Value::as_object) else {
+            return;
+        };
+        self.handle_response_output_items(response);
+        self.finish_reason_override = Some(compat_reason::chat_finish_reason_from_response_object(
+            response,
+            !self.tool_calls.is_empty(),
+        ));
+    }
+
+    fn handle_response_output_items(&mut self, response: &Map<String, Value>) {
         let Some(output) = response.get("output").and_then(Value::as_array) else {
             return;
         };
@@ -389,21 +419,20 @@ where
         if self.content_parts_sent {
             return;
         }
-        // Chat 标准没有 Responses 的非文本输出，这里用扩展字段保留原始内容。
-        let has_non_text = parts.iter().any(|part| {
-            part.get("type")
-                .and_then(Value::as_str)
-                .is_some_and(|part_type| part_type != "output_text")
-        });
-        if !has_non_text {
+        let non_text_parts = compat_content::chat_message_non_text_parts_from_responses(parts);
+        let delta_content = if !non_text_parts.is_empty() {
+            Value::Array(non_text_parts)
+        } else if !self.saw_text_delta {
+            compat_content::chat_message_content_from_responses_parts(parts)
+        } else {
             return;
-        }
+        };
         self.ensure_role_sent();
         self.out.push_back(chat_chunk_sse(
             &self.chat_id,
             self.created,
             &self.model,
-            json!({ "content_parts": parts }),
+            json!({ "content": delta_content }),
             None,
         ));
         self.content_parts_sent = true;
@@ -473,6 +502,9 @@ where
     }
 
     fn finish_reason(&self) -> &'static str {
+        if let Some(reason) = self.finish_reason_override {
+            return reason;
+        }
         if self.tool_calls.is_empty() {
             "stop"
         } else {

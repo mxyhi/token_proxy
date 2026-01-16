@@ -8,8 +8,7 @@ pub(super) struct ChatToolCall {
 }
 
 pub(super) struct ResponsesOutput {
-    pub(super) content: String,
-    pub(super) content_parts: Option<Vec<Value>>,
+    pub(super) content_parts: Vec<Value>,
     pub(super) tool_calls: Vec<Value>,
 }
 
@@ -98,15 +97,12 @@ fn extract_chat_message_legacy_function_call(function_call: &Map<String, Value>)
 pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
     let Some(output) = value.get("output").and_then(Value::as_array) else {
         return ResponsesOutput {
-            content: String::new(),
-            content_parts: None,
+            content_parts: Vec::new(),
             tool_calls: Vec::new(),
         };
     };
 
-    let mut combined = String::new();
     let mut content_parts = Vec::new();
-    let mut has_non_text = false;
     let mut tool_calls = Vec::new();
 
     for item in output {
@@ -123,15 +119,7 @@ pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
                 };
                 for part in content {
                     if let Some(part_obj) = part.as_object() {
-                        let part_type = part_obj.get("type").and_then(Value::as_str);
-                        if part_type != Some("output_text") {
-                            has_non_text = true;
-                        }
-                        if part_type == Some("output_text") {
-                            if let Some(text) = part_obj.get("text").and_then(Value::as_str) {
-                                combined.push_str(text);
-                            }
-                        }
+                        let _ = part_obj.get("type").and_then(Value::as_str);
                     }
                     content_parts.push(part.clone());
                 }
@@ -145,14 +133,7 @@ pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
         }
     }
 
-    let content_parts = if has_non_text {
-        Some(content_parts)
-    } else {
-        None
-    };
-
     ResponsesOutput {
-        content: combined,
         content_parts,
         tool_calls,
     }

@@ -1,20 +1,10 @@
-import { Info } from "lucide-react";
-
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PasswordInput } from "@/components/ui/password-input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ProxyServicePanel, type ProxyServiceViewProps } from "@/features/config/cards/proxy-service-card";
-import { type ConfigForm, LOG_LEVELS } from "@/features/config/types";
+import { type ConfigForm } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
 type ProxyCoreCardProps = {
@@ -78,53 +68,8 @@ function ProxyCoreFields({ form, showLocalKey, onToggleLocalKey, onChange }: Pro
           {m.proxy_core_app_proxy_url_help({ placeholder: "$app_proxy_url" })}
         </p>
       </div>
-      <div className="grid gap-2">
-        <div className="flex items-center gap-2">
-          <Label htmlFor="proxy-log-level">{m.proxy_core_log_level_label()}</Label>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                className="inline-flex size-5 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground"
-                aria-label={m.proxy_core_log_level_help()}
-              >
-                <Info className="size-3.5" aria-hidden="true" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top" align="start">
-              {m.proxy_core_log_level_help()}
-            </TooltipContent>
-          </Tooltip>
-        </div>
-        <Select
-          value={form.logLevel}
-          onValueChange={(nextValue) => {
-            const nextLevel = toLogLevel(nextValue);
-            if (nextLevel) {
-              onChange({ logLevel: nextLevel });
-            }
-          }}
-        >
-          <SelectTrigger id="proxy-log-level">
-            <SelectValue placeholder={m.proxy_core_log_level_placeholder()} />
-          </SelectTrigger>
-          <SelectContent>
-            {LOG_LEVELS.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                {option.label()}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
     </>
   );
-}
-
-const LOG_LEVEL_VALUES: ReadonlySet<string> = new Set(LOG_LEVELS.map((level) => level.value));
-
-function toLogLevel(value: string): ConfigForm["logLevel"] | null {
-  return LOG_LEVEL_VALUES.has(value) ? (value as ConfigForm["logLevel"]) : null;
 }
 
 type ProxyCoreFormatConversionProps = {

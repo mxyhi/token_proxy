@@ -15,16 +15,7 @@ export const TRAY_TOKEN_RATE_FORMATS = [
 
 export type TrayTokenRateFormat = (typeof TRAY_TOKEN_RATE_FORMATS)[number]["value"];
 
-export const LOG_LEVELS = [
-  { value: "silent", label: () => m.log_level_silent() },
-  { value: "error", label: () => m.log_level_error() },
-  { value: "warn", label: () => m.log_level_warn() },
-  { value: "info", label: () => m.log_level_info() },
-  { value: "debug", label: () => m.log_level_debug() },
-  { value: "trace", label: () => m.log_level_trace() },
-] as const;
-
-export type LogLevel = (typeof LOG_LEVELS)[number]["value"];
+export type LogLevel = "silent" | "error" | "warn" | "info" | "debug" | "trace";
 
 export type TrayTokenRateConfig = {
   enabled: boolean;

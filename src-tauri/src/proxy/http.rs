@@ -66,12 +66,15 @@ fn resolve_local_auth_token(
     path: &str,
     query: Option<&str>,
 ) -> Result<Option<String>, String> {
-    // Local auth follows request format: Anthropic -> x-api-key, Gemini -> x-goog-api-key/?key, others -> Authorization.
+    // Local auth follows request format: Anthropic -> x-api-key (or Authorization), Gemini -> x-goog-api-key/?key, others -> Authorization.
     if is_anthropic_path(path) {
         if let Some(value) = parse_raw_header(headers, X_API_KEY)? {
             return Ok(Some(value));
         }
-        return parse_raw_header(headers, X_ANTHROPIC_API_KEY);
+        if let Some(value) = parse_raw_header(headers, X_ANTHROPIC_API_KEY)? {
+            return Ok(Some(value));
+        }
+        return parse_bearer_header(headers);
     }
 
     if gemini::is_gemini_path(path) {
@@ -384,12 +387,12 @@ mod tests {
     }
 
     #[test]
-    fn local_auth_rejects_anthropic_authorization_only() {
+    fn local_auth_accepts_anthropic_authorization_only() {
         let config = config_with_local("local-key");
         let mut headers = HeaderMap::new();
         headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer local-key"));
         let result = ensure_local_auth(&config, &headers, "/v1/messages", None);
-        assert_eq!(result, Err("Missing local access key.".to_string()));
+        assert!(result.is_ok());
     }
 
     #[test]

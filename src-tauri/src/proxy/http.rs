@@ -12,7 +12,12 @@ use axum::{
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
 use serde_json::json;
 
-use super::config::{ProxyConfig, UpstreamRuntime};
+use super::{
+    config::{ProxyConfig, UpstreamRuntime},
+    gemini,
+    server_helpers::is_anthropic_path,
+};
+use url::form_urlencoded;
 
 const KEEP_ALIVE: HeaderName = HeaderName::from_static("keep-alive");
 const X_OPENAI_API_KEY: &str = "x-openai-api-key";
@@ -20,30 +25,31 @@ const X_API_KEY: &str = "x-api-key";
 const X_ANTHROPIC_API_KEY: &str = "x-anthropic-api-key";
 const X_GOOG_API_KEY: &str = "x-goog-api-key";
 
-pub(crate) fn ensure_local_auth(config: &ProxyConfig, headers: &HeaderMap) -> Result<(), String> {
+pub(crate) fn ensure_local_auth(
+    config: &ProxyConfig,
+    headers: &HeaderMap,
+    path: &str,
+    query: Option<&str>,
+) -> Result<(), String> {
     let Some(expected) = config.local_api_key.as_ref() else {
         tracing::debug!("no local_api_key configured, skipping local auth");
         return Ok(());
     };
-    tracing::debug!("local auth required, checking Authorization header");
-    let Some(header) = headers.get(AUTHORIZATION) else {
-        tracing::warn!("missing Authorization header");
+    tracing::debug!(path = %path, "local auth required, resolving local key");
+    let Some(provided) = resolve_local_auth_token(headers, path, query)? else {
+        tracing::warn!(path = %path, "missing local access key");
         return Err("Missing local access key.".to_string());
     };
-    let Ok(value) = header.to_str() else {
-        tracing::warn!("Authorization header is not valid UTF-8");
-        return Err("Local access key is invalid.".to_string());
-    };
-    let expected_value = format!("Bearer {expected}");
-    if value != expected_value {
+    if provided != expected {
         tracing::warn!(
-            got = %mask_key(value),
-            expected = %mask_key(&expected_value),
-            "authorization mismatch"
+            path = %path,
+            got = %mask_key(&provided),
+            expected = %mask_key(expected),
+            "local auth mismatch"
         );
         return Err("Local access key is invalid.".to_string());
     }
-    tracing::debug!("local auth passed");
+    tracing::debug!(path = %path, "local auth passed");
     Ok(())
 }
 
@@ -53,6 +59,78 @@ fn mask_key(key: &str) -> String {
         return key.to_string();
     }
     format!("{}...", &key[..8])
+}
+
+fn resolve_local_auth_token(
+    headers: &HeaderMap,
+    path: &str,
+    query: Option<&str>,
+) -> Result<Option<String>, String> {
+    // Local auth follows request format: Anthropic -> x-api-key, Gemini -> x-goog-api-key/?key, others -> Authorization.
+    if is_anthropic_path(path) {
+        if let Some(value) = parse_raw_header(headers, X_API_KEY)? {
+            return Ok(Some(value));
+        }
+        return parse_raw_header(headers, X_ANTHROPIC_API_KEY);
+    }
+
+    if gemini::is_gemini_path(path) {
+        if let Some(value) = parse_raw_header(headers, X_GOOG_API_KEY)? {
+            return Ok(Some(value));
+        }
+        return parse_query_key(query);
+    }
+
+    parse_bearer_header(headers)
+}
+
+fn parse_raw_header(headers: &HeaderMap, name: &str) -> Result<Option<String>, String> {
+    let Some(header) = headers.get(name) else {
+        return Ok(None);
+    };
+    let Ok(value) = header.to_str() else {
+        return Err("Local access key is invalid.".to_string());
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("Local access key is invalid.".to_string());
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn parse_bearer_header(headers: &HeaderMap) -> Result<Option<String>, String> {
+    let Some(header) = headers.get(AUTHORIZATION) else {
+        return Ok(None);
+    };
+    let Ok(value) = header.to_str() else {
+        return Err("Local access key is invalid.".to_string());
+    };
+    let value = value.trim();
+    let Some(token) = value.strip_prefix("Bearer ") else {
+        return Err("Local access key is invalid.".to_string());
+    };
+    let token = token.trim();
+    if token.is_empty() {
+        return Err("Local access key is invalid.".to_string());
+    }
+    Ok(Some(token.to_string()))
+}
+
+fn parse_query_key(query: Option<&str>) -> Result<Option<String>, String> {
+    let Some(query) = query else {
+        return Ok(None);
+    };
+    for (key, value) in form_urlencoded::parse(query.as_bytes()) {
+        if key != "key" {
+            continue;
+        }
+        let value = value.trim();
+        if value.is_empty() {
+            return Err("Local access key is invalid.".to_string());
+        }
+        return Ok(Some(value.to_string()));
+    }
+    Ok(None)
 }
 
 #[derive(Clone, Default)]
@@ -73,40 +151,40 @@ pub(crate) fn resolve_request_auth(
     headers: &HeaderMap,
 ) -> Result<RequestAuth, String> {
     let mut auth = RequestAuth::default();
-
-    if let Some(value) = headers.get(X_OPENAI_API_KEY) {
-        let Ok(value) = value.to_str() else {
-            return Err("Upstream API key is invalid.".to_string());
-        };
-        auth.openai_bearer = Some(bearer_header(value).ok_or_else(|| {
-            "Upstream API key contains invalid characters.".to_string()
-        })?);
-    }
-
-    // Anthropic uses `x-api-key`; allow explicit overrides as well.
-    if let Some(value) = headers
-        .get(X_API_KEY)
-        .or_else(|| headers.get(X_ANTHROPIC_API_KEY))
-    {
-        let Ok(_) = value.to_str() else {
-            return Err("Upstream API key is invalid.".to_string());
-        };
-        auth.anthropic_api_key = Some(value.clone());
-    }
-
+    // When local auth is enabled, request auth headers are reserved for local access and not used upstream.
     if config.local_api_key.is_none() {
+        if let Some(value) = headers.get(X_OPENAI_API_KEY) {
+            let Ok(value) = value.to_str() else {
+                return Err("Upstream API key is invalid.".to_string());
+            };
+            auth.openai_bearer = Some(bearer_header(value).ok_or_else(|| {
+                "Upstream API key contains invalid characters.".to_string()
+            })?);
+        }
+
+        // Anthropic uses `x-api-key`; allow explicit overrides as well.
+        if let Some(value) = headers
+            .get(X_API_KEY)
+            .or_else(|| headers.get(X_ANTHROPIC_API_KEY))
+        {
+            let Ok(_) = value.to_str() else {
+                return Err("Upstream API key is invalid.".to_string());
+            };
+            auth.anthropic_api_key = Some(value.clone());
+        }
+
         if let Some(value) = headers.get(AUTHORIZATION) {
             auth.authorization_fallback = Some(value.clone());
         }
-    }
 
-    if let Some(value) = headers.get(X_GOOG_API_KEY) {
-        let Ok(value) = value.to_str() else {
-            return Err("Upstream API key is invalid.".to_string());
-        };
-        let value = value.trim();
-        if !value.is_empty() {
-            auth.gemini_api_key = Some(value.to_string());
+        if let Some(value) = headers.get(X_GOOG_API_KEY) {
+            let Ok(value) = value.to_str() else {
+                return Err("Upstream API key is invalid.".to_string());
+            };
+            let value = value.trim();
+            if !value.is_empty() {
+                auth.gemini_api_key = Some(value.to_string());
+            }
         }
     }
     Ok(auth)
@@ -208,6 +286,7 @@ pub(crate) fn build_upstream_headers(
         if name == AUTHORIZATION
             || name == &auth.name
             || name.as_str().eq_ignore_ascii_case(X_OPENAI_API_KEY)
+            || name.as_str().eq_ignore_ascii_case(X_API_KEY)
             || name.as_str().eq_ignore_ascii_case(X_ANTHROPIC_API_KEY)
             || name.as_str().eq_ignore_ascii_case(X_GOOG_API_KEY)
         {
@@ -274,4 +353,64 @@ pub(crate) fn extract_request_id(headers: &ReqwestHeaderMap) -> Option<String> {
         .or_else(|| headers.get("openai-request-id"))
         .and_then(|value| value.to_str().ok())
         .map(|value| value.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::logging::LogLevel;
+    use std::collections::HashMap;
+
+    fn config_with_local(key: &str) -> ProxyConfig {
+        ProxyConfig {
+            host: "127.0.0.1".to_string(),
+            port: 9208,
+            local_api_key: Some(key.to_string()),
+            log_level: LogLevel::Silent,
+            max_request_body_bytes: 1024,
+            enable_api_format_conversion: false,
+            upstream_strategy: crate::proxy::config::UpstreamStrategy::PriorityFillFirst,
+            upstreams: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn local_auth_accepts_anthropic_headers() {
+        let config = config_with_local("local-key");
+        let mut headers = HeaderMap::new();
+        headers.insert("x-api-key", HeaderValue::from_static("local-key"));
+        let result = ensure_local_auth(&config, &headers, "/v1/messages", None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn local_auth_rejects_anthropic_authorization_only() {
+        let config = config_with_local("local-key");
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer local-key"));
+        let result = ensure_local_auth(&config, &headers, "/v1/messages", None);
+        assert_eq!(result, Err("Missing local access key.".to_string()));
+    }
+
+    #[test]
+    fn local_auth_accepts_gemini_query_key() {
+        let config = config_with_local("local-key");
+        let headers = HeaderMap::new();
+        let result = ensure_local_auth(
+            &config,
+            &headers,
+            "/v1beta/models/gemini-1.5-flash:generateContent",
+            Some("key=local-key"),
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn local_auth_accepts_openai_authorization() {
+        let config = config_with_local("local-key");
+        let mut headers = HeaderMap::new();
+        headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer local-key"));
+        let result = ensure_local_auth(&config, &headers, "/v1/chat/completions", None);
+        assert!(result.is_ok());
+    }
 }

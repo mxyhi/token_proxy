@@ -301,10 +301,11 @@ async fn ensure_local_auth_or_respond(
     body: Body,
     capture_next: bool,
     path: &str,
+    query: Option<&str>,
     request_start: Instant,
     max_body_bytes: usize,
 ) -> Result<Body, Response> {
-    if let Err(message) = http::ensure_local_auth(config, headers) {
+    if let Err(message) = http::ensure_local_auth(config, headers, path, query) {
         tracing::warn!("local auth failed");
         let detail = if capture_next {
             Some(capture_detail_from_body(headers, body, max_body_bytes).await)
@@ -487,6 +488,7 @@ async fn prepare_inbound_request(
     state: &ProxyState,
     headers: &HeaderMap,
     path: String,
+    query: Option<String>,
     body: Body,
     capture_next: bool,
     request_start: Instant,
@@ -499,6 +501,7 @@ async fn prepare_inbound_request(
         body,
         capture_next,
         &path,
+        query.as_deref(),
         request_start,
         state.config.max_request_body_bytes,
     )
@@ -590,6 +593,7 @@ async fn proxy_request(
     let is_debug_log = cfg!(debug_assertions)
         && matches!(state.config.log_level, LogLevel::Debug | LogLevel::Trace);
     let (path, _) = extract_request_path(&uri);
+    let query = uri.query().map(|value| value.to_string());
     tracing::info!(method = %method, path = %path, "incoming request");
     tracing::debug!(headers = ?headers.keys().collect::<Vec<_>>(), "request headers");
 
@@ -597,6 +601,7 @@ async fn proxy_request(
         &state,
         &headers,
         path,
+        query,
         body,
         capture_next,
         request_start,

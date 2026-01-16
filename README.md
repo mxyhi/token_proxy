@@ -33,7 +33,7 @@ curl -X POST \
 You can also call using the Anthropic Messages format (useful for Claude Code clients):
 ```bash
 curl -X POST \
-  -H "Authorization: Bearer YOUR_LOCAL_KEY" \
+  -H "x-api-key: YOUR_LOCAL_KEY" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:9208/v1/messages \
   -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":256,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}'
@@ -48,7 +48,7 @@ curl -X POST \
 | --- | --- | --- |
 | `host` | `127.0.0.1` | Listen address (IPv6 allowed; will be bracketed in URLs) |
 | `port` | `9208` release / `19208` debug | Change if the port is taken |
-| `local_api_key` | `null` | When set: incoming requests must send `Authorization: Bearer <key>`; the same header will **not** forward upstream. |
+| `local_api_key` | `null` | When set: local auth uses format-specific headers (see Auth rules); local auth inputs are **not** forwarded upstream. |
 | `app_proxy_url` | `null` | Proxy for app updater & as placeholder for upstreams (`"$app_proxy_url"`). Supports `http/https/socks5/socks5h`. |
 | `log_level` | `silent` | `silent|error|warn|info|debug|trace`; debug/trace log request headers (auth redacted) and small bodies (≤64KiB). Release builds force `silent`. |
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 = fallback to default. Protects inbound body size. |
@@ -81,7 +81,11 @@ curl -X POST \
 - If `openai-response` is missing for `/v1/responses`: fallback can be `openai` or `anthropic` (priority-based; tie-break prefers `openai`).
 
 ## Auth rules (important)
-- Local access: `local_api_key` enabled → require `Authorization: Bearer <key>`; this header will **not** be forwarded upstream.
+- Local access: `local_api_key` enabled → require format-specific key. These local auth inputs are stripped and **not** forwarded upstream.
+  - OpenAI / Responses: `Authorization: Bearer <key>`
+  - Anthropic `/v1/messages`: `x-api-key` or `x-anthropic-api-key`
+  - Gemini: `x-goog-api-key` or `?key=...`
+- When `local_api_key` is enabled, request headers are **not** used for upstream auth; configure `upstreams[].api_key` instead.
 - Upstream auth resolution (per request):
   - **OpenAI**: `upstream.api_key` → `x-openai-api-key` → `Authorization` (only if `local_api_key` is **not** set) → error.
   - **Anthropic**: `upstream.api_key` → `x-api-key` / `x-anthropic-api-key` → error. Missing `anthropic-version` is auto-filled with `2023-06-01`.
@@ -106,6 +110,6 @@ curl -X POST \
 
 ## FAQ
 - **Port already in use?** Change `port` in `config.jsonc`; remember to update your client base URL.
-- **Got 401?** If `local_api_key` is set, you must send `Authorization: Bearer <key>`; upstream keys go to `x-openai-api-key` / `x-api-key` / `x-goog-api-key` / `?key=`.
+- **Got 401?** If `local_api_key` is set, you must send the format-specific local key (OpenAI/Responses: `Authorization`, Anthropic: `x-api-key`, Gemini: `x-goog-api-key` or `?key=`). With local auth enabled, configure upstream keys in `upstreams[].api_key`.
 - **413 Payload Too Large?** Body exceeded `max_request_body_bytes` (default 20 MiB) or the 4 MiB transform limit for format-conversion requests.
 - **Why no system proxy?** By design, `reqwest` is built with `.no_proxy()`; set per-upstream `proxy_url` if needed.

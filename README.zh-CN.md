@@ -33,7 +33,7 @@ curl -X POST \
 也可以直接用 Anthropic Messages 格式（用于 Claude Code 等客户端）：
 ```bash
 curl -X POST \
-  -H "Authorization: Bearer 你的本地密钥" \
+  -H "x-api-key: 你的本地密钥" \
   -H "Content-Type: application/json" \
   http://127.0.0.1:9208/v1/messages \
   -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":256,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}'
@@ -48,7 +48,7 @@ curl -X POST \
 | --- | --- | --- |
 | `host` | `127.0.0.1` | 监听地址；支持 IPv6（URL 会自动加方括号） |
 | `port` | `9208`（release）/`19208`（debug） | 端口冲突时修改 |
-| `local_api_key` | `null` | 设置后，入站必须带 `Authorization: Bearer <key>`；此头**不会**再转给上游 |
+| `local_api_key` | `null` | 设置后，本地鉴权按接口格式生效（见“鉴权规则”）；本地鉴权不会转给上游 |
 | `app_proxy_url` | `null` | 应用更新 & 上游可复用的代理；支持 `http/https/socks5/socks5h`；可在 upstream `proxy_url` 用 `"$app_proxy_url"` 占位 |
 | `log_level` | `silent` | `silent|error|warn|info|debug|trace`；debug/trace 会记录请求头（鉴权打码）与小体积请求体（≤64KiB）；release 强制 `silent` |
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 表示回落到默认；保护入站体积 |
@@ -81,7 +81,11 @@ curl -X POST \
 - `/v1/responses` 缺少 `openai-response`：可 fallback 到 `openai` 或 `anthropic`（按优先级选择，平级优先 `openai`）
 
 ## 鉴权规则（重要）
-- 本地访问：设置了 `local_api_key` 必须带 `Authorization: Bearer <key>`；此头不会被转发给上游
+- 本地访问：设置了 `local_api_key` 必须按接口格式携带本地 key，且这些本地鉴权不会转发给上游
+  - OpenAI / Responses：`Authorization: Bearer <key>`
+  - Anthropic `/v1/messages`：`x-api-key` / `x-anthropic-api-key`
+  - Gemini：`x-goog-api-key` 或 `?key=...`
+- 启用 `local_api_key` 时，请求头不会用于上游鉴权；请在 `upstreams[].api_key` 配置上游 key
 - 上游鉴权解析（逐请求）：
   - **OpenAI**：`upstream.api_key` → `x-openai-api-key` → `Authorization`（仅当未设置 `local_api_key`）→ 报错
   - **Anthropic**：`upstream.api_key` → `x-api-key` / `x-anthropic-api-key` → 报错；若缺少 `anthropic-version` 自动补 `2023-06-01`
@@ -106,6 +110,6 @@ curl -X POST \
 
 ## FAQ
 - **端口被占用？** 修改 `config.jsonc` 里的 `port`，并同步更新客户端 base URL
-- **返回 401？** 设置了 `local_api_key` 就必须带 `Authorization: Bearer <key>`；上游密钥放 `x-openai-api-key` / `x-api-key` / `x-goog-api-key` / `?key=`
+- **返回 401？** 设置了 `local_api_key` 就必须按接口格式发送本地 key（OpenAI/Responses 用 `Authorization`；Anthropic 用 `x-api-key`；Gemini 用 `x-goog-api-key` 或 `?key=`）；开启本地鉴权后，上游密钥请配置在 `upstreams[].api_key`
 - **413 Payload Too Large？** 请求体超过 `max_request_body_bytes`（默认 20 MiB）或格式转换场景的 4 MiB 处理上限
 - **为什么不走系统代理？** `reqwest` 默认 `no_proxy()`；如需代理，请在每个 upstream 设置 `proxy_url`

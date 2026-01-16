@@ -281,8 +281,16 @@ pub fn run() {
     let logging_state = logging::LoggingState::init(LogLevel::Silent);
     tracing::info!("starting token_proxy application");
 
-    let app = tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
+    let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    #[cfg(desktop)]
+    {
+        // 二次启动时唤起并聚焦已有主窗口，避免多实例托盘图标。
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_or_create_main_window(app);
+        }));
+    }
+
+    let app = builder
         .setup(|app| {
             #[cfg(desktop)]
             {

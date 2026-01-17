@@ -12,15 +12,15 @@ use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 
-pub(super) fn stream_with_logging(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, reqwest::Error>>
-        + Unpin
-        + Send
-        + 'static,
+pub(super) fn stream_with_logging<E>(
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     token_tracker: RequestTokenTracker,
-) -> impl futures_util::stream::Stream<Item = Result<Bytes, std::io::Error>> + Send {
+) -> impl futures_util::stream::Stream<Item = Result<Bytes, std::io::Error>> + Send
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
     let collector = SseUsageCollector::new();
     let parser = SseEventParser::new();
     try_unfold(
@@ -79,16 +79,16 @@ pub(super) fn stream_with_logging(
     )
 }
 
-pub(super) fn stream_with_logging_and_model_override(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, reqwest::Error>>
-        + Unpin
-        + Send
-        + 'static,
+pub(super) fn stream_with_logging_and_model_override<E>(
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     model_override: String,
     token_tracker: RequestTokenTracker,
-) -> impl futures_util::stream::Stream<Item = Result<Bytes, std::io::Error>> + Send {
+) -> impl futures_util::stream::Stream<Item = Result<Bytes, std::io::Error>> + Send
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
     let state = ModelOverrideStreamState::new(upstream, context, log, model_override, token_tracker);
     try_unfold(state, |state| async move { state.step().await })
 }
@@ -106,9 +106,10 @@ struct ModelOverrideStreamState<S> {
     logged: bool,
 }
 
-impl<S> ModelOverrideStreamState<S>
+impl<S, E> ModelOverrideStreamState<S>
 where
-    S: futures_util::stream::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin + Send + 'static,
+    S: futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
 {
     fn new(
         upstream: S,

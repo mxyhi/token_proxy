@@ -15,6 +15,7 @@ mod compat_reason;
 mod openai_compat;
 mod request_body;
 mod response;
+mod redact;
 mod server;
 mod server_helpers;
 mod sse;
@@ -26,7 +27,16 @@ mod usage;
 use std::{
     collections::HashMap,
     sync::{atomic::AtomicUsize, Arc},
+    time::Duration,
 };
+
+// 上游“无数据响应”超时：同时用于等待响应头（TTFB）与流式 body 的空闲超时。
+// - 生产：180s（用户要求写死）
+// - 测试：缩短，避免用例卡 180s
+#[cfg(test)]
+pub(crate) const UPSTREAM_NO_DATA_TIMEOUT: Duration = Duration::from_millis(50);
+#[cfg(not(test))]
+pub(crate) const UPSTREAM_NO_DATA_TIMEOUT: Duration = Duration::from_secs(180);
 
 struct ProxyState {
     config: config::ProxyConfig,

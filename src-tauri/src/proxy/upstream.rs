@@ -1,6 +1,5 @@
 use axum::{
     http::{
-        header::{HeaderName, HeaderValue, CONTENT_LENGTH, HOST},
         HeaderMap, Method, StatusCode,
     },
     response::Response,
@@ -11,22 +10,21 @@ use std::{
     },
     time::Instant,
 };
+use tokio::time::timeout;
 
-const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
-const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const GEMINI_API_KEY_QUERY: &str = "key";
-const GEMINI_API_KEY_HEADER: HeaderName = HeaderName::from_static("x-goog-api-key");
 const LOCAL_UPSTREAM_ID: &str = "local";
 
+mod request;
 mod utils;
 
 use utils::{
-    build_group_order, ensure_query_param, extract_query_param, is_retryable_error,
-    is_retryable_status, resolve_group_start, sanitize_upstream_error,
+    build_group_order, is_retryable_error, is_retryable_status, resolve_group_start,
+    sanitize_upstream_error,
 };
 
 #[cfg(test)]
-use utils::redact_query_param_value;
+use crate::proxy::redact::redact_query_param_value;
 
 use super::{
     config::UpstreamRuntime,
@@ -34,11 +32,11 @@ use super::{
     http,
     http::RequestAuth,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
-    model,
     openai_compat::FormatTransform,
     request_detail::RequestDetailSnapshot,
     request_body::ReplayableBody,
     response::{build_proxy_response, build_proxy_response_buffered},
+    UPSTREAM_NO_DATA_TIMEOUT,
     ProxyState,
     RequestMeta,
 };
@@ -60,6 +58,7 @@ pub(super) async fn forward_upstream_request(
 ) -> Response {
     let mut last_retry_error: Option<String> = None;
     let mut last_retry_response: Option<Response> = None;
+    let mut last_timeout_error: Option<String> = None;
     let mut attempted = 0;
     let mut missing_auth = false;
 
@@ -110,6 +109,9 @@ pub(super) async fn forward_upstream_request(
         if let Some(response) = result.last_retry_response {
             last_retry_response = Some(response);
         }
+        if result.last_timeout_error.is_some() {
+            last_timeout_error = result.last_timeout_error;
+        }
         if result.last_retry_error.is_some() {
             last_retry_error = result.last_retry_error;
         }
@@ -132,6 +134,9 @@ pub(super) async fn forward_upstream_request(
     if let Some(response) = last_retry_response {
         return response;
     }
+    if let Some(err) = last_timeout_error {
+        return http::error_response(StatusCode::GATEWAY_TIMEOUT, err);
+    }
     if let Some(err) = last_retry_error {
         return http::error_response(StatusCode::BAD_GATEWAY, format!("Upstream request failed: {err}"));
     }
@@ -142,6 +147,7 @@ struct GroupAttemptResult {
     response: Option<Response>,
     attempted: usize,
     missing_auth: bool,
+    last_timeout_error: Option<String>,
     last_retry_error: Option<String>,
     last_retry_response: Option<Response>,
 }
@@ -151,6 +157,7 @@ enum AttemptOutcome {
     Retryable {
         message: String,
         response: Option<Response>,
+        is_timeout: bool,
     },
     Fatal(Response),
     SkippedAuth,
@@ -178,6 +185,7 @@ async fn try_group_upstreams(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> GroupAttemptResult {
+    let mut last_timeout_error = None;
     let mut last_retry_error = None;
     let mut last_retry_response = None;
     let mut attempted = 0;
@@ -209,12 +217,17 @@ async fn try_group_upstreams(
                     response: Some(response),
                     attempted,
                     missing_auth,
+                    last_timeout_error,
                     last_retry_error,
                     last_retry_response,
                 };
             }
-            AttemptOutcome::Retryable { message, response } => {
-                last_retry_error = Some(message);
+            AttemptOutcome::Retryable { message, response, is_timeout } => {
+                if is_timeout {
+                    last_timeout_error = Some(message.clone());
+                } else {
+                    last_retry_error = Some(message.clone());
+                }
                 if response.is_some() {
                     last_retry_response = response;
                 }
@@ -228,6 +241,7 @@ async fn try_group_upstreams(
         response: None,
         attempted,
         missing_auth,
+        last_timeout_error,
         last_retry_error,
         last_retry_response,
     }
@@ -271,12 +285,40 @@ async fn attempt_upstream(
             return AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
         }
     };
-    let upstream_res = client
-        .request(method, prepared.upstream_url)
-        .headers(prepared.request_headers)
-        .body(prepared.upstream_body)
-        .send()
-        .await;
+    let upstream_res = timeout(
+        UPSTREAM_NO_DATA_TIMEOUT,
+        client
+            .request(method, prepared.upstream_url)
+            .headers(prepared.request_headers)
+            .body(prepared.upstream_body)
+            .send(),
+    )
+    .await;
+    let upstream_res = match upstream_res {
+        Ok(result) => result,
+        Err(_) => {
+            let message = format!(
+                "Upstream did not respond within {}s.",
+                UPSTREAM_NO_DATA_TIMEOUT.as_secs()
+            );
+            log_upstream_error_if_needed(
+                &state.log,
+                request_detail.as_ref(),
+                meta,
+                provider,
+                &upstream.id,
+                inbound_path,
+                StatusCode::GATEWAY_TIMEOUT,
+                message.clone(),
+                start_time,
+            );
+            return AttemptOutcome::Retryable {
+                message,
+                response: None,
+                is_timeout: true,
+            };
+        }
+    };
     handle_upstream_result(
         upstream_res,
         &prepared.meta,
@@ -312,14 +354,14 @@ async fn prepare_upstream_request(
         &upstream_path_with_query,
         &upstream_url,
     )?;
-    let request_headers = build_request_headers(
+    let request_headers = request::build_request_headers(
         provider,
         headers,
         auth,
         upstream.header_overrides.as_deref(),
     );
     let upstream_body =
-        build_upstream_body(provider, &upstream_path_with_query, body, &mapped_meta).await?;
+        request::build_upstream_body(provider, &upstream_path_with_query, body, &mapped_meta).await?;
     Ok(PreparedUpstreamRequest {
         upstream_url,
         request_headers,
@@ -336,7 +378,12 @@ fn resolve_upstream_auth(
     upstream_url: &str,
 ) -> Result<(String, http::UpstreamAuthHeader), AttemptOutcome> {
     if provider == "gemini" {
-        return resolve_gemini_upstream(upstream, request_auth, upstream_path_with_query, upstream_url);
+        return request::resolve_gemini_upstream(
+            upstream,
+            request_auth,
+            upstream_path_with_query,
+            upstream_url,
+        );
     }
     let auth = match http::resolve_upstream_auth(provider, upstream, request_auth) {
         Ok(Some(auth)) => auth,
@@ -376,6 +423,7 @@ async fn handle_upstream_result(
             AttemptOutcome::Retryable {
                 message: format!("Upstream responded with {}", response.status()),
                 response: Some(response),
+                is_timeout: false,
             }
         }
         Ok(res) => {
@@ -396,6 +444,11 @@ async fn handle_upstream_result(
         }
         Err(err) if is_retryable_error(&err) => {
             let message = sanitize_upstream_error(provider, &err);
+            let status = if err.is_timeout() {
+                StatusCode::GATEWAY_TIMEOUT
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
             log_upstream_error_if_needed(
                 &log,
                 request_detail.as_ref(),
@@ -403,13 +456,14 @@ async fn handle_upstream_result(
                 provider,
                 upstream_id,
                 inbound_path,
-                StatusCode::BAD_GATEWAY,
+                status,
                 message.clone(),
                 start_time,
             );
             AttemptOutcome::Retryable {
                 message,
                 response: None,
+                is_timeout: err.is_timeout(),
             }
         }
         Err(err) => {
@@ -517,173 +571,13 @@ fn resolve_upstream_path_with_query(
     let Some(mapped_model) = meta.mapped_model.as_deref() else {
         return upstream_path_with_query.to_string();
     };
-    let (path, query) = split_path_query(upstream_path_with_query);
+    let (path, query) = request::split_path_query(upstream_path_with_query);
     let replaced = gemini::replace_gemini_model_in_path(path, mapped_model)
         .unwrap_or_else(|| path.to_string());
     match query {
         Some(query) => format!("{replaced}?{query}"),
         None => replaced,
     }
-}
-
-fn apply_header_overrides(
-    request_headers: &mut HeaderMap,
-    overrides: &[super::config::HeaderOverride],
-) {
-    for override_item in overrides {
-        // 屏蔽 hop-by-hop / Host / Content-Length，无论配置为何。
-        if crate::proxy::http::is_hop_header(&override_item.name)
-            || override_item.name == HOST
-            || override_item.name == CONTENT_LENGTH
-        {
-            continue;
-        }
-
-        match &override_item.value {
-            Some(value) => {
-                request_headers.insert(override_item.name.clone(), value.clone());
-            }
-            None => {
-                request_headers.remove(&override_item.name);
-            }
-        }
-    }
-}
-
-fn split_path_query(path_with_query: &str) -> (&str, Option<&str>) {
-    match path_with_query.split_once('?') {
-        Some((path, query)) => (path, Some(query)),
-        None => (path_with_query, None),
-    }
-}
-
-fn build_request_headers(
-    provider: &str,
-    headers: &HeaderMap,
-    auth: http::UpstreamAuthHeader,
-    header_overrides: Option<&[super::config::HeaderOverride]>,
-) -> HeaderMap {
-    let mut request_headers = http::build_upstream_headers(headers, auth);
-    if provider == "anthropic" && !request_headers.contains_key(ANTHROPIC_VERSION_HEADER) {
-        // Anthropic 官方 API 需要 `anthropic-version`；缺省时补一个稳定默认值，允许客户端覆盖。
-        request_headers.insert(
-            ANTHROPIC_VERSION_HEADER,
-            HeaderValue::from_static(DEFAULT_ANTHROPIC_VERSION),
-        );
-    }
-
-    if let Some(overrides) = header_overrides {
-        apply_header_overrides(&mut request_headers, overrides);
-    }
-    request_headers
-}
-
-async fn build_upstream_body(
-    provider: &str,
-    upstream_path_with_query: &str,
-    body: &ReplayableBody,
-    meta: &RequestMeta,
-) -> Result<reqwest::Body, AttemptOutcome> {
-    let mapped_body = maybe_rewrite_request_body_model(body, meta).await?;
-    let mapped_source = mapped_body.as_ref().unwrap_or(body);
-    let upstream_path = split_path_query(upstream_path_with_query).0;
-    let reasoning_body = match super::server_helpers::maybe_rewrite_openai_reasoning_effort_from_model_suffix(
-        provider,
-        upstream_path,
-        meta,
-        mapped_source,
-    )
-    .await
-    {
-        Ok(body) => body,
-        Err(err) => {
-            return Err(AttemptOutcome::Fatal(http::error_response(err.status, err.message)))
-        }
-    };
-    let source = reasoning_body
-        .as_ref()
-        .or(mapped_body.as_ref())
-        .unwrap_or(body);
-    source
-        .to_reqwest_body()
-        .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("Failed to read cached request body: {err}"),
-            ))
-        })
-}
-
-async fn maybe_rewrite_request_body_model(
-    body: &ReplayableBody,
-    meta: &RequestMeta,
-) -> Result<Option<ReplayableBody>, AttemptOutcome> {
-    if meta.model_override().is_none() {
-        return Ok(None);
-    }
-    let Some(mapped_model) = meta.mapped_model.as_deref() else {
-        return Ok(None);
-    };
-    let Some(bytes) = body
-        .read_bytes_if_small(REQUEST_MODEL_MAPPING_LIMIT_BYTES)
-        .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("Failed to read request body: {err}"),
-            ))
-        })?
-    else {
-        return Ok(None);
-    };
-    let Some(rewritten) = model::rewrite_request_model(&bytes, mapped_model) else {
-        return Ok(None);
-    };
-    Ok(Some(ReplayableBody::from_bytes(rewritten)))
-}
-
-fn resolve_gemini_upstream(
-    upstream: &UpstreamRuntime,
-    request_auth: &RequestAuth,
-    upstream_path_with_query: &str,
-    upstream_url: &str,
-) -> Result<(String, http::UpstreamAuthHeader), AttemptOutcome> {
-    let query_key = extract_query_param(upstream_path_with_query, GEMINI_API_KEY_QUERY);
-    let selected = upstream
-        .api_key
-        .as_deref()
-        .or_else(|| request_auth.gemini_api_key.as_deref())
-        .or_else(|| query_key.as_deref());
-
-    let Some(api_key) = selected else {
-        return Err(AttemptOutcome::SkippedAuth);
-    };
-
-    let upstream_url = match ensure_query_param(upstream_url, GEMINI_API_KEY_QUERY, api_key) {
-        Ok(url) => url,
-        Err(message) => {
-            return Err(AttemptOutcome::Fatal(http::error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("Failed to build upstream URL: {message}"),
-            )))
-        }
-    };
-
-    let value = HeaderValue::from_str(api_key).map_err(|_| {
-        AttemptOutcome::Fatal(http::error_response(
-            StatusCode::UNAUTHORIZED,
-            "Upstream API key contains invalid characters.",
-        ))
-    })?;
-
-    Ok((
-        upstream_url,
-        http::UpstreamAuthHeader {
-            name: GEMINI_API_KEY_HEADER.clone(),
-            value,
-        },
-    ))
 }
 
 #[cfg(test)]

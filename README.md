@@ -112,5 +112,6 @@ curl -X POST \
 ## FAQ
 - **Port already in use?** Change `port` in `config.jsonc`; remember to update your client base URL.
 - **Got 401?** If `local_api_key` is set, you must send the format-specific local key (OpenAI/Responses: `Authorization`, Anthropic: `x-api-key`, Gemini: `x-goog-api-key` or `?key=`). With local auth enabled, configure upstream keys in `upstreams[].api_key`.
+- **Got 504?** Upstream did not send response headers or the first body chunk within 180s. For streaming responses, a 180s idle timeout between chunks may also close the connection.
 - **413 Payload Too Large?** Body exceeded `max_request_body_bytes` (default 20 MiB) or the 4 MiB transform limit for format-conversion requests.
 - **Why no system proxy?** By design, `reqwest` is built with `.no_proxy()`; set per-upstream `proxy_url` if needed.

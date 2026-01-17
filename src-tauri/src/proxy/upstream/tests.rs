@@ -17,14 +17,14 @@ fn retryable_status_matches_new_api_policy() {
 
 #[test]
 fn extract_query_param_reads_key_value() {
-    let value = extract_query_param("/v1beta/models/x:generateContent?key=abc&foo=bar", "key");
+    let value = utils::extract_query_param("/v1beta/models/x:generateContent?key=abc&foo=bar", "key");
     assert_eq!(value.as_deref(), Some("abc"));
 }
 
 #[test]
 fn ensure_query_param_overrides_existing_value() {
     let url = "https://example.com/v1beta/models/x:generateContent?foo=bar&key=old";
-    let updated = ensure_query_param(url, "key", "new").expect("updated url");
+    let updated = utils::ensure_query_param(url, "key", "new").expect("updated url");
     assert!(updated.contains("foo=bar"));
     assert!(updated.contains("key=new"));
     assert!(!updated.contains("key=old"));
@@ -72,7 +72,7 @@ fn apply_header_overrides_sets_and_removes() {
         },
     ];
 
-    apply_header_overrides(&mut headers, &overrides);
+    request::apply_header_overrides(&mut headers, &overrides);
 
     assert_eq!(
         headers.get("x-custom").and_then(|v| v.to_str().ok()),

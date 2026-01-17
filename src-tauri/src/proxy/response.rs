@@ -10,15 +10,16 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+use super::{redact::redact_query_param_value, UPSTREAM_NO_DATA_TIMEOUT};
 use super::{
     gemini_compat,
     http,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
-    request_detail::RequestDetailSnapshot,
     model,
     openai_compat::{transform_response_body, FormatTransform},
     token_rate::{RequestTokenTracker, TokenRateTracker},
     usage::extract_usage_from_response,
+    request_detail::RequestDetailSnapshot,
     RequestMeta,
 };
 
@@ -166,12 +167,68 @@ async fn build_stream_response(
     response_transform: FormatTransform,
     model_override: Option<&str>,
 ) -> Response {
+    let mut context = context;
+    let mut upstream = upstream_stream::with_idle_timeout(upstream_res.bytes_stream());
+    let first = upstream.next().await;
+
+    let upstream = match first {
+        Some(Ok(chunk)) => {
+            if context.ttfb_ms.is_none() {
+                context.ttfb_ms = Some(context.start.elapsed().as_millis());
+            }
+            futures_util::stream::iter(vec![Ok::<
+                Bytes,
+                upstream_stream::UpstreamStreamError<reqwest::Error>,
+            >(chunk)])
+            .chain(upstream)
+            .boxed()
+        }
+        Some(Err(err)) => {
+            let (status, message) = match err {
+                upstream_stream::UpstreamStreamError::IdleTimeout(_) => (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    format!(
+                        "Upstream response timed out after {}s.",
+                        UPSTREAM_NO_DATA_TIMEOUT.as_secs()
+                    ),
+                ),
+                upstream_stream::UpstreamStreamError::Upstream(err) => {
+                    let raw = err.to_string();
+                    let message = if context.provider == PROVIDER_GEMINI {
+                        redact_query_param_value(&raw, "key")
+                    } else {
+                        raw
+                    };
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        format!("Failed to read upstream response: {message}"),
+                    )
+                }
+            };
+
+            context.status = status.as_u16();
+            let empty_usage = UsageSnapshot {
+                usage: None,
+                cached_tokens: None,
+                usage_json: None,
+            };
+            let entry = build_log_entry(&context, empty_usage, Some(message.clone()));
+            log.clone().write_detached(entry);
+            return http::error_response(status, message);
+        }
+        None => {
+            // 上游无 body：避免在下游转换链路里“空跑”并丢日志，这里直接返回空体。
+            // 这个分支理论上很少出现（SSE/streaming 通常至少会输出一段数据）。
+            return http::build_response(status, headers, Body::empty());
+        }
+    };
+
     let stream = match response_transform {
         FormatTransform::None => {
             if let Some(model_override) = model_override {
                 if should_rewrite_sse_model(&context.provider) {
                     streaming::stream_with_logging_and_model_override(
-                        upstream_res.bytes_stream(),
+                        upstream,
                         context,
                         log,
                         model_override.to_string(),
@@ -180,7 +237,7 @@ async fn build_stream_response(
                     .boxed()
                 } else {
                     streaming::stream_with_logging(
-                        upstream_res.bytes_stream(),
+                        upstream,
                         context,
                         log,
                         request_tracker,
@@ -189,7 +246,7 @@ async fn build_stream_response(
                 }
             } else {
                 streaming::stream_with_logging(
-                    upstream_res.bytes_stream(),
+                    upstream,
                     context,
                     log,
                     request_tracker,
@@ -199,7 +256,7 @@ async fn build_stream_response(
         }
         FormatTransform::ResponsesToChat => {
             responses_to_chat::stream_responses_to_chat(
-                upstream_res.bytes_stream(),
+                upstream,
                 context,
                 log,
                 request_tracker,
@@ -207,12 +264,17 @@ async fn build_stream_response(
                 .boxed()
         }
         FormatTransform::ChatToResponses => {
-            stream_chat_to_responses(upstream_res.bytes_stream(), context, log, request_tracker)
+            stream_chat_to_responses(
+                upstream,
+                context,
+                log,
+                request_tracker,
+            )
                 .boxed()
         }
         FormatTransform::ResponsesToAnthropic => {
             responses_to_anthropic::stream_responses_to_anthropic(
-                upstream_res.bytes_stream(),
+                upstream,
                 context,
                 log,
                 request_tracker,
@@ -221,7 +283,7 @@ async fn build_stream_response(
         }
         FormatTransform::AnthropicToResponses => {
             anthropic_to_responses::stream_anthropic_to_responses(
-                upstream_res.bytes_stream(),
+                upstream,
                 context,
                 log,
                 request_tracker,
@@ -234,7 +296,7 @@ async fn build_stream_response(
             let intermediate_log = Arc::new(LogWriter::new(None));
             let intermediate_tracker = RequestTokenTracker::disabled();
             let responses_stream = chat_to_responses::stream_chat_to_responses(
-                upstream_res.bytes_stream(),
+                upstream,
                 context.clone(),
                 intermediate_log,
                 intermediate_tracker,
@@ -254,7 +316,7 @@ async fn build_stream_response(
             let intermediate_log = Arc::new(LogWriter::new(None));
             let intermediate_tracker = RequestTokenTracker::disabled();
             let responses_stream = anthropic_to_responses::stream_anthropic_to_responses(
-                upstream_res.bytes_stream(),
+                upstream,
                 context.clone(),
                 intermediate_log,
                 intermediate_tracker,
@@ -274,7 +336,7 @@ async fn build_stream_response(
             let first_log = Arc::new(LogWriter::new(None));
             let first_tracker = RequestTokenTracker::disabled();
             let chat_stream = gemini_compat::stream_gemini_to_chat(
-                upstream_res.bytes_stream(),
+                upstream,
                 context.clone(),
                 first_log,
                 first_tracker,
@@ -303,7 +365,7 @@ async fn build_stream_response(
             let first_log = Arc::new(LogWriter::new(None));
             let first_tracker = RequestTokenTracker::disabled();
             let responses_stream = anthropic_to_responses::stream_anthropic_to_responses(
-                upstream_res.bytes_stream(),
+                upstream,
                 context.clone(),
                 first_log,
                 first_tracker,
@@ -322,7 +384,7 @@ async fn build_stream_response(
         }
         FormatTransform::GeminiToChat => {
             gemini_compat::stream_gemini_to_chat(
-                upstream_res.bytes_stream(),
+                upstream,
                 context,
                 log,
                 request_tracker,
@@ -331,7 +393,7 @@ async fn build_stream_response(
         }
         FormatTransform::ChatToGemini => {
             gemini_compat::stream_chat_to_gemini(
-                upstream_res.bytes_stream(),
+                upstream,
                 context,
                 log,
                 request_tracker,
@@ -343,7 +405,7 @@ async fn build_stream_response(
             let intermediate_log = Arc::new(LogWriter::new(None));
             let intermediate_tracker = RequestTokenTracker::disabled();
             let chat_stream = responses_to_chat::stream_responses_to_chat(
-                upstream_res.bytes_stream(),
+                upstream,
                 context.clone(),
                 intermediate_log,
                 intermediate_tracker,
@@ -356,7 +418,7 @@ async fn build_stream_response(
             let intermediate_log = Arc::new(LogWriter::new(None));
             let intermediate_tracker = RequestTokenTracker::disabled();
             let chat_stream = gemini_compat::stream_gemini_to_chat(
-                upstream_res.bytes_stream(),
+                upstream,
                 context.clone(),
                 intermediate_log,
                 intermediate_tracker,
@@ -381,11 +443,31 @@ async fn build_buffered_response(
     model_override: Option<&str>,
 ) -> Response {
     let mut context = context;
-    let bytes = match read_upstream_bytes_with_ttfb(upstream_res, &mut context).await {
+    let bytes = match upstream_read::read_upstream_bytes_with_ttfb(upstream_res, &mut context).await {
         Ok(bytes) => bytes,
         Err(err) => {
-            let message = format!("Failed to read upstream response: {err}");
-            context.status = StatusCode::BAD_GATEWAY.as_u16();
+            let (status, message) = match err {
+                upstream_stream::UpstreamStreamError::IdleTimeout(_) => (
+                    StatusCode::GATEWAY_TIMEOUT,
+                    format!(
+                        "Upstream response timed out after {}s.",
+                        UPSTREAM_NO_DATA_TIMEOUT.as_secs()
+                    ),
+                ),
+                upstream_stream::UpstreamStreamError::Upstream(err) => {
+                    let raw = err.to_string();
+                    let message = if context.provider == PROVIDER_GEMINI {
+                        redact_query_param_value(&raw, "key")
+                    } else {
+                        raw
+                    };
+                    (
+                        StatusCode::BAD_GATEWAY,
+                        format!("Failed to read upstream response: {message}"),
+                    )
+                }
+            };
+            context.status = status.as_u16();
             let empty_usage = UsageSnapshot {
                 usage: None,
                 cached_tokens: None,
@@ -393,7 +475,7 @@ async fn build_buffered_response(
             };
             let entry = build_log_entry(&context, empty_usage, Some(message.clone()));
             log.clone().write_detached(entry);
-            return http::error_response(StatusCode::BAD_GATEWAY, message);
+            return http::error_response(status, message);
         }
     };
     let usage = extract_usage_from_response(&bytes);
@@ -421,25 +503,9 @@ async fn build_buffered_response(
     log.clone().write_detached(entry);
 
     let output = maybe_override_response_model(output, model_override);
-    apply_output_tokens_from_response(&request_tracker, &context.provider, &output).await;
+    token_count::apply_output_tokens_from_response(&request_tracker, &context.provider, &output).await;
 
     http::build_response(status, headers, Body::from(output))
-}
-
-async fn read_upstream_bytes_with_ttfb(
-    upstream_res: reqwest::Response,
-    context: &mut LogContext,
-) -> Result<Bytes, reqwest::Error> {
-    let mut stream = upstream_res.bytes_stream();
-    let mut out = Vec::new();
-    while let Some(item) = stream.next().await {
-        let chunk = item?;
-        if context.ttfb_ms.is_none() {
-            context.ttfb_ms = Some(context.start.elapsed().as_millis());
-        }
-        out.extend_from_slice(chunk.as_ref());
-    }
-    Ok(Bytes::from(out))
 }
 
 // 只对 data-only SSE 的提供商做行级重写，避免破坏带 event: 行的流。
@@ -456,15 +522,15 @@ fn maybe_override_response_model(bytes: Bytes, model_override: Option<&str>) -> 
     model::rewrite_response_model(&bytes, model_override).unwrap_or(bytes)
 }
 
-fn stream_chat_to_responses(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, reqwest::Error>>
-        + Unpin
-        + Send
-        + 'static,
+fn stream_chat_to_responses<E>(
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     token_tracker: RequestTokenTracker,
-) -> impl futures_util::stream::Stream<Item = Result<Bytes, std::io::Error>> + Send {
+) -> impl futures_util::stream::Stream<Item = Result<Bytes, std::io::Error>> + Send
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
     chat_to_responses::stream_chat_to_responses(upstream, context, log, token_tracker)
 }
 
@@ -483,92 +549,6 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-async fn apply_output_tokens_from_response(
-    tracker: &RequestTokenTracker,
-    provider: &str,
-    bytes: &Bytes,
-) {
-    let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
-        return;
-    };
-    let mut texts = Vec::new();
-
-    match provider {
-        PROVIDER_OPENAI | PROVIDER_OPENAI_RESPONSES => {
-            if let Some(choices) = value.get("choices").and_then(Value::as_array) {
-                for choice in choices {
-                    if let Some(content) = choice.get("message").and_then(|message| message.get("content")) {
-                        if let Some(text) = content.as_str() {
-                            texts.push(text.to_string());
-                        } else if let Some(parts) = content.as_array() {
-                            for part in parts {
-                                if let Some(text) = part.get("text").and_then(Value::as_str) {
-                                    texts.push(text.to_string());
-                                }
-                            }
-                        }
-                    }
-                    if let Some(text) = choice.get("text").and_then(Value::as_str) {
-                        texts.push(text.to_string());
-                    }
-                }
-            }
-            if texts.is_empty() {
-                if let Some(output) = value.get("output").and_then(Value::as_array) {
-                    collect_responses_output(output, &mut texts);
-                }
-            }
-        }
-        PROVIDER_ANTHROPIC => {
-            if let Some(content) = value.get("content").and_then(Value::as_array) {
-                for item in content {
-                    if let Some(text) = item.get("text").and_then(Value::as_str) {
-                        texts.push(text.to_string());
-                    }
-                }
-            }
-        }
-        PROVIDER_GEMINI => {
-            if let Some(candidates) = value.get("candidates").and_then(Value::as_array) {
-                collect_gemini_output(candidates, &mut texts);
-            }
-        }
-        _ => {}
-    }
-    if texts.is_empty() {
-        return;
-    }
-    for text in texts {
-        tracker.add_output_text(&text).await;
-    }
-}
-
-fn collect_responses_output(output: &[Value], texts: &mut Vec<String>) {
-    for item in output {
-        if let Some(content) = item.get("content").and_then(Value::as_array) {
-            for part in content {
-                if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    texts.push(text.to_string());
-                }
-            }
-        }
-    }
-}
-
-fn collect_gemini_output(candidates: &[Value], texts: &mut Vec<String>) {
-    for candidate in candidates {
-        if let Some(content) = candidate.get("content") {
-            if let Some(parts) = content.get("parts").and_then(Value::as_array) {
-                for part in parts {
-                    if let Some(text) = part.get("text").and_then(Value::as_str) {
-                        texts.push(text.to_string());
-                    }
-                }
-            }
-        }
-    }
-}
-
 fn response_error_text(bytes: &Bytes) -> String {
     let slice = bytes.as_ref();
     if slice.len() <= RESPONSE_ERROR_LIMIT_BYTES {
@@ -583,6 +563,9 @@ mod anthropic_to_responses;
 mod responses_to_chat;
 mod responses_to_anthropic;
 mod streaming;
+mod token_count;
+mod upstream_read;
+mod upstream_stream;
 
 #[cfg(test)]
 mod tests;

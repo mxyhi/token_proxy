@@ -275,7 +275,7 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
         let (first_a, first_b) = first_event.split_at(12);
 
         let upstream = futures_util::stream::iter(vec![
-            Ok(Bytes::from(first_a.to_string())),
+            Ok::<Bytes, reqwest::Error>(Bytes::from(first_a.to_string())),
             Ok(Bytes::from(first_b.to_string())),
             Ok(Bytes::from(
                 "data: {\"choices\":[{\"delta\":{\"content\":\"!\"}}]}\n\n",
@@ -386,7 +386,7 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
     };
 
         let upstream = futures_util::stream::iter(vec![
-            Ok(Bytes::from(
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
                 "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_foo\",\"type\":\"function\",\"function\":{\"name\":\"getRandomNumber\",\"arguments\":\"{\\\"a\\\":\\\"0\\\"\"}}]}}]}\n\n",
             )),
             Ok(Bytes::from(

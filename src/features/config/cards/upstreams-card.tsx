@@ -1,14 +1,6 @@
 import { useMemo, useState } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   createDefaultColumnVisibility,
   mergeProviderOptions,
@@ -24,7 +16,7 @@ import type {
   UpstreamEditorState,
 } from "@/features/config/cards/upstreams/types";
 import { createEmptyUpstream } from "@/features/config/form";
-import { UPSTREAM_STRATEGIES, type UpstreamForm, type UpstreamStrategy } from "@/features/config/types";
+import type { UpstreamForm, UpstreamStrategy } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
 type UpstreamsCardProps = {
@@ -68,14 +60,6 @@ function cloneUpstreamDraft(upstream: UpstreamForm): UpstreamForm {
       header: upstream.overrides.header.map((entry) => ({ ...entry })),
     },
   };
-}
-
-const UPSTREAM_STRATEGY_VALUES: ReadonlySet<string> = new Set(
-  UPSTREAM_STRATEGIES.map((strategy) => strategy.value)
-);
-
-function toUpstreamStrategy(value: string): UpstreamStrategy | null {
-  return UPSTREAM_STRATEGY_VALUES.has(value) ? (value as UpstreamStrategy) : null;
 }
 
 export function UpstreamsCard({
@@ -166,45 +150,14 @@ export function UpstreamsCard({
         <CardDescription>{m.upstreams_desc()}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="rounded-md border border-border/60 bg-muted/30 p-3">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="space-y-1">
-              <p className="text-sm font-medium text-foreground">{m.strategy_title()}</p>
-              <p className="text-xs text-muted-foreground">{m.strategy_desc()}</p>
-            </div>
-            <div className="grid gap-1 sm:min-w-[220px]">
-              <Label htmlFor="upstreams-strategy" className="text-xs text-muted-foreground">
-                {m.strategy_label()}
-              </Label>
-              <Select
-                value={strategy}
-                onValueChange={(value) => {
-                  const nextStrategy = toUpstreamStrategy(value);
-                  if (nextStrategy) {
-                    onStrategyChange(nextStrategy);
-                  }
-                }}
-              >
-                <SelectTrigger id="upstreams-strategy">
-                  <SelectValue placeholder={m.strategy_placeholder()} />
-                </SelectTrigger>
-                <SelectContent>
-                  {UPSTREAM_STRATEGIES.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label()}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-        </div>
         <UpstreamsToolbar
           apiKeyVisible={apiKeyVisible}
           showApiKeys={showApiKeys}
           onToggleApiKeys={onToggleApiKeys}
           onAddClick={openCreateDialog}
           onColumnsClick={() => setColumnsOpen(true)}
+          strategy={strategy}
+          onStrategyChange={onStrategyChange}
         />
         {upstreams.length ? (
           <UpstreamsTable

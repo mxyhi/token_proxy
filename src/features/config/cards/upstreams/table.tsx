@@ -2,6 +2,14 @@ import { Ban, Check, Columns3, Copy, Eye, EyeOff, Pencil, Trash2 } from "lucide-
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   getUpstreamLabel,
   toMaskedApiKey,
@@ -9,21 +17,33 @@ import {
   toStatusLabel,
 } from "@/features/config/cards/upstreams/constants";
 import type { UpstreamColumnDefinition, UpstreamColumnId } from "@/features/config/cards/upstreams/types";
-import type { UpstreamForm } from "@/features/config/types";
+import { UPSTREAM_STRATEGIES, type UpstreamForm, type UpstreamStrategy } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
 type UpstreamsToolbarProps = {
   apiKeyVisible: boolean;
   showApiKeys: boolean;
+  strategy: UpstreamStrategy;
   onToggleApiKeys: () => void;
+  onStrategyChange: (value: UpstreamStrategy) => void;
   onAddClick: () => void;
   onColumnsClick: () => void;
 };
 
+const UPSTREAM_STRATEGY_VALUES: ReadonlySet<string> = new Set(
+  UPSTREAM_STRATEGIES.map((strategy) => strategy.value)
+);
+
+function toUpstreamStrategy(value: string): UpstreamStrategy | null {
+  return UPSTREAM_STRATEGY_VALUES.has(value) ? (value as UpstreamStrategy) : null;
+}
+
 export function UpstreamsToolbar({
   apiKeyVisible,
   showApiKeys,
+  strategy,
   onToggleApiKeys,
+  onStrategyChange,
   onAddClick,
   onColumnsClick,
 }: UpstreamsToolbarProps) {
@@ -38,17 +58,48 @@ export function UpstreamsToolbar({
           {m.common_columns()}
         </Button>
       </div>
-      {apiKeyVisible ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          onClick={onToggleApiKeys}
-          aria-label={showApiKeys ? m.upstreams_hide_api_keys() : m.upstreams_show_api_keys()}
-        >
-          {showApiKeys ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}
-        </Button>
-      ) : null}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2">
+          <Label
+            htmlFor="upstreams-strategy"
+            className="text-xs text-muted-foreground"
+            title={m.strategy_help()}
+          >
+            {m.strategy_label()}
+          </Label>
+          <Select
+            value={strategy}
+            onValueChange={(value) => {
+              const nextStrategy = toUpstreamStrategy(value);
+              if (nextStrategy) {
+                onStrategyChange(nextStrategy);
+              }
+            }}
+          >
+            <SelectTrigger id="upstreams-strategy" className="min-w-[180px]">
+              <SelectValue placeholder={m.strategy_placeholder()} />
+            </SelectTrigger>
+            <SelectContent>
+              {UPSTREAM_STRATEGIES.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label()}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {apiKeyVisible ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            onClick={onToggleApiKeys}
+            aria-label={showApiKeys ? m.upstreams_hide_api_keys() : m.upstreams_show_api_keys()}
+          >
+            {showApiKeys ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }

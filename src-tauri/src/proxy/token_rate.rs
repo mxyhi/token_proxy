@@ -1,9 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use tiktoken_rs::{cl100k_base, o200k_base, CoreBPE};
 use tokio::{
     sync::{watch, Mutex, RwLock},
     time::{interval, MissedTickBehavior},
@@ -425,37 +424,5 @@ impl Drop for RequestTokenTracker {
 }
 
 pub(crate) fn estimate_text_tokens(model: Option<&str>, text: &str) -> u64 {
-    if text.is_empty() {
-        return 0;
-    }
-    let bpe = bpe_for_model(model);
-    bpe.encode_with_special_tokens(text).len() as u64
-}
-
-fn bpe_for_model(model: Option<&str>) -> &'static CoreBPE {
-    if matches_o200k(model) {
-        static O200K: OnceLock<CoreBPE> = OnceLock::new();
-        return O200K.get_or_init(|| {
-            o200k_base().unwrap_or_else(|_| cl100k_base().expect("cl100k_base"))
-        });
-    }
-
-    static CL100K: OnceLock<CoreBPE> = OnceLock::new();
-    CL100K.get_or_init(|| cl100k_base().expect("cl100k_base"))
-}
-
-fn matches_o200k(model: Option<&str>) -> bool {
-    let Some(model) = model else {
-        return false;
-    };
-    let model = model.trim();
-    if model.is_empty() {
-        return false;
-    }
-    let model = model.to_ascii_lowercase();
-    model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
-        || model.starts_with("gpt-4o")
-        || model.starts_with("gpt-4.1")
+    super::token_estimator::estimate_text_tokens(model, text)
 }

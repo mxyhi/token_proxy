@@ -11,8 +11,8 @@ use super::{
         transform_request_body, FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES,
         RESPONSES_PATH,
     },
+    request_token_estimate,
     request_body::ReplayableBody,
-    token_rate,
     RequestMeta,
 };
 
@@ -107,7 +107,8 @@ pub(crate) async fn parse_request_meta_best_effort(
         }
     }
 
-    let estimated_input_tokens = estimate_input_tokens(&value, original_model.as_deref());
+    let estimated_input_tokens =
+        request_token_estimate::estimate_request_input_tokens(&value, original_model.as_deref());
     RequestMeta {
         stream,
         original_model,
@@ -132,125 +133,6 @@ pub(crate) fn parse_openai_reasoning_effort_from_model_suffix(
             Some((base.to_string(), effort))
         }
         _ => None,
-    }
-}
-
-fn estimate_input_tokens(value: &Value, model: Option<&str>) -> Option<u64> {
-    let mut total = 0u64;
-
-    if let Some(messages) = value.get("messages").and_then(Value::as_array) {
-        for message in messages {
-            total = total.saturating_add(sum_message_tokens(message, model));
-        }
-    }
-
-    if let Some(prompt) = value.get("prompt") {
-        total = total.saturating_add(sum_text_value(prompt, model));
-    }
-
-    if let Some(input) = value.get("input") {
-        total = total.saturating_add(sum_input_tokens(input, model));
-    }
-
-    if let Some(system) = value.get("system") {
-        total = total.saturating_add(sum_text_value(system, model));
-    }
-
-    if let Some(system_instruction) = value.get("system_instruction") {
-        total = total.saturating_add(sum_text_value(system_instruction, model));
-    }
-
-    if let Some(system_instruction) = value.get("systemInstruction") {
-        total = total.saturating_add(sum_text_value(system_instruction, model));
-    }
-
-    if let Some(instructions) = value.get("instructions") {
-        total = total.saturating_add(sum_text_value(instructions, model));
-    }
-
-    if let Some(contents) = value.get("contents") {
-        total = total.saturating_add(sum_gemini_contents(contents, model));
-    }
-
-    if total == 0 {
-        None
-    } else {
-        Some(total)
-    }
-}
-
-fn sum_message_tokens(message: &Value, model: Option<&str>) -> u64 {
-    let Some(content) = message.get("content") else {
-        return 0;
-    };
-    sum_content_tokens(content, model)
-}
-
-fn sum_input_tokens(input: &Value, model: Option<&str>) -> u64 {
-    match input {
-        Value::String(_) => sum_text_value(input, model),
-        Value::Array(items) => items.iter().fold(0u64, |acc, item| {
-            let mut next = acc;
-            if item.is_string() {
-                next = next.saturating_add(sum_text_value(item, model));
-            } else if let Some(content) = item.get("content") {
-                next = next.saturating_add(sum_content_tokens(content, model));
-            }
-            next
-        }),
-        Value::Object(object) => object
-            .get("content")
-            .map(|content| sum_content_tokens(content, model))
-            .unwrap_or(0),
-        _ => 0,
-    }
-}
-
-fn sum_gemini_contents(contents: &Value, model: Option<&str>) -> u64 {
-    let Some(contents) = contents.as_array() else {
-        return 0;
-    };
-    contents.iter().fold(0u64, |acc, content| {
-        let mut total = acc;
-        if let Some(parts) = content.get("parts").and_then(Value::as_array) {
-            for part in parts {
-                if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    total = total.saturating_add(token_rate::estimate_text_tokens(model, text));
-                }
-            }
-        }
-        total
-    })
-}
-
-fn sum_content_tokens(content: &Value, model: Option<&str>) -> u64 {
-    match content {
-        Value::String(_) => sum_text_value(content, model),
-        Value::Array(items) => items.iter().fold(0u64, |acc, item| {
-            let mut total = acc;
-            if let Some(text) = item.get("text").and_then(Value::as_str) {
-                total = total.saturating_add(token_rate::estimate_text_tokens(model, text));
-            } else if item.is_string() {
-                total = total.saturating_add(sum_text_value(item, model));
-            }
-            total
-        }),
-        _ => 0,
-    }
-}
-
-fn sum_text_value(value: &Value, model: Option<&str>) -> u64 {
-    match value {
-        Value::String(text) => token_rate::estimate_text_tokens(model, text),
-        Value::Array(items) => items.iter().fold(0u64, |acc, item| {
-            acc.saturating_add(sum_text_value(item, model))
-        }),
-        Value::Object(object) => object
-            .get("text")
-            .and_then(Value::as_str)
-            .map(|text| token_rate::estimate_text_tokens(model, text))
-            .unwrap_or(0),
-        _ => 0,
     }
 }
 

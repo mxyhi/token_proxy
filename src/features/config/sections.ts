@@ -14,7 +14,6 @@ export type ConfigSectionId =
   | "dashboard"
   | "logs"
   | "core"
-  | "strategy"
   | "upstreams"
   | "agents"
   | "settings";
@@ -50,13 +49,6 @@ export const CONFIG_SECTIONS: readonly ConfigSection[] = [
     label: () => m.config_section_core_label(),
     description: () => m.config_section_core_desc(),
     icon: SlidersHorizontal,
-  },
-  {
-    id: "strategy",
-    route: "/config/strategy",
-    label: () => m.config_section_strategy_label(),
-    description: () => m.config_section_strategy_desc(),
-    icon: Shuffle,
   },
   {
     id: "upstreams",

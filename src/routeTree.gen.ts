@@ -10,7 +10,6 @@ import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ConfigIndexRouteImport } from "./routes/config/index"
 
 const ConfigUpstreamsLazyRouteImport = createFileRoute("/config/upstreams")()
-const ConfigStrategyLazyRouteImport = createFileRoute("/config/strategy")()
 const ConfigSettingsLazyRouteImport = createFileRoute("/config/settings")()
 const ConfigLogsLazyRouteImport = createFileRoute("/config/logs")()
 const ConfigDashboardLazyRouteImport = createFileRoute("/config/dashboard")()
@@ -38,13 +37,6 @@ const ConfigUpstreamsLazyRoute = ConfigUpstreamsLazyRouteImport.update({
   getParentRoute: () => ConfigRouteRoute,
 } as any).lazy(() =>
   import("./routes/config/upstreams.lazy").then((d) => d.Route),
-)
-const ConfigStrategyLazyRoute = ConfigStrategyLazyRouteImport.update({
-  id: "/strategy",
-  path: "/strategy",
-  getParentRoute: () => ConfigRouteRoute,
-} as any).lazy(() =>
-  import("./routes/config/strategy.lazy").then((d) => d.Route),
 )
 const ConfigSettingsLazyRoute = ConfigSettingsLazyRouteImport.update({
   id: "/settings",
@@ -84,7 +76,6 @@ export interface FileRoutesByFullPath {
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
   "/config/settings": typeof ConfigSettingsLazyRoute
-  "/config/strategy": typeof ConfigStrategyLazyRoute
   "/config/upstreams": typeof ConfigUpstreamsLazyRoute
   "/config/": typeof ConfigIndexRoute
 }
@@ -95,7 +86,6 @@ export interface FileRoutesByTo {
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
   "/config/settings": typeof ConfigSettingsLazyRoute
-  "/config/strategy": typeof ConfigStrategyLazyRoute
   "/config/upstreams": typeof ConfigUpstreamsLazyRoute
   "/config": typeof ConfigIndexRoute
 }
@@ -108,7 +98,6 @@ export interface FileRoutesById {
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
   "/config/settings": typeof ConfigSettingsLazyRoute
-  "/config/strategy": typeof ConfigStrategyLazyRoute
   "/config/upstreams": typeof ConfigUpstreamsLazyRoute
   "/config/": typeof ConfigIndexRoute
 }
@@ -122,7 +111,6 @@ export interface FileRouteTypes {
     | "/config/dashboard"
     | "/config/logs"
     | "/config/settings"
-    | "/config/strategy"
     | "/config/upstreams"
     | "/config/"
   fileRoutesByTo: FileRoutesByTo
@@ -133,7 +121,6 @@ export interface FileRouteTypes {
     | "/config/dashboard"
     | "/config/logs"
     | "/config/settings"
-    | "/config/strategy"
     | "/config/upstreams"
     | "/config"
   id:
@@ -145,7 +132,6 @@ export interface FileRouteTypes {
     | "/config/dashboard"
     | "/config/logs"
     | "/config/settings"
-    | "/config/strategy"
     | "/config/upstreams"
     | "/config/"
   fileRoutesById: FileRoutesById
@@ -183,13 +169,6 @@ declare module "@tanstack/react-router" {
       path: "/upstreams"
       fullPath: "/config/upstreams"
       preLoaderRoute: typeof ConfigUpstreamsLazyRouteImport
-      parentRoute: typeof ConfigRouteRoute
-    }
-    "/config/strategy": {
-      id: "/config/strategy"
-      path: "/strategy"
-      fullPath: "/config/strategy"
-      preLoaderRoute: typeof ConfigStrategyLazyRouteImport
       parentRoute: typeof ConfigRouteRoute
     }
     "/config/settings": {
@@ -236,7 +215,6 @@ interface ConfigRouteRouteChildren {
   ConfigDashboardLazyRoute: typeof ConfigDashboardLazyRoute
   ConfigLogsLazyRoute: typeof ConfigLogsLazyRoute
   ConfigSettingsLazyRoute: typeof ConfigSettingsLazyRoute
-  ConfigStrategyLazyRoute: typeof ConfigStrategyLazyRoute
   ConfigUpstreamsLazyRoute: typeof ConfigUpstreamsLazyRoute
   ConfigIndexRoute: typeof ConfigIndexRoute
 }
@@ -247,7 +225,6 @@ const ConfigRouteRouteChildren: ConfigRouteRouteChildren = {
   ConfigDashboardLazyRoute: ConfigDashboardLazyRoute,
   ConfigLogsLazyRoute: ConfigLogsLazyRoute,
   ConfigSettingsLazyRoute: ConfigSettingsLazyRoute,
-  ConfigStrategyLazyRoute: ConfigStrategyLazyRoute,
   ConfigUpstreamsLazyRoute: ConfigUpstreamsLazyRoute,
   ConfigIndexRoute: ConfigIndexRoute,
 }

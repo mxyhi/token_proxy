@@ -24,7 +24,6 @@ import {
   AutoStartCard,
   ProjectLinksCard,
   ProxyCoreCard,
-  StrategyCard,
   TrayTokenRateCard,
   UpdateCard,
   UpstreamsCard,
@@ -216,21 +215,16 @@ function ConfigSectionBody({
           proxyService={proxyService}
         />
       );
-    case "strategy":
-      return (
-        <StrategyCard
-          strategy={props.form.upstreamStrategy}
-          onChange={props.onStrategyChange}
-        />
-      );
     case "upstreams":
       return (
         <UpstreamsCard
           upstreams={props.form.upstreams}
           appProxyUrl={props.form.appProxyUrl}
+          strategy={props.form.upstreamStrategy}
           showApiKeys={props.showUpstreamKeys}
           providerOptions={props.providerOptions}
           onToggleApiKeys={props.onToggleUpstreamKeys}
+          onStrategyChange={props.onStrategyChange}
           onAdd={props.onAddUpstream}
           onRemove={props.onRemoveUpstream}
           onChange={props.onChangeUpstream}

@@ -1,6 +1,14 @@
 import { useMemo, useState } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   createDefaultColumnVisibility,
   mergeProviderOptions,
@@ -16,15 +24,17 @@ import type {
   UpstreamEditorState,
 } from "@/features/config/cards/upstreams/types";
 import { createEmptyUpstream } from "@/features/config/form";
-import type { UpstreamForm } from "@/features/config/types";
+import { UPSTREAM_STRATEGIES, type UpstreamForm, type UpstreamStrategy } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
 type UpstreamsCardProps = {
   upstreams: UpstreamForm[];
   appProxyUrl: string;
+  strategy: UpstreamStrategy;
   showApiKeys: boolean;
   providerOptions: string[];
   onToggleApiKeys: () => void;
+  onStrategyChange: (value: UpstreamStrategy) => void;
   onAdd: (upstream: UpstreamForm) => void;
   onRemove: (index: number) => void;
   onChange: (index: number, patch: Partial<UpstreamForm>) => void;
@@ -60,12 +70,22 @@ function cloneUpstreamDraft(upstream: UpstreamForm): UpstreamForm {
   };
 }
 
+const UPSTREAM_STRATEGY_VALUES: ReadonlySet<string> = new Set(
+  UPSTREAM_STRATEGIES.map((strategy) => strategy.value)
+);
+
+function toUpstreamStrategy(value: string): UpstreamStrategy | null {
+  return UPSTREAM_STRATEGY_VALUES.has(value) ? (value as UpstreamStrategy) : null;
+}
+
 export function UpstreamsCard({
   upstreams,
   appProxyUrl,
+  strategy,
   showApiKeys,
   providerOptions,
   onToggleApiKeys,
+  onStrategyChange,
   onAdd,
   onRemove,
   onChange,
@@ -142,8 +162,36 @@ export function UpstreamsCard({
   return (
     <Card data-slot="upstreams-card">
       <CardHeader>
-        <CardTitle>{m.upstreams_title()}</CardTitle>
-        <CardDescription>{m.upstreams_desc()}</CardDescription>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="space-y-1">
+            <CardTitle>{m.upstreams_title()}</CardTitle>
+            <CardDescription>{m.upstreams_desc()}</CardDescription>
+          </div>
+          <div className="grid gap-2 sm:min-w-[240px]">
+            <Label htmlFor="upstreams-strategy">{m.strategy_label()}</Label>
+            <Select
+              value={strategy}
+              onValueChange={(value) => {
+                const nextStrategy = toUpstreamStrategy(value);
+                if (nextStrategy) {
+                  onStrategyChange(nextStrategy);
+                }
+              }}
+            >
+              <SelectTrigger id="upstreams-strategy">
+                <SelectValue placeholder={m.strategy_placeholder()} />
+              </SelectTrigger>
+              <SelectContent>
+                {UPSTREAM_STRATEGIES.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">{m.strategy_help()}</p>
+          </div>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <UpstreamsToolbar

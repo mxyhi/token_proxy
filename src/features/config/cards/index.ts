@@ -2,7 +2,6 @@ export type { StatusBadge } from "./types";
 export { ProxyCoreCard } from "./proxy-core-card";
 export { AutoStartCard } from "./auto-start-card";
 export { TrayTokenRateCard } from "./tray-token-rate-card";
-export { StrategyCard } from "./strategy-card";
 export { UpstreamsCard } from "./upstreams-card";
 export { ConfigFileCard } from "./config-file-card";
 export { ClientSetupCard } from "./client-setup-card";

@@ -14,7 +14,8 @@
       {
         "title": "Token Proxy (dev)",
         "width": 1064,
-        "height": 658
+        "height": 658,
+        "visible": false
       }
     ],
     "security": {

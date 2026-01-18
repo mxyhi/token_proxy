@@ -70,6 +70,10 @@ pub(crate) fn show_or_create_main_window(app: &tauri::AppHandle) {
     });
 }
 
+fn is_autostart_launch() -> bool {
+    std::env::args().any(|arg| arg == "--autostart")
+}
+
 #[tauri::command]
 async fn read_proxy_config(app: tauri::AppHandle) -> Result<proxy::config::ConfigResponse, String> {
     proxy::config::read_config(app).await
@@ -280,10 +284,16 @@ pub fn run() {
     // 默认 silent；后续加载配置后按需调整。
     let logging_state = logging::LoggingState::init(LogLevel::Silent);
     tracing::info!("starting token_proxy application");
+    let autostart_launch = is_autostart_launch();
 
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
     #[cfg(desktop)]
     {
+        builder = builder.plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args(["--autostart"])
+                .build(),
+        );
         // 二次启动时唤起并聚焦已有主窗口，避免多实例托盘图标。
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_or_create_main_window(app);
@@ -291,7 +301,7 @@ pub fn run() {
     }
 
     let app = builder
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(desktop)]
             {
                 app.handle().plugin(tauri_plugin_process::init())?;
@@ -324,8 +334,9 @@ pub fn run() {
 
             let tray_state_for_start = tray_state.clone();
             let proxy_for_start = proxy_service.clone();
+            let app_handle_for_start = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                match proxy_for_start.start(app_handle).await {
+                match proxy_for_start.start(app_handle_for_start).await {
                     Ok(status) => tray_state_for_start.apply_status(&status),
                     Err(err) => {
                         tray_state_for_start.apply_error("启动失败", &err);
@@ -333,6 +344,15 @@ pub fn run() {
                     }
                 }
             });
+
+            if autostart_launch {
+                set_main_window_visibility(&app_handle, false);
+                if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
+                    let _ = window.hide();
+                }
+            } else {
+                show_or_create_main_window(&app_handle);
+            }
             Ok(())
         })
         .on_window_event(|window, event| match event {

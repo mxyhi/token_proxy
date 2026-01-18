@@ -21,6 +21,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import {
   ClientSetupCard,
   ConfigFileCard,
+  AutoStartCard,
   ProjectLinksCard,
   ProxyCoreCard,
   StrategyCard,
@@ -54,6 +55,9 @@ type AppViewProps = {
   providerOptions: string[];
   configPath: string;
   savedAt: string;
+  autoStartEnabled: boolean;
+  autoStartStatus: "idle" | "loading" | "error";
+  autoStartMessage: string;
   proxyServiceStatus: ProxyServiceStatus | null;
   proxyServiceRequestState: ProxyServiceRequestState;
   proxyServiceMessage: string;
@@ -66,6 +70,7 @@ type AppViewProps = {
   onToggleUpstreamKeys: () => void;
   onFormChange: (patch: Partial<ConfigForm>) => void;
   onStrategyChange: (value: ConfigForm["upstreamStrategy"]) => void;
+  onAutoStartChange: (value: boolean) => void;
   onAddUpstream: (upstream: ConfigForm["upstreams"][number]) => void;
   onRemoveUpstream: (index: number) => void;
   onChangeUpstream: (
@@ -238,6 +243,12 @@ function ConfigSectionBody({
             configPath={props.configPath}
             savedAt={props.savedAt}
             isDirty={props.isDirty}
+          />
+          <AutoStartCard
+            enabled={props.autoStartEnabled}
+            status={props.autoStartStatus}
+            message={props.autoStartMessage}
+            onChange={props.onAutoStartChange}
           />
           <TrayTokenRateCard
             value={props.form.trayTokenRate}

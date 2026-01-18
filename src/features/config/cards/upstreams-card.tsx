@@ -162,38 +162,43 @@ export function UpstreamsCard({
   return (
     <Card data-slot="upstreams-card">
       <CardHeader>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-1">
-            <CardTitle>{m.upstreams_title()}</CardTitle>
-            <CardDescription>{m.upstreams_desc()}</CardDescription>
-          </div>
-          <div className="grid gap-2 sm:min-w-[240px]">
-            <Label htmlFor="upstreams-strategy">{m.strategy_label()}</Label>
-            <Select
-              value={strategy}
-              onValueChange={(value) => {
-                const nextStrategy = toUpstreamStrategy(value);
-                if (nextStrategy) {
-                  onStrategyChange(nextStrategy);
-                }
-              }}
-            >
-              <SelectTrigger id="upstreams-strategy">
-                <SelectValue placeholder={m.strategy_placeholder()} />
-              </SelectTrigger>
-              <SelectContent>
-                {UPSTREAM_STRATEGIES.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label()}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-xs text-muted-foreground">{m.strategy_help()}</p>
-          </div>
-        </div>
+        <CardTitle>{m.upstreams_title()}</CardTitle>
+        <CardDescription>{m.upstreams_desc()}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div className="rounded-md border border-border/60 bg-muted/30 p-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-foreground">{m.strategy_title()}</p>
+              <p className="text-xs text-muted-foreground">{m.strategy_desc()}</p>
+            </div>
+            <div className="grid gap-1 sm:min-w-[220px]">
+              <Label htmlFor="upstreams-strategy" className="text-xs text-muted-foreground">
+                {m.strategy_label()}
+              </Label>
+              <Select
+                value={strategy}
+                onValueChange={(value) => {
+                  const nextStrategy = toUpstreamStrategy(value);
+                  if (nextStrategy) {
+                    onStrategyChange(nextStrategy);
+                  }
+                }}
+              >
+                <SelectTrigger id="upstreams-strategy">
+                  <SelectValue placeholder={m.strategy_placeholder()} />
+                </SelectTrigger>
+                <SelectContent>
+                  {UPSTREAM_STRATEGIES.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label()}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        </div>
         <UpstreamsToolbar
           apiKeyVisible={apiKeyVisible}
           showApiKeys={showApiKeys}

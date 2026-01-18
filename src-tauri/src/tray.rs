@@ -375,19 +375,20 @@ fn start_token_rate_loop(tray_state: TrayState, loop_id: u64) {
 
 #[cfg(target_os = "macos")]
 fn format_rate_title(snapshot: TokenRateSnapshot, format: TrayTokenRateFormat) -> String {
-    let has_tokens = snapshot.total > 0;
+    let has_input = snapshot.input > 0;
+    let has_output = snapshot.output > 0;
+    let has_tokens = has_input || has_output;
+    // ↑ 显示 input（有 input 时）或连接数（无 input 时）
+    let input_display = if has_input { snapshot.input } else { snapshot.connections };
+    // ↓ 始终显示 output
+    let output_display = snapshot.output;
+    // total 显示总 token 数（有 token 时）或连接数（无 token 时）
     let total_display = if has_tokens { snapshot.total } else { snapshot.connections };
-    let split_input_display = if has_tokens { snapshot.input } else { snapshot.connections };
-    let both_input_display = if has_tokens { snapshot.input } else { 0 };
-    let split_output_display = snapshot.output;
-    let both_output_display = if has_tokens { snapshot.output } else { 0 };
     match format {
         TrayTokenRateFormat::Combined => format!("{total_display}"),
-        TrayTokenRateFormat::Split => format!("↑{split_input_display} ↓{split_output_display}"),
+        TrayTokenRateFormat::Split => format!("↑{input_display} ↓{output_display}"),
         TrayTokenRateFormat::Both => {
-            format!(
-                "{total_display} | ↑{both_input_display} ↓{both_output_display}"
-            )
+            format!("{total_display} | ↑{input_display} ↓{output_display}")
         }
     }
 }

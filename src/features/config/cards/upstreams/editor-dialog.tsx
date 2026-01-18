@@ -24,8 +24,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getUpstreamLabel } from "@/features/config/cards/upstreams/constants";
+import { KiroAccountFields } from "@/features/config/cards/upstreams/kiro-account-fields";
 import type { UpstreamEditorState } from "@/features/config/cards/upstreams/types";
 import { createModelMapping } from "@/features/config/form";
+import type { KiroAccountSummary } from "@/features/kiro/types";
 import type {
   HeaderOverrideForm,
   ModelMappingForm,
@@ -225,6 +227,12 @@ type UpstreamEditorFieldsProps = {
   showApiKeys: boolean;
   onToggleApiKeys: () => void;
   onChangeDraft: (patch: Partial<UpstreamForm>) => void;
+  kiroAccounts: KiroAccountSummary[];
+  kiroAccountsLoading: boolean;
+  kiroAccountsError: string;
+  onRefreshKiroAccounts: () => void;
+  onLogoutKiroAccount: (accountId: string) => void;
+  onImportKiroIde: () => Promise<KiroAccountSummary[]>;
 };
 
 type UpstreamIdentityFieldsProps = {
@@ -232,6 +240,7 @@ type UpstreamIdentityFieldsProps = {
   providerOptions: readonly string[];
   appProxyUrl: string;
   onChangeDraft: (patch: Partial<UpstreamForm>) => void;
+  showBaseUrl: boolean;
 };
 
 function UpstreamIdentityFields({
@@ -239,6 +248,7 @@ function UpstreamIdentityFields({
   providerOptions,
   appProxyUrl,
   onChangeDraft,
+  showBaseUrl,
 }: UpstreamIdentityFieldsProps) {
   const canUseAppProxy = !!appProxyUrl.trim();
   return (
@@ -287,14 +297,16 @@ function UpstreamIdentityFields({
         </Select>
       </div>
 
-      <EditorField label={m.field_base_url()} htmlFor="upstream-editor-baseUrl">
-        <Input
-          id="upstream-editor-baseUrl"
-          value={draft.baseUrl}
-          onChange={(e) => onChangeDraft({ baseUrl: e.target.value })}
-          placeholder="https://api.openai.com"
-        />
-      </EditorField>
+      {showBaseUrl ? (
+        <EditorField label={m.field_base_url()} htmlFor="upstream-editor-baseUrl">
+          <Input
+            id="upstream-editor-baseUrl"
+            value={draft.baseUrl}
+            onChange={(e) => onChangeDraft({ baseUrl: e.target.value })}
+            placeholder="https://api.openai.com"
+          />
+        </EditorField>
+      ) : null}
 
       <EditorField label={m.field_proxy_url()} htmlFor="upstream-editor-proxyUrl">
         <div className="grid gap-2">
@@ -426,7 +438,14 @@ function UpstreamEditorFields({
   showApiKeys,
   onToggleApiKeys,
   onChangeDraft,
+  kiroAccounts,
+  kiroAccountsLoading,
+  kiroAccountsError,
+  onRefreshKiroAccounts,
+  onLogoutKiroAccount,
+  onImportKiroIde,
 }: UpstreamEditorFieldsProps) {
+  const isKiro = draft.provider.trim() === "kiro";
   return (
     <div
       data-slot="upstream-editor-fields"
@@ -436,14 +455,29 @@ function UpstreamEditorFields({
         draft={draft}
         providerOptions={providerOptions}
         appProxyUrl={appProxyUrl}
+        showBaseUrl={!isKiro}
         onChangeDraft={onChangeDraft}
       />
-      <UpstreamAuthFields
-        draft={draft}
-        showApiKeys={showApiKeys}
-        onToggleApiKeys={onToggleApiKeys}
-        onChangeDraft={onChangeDraft}
-      />
+      {isKiro ? null : (
+        <UpstreamAuthFields
+          draft={draft}
+          showApiKeys={showApiKeys}
+          onToggleApiKeys={onToggleApiKeys}
+          onChangeDraft={onChangeDraft}
+        />
+      )}
+      {draft.provider.trim() === "kiro" ? (
+        <KiroAccountFields
+          accountId={draft.kiroAccountId}
+          accounts={kiroAccounts}
+          loading={kiroAccountsLoading}
+          error={kiroAccountsError}
+          onRefresh={onRefreshKiroAccounts}
+          onLogout={onLogoutKiroAccount}
+          onImport={onImportKiroIde}
+          onSelect={(accountId) => onChangeDraft({ kiroAccountId: accountId })}
+        />
+      ) : null}
       <UpstreamOrderFields draft={draft} onChangeDraft={onChangeDraft} />
       <UpstreamModelMappingFields draft={draft} onChangeDraft={onChangeDraft} />
       <UpstreamHeaderOverrideFields draft={draft} onChangeDraft={onChangeDraft} />
@@ -460,6 +494,12 @@ type UpstreamEditorDialogProps = {
   onOpenChange: (open: boolean) => void;
   onChangeDraft: (patch: Partial<UpstreamForm>) => void;
   onSave: () => void;
+  kiroAccounts: KiroAccountSummary[];
+  kiroAccountsLoading: boolean;
+  kiroAccountsError: string;
+  onRefreshKiroAccounts: () => void;
+  onLogoutKiroAccount: (accountId: string) => void;
+  onImportKiroIde: () => Promise<KiroAccountSummary[]>;
 };
 
 export function UpstreamEditorDialog({
@@ -471,6 +511,12 @@ export function UpstreamEditorDialog({
   onOpenChange,
   onChangeDraft,
   onSave,
+  kiroAccounts,
+  kiroAccountsLoading,
+  kiroAccountsError,
+  onRefreshKiroAccounts,
+  onLogoutKiroAccount,
+  onImportKiroIde,
 }: UpstreamEditorDialogProps) {
   const title = editor.open
     ? editor.mode === "create"
@@ -500,6 +546,12 @@ export function UpstreamEditorDialog({
               showApiKeys={showApiKeys}
               onToggleApiKeys={onToggleApiKeys}
               onChangeDraft={onChangeDraft}
+              kiroAccounts={kiroAccounts}
+              kiroAccountsLoading={kiroAccountsLoading}
+              kiroAccountsError={kiroAccountsError}
+              onRefreshKiroAccounts={onRefreshKiroAccounts}
+              onLogoutKiroAccount={onLogoutKiroAccount}
+              onImportKiroIde={onImportKiroIde}
             />
           ) : null}
         </AlertDialogBody>

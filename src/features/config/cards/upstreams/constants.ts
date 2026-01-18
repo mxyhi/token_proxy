@@ -16,6 +16,13 @@ export const UPSTREAM_COLUMNS: readonly UpstreamColumnDefinition[] = [
     headerClassName: "w-[12rem]",
     cellClassName: "w-[12rem] max-w-[12rem]",
   },
+  {
+    id: "account",
+    label: () => m.upstreams_column_account(),
+    defaultVisible: true,
+    headerClassName: "w-[14rem]",
+    cellClassName: "w-[14rem] max-w-[14rem]",
+  },
   { id: "baseUrl", label: () => m.upstreams_column_base_url(), defaultVisible: false, cellClassName: "min-w-[18rem]" },
   { id: "apiKey", label: () => m.upstreams_column_api_key(), defaultVisible: false, cellClassName: "min-w-[18rem]" },
   { id: "proxyUrl", label: () => m.upstreams_column_proxy_url(), defaultVisible: false, cellClassName: "min-w-[18rem]" },
@@ -39,6 +46,7 @@ export function createDefaultColumnVisibility() {
   const visibility: ColumnVisibility = {
     id: true,
     provider: true,
+    account: true,
     baseUrl: false,
     apiKey: false,
     proxyUrl: false,
@@ -51,7 +59,7 @@ export function createDefaultColumnVisibility() {
   return visibility;
 }
 
-const DEFAULT_PROVIDER_OPTIONS = ["openai", "openai-response", "anthropic", "gemini"] as const;
+const DEFAULT_PROVIDER_OPTIONS = ["openai", "openai-response", "anthropic", "gemini", "kiro"] as const;
 
 export function mergeProviderOptions(values: readonly string[]) {
   const seen = new Set<string>();

@@ -16,6 +16,7 @@ import type {
   UpstreamEditorState,
 } from "@/features/config/cards/upstreams/types";
 import { createEmptyUpstream } from "@/features/config/form";
+import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
 import type { UpstreamForm, UpstreamStrategy } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
@@ -84,12 +85,24 @@ export function UpstreamsCard({
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [editor, setEditor] = useState<UpstreamEditorState>({ open: false });
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>({ open: false });
+  const {
+    accounts: kiroAccounts,
+    loading: kiroAccountsLoading,
+    error: kiroAccountsError,
+    refresh: refreshKiroAccounts,
+    logout: logoutKiroAccount,
+    importIde: importKiroIde,
+  } = useKiroAccounts();
 
   const columns = useMemo(
     () => UPSTREAM_COLUMNS.filter((column) => columnVisibility[column.id]),
     [columnVisibility]
   );
   const apiKeyVisible = columnVisibility.apiKey;
+  const kiroAccountMap = useMemo(() => {
+    const map = new Map(kiroAccounts.map((account) => [account.account_id, account]));
+    return map;
+  }, [kiroAccounts]);
 
   const updateDraft = (patch: Partial<UpstreamForm>) =>
     setEditor((prev) =>
@@ -164,6 +177,7 @@ export function UpstreamsCard({
             upstreams={upstreams}
             columns={columns}
             showApiKeys={showApiKeys}
+            kiroAccounts={kiroAccountMap}
             disableDelete={false}
             onEdit={openEditDialog}
             onCopy={openCopyDialog}
@@ -199,6 +213,12 @@ export function UpstreamsCard({
         onOpenChange={(open) => !open && setEditor({ open: false })}
         onChangeDraft={updateDraft}
         onSave={saveDraft}
+        kiroAccounts={kiroAccounts}
+        kiroAccountsLoading={kiroAccountsLoading}
+        kiroAccountsError={kiroAccountsError}
+        onRefreshKiroAccounts={refreshKiroAccounts}
+        onLogoutKiroAccount={logoutKiroAccount}
+        onImportKiroIde={importKiroIde}
       />
       <DeleteUpstreamDialog
         dialog={deleteDialog}

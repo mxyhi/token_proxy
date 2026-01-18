@@ -102,6 +102,18 @@ fn normalize_single_upstream(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
+    let kiro_account_id = upstream
+        .kiro_account_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    if provider == "kiro" && kiro_account_id.is_none() {
+        return Err(format!(
+            "Upstream {} requires a Kiro account binding.",
+            upstream.id
+        ));
+    }
     let proxy_url = normalize_upstream_proxy_url(
         upstream.proxy_url.as_deref(),
         app_proxy_url,
@@ -113,6 +125,7 @@ fn normalize_single_upstream(
         id: upstream.id.trim().to_string(),
         base_url: base_url.to_string(),
         api_key,
+        kiro_account_id,
         proxy_url,
         priority: upstream.priority.unwrap_or(0),
         model_mappings,

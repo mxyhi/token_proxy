@@ -1,6 +1,7 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod client_config;
 mod jsonc;
+mod kiro;
 mod logging;
 mod proxy;
 mod tray;
@@ -189,6 +190,54 @@ fn set_request_detail_capture(
 }
 
 #[tauri::command]
+async fn kiro_list_accounts(
+    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+) -> Result<Vec<kiro::KiroAccountSummary>, String> {
+    kiro_store.list_accounts().await
+}
+
+#[tauri::command]
+async fn kiro_import_ide(
+    app: tauri::AppHandle,
+    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+) -> Result<Vec<kiro::KiroAccountSummary>, String> {
+    kiro_store.import_ide_tokens(&app).await
+}
+
+#[tauri::command]
+async fn kiro_start_login(
+    kiro_login: tauri::State<'_, Arc<kiro::KiroLoginManager>>,
+    method: String,
+) -> Result<kiro::KiroLoginStartResponse, String> {
+    let parsed = method.parse::<kiro::KiroLoginMethod>()?;
+    kiro_login.start_login(parsed).await
+}
+
+#[tauri::command]
+async fn kiro_poll_login(
+    kiro_login: tauri::State<'_, Arc<kiro::KiroLoginManager>>,
+    state: String,
+) -> Result<kiro::KiroLoginPollResponse, String> {
+    kiro_login.poll_login(&state).await
+}
+
+#[tauri::command]
+async fn kiro_logout(
+    kiro_login: tauri::State<'_, Arc<kiro::KiroLoginManager>>,
+    account_id: String,
+) -> Result<(), String> {
+    kiro_login.logout(&account_id).await
+}
+
+#[tauri::command]
+async fn kiro_handle_callback(
+    kiro_login: tauri::State<'_, Arc<kiro::KiroLoginManager>>,
+    url: String,
+) -> Result<(), String> {
+    kiro_login.handle_callback_url(&url).await
+}
+
+#[tauri::command]
 async fn proxy_status(
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,
@@ -286,7 +335,9 @@ pub fn run() {
     tracing::info!("starting token_proxy application");
     let autostart_launch = is_autostart_launch();
 
-    let mut builder = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+    let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_deep_link::init());
     #[cfg(desktop)]
     {
         builder = builder.plugin(
@@ -295,7 +346,19 @@ pub fn run() {
                 .build(),
         );
         // 二次启动时唤起并聚焦已有主窗口，避免多实例托盘图标。
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if let Some(login) = app.try_state::<Arc<kiro::KiroLoginManager>>() {
+                for arg in &args {
+                    if arg.starts_with("kiro://") {
+                        let url = arg.clone();
+                        let login = login.inner().clone();
+                        tauri::async_runtime::spawn(async move {
+                            let _ = login.handle_callback_url(&url).await;
+                        });
+                        break;
+                    }
+                }
+            }
             show_or_create_main_window(app);
         }));
     }
@@ -318,6 +381,10 @@ pub fn run() {
             app.manage(proxy_service.clone());
             app.manage(logging_state.clone());
             let app_handle = app.handle().clone();
+            let kiro_store = Arc::new(kiro::KiroAccountStore::new(&app_handle)?);
+            app.manage(kiro_store.clone());
+            let kiro_login = Arc::new(kiro::KiroLoginManager::new(kiro_store));
+            app.manage(kiro_login);
             let tray_state = tray::init_tray(&app_handle, proxy_service.clone())?;
             app.manage(tray_state.clone());
 
@@ -388,6 +455,12 @@ pub fn run() {
             read_request_log_detail,
             read_request_detail_capture,
             set_request_detail_capture,
+            kiro_list_accounts,
+            kiro_import_ide,
+            kiro_start_login,
+            kiro_poll_login,
+            kiro_logout,
+            kiro_handle_callback,
             proxy_status,
             proxy_start,
             proxy_stop,

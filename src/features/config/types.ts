@@ -27,6 +27,7 @@ export type UpstreamConfig = {
   provider: string;
   base_url: string;
   api_key: string | null;
+  kiro_account_id?: string | null;
   proxy_url: string | null;
   priority: number | null;
   enabled: boolean;
@@ -70,6 +71,7 @@ export type UpstreamForm = {
   provider: string;
   baseUrl: string;
   apiKey: string;
+  kiroAccountId: string;
   proxyUrl: string;
   priority: string;
   enabled: boolean;

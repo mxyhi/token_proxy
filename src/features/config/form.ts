@@ -15,6 +15,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "openai",
     baseUrl: "https://api.openai.com",
     apiKey: "",
+    kiroAccountId: "",
     proxyUrl: "",
     priority: "0",
     enabled: true,
@@ -26,6 +27,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "openai-response",
     baseUrl: "https://api.openai.com",
     apiKey: "",
+    kiroAccountId: "",
     proxyUrl: "",
     priority: "0",
     enabled: true,
@@ -37,6 +39,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "anthropic",
     baseUrl: "https://api.anthropic.com",
     apiKey: "",
+    kiroAccountId: "",
     proxyUrl: "",
     priority: "0",
     enabled: true,
@@ -48,6 +51,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "gemini",
     baseUrl: "https://generativelanguage.googleapis.com",
     apiKey: "",
+    kiroAccountId: "",
     proxyUrl: "",
     priority: "0",
     enabled: true,
@@ -98,6 +102,7 @@ export function createEmptyUpstream(): UpstreamForm {
     provider: "",
     baseUrl: "",
     apiKey: "",
+    kiroAccountId: "",
     proxyUrl: "",
     priority: "",
     enabled: true,
@@ -151,6 +156,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
       provider: upstream.provider,
       baseUrl: upstream.base_url,
       apiKey: upstream.api_key ?? "",
+      kiroAccountId: upstream.kiro_account_id ?? "",
       proxyUrl: upstream.proxy_url ?? "",
       priority: upstream.priority === null ? "" : String(upstream.priority),
       enabled: upstream.enabled,
@@ -176,6 +182,9 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       provider: upstream.provider.trim(),
       base_url: upstream.baseUrl.trim(),
       api_key: upstream.apiKey.trim() ? upstream.apiKey.trim() : null,
+      kiro_account_id: upstream.kiroAccountId.trim()
+        ? upstream.kiroAccountId.trim()
+        : null,
       proxy_url: upstream.proxyUrl.trim() ? upstream.proxyUrl.trim() : null,
       priority: parseOptionalInt(upstream.priority),
       enabled: upstream.enabled,
@@ -216,6 +225,9 @@ export function validate(form: ConfigForm) {
     const provider = upstream.provider.trim();
     if (!provider) {
       return { valid: false, message: m.error_upstream_provider_required({ id }) };
+    }
+    if (provider === "kiro" && !upstream.kiroAccountId.trim()) {
+      return { valid: false, message: m.error_upstream_kiro_account_required({ id }) };
     }
     if (!upstream.baseUrl.trim()) {
       return { valid: false, message: m.error_upstream_base_url_required({ id }) };

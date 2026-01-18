@@ -345,6 +345,10 @@ async fn build_proxy_state(
         .state::<Arc<super::token_rate::TokenRateTracker>>()
         .inner()
         .clone();
+    let kiro_accounts = app
+        .state::<Arc<crate::kiro::KiroAccountStore>>()
+        .inner()
+        .clone();
     Ok(Arc::new(ProxyState {
         config,
         http_clients,
@@ -352,5 +356,6 @@ async fn build_proxy_state(
         cursors,
         request_detail,
         token_rate,
+        kiro_accounts,
     }))
 }

@@ -31,12 +31,12 @@ use std::{
 };
 
 // 上游“无数据响应”超时：同时用于等待响应头（TTFB）与流式 body 的空闲超时。
-// - 生产：180s（用户要求写死）
-// - 测试：缩短，避免用例卡 180s
+// - 生产：120s（用户要求写死）
+// - 测试：缩短，避免用例卡 120s
 #[cfg(test)]
 pub(crate) const UPSTREAM_NO_DATA_TIMEOUT: Duration = Duration::from_millis(50);
 #[cfg(not(test))]
-pub(crate) const UPSTREAM_NO_DATA_TIMEOUT: Duration = Duration::from_secs(180);
+pub(crate) const UPSTREAM_NO_DATA_TIMEOUT: Duration = Duration::from_secs(120);
 
 struct ProxyState {
     config: config::ProxyConfig,

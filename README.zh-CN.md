@@ -112,6 +112,6 @@ curl -X POST \
 ## FAQ
 - **端口被占用？** 修改 `config.jsonc` 里的 `port`，并同步更新客户端 base URL
 - **返回 401？** 设置了 `local_api_key` 就必须按接口格式发送本地 key（OpenAI/Responses 用 `Authorization`；Anthropic 用 `x-api-key`；Gemini 用 `x-goog-api-key` 或 `?key=`）；开启本地鉴权后，上游密钥请配置在 `upstreams[].api_key`
-- **返回 504？** 上游在 180 秒内未返回响应头或首个 body chunk。对于流式响应，若相邻 chunk 间空闲超过 180 秒，连接也可能被关闭。
+- **返回 504？** 上游在 120 秒内未返回响应头或首个 body chunk。对于流式响应，若相邻 chunk 间空闲超过 120 秒，连接也可能被关闭。
 - **413 Payload Too Large？** 请求体超过 `max_request_body_bytes`（默认 20 MiB）或格式转换场景的 4 MiB 处理上限
 - **为什么不走系统代理？** `reqwest` 默认 `no_proxy()`；如需代理，请在每个 upstream 设置 `proxy_url`

@@ -17,6 +17,12 @@
 - SQLite 仪表盘：请求数、Token、缓存 Token、延迟、最近请求
 - macOS 托盘实时 Token 速率（可选）
 
+## 应用截图
+|  |  |
+| --- | --- |
+| **仪表盘**<br>![仪表盘](images/dashboard.png) | **核心配置**<br>![核心配置](images/core.png) |
+| **上游管理**<br>![上游管理](images/upstream.png) | **新增上游**<br>![新增上游](images/add-upstream.png) |
+
 ## 快速上手（macOS）
 1) 安装：把 `Token Proxy.app` 放到 `/Applications`。若被拦截，执行 `xattr -cr /Applications/Token\ Proxy.app`。
 2) 启动应用，代理会自动运行。

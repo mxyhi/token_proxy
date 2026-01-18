@@ -17,6 +17,12 @@ Local AI API gateway for OpenAI / Gemini / Anthropic. Runs on your machine, keep
 - SQLite-powered dashboard (requests, tokens, cached tokens, latency, recent)
 - macOS tray live token rate (optional)
 
+## Screenshots
+|  |  |
+| --- | --- |
+| **Dashboard**<br>![Dashboard](images/dashboard.png) | **Core**<br>![Core settings](images/core.png) |
+| **Upstreams**<br>![Upstreams](images/upstream.png) | **Add upstream**<br>![Add upstream](images/add-upstream.png) |
+
 ## Quick start (macOS)
 1) Install: move `Token Proxy.app` to `/Applications`. If blocked: `xattr -cr /Applications/Token\ Proxy.app`.
 2) Launch the app. The proxy starts automatically.

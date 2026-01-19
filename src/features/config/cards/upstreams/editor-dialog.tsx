@@ -1,4 +1,4 @@
-import { CircleX } from "lucide-react";
+import { CirclePlus, CircleX, HelpCircle } from "lucide-react";
 import type { ReactNode } from "react";
 
 import {
@@ -6,7 +6,6 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
-  AlertDialogDescription,
   AlertDialogBody,
   AlertDialogFooter,
   AlertDialogHeader,
@@ -39,17 +38,35 @@ import { m } from "@/paraglide/messages.js";
 type EditorFieldProps = {
   label: string;
   htmlFor?: string;
+  /** tooltip 提示文字，不传则不显示图标 */
+  tooltip?: string;
   children: ReactNode;
 };
 
-/** 单个字段：label 左侧，input 右侧 */
-function EditorField({ label, htmlFor, children }: EditorFieldProps) {
+/** 单个字段：label 左侧（可带 tooltip），input 右侧 */
+function EditorField({ label, htmlFor, tooltip, children }: EditorFieldProps) {
+  const labelContent = (
+    <span className="inline-flex items-center gap-1">
+      {label}
+      {tooltip ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+          </TooltipTrigger>
+          <TooltipContent side="right" className="max-w-xs">
+            {tooltip}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </span>
+  );
+
   return (
     <>
       {htmlFor ? (
-        <Label htmlFor={htmlFor}>{label}</Label>
+        <Label htmlFor={htmlFor}>{labelContent}</Label>
       ) : (
-        <Label>{label}</Label>
+        <Label>{labelContent}</Label>
       )}
       {children}
     </>
@@ -62,10 +79,6 @@ type ModelMappingsEditorProps = {
 };
 
 function ModelMappingsEditor({ mappings, onChange }: ModelMappingsEditorProps) {
-  const handleAdd = () => {
-    onChange([...mappings, createModelMapping()]);
-  };
-
   const handleUpdate = (index: number, patch: Partial<ModelMappingForm>) => {
     onChange(
       mappings.map((mapping, current) =>
@@ -80,57 +93,34 @@ function ModelMappingsEditor({ mappings, onChange }: ModelMappingsEditorProps) {
 
   return (
     <div data-slot="model-mappings" className="space-y-2">
-      {mappings.length ? (
-        <>
-          <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-xs text-muted-foreground">
-            <span>{m.field_model_mapping_pattern()}</span>
-            <span>{m.field_model_mapping_target()}</span>
-            <span className="sr-only">{m.model_mappings_remove()}</span>
-          </div>
-          {mappings.map((mapping, index) => (
-            <div
-              key={mapping.id}
-              className="grid grid-cols-[1fr_1fr_auto] gap-2"
-            >
-              <Input
-                value={mapping.pattern}
-                onChange={(e) =>
-                  handleUpdate(index, { pattern: e.target.value })
-                }
-                placeholder={m.model_mappings_placeholder_pattern()}
-              />
-              <Input
-                value={mapping.target}
-                onChange={(e) =>
-                  handleUpdate(index, { target: e.target.value })
-                }
-                placeholder={m.model_mappings_placeholder_target()}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={m.model_mappings_remove()}
-                onClick={() => handleRemove(index)}
-              >
-                <CircleX className="size-4" aria-hidden="true" />
-              </Button>
-            </div>
-          ))}
-        </>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          {m.model_mappings_empty()}
-        </p>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="secondary" size="sm" onClick={handleAdd}>
-          {m.model_mappings_add()}
-        </Button>
-        <span className="text-xs text-muted-foreground">
-          {m.model_mappings_tip()}
-        </span>
+      <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-xs text-muted-foreground">
+        <span>{m.field_model_mapping_pattern()}</span>
+        <span>{m.field_model_mapping_target()}</span>
+        <span className="sr-only">{m.model_mappings_remove()}</span>
       </div>
+      {mappings.map((mapping, index) => (
+        <div key={mapping.id} className="grid grid-cols-[1fr_1fr_auto] gap-2">
+          <Input
+            value={mapping.pattern}
+            onChange={(e) => handleUpdate(index, { pattern: e.target.value })}
+            placeholder={m.model_mappings_placeholder_pattern()}
+          />
+          <Input
+            value={mapping.target}
+            onChange={(e) => handleUpdate(index, { target: e.target.value })}
+            placeholder={m.model_mappings_placeholder_target()}
+          />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={m.model_mappings_remove()}
+            onClick={() => handleRemove(index)}
+          >
+            <CircleX className="size-4" aria-hidden="true" />
+          </Button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -141,16 +131,6 @@ type HeaderOverridesEditorProps = {
 };
 
 function HeaderOverridesEditor({ overrides, onChange }: HeaderOverridesEditorProps) {
-  const handleAdd = () => {
-    const next: HeaderOverrideForm = {
-      id: `header-override-${Date.now()}-${overrides.length}`,
-      name: "",
-      value: "",
-      isNull: false,
-    };
-    onChange([...overrides, next]);
-  };
-
   const handleUpdate = (index: number, patch: Partial<HeaderOverrideForm>) => {
     onChange(
       overrides.map((item, current) => (current === index ? { ...item, ...patch } : item)),
@@ -163,60 +143,48 @@ function HeaderOverridesEditor({ overrides, onChange }: HeaderOverridesEditorPro
 
   return (
     <div data-slot="header-overrides" className="space-y-2">
-      {overrides.length ? (
-        <>
-          <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-2 text-xs text-muted-foreground">
-            <span>{m.header_overrides_placeholder_name()}</span>
-            <span>{m.header_overrides_placeholder_value()}</span>
-            <span className="sr-only">{m.common_enabled()}</span>
-            <span className="sr-only">{m.header_overrides_remove()}</span>
-          </div>
-          {overrides.map((item, index) => (
-            <div
-              key={item.id}
-              className="grid grid-cols-[1fr_1fr_auto_auto] items-center gap-2"
-            >
-              <Input
-                value={item.name}
-                onChange={(e) => handleUpdate(index, { name: e.target.value })}
-                placeholder={m.header_overrides_placeholder_name()}
-              />
-              <Input
-                value={item.isNull ? "" : item.value}
-                onChange={(e) => handleUpdate(index, { value: e.target.value, isNull: false })}
-                placeholder={m.header_overrides_placeholder_value()}
-                disabled={item.isNull}
-              />
-              <Button
-                type="button"
-                variant={item.isNull ? "secondary" : "ghost"}
-                size="icon-sm"
-                aria-label={item.isNull ? m.common_disabled() : m.common_enabled()}
-                onClick={() => handleUpdate(index, { isNull: !item.isNull })}
-              >
-                {item.isNull ? m.common_disabled() : m.common_enabled()}
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-sm"
-                aria-label={m.header_overrides_remove()}
-                onClick={() => handleRemove(index)}
-              >
-                <CircleX className="size-4" aria-hidden="true" />
-              </Button>
-            </div>
-          ))}
-        </>
-      ) : (
-        <p className="text-xs text-muted-foreground">{m.header_overrides_empty()}</p>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="secondary" size="sm" onClick={handleAdd}>
-          {m.header_overrides_add()}
-        </Button>
-        <span className="text-xs text-muted-foreground">{m.header_overrides_tip()}</span>
+      <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-2 text-xs text-muted-foreground">
+        <span>{m.header_overrides_placeholder_name()}</span>
+        <span>{m.header_overrides_placeholder_value()}</span>
+        <span className="sr-only">{m.common_enabled()}</span>
+        <span className="sr-only">{m.header_overrides_remove()}</span>
       </div>
+      {overrides.map((item, index) => (
+        <div
+          key={item.id}
+          className="grid grid-cols-[1fr_1fr_auto_auto] items-center gap-2"
+        >
+          <Input
+            value={item.name}
+            onChange={(e) => handleUpdate(index, { name: e.target.value })}
+            placeholder={m.header_overrides_placeholder_name()}
+          />
+          <Input
+            value={item.isNull ? "" : item.value}
+            onChange={(e) => handleUpdate(index, { value: e.target.value, isNull: false })}
+            placeholder={m.header_overrides_placeholder_value()}
+            disabled={item.isNull}
+          />
+          <Button
+            type="button"
+            variant={item.isNull ? "secondary" : "ghost"}
+            size="icon-sm"
+            aria-label={item.isNull ? m.common_disabled() : m.common_enabled()}
+            onClick={() => handleUpdate(index, { isNull: !item.isNull })}
+          >
+            {item.isNull ? m.common_disabled() : m.common_enabled()}
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={m.header_overrides_remove()}
+            onClick={() => handleRemove(index)}
+          >
+            <CircleX className="size-4" aria-hidden="true" />
+          </Button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -264,7 +232,17 @@ function UpstreamIdentityFields({
   return (
     <div data-slot="upstream-identity-fields" className="contents">
       {/* 第一行：Provider 和 Status 并排 */}
-      <Label>{m.field_provider()}</Label>
+      <Label className="inline-flex items-center gap-1">
+        {m.field_provider()}
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+          </TooltipTrigger>
+          <TooltipContent side="right" className="max-w-xs">
+            {m.field_provider_tip()}
+          </TooltipContent>
+        </Tooltip>
+      </Label>
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
         <Select
           value={draft.provider.trim() ? draft.provider : undefined}
@@ -281,7 +259,17 @@ function UpstreamIdentityFields({
             ))}
           </SelectContent>
         </Select>
-        <Label>{m.field_status()}</Label>
+        <Label className="inline-flex items-center gap-1">
+          {m.field_status()}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent side="right" className="max-w-xs">
+              {m.field_status_tip()}
+            </TooltipContent>
+          </Tooltip>
+        </Label>
         <Select
           value={draft.enabled ? "enabled" : "disabled"}
           onValueChange={(value) =>
@@ -311,7 +299,7 @@ function UpstreamIdentityFields({
       ) : null}
 
       {/* 第三行：ID（自动生成，可编辑） */}
-      <EditorField label={m.field_id()} htmlFor="upstream-editor-id">
+      <EditorField label={m.field_id()} tooltip={m.field_id_tip()} htmlFor="upstream-editor-id">
         <Input
           id="upstream-editor-id"
           value={draft.id}
@@ -321,7 +309,7 @@ function UpstreamIdentityFields({
       </EditorField>
 
       {showBaseUrl ? (
-        <EditorField label={m.field_base_url()} htmlFor="upstream-editor-baseUrl">
+        <EditorField label={m.field_base_url()} tooltip={m.field_base_url_tip()} htmlFor="upstream-editor-baseUrl">
           <Input
             id="upstream-editor-baseUrl"
             value={draft.baseUrl}
@@ -331,7 +319,7 @@ function UpstreamIdentityFields({
         </EditorField>
       ) : null}
 
-      <EditorField label={m.field_proxy_url()} htmlFor="upstream-editor-proxyUrl">
+      <EditorField label={m.field_proxy_url()} tooltip={m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })} htmlFor="upstream-editor-proxyUrl">
         <div className="flex items-center gap-2">
           <Input
             id="upstream-editor-proxyUrl"
@@ -341,31 +329,15 @@ function UpstreamIdentityFields({
             className="flex-1"
           />
           {canUseAppProxy ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => onChangeDraft({ proxyUrl: "$app_proxy_url" })}
-                >
-                  {m.upstreams_proxy_use_app()}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-xs">
-                {m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
-              </TooltipContent>
-            </Tooltip>
-          ) : (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <span className="text-xs text-muted-foreground cursor-help">?</span>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-xs">
-                {m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
-              </TooltipContent>
-            </Tooltip>
-          )}
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={() => onChangeDraft({ proxyUrl: "$app_proxy_url" })}
+            >
+              {m.upstreams_proxy_use_app()}
+            </Button>
+          ) : null}
         </div>
       </EditorField>
     </div>
@@ -387,7 +359,7 @@ function UpstreamAuthFields({
 }: UpstreamAuthFieldsProps) {
   return (
     <div data-slot="upstream-auth-fields" className="contents">
-      <EditorField label={m.field_api_key()} htmlFor="upstream-editor-apiKey">
+      <EditorField label={m.field_api_key()} tooltip={m.field_api_key_tip()} htmlFor="upstream-editor-apiKey">
         <PasswordInput
           id="upstream-editor-apiKey"
           visible={showApiKeys}
@@ -412,8 +384,7 @@ function UpstreamOrderFields({
 }: UpstreamOrderFieldsProps) {
   return (
     <div data-slot="upstream-order-fields" className="contents">
-      <Label htmlFor="upstream-editor-priority">{m.field_priority()}</Label>
-      <div className="grid gap-2">
+      <EditorField label={m.field_priority()} tooltip={m.field_priority_tip()} htmlFor="upstream-editor-priority">
         <Input
           id="upstream-editor-priority"
           value={draft.priority}
@@ -421,7 +392,7 @@ function UpstreamOrderFields({
           placeholder="0"
           inputMode="numeric"
         />
-      </div>
+      </EditorField>
     </div>
   );
 }
@@ -435,13 +406,40 @@ function UpstreamModelMappingFields({
   draft,
   onChangeDraft,
 }: UpstreamModelMappingFieldsProps) {
+  const handleAdd = () => {
+    onChangeDraft({ modelMappings: [...draft.modelMappings, createModelMapping()] });
+  };
+
   return (
-    <div data-slot="upstream-model-mapping-fields" className="contents">
-      <Label className="self-start">{m.field_model_mappings()}</Label>
-      <ModelMappingsEditor
-        mappings={draft.modelMappings}
-        onChange={(next) => onChangeDraft({ modelMappings: next })}
-      />
+    <div data-slot="upstream-model-mapping-fields" className="col-span-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <Label className="inline-flex items-center gap-1">
+          {m.field_model_mappings()}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent side="right" className="max-w-xs">
+              {m.model_mappings_tip()}
+            </TooltipContent>
+          </Tooltip>
+        </Label>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={m.model_mappings_add()}
+          onClick={handleAdd}
+        >
+          <CirclePlus className="size-4" aria-hidden="true" />
+        </Button>
+      </div>
+      {draft.modelMappings.length > 0 ? (
+        <ModelMappingsEditor
+          mappings={draft.modelMappings}
+          onChange={(next) => onChangeDraft({ modelMappings: next })}
+        />
+      ) : null}
     </div>
   );
 }
@@ -455,13 +453,46 @@ function UpstreamHeaderOverrideFields({
   draft,
   onChangeDraft,
 }: UpstreamHeaderOverrideFieldsProps) {
+  const handleAdd = () => {
+    const next: HeaderOverrideForm = {
+      id: `header-override-${Date.now()}-${draft.overrides.header.length}`,
+      name: "",
+      value: "",
+      isNull: false,
+    };
+    onChangeDraft({ overrides: { header: [...draft.overrides.header, next] } });
+  };
+
   return (
-    <div data-slot="upstream-header-override-fields" className="contents">
-      <Label className="self-start">{m.field_header_overrides()}</Label>
-      <HeaderOverridesEditor
-        overrides={draft.overrides.header}
-        onChange={(header) => onChangeDraft({ overrides: { header } })}
-      />
+    <div data-slot="upstream-header-override-fields" className="col-span-2 space-y-2">
+      <div className="flex items-center gap-2">
+        <Label className="inline-flex items-center gap-1">
+          {m.field_header_overrides()}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+            </TooltipTrigger>
+            <TooltipContent side="right" className="max-w-xs">
+              {m.header_overrides_tip()}
+            </TooltipContent>
+          </Tooltip>
+        </Label>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={m.header_overrides_add()}
+          onClick={handleAdd}
+        >
+          <CirclePlus className="size-4" aria-hidden="true" />
+        </Button>
+      </div>
+      {draft.overrides.header.length > 0 ? (
+        <HeaderOverridesEditor
+          overrides={draft.overrides.header}
+          onChange={(header) => onChangeDraft({ overrides: { header } })}
+        />
+      ) : null}
     </div>
   );
 }
@@ -555,8 +586,17 @@ export function UpstreamEditorDialog({
     <AlertDialog open={editor.open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-xl">
         <AlertDialogHeader>
-          <AlertDialogTitle>{title}</AlertDialogTitle>
-          <AlertDialogDescription>{description}</AlertDialogDescription>
+          <AlertDialogTitle className="flex items-center gap-2">
+            {title}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <HelpCircle className="size-4 text-muted-foreground cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent side="right" className="max-w-xs">
+                {description}
+              </TooltipContent>
+            </Tooltip>
+          </AlertDialogTitle>
         </AlertDialogHeader>
         <AlertDialogBody className="space-y-4 pr-1">
           {editor.open ? (

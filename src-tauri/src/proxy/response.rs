@@ -523,7 +523,7 @@ async fn build_buffered_response(
             return http::error_response(status, message);
         }
     };
-    let usage = extract_usage_from_response(&bytes);
+    let mut usage = extract_usage_from_response(&bytes);
     let response_error = if status.is_client_error() || status.is_server_error() {
         Some(response_error_text(&bytes))
     } else {
@@ -532,7 +532,7 @@ async fn build_buffered_response(
     let output = if status.is_success() {
         match response_transform {
             FormatTransform::KiroToResponses => {
-                match kiro_to_responses::convert_kiro_response(&bytes, context.model.as_deref()) {
+                let converted = match kiro_to_responses::convert_kiro_response(&bytes, context.model.as_deref()) {
                     Ok(converted) => converted,
                     Err(message) => {
                         let error_message = format!("Failed to transform upstream response: {message}");
@@ -541,7 +541,9 @@ async fn build_buffered_response(
                         log.clone().write_detached(entry);
                         return http::error_response(StatusCode::BAD_GATEWAY, error_message);
                     }
-                }
+                };
+                usage = resolve_kiro_usage(&bytes, &converted);
+                converted
             }
             FormatTransform::KiroToChat => {
                 let responses = match kiro_to_responses::convert_kiro_response(&bytes, context.model.as_deref()) {
@@ -554,6 +556,7 @@ async fn build_buffered_response(
                         return http::error_response(StatusCode::BAD_GATEWAY, error_message);
                     }
                 };
+                usage = resolve_kiro_usage(&bytes, &responses);
                 match transform_response_body(FormatTransform::ResponsesToChat, &responses, context.model.as_deref()) {
                     Ok(converted) => converted,
                     Err(message) => {
@@ -576,6 +579,7 @@ async fn build_buffered_response(
                         return http::error_response(StatusCode::BAD_GATEWAY, error_message);
                     }
                 };
+                usage = resolve_kiro_usage(&bytes, &responses);
                 match transform_response_body(FormatTransform::ResponsesToAnthropic, &responses, context.model.as_deref()) {
                     Ok(converted) => converted,
                     Err(message) => {
@@ -618,6 +622,16 @@ async fn build_buffered_response(
     token_count::apply_output_tokens_from_response(&request_tracker, provider_for_tokens, &output).await;
 
     http::build_response(status, headers, Body::from(output))
+}
+
+fn resolve_kiro_usage(raw_bytes: &Bytes, responses_bytes: &Bytes) -> UsageSnapshot {
+    let usage = extract_usage_from_response(responses_bytes);
+    if usage.usage.is_none() && usage.cached_tokens.is_none() && usage.usage_json.is_none() {
+        if let Some(fallback) = kiro_to_responses::extract_kiro_usage_snapshot(raw_bytes) {
+            return fallback;
+        }
+    }
+    usage
 }
 
 // 只对 data-only SSE 的提供商做行级重写，避免破坏带 event: 行的流。

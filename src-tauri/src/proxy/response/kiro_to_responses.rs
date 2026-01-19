@@ -44,6 +44,22 @@ pub(super) fn convert_kiro_response(bytes: &Bytes, model: Option<&str>) -> Resul
         .map_err(|err| format!("Failed to serialize response: {err}"))
 }
 
+pub(super) fn extract_kiro_usage_snapshot(bytes: &Bytes) -> Option<UsageSnapshot> {
+    let parsed = crate::proxy::kiro::parse_event_stream(bytes).ok()?;
+    let usage_snapshot = UsageSnapshot {
+        usage: usage_from_kiro(&parsed.usage),
+        cached_tokens: None,
+        usage_json: usage_json_from_kiro(&parsed.usage),
+    };
+    if usage_snapshot.usage.is_none()
+        && usage_snapshot.usage_json.is_none()
+        && usage_snapshot.cached_tokens.is_none()
+    {
+        return None;
+    }
+    Some(usage_snapshot)
+}
+
 struct MessageOutput {
     id: String,
     output_index: u64,

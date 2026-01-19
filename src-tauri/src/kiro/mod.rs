@@ -12,4 +12,5 @@ pub(crate) use quota::{fetch_quotas, KiroQuotaSummary};
 pub(crate) use store::KiroAccountStore;
 pub(crate) use types::{
     KiroAccountSummary, KiroLoginMethod, KiroLoginPollResponse, KiroLoginStartResponse,
+    KiroTokenRecord,
 };

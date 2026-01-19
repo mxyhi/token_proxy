@@ -30,7 +30,7 @@ pub(crate) fn convert_openai_tools(tools: Option<&Value>, is_chat_only: bool) ->
         if name.is_empty() {
             continue;
         }
-        let mut name = shorten_tool_name(name);
+        let name = shorten_tool_name(name);
         let mut description = function
             .get("description")
             .and_then(Value::as_str)

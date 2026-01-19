@@ -123,7 +123,7 @@ pub(crate) struct KiroAssistantResponseMessage {
     pub(crate) tool_uses: Vec<KiroToolUse>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct KiroToolUse {
     pub(crate) tool_use_id: String,

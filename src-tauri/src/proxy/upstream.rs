@@ -18,6 +18,7 @@ mod request;
 mod attempt;
 mod result;
 mod utils;
+mod kiro;
 
 use utils::{
     build_group_order, resolve_group_start,

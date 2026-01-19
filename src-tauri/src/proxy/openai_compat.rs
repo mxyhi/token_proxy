@@ -87,6 +87,9 @@ pub(crate) async fn transform_request_body(
         FormatTransform::GeminiToChat => gemini_compat::gemini_request_to_chat(body, model_hint),
         FormatTransform::ResponsesToGemini => responses_request_to_gemini(body),
         FormatTransform::GeminiToResponses => gemini_request_to_responses(body, model_hint),
+        FormatTransform::KiroToResponses
+        | FormatTransform::KiroToChat
+        | FormatTransform::KiroToAnthropic => Ok(body.clone()),
     }
 }
 
@@ -117,6 +120,9 @@ pub(crate) fn transform_response_body(
         FormatTransform::GeminiToChat => gemini_compat::gemini_response_to_chat(bytes, model_hint),
         FormatTransform::ResponsesToGemini => responses_response_to_gemini(bytes, model_hint),
         FormatTransform::GeminiToResponses => gemini_response_to_responses(bytes, model_hint),
+        FormatTransform::KiroToResponses
+        | FormatTransform::KiroToChat
+        | FormatTransform::KiroToAnthropic => Err("Kiro response conversion is handled upstream.".to_string()),
     }
 }
 

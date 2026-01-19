@@ -174,20 +174,20 @@ fn update_usage(event: &Map<String, Value>, usage: &mut KiroUsage) {
         usage.total_tokens = Some(tokens);
     }
 
-    if let Some(Value::Object(metadata)) = event.get("messageMetadataEvent").and_then(Value::as_object) {
+    if let Some(metadata) = event.get("messageMetadataEvent").and_then(Value::as_object) {
         update_usage_from_metadata(metadata, usage);
-    } else if let Some(Value::Object(metadata)) = event.get("metadataEvent").and_then(Value::as_object) {
+    } else if let Some(metadata) = event.get("metadataEvent").and_then(Value::as_object) {
         update_usage_from_metadata(metadata, usage);
     }
 
-    if let Some(Value::Object(usage_obj)) = event.get("usage").and_then(Value::as_object) {
+    if let Some(usage_obj) = event.get("usage").and_then(Value::as_object) {
         update_usage_from_usage_obj(usage_obj, usage);
     }
-    if let Some(Value::Object(usage_obj)) = event.get("usageEvent").and_then(Value::as_object) {
+    if let Some(usage_obj) = event.get("usageEvent").and_then(Value::as_object) {
         update_usage_from_usage_obj(usage_obj, usage);
     }
 
-    if let Some(Value::Object(links)) = event.get("supplementaryWebLinksEvent").and_then(Value::as_object) {
+    if let Some(links) = event.get("supplementaryWebLinksEvent").and_then(Value::as_object) {
         if let Some(tokens) = links.get("inputTokens").and_then(Value::as_u64) {
             usage.input_tokens = Some(tokens);
         }
@@ -198,7 +198,7 @@ fn update_usage(event: &Map<String, Value>, usage: &mut KiroUsage) {
 }
 
 fn update_usage_from_metadata(metadata: &Map<String, Value>, usage: &mut KiroUsage) {
-    if let Some(Value::Object(token_usage)) = metadata.get("tokenUsage").and_then(Value::as_object) {
+    if let Some(token_usage) = metadata.get("tokenUsage").and_then(Value::as_object) {
         if let Some(tokens) = token_usage.get("outputTokens").and_then(Value::as_u64) {
             usage.output_tokens = Some(tokens);
         }

@@ -5,21 +5,18 @@ pub(crate) struct KiroEndpointConfig {
     pub(crate) url: &'static str,
     pub(crate) origin: &'static str,
     pub(crate) amz_target: &'static str,
-    pub(crate) name: &'static str,
 }
 
 const CODEWHISPERER_ENDPOINT: KiroEndpointConfig = KiroEndpointConfig {
     url: "https://codewhisperer.us-east-1.amazonaws.com/generateAssistantResponse",
     origin: "AI_EDITOR",
     amz_target: "AmazonCodeWhispererStreamingService.GenerateAssistantResponse",
-    name: "CodeWhisperer",
 };
 
 const AMAZON_Q_ENDPOINT: KiroEndpointConfig = KiroEndpointConfig {
     url: "https://q.us-east-1.amazonaws.com/generateAssistantResponse",
     origin: "CLI",
     amz_target: "AmazonQDeveloperStreamingService.SendMessage",
-    name: "AmazonQ",
 };
 
 pub(crate) fn select_endpoints(
@@ -28,7 +25,7 @@ pub(crate) fn select_endpoints(
 ) -> Vec<KiroEndpointConfig> {
     // IDC auth must use CodeWhisperer origin/endpoint pairing.
     if is_idc {
-        return vec![CODEWHISPERER_ENDPOINT, AMAZON_Q_ENDPOINT];
+        return vec![CODEWHISPERER_ENDPOINT];
     }
 
     match preferred {

@@ -1,5 +1,6 @@
 import {
   type ConfigForm,
+  type KiroPreferredEndpoint,
   type ModelMappingForm,
   type ProxyConfigFile,
   type ProxyConfigFileBase,
@@ -75,6 +76,18 @@ let modelMappingCounter = 0;
 const TRAY_TOKEN_RATE_FORMAT_VALUES: ReadonlySet<string> = new Set(
   TRAY_TOKEN_RATE_FORMATS.map((format) => format.value)
 );
+
+function isKiroPreferredEndpoint(value: string): value is KiroPreferredEndpoint {
+  return value === "ide" || value === "cli";
+}
+
+function normalizeKiroPreferredEndpoint(value: string) {
+  const trimmed = value.trim();
+  if (isKiroPreferredEndpoint(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
 
 const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "host",
@@ -182,9 +195,7 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     port,
     local_api_key: form.localApiKey.trim() ? form.localApiKey.trim() : null,
     app_proxy_url: form.appProxyUrl.trim() ? form.appProxyUrl.trim() : null,
-    kiro_preferred_endpoint: form.kiroPreferredEndpoint.trim()
-      ? form.kiroPreferredEndpoint.trim()
-      : null,
+    kiro_preferred_endpoint: normalizeKiroPreferredEndpoint(form.kiroPreferredEndpoint),
     log_level: form.logLevel,
     tray_token_rate: form.trayTokenRate,
     enable_api_format_conversion: form.enableApiFormatConversion,
@@ -197,9 +208,7 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       kiro_account_id: upstream.kiroAccountId.trim()
         ? upstream.kiroAccountId.trim()
         : null,
-      preferred_endpoint: upstream.preferredEndpoint.trim()
-        ? upstream.preferredEndpoint.trim()
-        : null,
+      preferred_endpoint: normalizeKiroPreferredEndpoint(upstream.preferredEndpoint),
       proxy_url: upstream.proxyUrl.trim() ? upstream.proxyUrl.trim() : null,
       priority: parseOptionalInt(upstream.priority),
       enabled: upstream.enabled,

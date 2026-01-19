@@ -1,4 +1,5 @@
 use super::*;
+use super::utils::is_retryable_status;
 
 #[test]
 fn retryable_status_matches_new_api_policy() {

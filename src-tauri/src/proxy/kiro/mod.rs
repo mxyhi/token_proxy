@@ -6,9 +6,11 @@ pub(crate) mod payload;
 pub(crate) mod response;
 pub(crate) mod tools;
 pub(crate) mod types;
+pub(crate) mod utils;
 
 pub(crate) use endpoint::{select_endpoints, KiroEndpointConfig};
-pub(crate) use event_stream::{EventStreamDecoder, EventStreamError, EventStreamMessage};
+pub(crate) use event_stream::EventStreamDecoder;
 pub(crate) use model::{determine_agentic_mode, map_model_to_kiro};
 pub(crate) use payload::{build_payload_from_responses, BuildPayloadResult};
-pub(crate) use response::{parse_event_stream, KiroParsedResponse, KiroUsage};
+pub(crate) use response::{parse_event_stream, KiroUsage};
+pub(crate) use types::KiroToolUse;

@@ -60,15 +60,6 @@ pub(crate) enum KiroPreferredEndpoint {
     Cli,
 }
 
-impl KiroPreferredEndpoint {
-    pub(crate) fn as_str(&self) -> &'static str {
-        match self {
-            Self::Ide => "ide",
-            Self::Cli => "cli",
-        }
-    }
-}
-
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct TrayTokenRateConfig {
     #[serde(default = "default_tray_token_rate_enabled")]

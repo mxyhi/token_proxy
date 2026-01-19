@@ -50,6 +50,3 @@ You MUST follow these rules for ALL file operations. Violation causes server tim
 
 REMEMBER: When in doubt, write LESS per operation. Multiple small operations > one large operation.
 "#;
-
-pub(crate) const THINKING_START_TAG: &str = "<thinking>";
-pub(crate) const THINKING_END_TAG: &str = "</thinking>";

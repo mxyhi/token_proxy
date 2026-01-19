@@ -3,9 +3,28 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { PasswordInput } from "@/components/ui/password-input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { ProxyServicePanel, type ProxyServiceViewProps } from "@/features/config/cards/proxy-service-card";
-import { type ConfigForm } from "@/features/config/types";
+import { type ConfigForm, type KiroPreferredEndpoint } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
+
+const KIRO_ENDPOINT_OPTIONS: ReadonlyArray<{
+  value: KiroPreferredEndpoint;
+  label: () => string;
+}> = [
+  { value: "ide", label: () => m.kiro_preferred_endpoint_ide() },
+  { value: "cli", label: () => m.kiro_preferred_endpoint_cli() },
+];
+
+function isKiroPreferredEndpoint(value: string): value is KiroPreferredEndpoint {
+  return value === "ide" || value === "cli";
+}
 
 type ProxyCoreCardProps = {
   form: ConfigForm;
@@ -66,6 +85,33 @@ function ProxyCoreFields({ form, showLocalKey, onToggleLocalKey, onChange }: Pro
         />
         <p className="text-xs text-muted-foreground">
           {m.proxy_core_app_proxy_url_help({ placeholder: "$app_proxy_url" })}
+        </p>
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="kiro-preferred-endpoint">
+          {m.proxy_core_kiro_preferred_endpoint_label()}
+        </Label>
+        <Select
+          value={form.kiroPreferredEndpoint}
+          onValueChange={(value) => {
+            if (isKiroPreferredEndpoint(value)) {
+              onChange({ kiroPreferredEndpoint: value });
+            }
+          }}
+        >
+          <SelectTrigger id="kiro-preferred-endpoint">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {KIRO_ENDPOINT_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label()}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          {m.proxy_core_kiro_preferred_endpoint_help()}
         </p>
       </div>
     </>

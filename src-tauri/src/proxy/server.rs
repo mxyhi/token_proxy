@@ -33,6 +33,7 @@ use crate::logging::LogLevel;
 
 const PROVIDER_ANTHROPIC: &str = "anthropic";
 const PROVIDER_GEMINI: &str = "gemini";
+const PROVIDER_KIRO: &str = "kiro";
 const PROVIDER_PROXY: &str = "proxy";
 const LOCAL_UPSTREAM_ID: &str = "local";
 
@@ -167,7 +168,7 @@ fn resolve_anthropic_plan(
     if path == "/v1/messages" {
         let fallback = choose_provider_by_priority(
             config,
-            &[PROVIDER_RESPONSES, PROVIDER_CHAT, PROVIDER_GEMINI],
+            &[PROVIDER_RESPONSES, PROVIDER_CHAT, PROVIDER_GEMINI, PROVIDER_KIRO],
         );
         let Some(fallback) = fallback else {
             return Some(Err(ERROR_NO_UPSTREAM.to_string()));
@@ -194,6 +195,12 @@ fn resolve_anthropic_plan(
                 request_transform: FormatTransform::AnthropicToGemini,
                 response_transform: FormatTransform::GeminiToAnthropic,
             },
+            PROVIDER_KIRO => DispatchPlan {
+                provider: PROVIDER_KIRO,
+                outbound_path: Some(RESPONSES_PATH),
+                request_transform: FormatTransform::AnthropicToResponses,
+                response_transform: FormatTransform::KiroToAnthropic,
+            },
             _ => base_plan(PROVIDER_RESPONSES),
         }));
     }
@@ -211,21 +218,25 @@ fn resolve_formatless_plan(config: &ProxyConfig) -> Result<DispatchPlan, String>
 }
 
 fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
-    if config.provider_upstreams(PROVIDER_CHAT).is_some() {
-        return Ok(base_plan(PROVIDER_CHAT));
-    }
-
-    // 包含 Gemini 作为可选的转换目标
-    let fallback = choose_provider_by_priority(
+    let selected = choose_provider_by_priority(
         config,
-        &[PROVIDER_RESPONSES, PROVIDER_ANTHROPIC, PROVIDER_GEMINI],
+        &[
+            PROVIDER_CHAT,
+            PROVIDER_RESPONSES,
+            PROVIDER_ANTHROPIC,
+            PROVIDER_GEMINI,
+            PROVIDER_KIRO,
+        ],
     )
     .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
+    if selected == PROVIDER_CHAT {
+        return Ok(base_plan(PROVIDER_CHAT));
+    }
     if !config.enable_api_format_conversion {
         return Err(ERROR_CHAT_CONVERSION_DISABLED.to_string());
     }
 
-    Ok(match fallback {
+    Ok(match selected {
         PROVIDER_RESPONSES => DispatchPlan {
             provider: PROVIDER_RESPONSES,
             outbound_path: Some(RESPONSES_PATH),
@@ -244,25 +255,44 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
             request_transform: FormatTransform::ChatToGemini,
             response_transform: FormatTransform::GeminiToChat,
         },
+        PROVIDER_KIRO => DispatchPlan {
+            provider: PROVIDER_KIRO,
+            outbound_path: Some(RESPONSES_PATH),
+            request_transform: FormatTransform::ChatToResponses,
+            response_transform: FormatTransform::KiroToChat,
+        },
         _ => base_plan(PROVIDER_RESPONSES),
     })
 }
 
 fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
-    if config.provider_upstreams(PROVIDER_RESPONSES).is_some() {
+    let selected = choose_provider_by_priority(
+        config,
+        &[
+            PROVIDER_RESPONSES,
+            PROVIDER_KIRO,
+            PROVIDER_CHAT,
+            PROVIDER_ANTHROPIC,
+            PROVIDER_GEMINI,
+        ],
+    )
+    .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
+    if selected == PROVIDER_RESPONSES {
         return Ok(base_plan(PROVIDER_RESPONSES));
     }
-
-    let fallback = choose_provider_by_priority(
-        config,
-        &[PROVIDER_CHAT, PROVIDER_ANTHROPIC, PROVIDER_GEMINI],
-    )
-        .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
+    if selected == PROVIDER_KIRO {
+        return Ok(DispatchPlan {
+            provider: PROVIDER_KIRO,
+            outbound_path: Some(RESPONSES_PATH),
+            request_transform: FormatTransform::None,
+            response_transform: FormatTransform::KiroToResponses,
+        });
+    }
     if !config.enable_api_format_conversion {
         return Err(ERROR_RESPONSES_CONVERSION_DISABLED.to_string());
     }
 
-    Ok(match fallback {
+    Ok(match selected {
         PROVIDER_CHAT => DispatchPlan {
             provider: PROVIDER_CHAT,
             outbound_path: Some(CHAT_PATH),

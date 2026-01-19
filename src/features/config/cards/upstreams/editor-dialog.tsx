@@ -30,10 +30,26 @@ import { createModelMapping } from "@/features/config/form";
 import type { KiroAccountSummary } from "@/features/kiro/types";
 import type {
   HeaderOverrideForm,
+  KiroPreferredEndpoint,
   ModelMappingForm,
   UpstreamForm,
 } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
+
+const KIRO_ENDPOINT_INHERIT = "inherit";
+
+const KIRO_ENDPOINT_OPTIONS: ReadonlyArray<{
+  value: KiroPreferredEndpoint | typeof KIRO_ENDPOINT_INHERIT;
+  label: () => string;
+}> = [
+  { value: KIRO_ENDPOINT_INHERIT, label: () => m.kiro_preferred_endpoint_inherit() },
+  { value: "ide", label: () => m.kiro_preferred_endpoint_ide() },
+  { value: "cli", label: () => m.kiro_preferred_endpoint_cli() },
+];
+
+function isKiroPreferredEndpoint(value: string): value is KiroPreferredEndpoint {
+  return value === "ide" || value === "cli";
+}
 
 type EditorFieldProps = {
   label: string;
@@ -228,6 +244,9 @@ function UpstreamIdentityFields({
 }: UpstreamIdentityFieldsProps) {
   const canUseAppProxy = !!appProxyUrl.trim();
   const isKiro = draft.provider.trim() === "kiro";
+  const kiroEndpointValue = draft.preferredEndpoint.trim()
+    ? draft.preferredEndpoint
+    : KIRO_ENDPOINT_INHERIT;
 
   return (
     <div data-slot="upstream-identity-fields" className="contents">
@@ -296,6 +315,37 @@ function UpstreamIdentityFields({
           onRefresh={onRefreshKiroAccounts}
           onSelect={(accountId) => onChangeDraft({ kiroAccountId: accountId })}
         />
+      ) : null}
+      {isKiro ? (
+        <EditorField
+          label={m.field_kiro_preferred_endpoint()}
+          tooltip={m.field_kiro_preferred_endpoint_tip()}
+          htmlFor="upstream-editor-kiro-endpoint"
+        >
+          <Select
+            value={kiroEndpointValue}
+            onValueChange={(value) => {
+              if (value === KIRO_ENDPOINT_INHERIT) {
+                onChangeDraft({ preferredEndpoint: "" });
+                return;
+              }
+              if (isKiroPreferredEndpoint(value)) {
+                onChangeDraft({ preferredEndpoint: value });
+              }
+            }}
+          >
+            <SelectTrigger id="upstream-editor-kiro-endpoint">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {KIRO_ENDPOINT_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label()}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </EditorField>
       ) : null}
 
       {/* 第三行：ID（自动生成，可编辑） */}

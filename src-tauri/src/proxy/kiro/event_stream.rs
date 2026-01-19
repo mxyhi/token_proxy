@@ -5,14 +5,7 @@ const MAX_FRAME_SIZE: usize = 10 << 20;
 
 #[derive(Debug)]
 pub(crate) struct EventStreamError {
-    pub(crate) kind: EventStreamErrorKind,
     pub(crate) message: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EventStreamErrorKind {
-    Fatal,
-    Malformed,
 }
 
 #[derive(Debug, Clone)]
@@ -50,13 +43,11 @@ impl EventStreamDecoder {
 
             if total_len < MIN_FRAME_SIZE {
                 return Err(EventStreamError {
-                    kind: EventStreamErrorKind::Malformed,
                     message: "EventStream frame too small".to_string(),
                 });
             }
             if total_len > MAX_FRAME_SIZE {
                 return Err(EventStreamError {
-                    kind: EventStreamErrorKind::Malformed,
                     message: "EventStream frame too large".to_string(),
                 });
             }
@@ -68,14 +59,12 @@ impl EventStreamDecoder {
             let headers_end = headers_start + headers_len;
             if headers_end > total_len {
                 return Err(EventStreamError {
-                    kind: EventStreamErrorKind::Malformed,
                     message: "EventStream header length invalid".to_string(),
                 });
             }
             let payload_start = headers_end;
             if payload_start + 4 > total_len {
                 return Err(EventStreamError {
-                    kind: EventStreamErrorKind::Malformed,
                     message: "EventStream payload length invalid".to_string(),
                 });
             }
@@ -164,7 +153,6 @@ fn parse_event_type(headers: &[u8]) -> Option<String> {
 impl From<io::Error> for EventStreamError {
     fn from(err: io::Error) -> Self {
         EventStreamError {
-            kind: EventStreamErrorKind::Fatal,
             message: err.to_string(),
         }
     }

@@ -27,6 +27,20 @@ pub(super) async fn attempt_upstream(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> AttemptOutcome {
+    if provider == "kiro" {
+        return super::kiro::attempt_kiro_upstream(
+            state,
+            method,
+            upstream,
+            inbound_path,
+            headers,
+            body,
+            meta,
+            response_transform,
+            request_detail,
+        )
+        .await;
+    }
     let first = match attempt_send(
         state,
         method.clone(),

@@ -1,16 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, HelpCircle } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -268,8 +263,17 @@ export function LogsPanel() {
       <div className="px-4 lg:px-6">
         <Card className="border-border/60 bg-background/70">
           <CardHeader className="pb-2">
-            <CardTitle className="text-base">{m.logs_capture_title()}</CardTitle>
-            <CardDescription>{m.logs_capture_desc()}</CardDescription>
+            <CardTitle className="inline-flex items-center gap-1 text-base">
+              {m.logs_capture_title()}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <HelpCircle className="size-4 text-muted-foreground cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  {m.logs_capture_desc()}
+                </TooltipContent>
+              </Tooltip>
+            </CardTitle>
           </CardHeader>
           <CardContent className="flex flex-wrap items-center justify-between gap-3">
             <div className="space-y-1">

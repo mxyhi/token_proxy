@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getUpstreamLabel } from "@/features/config/cards/upstreams/constants";
 import { KiroAccountSelect } from "@/features/config/cards/upstreams/kiro-account-select";
 import type { UpstreamEditorState } from "@/features/config/cards/upstreams/types";
@@ -239,6 +240,11 @@ type UpstreamIdentityFieldsProps = {
   appProxyUrl: string;
   onChangeDraft: (patch: Partial<UpstreamForm>) => void;
   showBaseUrl: boolean;
+  /** kiro 账户相关 props，仅 provider=kiro 时使用 */
+  kiroAccounts: KiroAccountSummary[];
+  kiroAccountsLoading: boolean;
+  kiroAccountsError: string;
+  onRefreshKiroAccounts: () => void;
 };
 
 function UpstreamIdentityFields({
@@ -247,20 +253,17 @@ function UpstreamIdentityFields({
   appProxyUrl,
   onChangeDraft,
   showBaseUrl,
+  kiroAccounts,
+  kiroAccountsLoading,
+  kiroAccountsError,
+  onRefreshKiroAccounts,
 }: UpstreamIdentityFieldsProps) {
   const canUseAppProxy = !!appProxyUrl.trim();
+  const isKiro = draft.provider.trim() === "kiro";
+
   return (
     <div data-slot="upstream-identity-fields" className="contents">
-      <EditorField label={m.field_id()} htmlFor="upstream-editor-id">
-        <Input
-          id="upstream-editor-id"
-          value={draft.id}
-          onChange={(e) => onChangeDraft({ id: e.target.value })}
-          placeholder="openai-default"
-        />
-      </EditorField>
-
-      {/* Provider 和 Status 并排：四列布局 */}
+      {/* 第一行：Provider 和 Status 并排 */}
       <Label>{m.field_provider()}</Label>
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
         <Select
@@ -295,6 +298,28 @@ function UpstreamIdentityFields({
         </Select>
       </div>
 
+      {/* 第二行：kiro 账户选择器（仅 kiro provider） */}
+      {isKiro ? (
+        <KiroAccountSelect
+          accountId={draft.kiroAccountId}
+          accounts={kiroAccounts}
+          loading={kiroAccountsLoading}
+          error={kiroAccountsError}
+          onRefresh={onRefreshKiroAccounts}
+          onSelect={(accountId) => onChangeDraft({ kiroAccountId: accountId })}
+        />
+      ) : null}
+
+      {/* 第三行：ID（自动生成，可编辑） */}
+      <EditorField label={m.field_id()} htmlFor="upstream-editor-id">
+        <Input
+          id="upstream-editor-id"
+          value={draft.id}
+          onChange={(e) => onChangeDraft({ id: e.target.value })}
+          placeholder="openai-default"
+        />
+      </EditorField>
+
       {showBaseUrl ? (
         <EditorField label={m.field_base_url()} htmlFor="upstream-editor-baseUrl">
           <Input
@@ -307,28 +332,40 @@ function UpstreamIdentityFields({
       ) : null}
 
       <EditorField label={m.field_proxy_url()} htmlFor="upstream-editor-proxyUrl">
-        <div className="grid gap-2">
+        <div className="flex items-center gap-2">
           <Input
             id="upstream-editor-proxyUrl"
             value={draft.proxyUrl}
             onChange={(e) => onChangeDraft({ proxyUrl: e.target.value })}
             placeholder="http://127.0.0.1:7890"
+            className="flex-1"
           />
           {canUseAppProxy ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                onClick={() => onChangeDraft({ proxyUrl: "$app_proxy_url" })}
-              >
-                {m.upstreams_proxy_use_app()}
-              </Button>
-            </div>
-          ) : null}
-          <p className="text-xs text-muted-foreground">
-            {m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
-          </p>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => onChangeDraft({ proxyUrl: "$app_proxy_url" })}
+                >
+                  {m.upstreams_proxy_use_app()}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                {m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
+              </TooltipContent>
+            </Tooltip>
+          ) : (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="text-xs text-muted-foreground cursor-help">?</span>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs">
+                {m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
+              </TooltipContent>
+            </Tooltip>
+          )}
         </div>
       </EditorField>
     </div>
@@ -453,6 +490,10 @@ function UpstreamEditorFields({
         appProxyUrl={appProxyUrl}
         showBaseUrl={!isKiro}
         onChangeDraft={onChangeDraft}
+        kiroAccounts={kiroAccounts}
+        kiroAccountsLoading={kiroAccountsLoading}
+        kiroAccountsError={kiroAccountsError}
+        onRefreshKiroAccounts={onRefreshKiroAccounts}
       />
       {isKiro ? null : (
         <UpstreamAuthFields
@@ -462,16 +503,6 @@ function UpstreamEditorFields({
           onChangeDraft={onChangeDraft}
         />
       )}
-      {draft.provider.trim() === "kiro" ? (
-        <KiroAccountSelect
-          accountId={draft.kiroAccountId}
-          accounts={kiroAccounts}
-          loading={kiroAccountsLoading}
-          error={kiroAccountsError}
-          onRefresh={onRefreshKiroAccounts}
-          onSelect={(accountId) => onChangeDraft({ kiroAccountId: accountId })}
-        />
-      ) : null}
       <UpstreamOrderFields draft={draft} onChangeDraft={onChangeDraft} />
       <UpstreamModelMappingFields draft={draft} onChangeDraft={onChangeDraft} />
       <UpstreamHeaderOverrideFields draft={draft} onChangeDraft={onChangeDraft} />

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -17,6 +17,7 @@ import type {
 } from "@/features/config/cards/upstreams/types";
 import { createEmptyUpstream } from "@/features/config/form";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
+import type { KiroAccountSummary } from "@/features/kiro/types";
 import type { UpstreamForm, UpstreamStrategy } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
@@ -51,6 +52,67 @@ function createCopiedUpstreamId(sourceId: string, upstreams: readonly UpstreamFo
     suffix += 1;
   }
   return `${prefix}-${suffix}`;
+}
+
+/**
+ * 基于 provider 自动生成唯一 ID
+ * 例如：openai-1, openai-2, kiro-1 等
+ */
+function createAutoUpstreamId(
+  provider: string,
+  upstreams: readonly UpstreamForm[],
+  editingIndex?: number,
+) {
+  const base = provider.trim() || "upstream";
+  const taken = new Set(
+    upstreams
+      .filter((_, index) => index !== editingIndex)
+      .map((upstream) => upstream.id.trim())
+      .filter((id) => id),
+  );
+
+  // 先尝试 provider-1
+  let suffix = 1;
+  while (taken.has(`${base}-${suffix}`)) {
+    suffix += 1;
+  }
+  return `${base}-${suffix}`;
+}
+
+/**
+ * 去除 account_id 的 .json 后缀，用于生成更简洁的 upstream ID
+ */
+function stripJsonSuffix(accountId: string): string {
+  return accountId.endsWith(".json") ? accountId.slice(0, -5) : accountId;
+}
+
+/**
+ * 找到第一个未被其他上游使用的空闲 kiro 账户
+ * 优先返回 active 状态的账户
+ */
+function findIdleKiroAccount(
+  accounts: KiroAccountSummary[],
+  upstreams: readonly UpstreamForm[],
+  editingIndex?: number,
+): KiroAccountSummary | undefined {
+  // 收集已被使用的 kiro account id
+  const usedAccountIds = new Set(
+    upstreams
+      .filter((upstream, index) => {
+        if (index === editingIndex) return false;
+        return upstream.provider.trim() === "kiro" && upstream.kiroAccountId.trim();
+      })
+      .map((upstream) => upstream.kiroAccountId.trim()),
+  );
+
+  // 先找 active 状态的空闲账户
+  const activeIdle = accounts.find(
+    (account) => account.status === "active" && !usedAccountIds.has(account.account_id),
+  );
+  if (activeIdle) return activeIdle;
+
+  // 如果没有 active 的，找任意空闲账户
+  return accounts.find((account) => !usedAccountIds.has(account.account_id));
 }
 
 function cloneUpstreamDraft(upstream: UpstreamForm): UpstreamForm {
@@ -102,12 +164,58 @@ export function UpstreamsCard({
     return map;
   }, [kiroAccounts]);
 
-  const updateDraft = (patch: Partial<UpstreamForm>) =>
-    setEditor((prev) =>
-      prev.open
-        ? { ...prev, draft: { ...prev.draft, ...patch } }
-        : prev
-    );
+  // 更新 draft，处理 provider 变化时的自动逻辑
+  const updateDraft = useCallback(
+    (patch: Partial<UpstreamForm>) => {
+      setEditor((prev) => {
+        if (!prev.open) return prev;
+
+        const editingIndex = prev.mode === "edit" ? prev.index : undefined;
+        const currentProvider = prev.draft.provider.trim();
+        const newProvider = patch.provider?.trim();
+
+        // 如果 provider 变化，自动生成新 ID 并处理 kiro 账户
+        if (newProvider !== undefined && newProvider !== currentProvider) {
+          let kiroAccountId = prev.draft.kiroAccountId;
+          let autoId: string;
+
+          // 如果切换到 kiro，自动选择空闲账户，并用账户 ID（去掉 .json）作为 upstream ID
+          if (newProvider === "kiro") {
+            const idleAccount = findIdleKiroAccount(kiroAccounts, upstreams, editingIndex);
+            kiroAccountId = idleAccount?.account_id ?? "";
+            autoId = kiroAccountId ? stripJsonSuffix(kiroAccountId) : createAutoUpstreamId(newProvider, upstreams, editingIndex);
+          } else {
+            // 其他 provider 用 provider-n 格式
+            autoId = createAutoUpstreamId(newProvider, upstreams, editingIndex);
+            if (currentProvider === "kiro") {
+              kiroAccountId = "";
+            }
+          }
+
+          return {
+            ...prev,
+            draft: { ...prev.draft, ...patch, id: autoId, kiroAccountId },
+          };
+        }
+
+        // 如果是 kiro provider 且 kiroAccountId 变化，同步更新 ID（去掉 .json）
+        if (
+          prev.draft.provider.trim() === "kiro" &&
+          patch.kiroAccountId !== undefined &&
+          patch.kiroAccountId !== prev.draft.kiroAccountId
+        ) {
+          const newId = patch.kiroAccountId ? stripJsonSuffix(patch.kiroAccountId) : prev.draft.id;
+          return {
+            ...prev,
+            draft: { ...prev.draft, ...patch, id: newId },
+          };
+        }
+
+        return { ...prev, draft: { ...prev.draft, ...patch } };
+      });
+    },
+    [upstreams, kiroAccounts],
+  );
 
   const openCreateDialog = () =>
     setEditor({ open: true, mode: "create", draft: createEmptyUpstream() });

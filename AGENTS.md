@@ -1,4 +1,4 @@
-# AGENTS.md - Token Proxy 代码库指南
+# Token Proxy 代码库rule
 
 本文件为在 `token_proxy` 项目中工作的 AI 智能体提供指导。
 
@@ -125,23 +125,6 @@ function validate(form: ConfigForm): ValidationResult {
 }
 ```
 
-### 注释风格
-
-- **极少注释**: 代码自解释为主
-- **配置文件**: 可以使用注释说明选项
-- **复杂逻辑**: 仅在无法通过命名表达意图时添加注释
-
-```typescript
-// ✅ 自解释代码，无需注释
-function toForm(config: ProxyConfigFile): ConfigForm {
-  return {
-    host: config.host,
-    port: String(config.port),
-    localApiKey: config.local_api_key ?? "",
-  };
-}
-```
-
 ### 状态管理模式
 
 三层分离架构（参考 `src/App.tsx`）:
@@ -213,6 +196,7 @@ src/
 ├── components/ui/        # shadcn/ui 组件
 ├── lib/utils.ts          # 工具函数
 └── assets/               # 静态资源
+└── *                     # 其他文件
 ```
 
 ### 后端目录（Rust）
@@ -221,11 +205,7 @@ src/
 src-tauri/src/
 ├── main.rs               # Rust 入口点
 ├── lib.rs                # Tauri 命令和应用逻辑
-├── proxy.rs              # 代理服务模块
-└── proxy/                # 代理子模块
-    ├── config.rs
-    ├── usage.rs
-    └── log.rs
+└── *                     # 其他文件
 ```
 
 ---
@@ -249,15 +229,14 @@ src-tauri/src/
 
 ### Tailwind CSS
 
-- **版本**: v4.1.18
 - **插件**: `@tailwindcss/vite`
 - **动画**: `tw-animate-css`
 
 ### Rust 依赖（Cargo.toml）
 
-- **异步运行时**: Tokio 1.49.0（多线程）
-- **Web 框架**: Axum 0.7.9
-- **HTTP 客户端**: Reqwest 0.12.26（JSON + 流式）
+- **异步运行时**: Tokio（多线程）
+- **Web 框架**: Axum
+- **HTTP 客户端**: Reqwest（JSON + 流式）
 - **序列化**: Serde + serde_json（JSONC 配置文件）
 - **桌面框架**: Tauri 2
 
@@ -303,27 +282,3 @@ src-tauri/src/
 3. 定义 TypeScript 类型用于响应
 
 ---
-
-## 调试技巧
-
-### 前端调试
-
-- 使用浏览器开发者工具（React DevTools）
-- 查看网络请求（Tauri 命令调用）
-- 控制台日志（避免生产代码残留）
-
-### 后端调试
-
-- 使用 `println!` 或 `eprintln!` 输出日志
-- 查看 `data.db`（SQLite 请求统计）
-- 使用 Rust 调试器（如 VS Code 的 rust-analyzer）
-
----
-
-## 常见陷阱
-
-1. **端口冲突**: Vite 固定端口 1420，确保端口可用
-2. **类型转换**: 表单输入是 string，需转换为 number（如端口）
-3. **空值处理**: 使用 `??` 运算符处理 `null`/`undefined`
-4. **Rust 异步**: Tokio 运行时必须启用 `rt-multi-thread` 特性
-5. **React Compiler**: 不需要手动 memoization（useMemo/useCallback 可省略）

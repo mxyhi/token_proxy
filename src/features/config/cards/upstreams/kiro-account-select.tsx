@@ -24,11 +24,7 @@ type KiroAccountSelectProps = {
 };
 
 function formatAccountLabel(account: KiroAccountSummary) {
-  const email = account.email?.trim();
-  if (email) {
-    return `${account.provider} · ${email}`;
-  }
-  return `${account.provider} · ${account.account_id}`;
+  return account.account_id;
 }
 
 function formatAccountStatus(account: KiroAccountSummary) {

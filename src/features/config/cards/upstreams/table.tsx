@@ -164,15 +164,7 @@ function renderAccountCell(upstream: UpstreamForm, kiroAccounts: KiroAccountMap)
   if (!account) {
     return <span className="truncate text-muted-foreground">{m.kiro_account_missing()}</span>;
   }
-  const label = account.email?.trim() || account.account_id;
-  const statusLabel =
-    account.status === "expired" ? m.kiro_account_status_expired() : m.kiro_account_status_active();
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="truncate text-foreground">{`${account.provider} · ${label}`}</span>
-      <span className="text-xs text-muted-foreground">{statusLabel}</span>
-    </div>
-  );
+  return <span className="truncate text-foreground">{account.account_id}</span>;
 }
 
 function renderApiKeyCell(upstream: UpstreamForm, showApiKeys: boolean) {

@@ -238,6 +238,13 @@ async fn kiro_handle_callback(
 }
 
 #[tauri::command]
+async fn kiro_fetch_quotas(
+    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+) -> Result<Vec<kiro::KiroQuotaSummary>, String> {
+    kiro::fetch_quotas(kiro_store.as_ref()).await
+}
+
+#[tauri::command]
 async fn proxy_status(
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,
@@ -461,6 +468,7 @@ pub fn run() {
             kiro_poll_login,
             kiro_logout,
             kiro_handle_callback,
+            kiro_fetch_quotas,
             proxy_status,
             proxy_start,
             proxy_stop,

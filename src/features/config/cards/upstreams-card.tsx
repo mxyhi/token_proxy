@@ -90,8 +90,6 @@ export function UpstreamsCard({
     loading: kiroAccountsLoading,
     error: kiroAccountsError,
     refresh: refreshKiroAccounts,
-    logout: logoutKiroAccount,
-    importIde: importKiroIde,
   } = useKiroAccounts();
 
   const columns = useMemo(
@@ -217,8 +215,6 @@ export function UpstreamsCard({
         kiroAccountsLoading={kiroAccountsLoading}
         kiroAccountsError={kiroAccountsError}
         onRefreshKiroAccounts={refreshKiroAccounts}
-        onLogoutKiroAccount={logoutKiroAccount}
-        onImportKiroIde={importKiroIde}
       />
       <DeleteUpstreamDialog
         dialog={deleteDialog}

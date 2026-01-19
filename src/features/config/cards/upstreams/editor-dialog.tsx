@@ -24,7 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getUpstreamLabel } from "@/features/config/cards/upstreams/constants";
-import { KiroAccountFields } from "@/features/config/cards/upstreams/kiro-account-fields";
+import { KiroAccountSelect } from "@/features/config/cards/upstreams/kiro-account-select";
 import type { UpstreamEditorState } from "@/features/config/cards/upstreams/types";
 import { createModelMapping } from "@/features/config/form";
 import type { KiroAccountSummary } from "@/features/kiro/types";
@@ -231,8 +231,6 @@ type UpstreamEditorFieldsProps = {
   kiroAccountsLoading: boolean;
   kiroAccountsError: string;
   onRefreshKiroAccounts: () => void;
-  onLogoutKiroAccount: (accountId: string) => void;
-  onImportKiroIde: () => Promise<KiroAccountSummary[]>;
 };
 
 type UpstreamIdentityFieldsProps = {
@@ -442,8 +440,6 @@ function UpstreamEditorFields({
   kiroAccountsLoading,
   kiroAccountsError,
   onRefreshKiroAccounts,
-  onLogoutKiroAccount,
-  onImportKiroIde,
 }: UpstreamEditorFieldsProps) {
   const isKiro = draft.provider.trim() === "kiro";
   return (
@@ -467,14 +463,12 @@ function UpstreamEditorFields({
         />
       )}
       {draft.provider.trim() === "kiro" ? (
-        <KiroAccountFields
+        <KiroAccountSelect
           accountId={draft.kiroAccountId}
           accounts={kiroAccounts}
           loading={kiroAccountsLoading}
           error={kiroAccountsError}
           onRefresh={onRefreshKiroAccounts}
-          onLogout={onLogoutKiroAccount}
-          onImport={onImportKiroIde}
           onSelect={(accountId) => onChangeDraft({ kiroAccountId: accountId })}
         />
       ) : null}
@@ -498,8 +492,6 @@ type UpstreamEditorDialogProps = {
   kiroAccountsLoading: boolean;
   kiroAccountsError: string;
   onRefreshKiroAccounts: () => void;
-  onLogoutKiroAccount: (accountId: string) => void;
-  onImportKiroIde: () => Promise<KiroAccountSummary[]>;
 };
 
 export function UpstreamEditorDialog({
@@ -515,8 +507,6 @@ export function UpstreamEditorDialog({
   kiroAccountsLoading,
   kiroAccountsError,
   onRefreshKiroAccounts,
-  onLogoutKiroAccount,
-  onImportKiroIde,
 }: UpstreamEditorDialogProps) {
   const title = editor.open
     ? editor.mode === "create"
@@ -546,13 +536,11 @@ export function UpstreamEditorDialog({
               showApiKeys={showApiKeys}
               onToggleApiKeys={onToggleApiKeys}
               onChangeDraft={onChangeDraft}
-              kiroAccounts={kiroAccounts}
-              kiroAccountsLoading={kiroAccountsLoading}
-              kiroAccountsError={kiroAccountsError}
-              onRefreshKiroAccounts={onRefreshKiroAccounts}
-              onLogoutKiroAccount={onLogoutKiroAccount}
-              onImportKiroIde={onImportKiroIde}
-            />
+          kiroAccounts={kiroAccounts}
+          kiroAccountsLoading={kiroAccountsLoading}
+          kiroAccountsError={kiroAccountsError}
+          onRefreshKiroAccounts={onRefreshKiroAccounts}
+        />
           ) : null}
         </AlertDialogBody>
         <AlertDialogFooter>

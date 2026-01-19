@@ -4,6 +4,7 @@ import {
   ScrollText,
   Server,
   Settings,
+  ShieldCheck,
   Shuffle,
   SlidersHorizontal,
 } from "lucide-react";
@@ -15,6 +16,7 @@ export type ConfigSectionId =
   | "logs"
   | "core"
   | "upstreams"
+  | "providers"
   | "agents"
   | "settings";
 
@@ -56,6 +58,13 @@ export const CONFIG_SECTIONS: readonly ConfigSection[] = [
     label: () => m.config_section_upstreams_label(),
     description: () => m.config_section_upstreams_desc(),
     icon: Server,
+  },
+  {
+    id: "providers",
+    route: "/config/providers",
+    label: () => m.config_section_providers_label(),
+    description: () => m.config_section_providers_desc(),
+    icon: ShieldCheck,
   },
   {
     id: "agents",

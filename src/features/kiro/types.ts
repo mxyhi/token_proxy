@@ -30,3 +30,20 @@ export type KiroLoginPollResponse = {
   error: string | null;
   account: KiroAccountSummary | null;
 };
+
+export type KiroQuotaItem = {
+  name: string;
+  percentage: number;
+  used: number | null;
+  limit: number | null;
+  reset_at: string | null;
+  is_trial: boolean;
+};
+
+export type KiroQuotaSummary = {
+  account_id: string;
+  provider: string;
+  plan_type: string | null;
+  quotas: KiroQuotaItem[];
+  error: string | null;
+};

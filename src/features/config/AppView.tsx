@@ -43,6 +43,7 @@ import type {
 } from "@/features/config/types";
 import { DashboardPanel } from "@/features/dashboard/DashboardPanel";
 import { LogsPanel } from "@/features/logs/LogsPanel";
+import { ProvidersPanel } from "@/features/providers/ProvidersPanel";
 import { m } from "@/paraglide/messages.js";
 
 type AppViewProps = {
@@ -274,6 +275,9 @@ function ConfigSectionContent({
   }
   if (activeSectionId === "logs") {
     return <LogsPanel />;
+  }
+  if (activeSectionId === "providers") {
+    return <ProvidersPanel />;
   }
 
   return (

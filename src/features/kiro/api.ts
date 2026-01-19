@@ -5,6 +5,7 @@ import type {
   KiroLoginMethod,
   KiroLoginPollResponse,
   KiroLoginStartResponse,
+  KiroQuotaSummary,
 } from "@/features/kiro/types";
 
 export async function listKiroAccounts() {
@@ -29,4 +30,8 @@ export async function logoutKiroAccount(accountId: string) {
 
 export async function handleKiroCallback(url: string) {
   await invoke<void>("kiro_handle_callback", { url });
+}
+
+export async function fetchKiroQuotas() {
+  return await invoke<KiroQuotaSummary[]>("kiro_fetch_quotas");
 }

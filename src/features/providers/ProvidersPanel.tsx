@@ -8,7 +8,6 @@ import {
   Dialog,
   DialogBody,
   DialogContent,
-  DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
@@ -253,15 +252,7 @@ function ProvidersToolbar({
   );
 }
 
-function ProvidersSectionHeader({
-  title,
-  description,
-  count,
-}: {
-  title: string;
-  description: string;
-  count: number;
-}) {
+function ProvidersSectionHeader({ title, count }: { title: string; count: number }) {
   return (
     <div data-slot="providers-section-header" className="flex flex-wrap items-start gap-2">
       <div className="flex-1">
@@ -269,7 +260,6 @@ function ProvidersSectionHeader({
           <p className="text-sm font-semibold text-foreground">{title}</p>
           <Badge variant="secondary">{count}</Badge>
         </div>
-        <p className="text-xs text-muted-foreground">{description}</p>
       </div>
     </div>
   );
@@ -414,7 +404,6 @@ function KiroProviderGroup({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{m.providers_add_account()}</DialogTitle>
-            <DialogDescription>{m.providers_kiro_desc()}</DialogDescription>
           </DialogHeader>
           <DialogBody>
             <KiroLoginSection
@@ -447,7 +436,6 @@ function KiroProviderGroup({
                 <p className="text-sm font-medium text-foreground">{m.providers_kiro_title()}</p>
                 <Badge variant="outline">{accounts.length}</Badge>
               </div>
-              <p className="text-xs text-muted-foreground">{m.providers_kiro_desc()}</p>
               <p className="text-xs text-muted-foreground">{statusSummary}</p>
             </div>
           </div>
@@ -615,11 +603,7 @@ export function ProvidersPanel() {
       />
 
       <section className="space-y-3">
-        <ProvidersSectionHeader
-          title={m.providers_section_accounts_title()}
-          description={m.providers_section_accounts_desc()}
-          count={visibleAccounts.length}
-        />
+        <ProvidersSectionHeader title={m.providers_section_accounts_title()} count={visibleAccounts.length} />
         {showKiro ? (
           <KiroProviderGroup
             accounts={accounts}

@@ -20,7 +20,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import type { KiroAccountSummary, KiroLoginMethod, KiroQuotaItem } from "@/features/kiro/types";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
 import { useKiroLogin } from "@/features/kiro/use-kiro-login";
@@ -373,6 +372,7 @@ function KiroProviderGroup({
   quotasLoading,
   accountsError,
   quotasError,
+  onRefresh,
   onLogout,
   onLogin,
   onImport,
@@ -388,6 +388,7 @@ function KiroProviderGroup({
   quotasLoading: boolean;
   accountsError: string;
   quotasError: string;
+  onRefresh: () => void;
   onLogout: (accountId: string) => Promise<void>;
   onLogin: (method: KiroLoginMethod) => void;
   onImport: () => void;
@@ -450,18 +451,42 @@ function KiroProviderGroup({
               <p className="text-xs text-muted-foreground">{statusSummary}</p>
             </div>
           </div>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setLoginOpen(true);
-            }}
-          >
-            {m.providers_add_account()}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onRefresh();
+              }}
+              disabled={accountsLoading || quotasLoading}
+            >
+              <RefreshCw
+                className={[
+                  "size-4",
+                  accountsLoading || quotasLoading ? "animate-spin" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                aria-hidden="true"
+              />
+              <span className="sr-only">{m.common_refresh()}</span>
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setLoginOpen(true);
+              }}
+            >
+              {m.providers_add_account()}
+            </Button>
+          </div>
         </summary>
         <div className="border-t border-border/60 px-4 py-4">
           {accountsLoading ? (
@@ -604,6 +629,7 @@ export function ProvidersPanel() {
             quotasLoading={quotasLoading}
             accountsError={accountsError}
             quotasError={quotasError}
+            onRefresh={refreshAll}
             onLogout={logoutAccount}
             onLogin={beginLogin}
             onImport={async () => {
@@ -623,16 +649,6 @@ export function ProvidersPanel() {
         )}
       </section>
 
-      <Separator />
-
-      <section className="space-y-3">
-        <ProvidersSectionHeader
-          title={m.providers_section_custom_title()}
-          description={m.providers_section_custom_desc()}
-          count={0}
-        />
-        <p className="text-sm text-muted-foreground">{m.providers_custom_empty()}</p>
-      </section>
     </div>
   );
 }

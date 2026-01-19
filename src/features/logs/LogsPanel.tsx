@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AlertCircle, HelpCircle } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sheet,
@@ -15,7 +12,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { Switch } from "@/components/ui/switch";
 import {
   DashboardFilters,
   RECENT_PAGE_SIZE,
@@ -134,7 +130,6 @@ export function LogsPanel() {
 
   const [captureEnabled, setCaptureEnabled] = useState(false);
   const [captureLoading, setCaptureLoading] = useState(false);
-  const [captureMessage, setCaptureMessage] = useState("");
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailStatus, setDetailStatus] = useState<DetailStatus>("idle");
   const [detailMessage, setDetailMessage] = useState("");
@@ -147,9 +142,8 @@ export function LogsPanel() {
     try {
       const enabled = await readRequestDetailCapture();
       setCaptureEnabled(enabled);
-      setCaptureMessage("");
-    } catch (error) {
-      setCaptureMessage(parseError(error));
+    } catch {
+      // ignore
     }
   }, []);
 
@@ -177,11 +171,8 @@ export function LogsPanel() {
           return;
         }
         unlisten = stop;
-      } catch (error) {
-        if (!active) {
-          return;
-        }
-        setCaptureMessage(parseError(error));
+      } catch {
+        // ignore
       }
     };
 
@@ -203,12 +194,11 @@ export function LogsPanel() {
 
   const handleToggleCapture = useCallback(async (nextValue: boolean) => {
     setCaptureLoading(true);
-    setCaptureMessage("");
     try {
       const enabled = await setRequestDetailCapture(nextValue);
       setCaptureEnabled(enabled);
-    } catch (error) {
-      setCaptureMessage(parseError(error));
+    } catch {
+      // ignore
     } finally {
       setCaptureLoading(false);
     }
@@ -244,10 +234,6 @@ export function LogsPanel() {
     }
   }, [detailOpen, selectedId, loadDetail]);
 
-  const captureStatusText = captureEnabled
-    ? m.logs_capture_status_ready()
-    : m.logs_capture_status_idle();
-
   return (
     <div className="flex flex-col gap-4">
       {status === "error" ? (
@@ -260,45 +246,16 @@ export function LogsPanel() {
         </Alert>
       ) : null}
 
-      <div className="px-4 lg:px-6">
-        <Card className="border-border/60 bg-background/70">
-          <CardHeader className="pb-2">
-            <CardTitle className="inline-flex items-center gap-1 text-base">
-              {m.logs_capture_title()}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <HelpCircle className="size-4 text-muted-foreground cursor-help" />
-                </TooltipTrigger>
-                <TooltipContent side="right" className="max-w-xs">
-                  {m.logs_capture_desc()}
-                </TooltipContent>
-              </Tooltip>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-wrap items-center justify-between gap-3">
-            <div className="space-y-1">
-              <Label htmlFor="logs-capture" className="text-xs text-muted-foreground">
-                {captureStatusText}
-              </Label>
-              {captureMessage ? (
-                <p className="text-xs text-destructive">{captureMessage}</p>
-              ) : null}
-            </div>
-            <Switch
-              id="logs-capture"
-              checked={captureEnabled}
-              disabled={captureLoading}
-              onCheckedChange={handleToggleCapture}
-            />
-          </CardContent>
-        </Card>
-      </div>
-
       <DashboardFilters
         range={rangePreset}
         loading={isLoading}
         onRangeChange={onRangeChange}
         onRefresh={refresh}
+        capture={{
+          enabled: captureEnabled,
+          loading: captureLoading,
+          onToggle: handleToggleCapture,
+        }}
       />
 
       <DataTable

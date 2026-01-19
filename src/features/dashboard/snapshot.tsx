@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { RefreshCcw } from "lucide-react"
+import { HelpCircle, RefreshCcw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -11,6 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { readDashboardSnapshot } from "@/features/dashboard/api"
 import {
   DASHBOARD_RANGE_OPTIONS,
@@ -118,6 +120,12 @@ type DashboardFiltersProps = {
   loading: boolean
   onRangeChange: (range: DashboardTimeRange) => void
   onRefresh: () => void
+  /** 请求详情捕获相关，仅 LogsPanel 使用 */
+  capture?: {
+    enabled: boolean
+    loading: boolean
+    onToggle: (enabled: boolean) => void
+  }
 }
 
 export function DashboardFilters({
@@ -125,6 +133,7 @@ export function DashboardFilters({
   loading,
   onRangeChange,
   onRefresh,
+  capture,
 }: DashboardFiltersProps) {
   return (
     <div
@@ -158,10 +167,37 @@ export function DashboardFilters({
               </SelectContent>
             </Select>
           </div>
-          <Button type="button" variant="outline" onClick={onRefresh} disabled={loading}>
-            <RefreshCcw className={cn("mr-2 size-4", loading && "animate-spin")} />
-            {m.common_refresh()}
-          </Button>
+          <div className="flex items-center gap-3">
+            {capture ? (
+              <div className="flex items-center gap-2">
+                <span
+                  className={`size-2 rounded-full ${capture.enabled ? "bg-green-500" : "bg-muted-foreground/40"}`}
+                  aria-hidden="true"
+                />
+                <Label htmlFor="logs-capture" className="text-xs text-muted-foreground">
+                  {m.logs_capture_title()}
+                </Label>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom" className="max-w-xs">
+                    {m.logs_capture_desc()}
+                  </TooltipContent>
+                </Tooltip>
+                <Switch
+                  id="logs-capture"
+                  checked={capture.enabled}
+                  disabled={capture.loading}
+                  onCheckedChange={capture.onToggle}
+                />
+              </div>
+            ) : null}
+            <Button type="button" variant="outline" size="icon" onClick={onRefresh} disabled={loading}>
+              <RefreshCcw className={cn("size-4", loading && "animate-spin")} />
+              <span className="sr-only">{m.common_refresh()}</span>
+            </Button>
+          </div>
         </CardContent>
       </Card>
     </div>

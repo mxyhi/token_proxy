@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { type StatusBadge } from "@/features/config/cards";
 import {
   EMPTY_FORM,
+  toForm,
   mergeConfigExtras,
   toPayload,
   validate,
@@ -36,6 +37,14 @@ function sortJsonValue(value: JsonValue): JsonValue {
 
 function stableStringify(value: JsonValue) {
   return JSON.stringify(sortJsonValue(value));
+}
+
+function normalizeConfigForCompare(
+  config: ProxyConfigFile,
+  extras: Record<string, unknown>
+) {
+  // 将配置走一遍 toForm/toPayload，统一空值/null/overrides 等形态，避免启动即脏。
+  return mergeConfigExtras(toPayload(toForm(config)), extras);
 }
 
 export type StatusState = "idle" | "loading" | "saving" | "saved" | "error";
@@ -191,15 +200,22 @@ export function useConfigDerived(
     [configExtras, form, validation.valid]
   );
 
+  const normalizedLastConfig = useMemo(() => {
+    if (!lastConfig) {
+      return null;
+    }
+    return normalizeConfigForCompare(lastConfig, configExtras);
+  }, [configExtras, lastConfig]);
+
   const configDirty = useMemo(() => {
-    if (!currentPayload || !lastConfig) {
+    if (!currentPayload || !normalizedLastConfig) {
       return false;
     }
     return (
       stableStringify(currentPayload as JsonValue) !==
-      stableStringify(lastConfig as JsonValue)
+      stableStringify(normalizedLastConfig as JsonValue)
     );
-  }, [currentPayload, lastConfig]);
+  }, [currentPayload, normalizedLastConfig]);
 
   const autoStartDirty =
     autoStartStatus !== "loading" && autoStartEnabled !== autoStartBaseline;

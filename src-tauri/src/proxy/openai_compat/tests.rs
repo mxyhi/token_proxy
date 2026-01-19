@@ -320,6 +320,32 @@ fn responses_response_to_chat_extracts_output_text_and_maps_usage() {
 }
 
 #[test]
+fn responses_response_to_chat_maps_reasoning_content() {
+    let input = bytes_from_json(json!({
+        "id": "resp_reason",
+        "created_at": 1700000002,
+        "model": "gpt-4.1",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    { "type": "reasoning_text", "text": "think", "annotations": [] },
+                    { "type": "output_text", "text": "ok", "annotations": [] }
+                ]
+            }
+        ]
+    }));
+
+    let output = transform_response_body(FormatTransform::ResponsesToChat, &input, None).expect("transform");
+    let value = json_from_bytes(output);
+
+    let message = &value["choices"][0]["message"];
+    assert_eq!(message["content"], json!("ok"));
+    assert_eq!(message["reasoning_content"], json!("think"));
+}
+
+#[test]
 fn responses_response_to_chat_includes_tool_calls_and_multimodal_content() {
     let input = bytes_from_json(json!({
         "id": "resp_456",

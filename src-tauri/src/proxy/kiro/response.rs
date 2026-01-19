@@ -3,6 +3,9 @@ use std::collections::HashSet;
 use serde_json::{Map, Value};
 
 use super::event_stream::EventStreamDecoder;
+use super::tool_parser::{
+    deduplicate_tool_uses, parse_embedded_tool_calls, process_tool_use_event, ToolUseState,
+};
 use super::types::KiroToolUse;
 
 #[derive(Clone, Debug, Default)]
@@ -10,11 +13,13 @@ pub(crate) struct KiroUsage {
     pub(crate) input_tokens: Option<u64>,
     pub(crate) output_tokens: Option<u64>,
     pub(crate) total_tokens: Option<u64>,
+    pub(crate) context_usage_percentage: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct KiroParsedResponse {
     pub(crate) content: String,
+    pub(crate) reasoning: String,
     pub(crate) tool_uses: Vec<KiroToolUse>,
     pub(crate) usage: KiroUsage,
     pub(crate) stop_reason: Option<String>,
@@ -28,10 +33,12 @@ pub(crate) fn parse_event_stream(bytes: &[u8]) -> Result<KiroParsedResponse, Str
 
     let mut content = String::new();
     let mut tool_uses: Vec<KiroToolUse> = Vec::new();
+    let mut reasoning = String::new();
     let mut usage = KiroUsage::default();
     let mut stop_reason: Option<String> = None;
-    let mut processed_tool_ids: HashSet<String> = HashSet::new();
+    let mut processed_tool_keys: HashSet<String> = HashSet::new();
     let mut tool_state: Option<ToolUseState> = None;
+    let mut saw_invalid_state = false;
 
     for message in messages {
         if message.payload.is_empty() {
@@ -45,7 +52,11 @@ pub(crate) fn parse_event_stream(bytes: &[u8]) -> Result<KiroParsedResponse, Str
         };
 
         if let Some(error) = extract_error(event_obj) {
-            return Err(error);
+            if error == "invalidStateEvent" {
+                saw_invalid_state = true;
+            } else {
+                return Err(error);
+            }
         }
 
         update_stop_reason(event_obj, &mut stop_reason);
@@ -58,13 +69,14 @@ pub(crate) fn parse_event_stream(bytes: &[u8]) -> Result<KiroParsedResponse, Str
         };
 
         match event_type {
+            "followupPromptEvent" => {}
             "assistantResponseEvent" => {
                 if let Some(Value::Object(assistant)) = event_obj.get("assistantResponseEvent") {
                     if let Some(text) = assistant.get("content").and_then(Value::as_str) {
                         content.push_str(text);
                     }
                     if let Some(tool_items) = assistant.get("toolUses").and_then(Value::as_array) {
-                        extract_tool_uses(tool_items, &mut tool_uses, &mut processed_tool_ids);
+                        extract_tool_uses(tool_items, &mut tool_uses, &mut processed_tool_keys);
                     }
                     update_stop_reason(assistant, &mut stop_reason);
                 }
@@ -72,25 +84,50 @@ pub(crate) fn parse_event_stream(bytes: &[u8]) -> Result<KiroParsedResponse, Str
                     content.push_str(text);
                 }
                 if let Some(tool_items) = event_obj.get("toolUses").and_then(Value::as_array) {
-                    extract_tool_uses(tool_items, &mut tool_uses, &mut processed_tool_ids);
+                    extract_tool_uses(tool_items, &mut tool_uses, &mut processed_tool_keys);
                 }
             }
             "toolUseEvent" => {
                 let (completed, next_state) =
-                    process_tool_use_event(event_obj, tool_state.take(), &mut processed_tool_ids);
+                    process_tool_use_event(event_obj, tool_state.take(), &mut processed_tool_keys);
                 tool_uses.extend(completed);
                 tool_state = next_state;
             }
             "reasoningContentEvent" => {
-                if let Some(Value::Object(reasoning)) = event_obj.get("reasoningContentEvent") {
-                    if let Some(text) = reasoning.get("thinkingText").and_then(Value::as_str) {
-                        content.push_str(text);
+                if let Some(Value::Object(reasoning_event)) = event_obj.get("reasoningContentEvent") {
+                    if let Some(text) = reasoning_event.get("thinkingText").and_then(Value::as_str) {
+                        reasoning.push_str(text);
+                    }
+                    if let Some(text) = reasoning_event.get("text").and_then(Value::as_str) {
+                        reasoning.push_str(text);
                     }
                 }
+            }
+            "messageStopEvent" | "message_stop" => {
+                update_stop_reason(event_obj, &mut stop_reason);
             }
             _ => {}
         }
     }
+
+    if saw_invalid_state {
+        // Ignore invalidStateEvent and continue parsing.
+    }
+
+    let (cleaned_content, extracted_reasoning) = extract_thinking_from_content(&content);
+    content = cleaned_content;
+    if !extracted_reasoning.trim().is_empty() {
+        if !reasoning.is_empty() && !reasoning.ends_with('\n') {
+            reasoning.push('\n');
+        }
+        reasoning.push_str(extracted_reasoning.trim());
+    }
+
+    let (cleaned, embedded_tool_uses) =
+        parse_embedded_tool_calls(&content, &mut processed_tool_keys);
+    content = cleaned;
+    tool_uses.extend(embedded_tool_uses);
+    tool_uses = deduplicate_tool_uses(tool_uses);
 
     if stop_reason.is_none() {
         if !tool_uses.is_empty() {
@@ -102,10 +139,44 @@ pub(crate) fn parse_event_stream(bytes: &[u8]) -> Result<KiroParsedResponse, Str
 
     Ok(KiroParsedResponse {
         content,
+        reasoning,
         tool_uses,
         usage,
         stop_reason,
     })
+}
+
+fn extract_thinking_from_content(content: &str) -> (String, String) {
+    const START: &str = "<thinking>";
+    const END: &str = "</thinking>";
+
+    if !content.contains(START) {
+        return (content.to_string(), String::new());
+    }
+
+    let mut cleaned = String::new();
+    let mut reasoning = String::new();
+    let mut remaining = content;
+
+    loop {
+        let Some(start_idx) = remaining.find(START) else {
+            cleaned.push_str(remaining);
+            break;
+        };
+        let (before, after_start) = remaining.split_at(start_idx);
+        cleaned.push_str(before);
+        let after_start = &after_start[START.len()..];
+
+        let Some(end_idx) = after_start.find(END) else {
+            reasoning.push_str(after_start);
+            break;
+        };
+        let (think_block, rest) = after_start.split_at(end_idx);
+        reasoning.push_str(think_block);
+        remaining = &rest[END.len()..];
+    }
+
+    (cleaned, reasoning)
 }
 
 fn detect_event_type(event: &Map<String, Value>) -> &str {
@@ -114,11 +185,18 @@ fn detect_event_type(event: &Map<String, Value>) -> &str {
         "toolUseEvent",
         "reasoningContentEvent",
         "messageStopEvent",
+        "message_stop",
         "messageMetadataEvent",
         "metadataEvent",
         "usageEvent",
         "usage",
+        "metricsEvent",
+        "meteringEvent",
         "supplementaryWebLinksEvent",
+        "error",
+        "exception",
+        "internalServerException",
+        "invalidStateEvent",
     ] {
         if event.contains_key(key) {
             return key;
@@ -136,7 +214,10 @@ fn extract_error(event: &Map<String, Value>) -> Option<String> {
         return Some(format!("Kiro error: {err_type} {message}"));
     }
     if let Some(Value::String(kind)) = event.get("type") {
-        if matches!(kind.as_str(), "error" | "exception" | "internalServerException") {
+        if matches!(
+            kind.as_str(),
+            "error" | "exception" | "internalServerException"
+        ) {
             let message = event
                 .get("message")
                 .and_then(Value::as_str)
@@ -151,6 +232,14 @@ fn extract_error(event: &Map<String, Value>) -> Option<String> {
             return Some(format!("Kiro error: {message}"));
         }
     }
+    if event.contains_key("invalidStateEvent")
+        || event
+            .get("eventType")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value == "invalidStateEvent")
+    {
+        return Some("invalidStateEvent".to_string());
+    }
     None
 }
 
@@ -164,6 +253,9 @@ fn update_stop_reason(event: &Map<String, Value>, stop_reason: &mut Option<Strin
 }
 
 fn update_usage(event: &Map<String, Value>, usage: &mut KiroUsage) {
+    if let Some(context_pct) = event.get("contextUsagePercentage").and_then(Value::as_f64) {
+        usage.context_usage_percentage = Some(context_pct);
+    }
     if let Some(tokens) = event.get("inputTokens").and_then(Value::as_u64) {
         usage.input_tokens = Some(tokens);
     }
@@ -195,6 +287,15 @@ fn update_usage(event: &Map<String, Value>, usage: &mut KiroUsage) {
             usage.output_tokens = Some(tokens);
         }
     }
+
+    if let Some(metrics) = event.get("metricsEvent").and_then(Value::as_object) {
+        if let Some(tokens) = metrics.get("inputTokens").and_then(Value::as_u64) {
+            usage.input_tokens = Some(tokens);
+        }
+        if let Some(tokens) = metrics.get("outputTokens").and_then(Value::as_u64) {
+            usage.output_tokens = Some(tokens);
+        }
+    }
 }
 
 fn update_usage_from_metadata(metadata: &Map<String, Value>, usage: &mut KiroUsage) {
@@ -211,6 +312,12 @@ fn update_usage_from_metadata(metadata: &Map<String, Value>, usage: &mut KiroUsa
         if let Some(tokens) = token_usage.get("cacheReadInputTokens").and_then(Value::as_u64) {
             let current = usage.input_tokens.unwrap_or(0);
             usage.input_tokens = Some(current + tokens);
+        }
+        if let Some(context_pct) = token_usage
+            .get("contextUsagePercentage")
+            .and_then(Value::as_f64)
+        {
+            usage.context_usage_percentage = Some(context_pct);
         }
     }
 
@@ -267,7 +374,8 @@ fn extract_tool_uses(
             .or_else(|| tool.get("tool_use_id"))
             .and_then(Value::as_str)
             .unwrap_or("");
-        if tool_use_id.is_empty() || processed.contains(tool_use_id) {
+        let dedupe_key = format!("id:{tool_use_id}");
+        if tool_use_id.is_empty() || processed.contains(&dedupe_key) {
             continue;
         }
         let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
@@ -276,102 +384,11 @@ fn extract_tool_uses(
             .and_then(Value::as_object)
             .cloned()
             .unwrap_or_default();
-        processed.insert(tool_use_id.to_string());
+        processed.insert(dedupe_key);
         output.push(KiroToolUse {
             tool_use_id: tool_use_id.to_string(),
             name: name.to_string(),
             input,
         });
     }
-}
-
-struct ToolUseState {
-    id: String,
-    name: String,
-    input_buffer: String,
-}
-
-fn process_tool_use_event(
-    event: &Map<String, Value>,
-    current: Option<ToolUseState>,
-    processed: &mut HashSet<String>,
-) -> (Vec<KiroToolUse>, Option<ToolUseState>) {
-    let mut tool_uses = Vec::new();
-    let mut state = current;
-
-    let source = event
-        .get("toolUseEvent")
-        .and_then(Value::as_object)
-        .unwrap_or(event);
-
-    let tool_use_id = source
-        .get("toolUseId")
-        .or_else(|| source.get("tool_use_id"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let name = source.get("name").and_then(Value::as_str).unwrap_or("");
-    let stop = source.get("stop").and_then(Value::as_bool).unwrap_or(false);
-
-    if !tool_use_id.is_empty() && !name.is_empty() {
-        if let Some(current_state) = &state {
-            if current_state.id != tool_use_id {
-                state = None;
-            }
-        }
-
-        if state.is_none() && !processed.contains(tool_use_id) {
-            state = Some(ToolUseState {
-                id: tool_use_id.to_string(),
-                name: name.to_string(),
-                input_buffer: String::new(),
-            });
-        }
-    }
-
-    if let Some(current_state) = &mut state {
-        if let Some(Value::String(fragment)) = source.get("input") {
-            current_state.input_buffer.push_str(fragment);
-        } else if let Some(Value::Object(input)) = source.get("input") {
-            let serialized = serde_json::to_string(input).unwrap_or_default();
-            current_state.input_buffer = serialized;
-        }
-    }
-
-    if stop {
-        if let Some(current_state) = state.take() {
-            let input = parse_tool_input(&current_state.input_buffer);
-            processed.insert(current_state.id.clone());
-            tool_uses.push(KiroToolUse {
-                tool_use_id: current_state.id,
-                name: current_state.name,
-                input,
-            });
-        }
-    }
-
-    (tool_uses, state)
-}
-
-fn parse_tool_input(raw: &str) -> Map<String, Value> {
-    if raw.trim().is_empty() {
-        return Map::new();
-    }
-    let repaired = repair_json(raw);
-    serde_json::from_str::<Map<String, Value>>(&repaired).unwrap_or_default()
-}
-
-fn repair_json(raw: &str) -> String {
-    let mut output = String::with_capacity(raw.len());
-    let mut chars = raw.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == ',' {
-            if let Some(next) = chars.peek() {
-                if *next == '}' || *next == ']' {
-                    continue;
-                }
-            }
-        }
-        output.push(ch);
-    }
-    output
 }

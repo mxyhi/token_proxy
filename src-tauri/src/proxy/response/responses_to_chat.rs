@@ -50,6 +50,7 @@ struct ResponsesToChatState<S> {
     content_parts_sent: bool,
     finish_reason_override: Option<&'static str>,
     saw_text_delta: bool,
+    saw_reasoning_delta: bool,
 }
 
 struct ToolCallState {
@@ -96,6 +97,7 @@ where
             content_parts_sent: false,
             finish_reason_override: None,
             saw_text_delta: false,
+            saw_reasoning_delta: false,
         }
     }
 
@@ -170,6 +172,10 @@ where
             self.handle_output_text_delta(&value, token_texts);
             return;
         }
+        if event_type.ends_with("reasoning_text.delta") {
+            self.handle_reasoning_text_delta(&value, token_texts);
+            return;
+        }
         if event_type.ends_with("function_call_arguments.delta") {
             self.handle_function_call_arguments_delta(&value);
             return;
@@ -207,6 +213,22 @@ where
             self.created,
             &self.model,
             json!({ "content": delta }),
+            None,
+        ));
+    }
+
+    fn handle_reasoning_text_delta(&mut self, value: &Value, token_texts: &mut Vec<String>) {
+        let Some(delta) = value.get("delta").and_then(Value::as_str) else {
+            return;
+        };
+        self.saw_reasoning_delta = true;
+        token_texts.push(delta.to_string());
+        self.ensure_role_sent();
+        self.out.push_back(chat_chunk_sse(
+            &self.chat_id,
+            self.created,
+            &self.model,
+            json!({ "reasoning_content": delta }),
             None,
         ));
     }
@@ -416,6 +438,21 @@ where
     }
 
     fn maybe_emit_content_parts(&mut self, parts: &[Value]) {
+        if !self.saw_reasoning_delta {
+            let reasoning_text = extract_reasoning_text(parts);
+            if !reasoning_text.trim().is_empty() {
+                self.saw_reasoning_delta = true;
+                self.ensure_role_sent();
+                self.out.push_back(chat_chunk_sse(
+                    &self.chat_id,
+                    self.created,
+                    &self.model,
+                    json!({ "reasoning_content": reasoning_text }),
+                    None,
+                ));
+            }
+        }
+
         if self.content_parts_sent {
             return;
         }
@@ -534,6 +571,22 @@ fn chat_chunk_sse(
         ]
     });
     Bytes::from(format!("data: {}\n\n", chunk.to_string()))
+}
+
+fn extract_reasoning_text(parts: &[Value]) -> String {
+    let mut reasoning = String::new();
+    for part in parts {
+        let Some(part) = part.as_object() else {
+            continue;
+        };
+        if part.get("type").and_then(Value::as_str) != Some("reasoning_text") {
+            continue;
+        }
+        if let Some(text) = part.get("text").and_then(Value::as_str) {
+            reasoning.push_str(text);
+        }
+    }
+    reasoning
 }
 
 fn tool_call_id(call_id: &str, item_id: &str) -> String {

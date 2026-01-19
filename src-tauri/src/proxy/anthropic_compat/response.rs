@@ -1,5 +1,7 @@
 use axum::body::Bytes;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::proxy::compat_reason;
@@ -39,6 +41,7 @@ pub(super) fn responses_response_to_anthropic(
         .map(|items| items.as_slice())
         .unwrap_or(&[]);
     let mut combined_text = String::new();
+    let mut thinking_text = String::new();
     let mut tool_uses = Vec::new();
 
     for item in output {
@@ -55,11 +58,18 @@ pub(super) fn responses_response_to_anthropic(
                         let Some(part) = part.as_object() else {
                             continue;
                         };
-                        if part.get("type").and_then(Value::as_str) != Some("output_text") {
-                            continue;
-                        }
-                        if let Some(text) = part.get("text").and_then(Value::as_str) {
-                            combined_text.push_str(text);
+                        match part.get("type").and_then(Value::as_str) {
+                            Some("output_text") => {
+                                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                    combined_text.push_str(text);
+                                }
+                            }
+                            Some("reasoning_text") => {
+                                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                    thinking_text.push_str(text);
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -74,6 +84,16 @@ pub(super) fn responses_response_to_anthropic(
     }
 
     let mut content = Vec::new();
+    if !thinking_text.trim().is_empty() {
+        let signature = thinking_signature(&thinking_text);
+        let mut block = json!({ "type": "thinking", "thinking": thinking_text });
+        if let (Some(signature), Some(block)) =
+            (signature, block.as_object_mut())
+        {
+            block.insert("signature".to_string(), Value::String(signature));
+        }
+        content.push(block);
+    }
     if !combined_text.trim().is_empty() || tool_uses.is_empty() {
         content.push(json!({ "type": "text", "text": combined_text }));
     }
@@ -210,6 +230,15 @@ fn tool_use_to_responses_function_call(block: &Map<String, Value>) -> Option<Val
         "call_id": call_id,
         "name": name
     }))
+}
+
+fn thinking_signature(text: &str) -> Option<String> {
+    if text.trim().is_empty() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    Some(STANDARD.encode(hasher.finalize()))
 }
 
 fn map_openai_usage_to_anthropic_usage(usage: &Map<String, Value>) -> Value {

@@ -9,6 +9,7 @@ pub(super) struct ChatToolCall {
 
 pub(super) struct ResponsesOutput {
     pub(super) content_parts: Vec<Value>,
+    pub(super) reasoning_text: String,
     pub(super) tool_calls: Vec<Value>,
 }
 
@@ -98,11 +99,13 @@ pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
     let Some(output) = value.get("output").and_then(Value::as_array) else {
         return ResponsesOutput {
             content_parts: Vec::new(),
+            reasoning_text: String::new(),
             tool_calls: Vec::new(),
         };
     };
 
     let mut content_parts = Vec::new();
+    let mut reasoning_text = String::new();
     let mut tool_calls = Vec::new();
 
     for item in output {
@@ -119,7 +122,12 @@ pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
                 };
                 for part in content {
                     if let Some(part_obj) = part.as_object() {
-                        let _ = part_obj.get("type").and_then(Value::as_str);
+                        let part_type = part_obj.get("type").and_then(Value::as_str);
+                        if part_type == Some("reasoning_text") {
+                            if let Some(text) = part_obj.get("text").and_then(Value::as_str) {
+                                reasoning_text.push_str(text);
+                            }
+                        }
                     }
                     content_parts.push(part.clone());
                 }
@@ -135,6 +143,7 @@ pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
 
     ResponsesOutput {
         content_parts,
+        reasoning_text,
         tool_calls,
     }
 }

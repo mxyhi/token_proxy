@@ -154,3 +154,30 @@ fn responses_request_to_anthropic_maps_tool_choice_and_tool_result() {
     assert_eq!(messages[2]["content"][0]["content"], json!("ok"));
 }
 
+#[test]
+fn responses_response_to_anthropic_includes_thinking_block() {
+    let input = bytes_from_json(json!({
+        "id": "resp_thinking",
+        "model": "gpt-4.1",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    { "type": "reasoning_text", "text": "think" },
+                    { "type": "output_text", "text": "ok" }
+                ]
+            }
+        ],
+        "usage": { "input_tokens": 1, "output_tokens": 2 }
+    }));
+
+    let output = responses_response_to_anthropic(&input, None).expect("transform");
+    let value = json_from_bytes(output);
+
+    assert_eq!(value["content"][0]["type"], json!("thinking"));
+    assert_eq!(value["content"][0]["thinking"], json!("think"));
+    assert!(value["content"][0]["signature"].as_str().is_some());
+    assert_eq!(value["content"][1]["type"], json!("text"));
+    assert_eq!(value["content"][1]["text"], json!("ok"));
+}

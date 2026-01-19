@@ -214,12 +214,12 @@ fn resolve_anthropic_plan(
                 request_transform: FormatTransform::AnthropicToGemini,
                 response_transform: FormatTransform::GeminiToAnthropic,
             },
-            PROVIDER_KIRO => DispatchPlan {
-                provider: PROVIDER_KIRO,
-                outbound_path: Some(RESPONSES_PATH),
-                request_transform: FormatTransform::AnthropicToResponses,
-                response_transform: FormatTransform::KiroToAnthropic,
-            },
+        PROVIDER_KIRO => DispatchPlan {
+            provider: PROVIDER_KIRO,
+            outbound_path: Some(RESPONSES_PATH),
+            request_transform: FormatTransform::None,
+            response_transform: FormatTransform::KiroToAnthropic,
+        },
             _ => base_plan(PROVIDER_RESPONSES),
         }));
     }
@@ -271,7 +271,7 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
         PROVIDER_KIRO => DispatchPlan {
             provider: PROVIDER_KIRO,
             outbound_path: Some(RESPONSES_PATH),
-            request_transform: FormatTransform::ChatToResponses,
+            request_transform: FormatTransform::None,
             response_transform: FormatTransform::KiroToChat,
         },
         _ => base_plan(PROVIDER_RESPONSES),

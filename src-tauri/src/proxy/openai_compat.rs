@@ -416,12 +416,21 @@ fn responses_response_to_chat(bytes: &Bytes, model_hint: Option<&str>) -> Result
     let finish_reason =
         compat_reason::chat_finish_reason_from_response_object(object, !extracted.tool_calls.is_empty());
 
+    let reasoning_text = extracted.reasoning_text.clone();
     let mut message = json!({
         "role": "assistant",
         "content": compat_content::chat_message_content_from_responses_parts(
             &extracted.content_parts,
         )
     });
+    if let Some(message) = message.as_object_mut() {
+        if !reasoning_text.trim().is_empty() {
+            message.insert(
+                "reasoning_content".to_string(),
+                Value::String(reasoning_text),
+            );
+        }
+    }
     if !extracted.tool_calls.is_empty() {
         if let Some(message) = message.as_object_mut() {
             message.insert("tool_calls".to_string(), Value::Array(extracted.tool_calls));

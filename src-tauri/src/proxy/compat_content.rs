@@ -17,6 +17,7 @@ pub(crate) fn chat_message_content_from_responses_parts(parts: &[Value]) -> Valu
                     output_parts.push(json!({ "type": "text", "text": text }));
                 }
             }
+            Some("reasoning_text") => {}
             Some("refusal") => {
                 let text = part
                     .get("refusal")

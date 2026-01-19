@@ -19,6 +19,8 @@ mod attempt;
 mod result;
 mod utils;
 mod kiro;
+mod kiro_headers;
+mod kiro_http;
 
 use utils::{
     build_group_order, resolve_group_start,

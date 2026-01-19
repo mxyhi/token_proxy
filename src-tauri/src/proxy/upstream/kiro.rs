@@ -1,43 +1,30 @@
-use axum::http::{
-    header::{ACCEPT, CONTENT_TYPE, USER_AGENT},
-    HeaderMap, HeaderName, HeaderValue, Method, StatusCode,
-};
+use axum::body::Bytes;
+use axum::body::Body;
+use axum::http::{HeaderMap, Method, StatusCode};
 use serde_json::Value;
-use std::time::Instant;
-use tokio::time::timeout;
-
-use super::request;
+use std::time::{Duration, Instant};
 use super::{result, AttemptOutcome};
+use super::kiro_http::{
+    build_client,
+    handle_send_error,
+    read_request_json,
+    refresh_kiro_account,
+    send_kiro_request,
+};
 use crate::proxy::http;
 use crate::proxy::kiro::{
-    build_payload_from_responses, determine_agentic_mode, map_model_to_kiro, select_endpoints,
-    KiroEndpointConfig,
+    build_payload_from_chat, build_payload_from_responses, determine_agentic_mode, map_model_to_kiro,
+    select_endpoints, BuildPayloadResult, KiroEndpointConfig,
 };
+use crate::proxy::anthropic_compat;
 use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_body::ReplayableBody;
-use crate::proxy::{ProxyState, RequestMeta, UPSTREAM_NO_DATA_TIMEOUT};
+use crate::proxy::{ProxyState, RequestMeta};
 use crate::proxy::{config::UpstreamRuntime, request_detail::RequestDetailSnapshot};
 use crate::kiro::KiroTokenRecord;
 
-const KIRO_REQUEST_CONTENT_TYPE: &str = "application/x-amz-json-1.0";
-const KIRO_REQUEST_ACCEPT: &str = "*/*";
-const KIRO_AGENT_MODE_IDC: &str = "spec";
-const KIRO_AGENT_MODE_DEFAULT: &str = "vibe";
-const KIRO_OPT_OUT: &str = "true";
-const KIRO_SDK_REQUEST: &str = "attempt=1; max=3";
-const KIRO_USER_AGENT_IDC: &str = "aws-sdk-js/1.0.18 ua/2.1 os/darwin#25.0.0 lang/js md/nodejs#20.16.0 api/codewhispererstreaming#1.0.18 m/E KiroIDE-0.2.13-66c23a8c5d15afabec89ef9954ef52a119f10d369df04d548fc6c1eac694b0d1";
-const KIRO_USER_AGENT_IDC_AMZ: &str =
-    "aws-sdk-js/1.0.18 KiroIDE-0.2.13-66c23a8c5d15afabec89ef9954ef52a119f10d369df04d548fc6c1eac694b0d1";
-const KIRO_USER_AGENT_DEFAULT: &str = "aws-sdk-rust/1.3.9 os/macos lang/rust/1.87.0";
-const KIRO_USER_AGENT_DEFAULT_AMZ: &str =
-    "aws-sdk-rust/1.3.9 ua/2.1 api/ssooidc/1.88.0 os/macos lang/rust/1.87.0 m/E app/AmazonQ-For-CLI";
-
-const HEADER_AMZ_TARGET: HeaderName = HeaderName::from_static("x-amz-target");
-const HEADER_AMZ_USER_AGENT: HeaderName = HeaderName::from_static("x-amz-user-agent");
-const HEADER_AMZ_SDK_REQUEST: HeaderName = HeaderName::from_static("amz-sdk-request");
-const HEADER_AMZ_SDK_INVOCATION_ID: HeaderName = HeaderName::from_static("amz-sdk-invocation-id");
-const HEADER_KIRO_AGENT_MODE: HeaderName = HeaderName::from_static("x-amzn-kiro-agent-mode");
-const HEADER_KIRO_OPTOUT: HeaderName = HeaderName::from_static("x-amzn-codewhisperer-optout");
+const MAX_KIRO_RETRIES: usize = 2;
+const MAX_KIRO_BACKOFF_SECS: u64 = 30;
 
 pub(super) async fn attempt_kiro_upstream(
     state: &ProxyState,
@@ -86,12 +73,28 @@ struct KiroContext<'a> {
     model_id: String,
     is_agentic: bool,
     is_chat_only: bool,
+    source_format: KiroSourceFormat,
     client: reqwest::Client,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum KiroSourceFormat {
+    OpenAIChat,
+    Responses,
+    Anthropic,
 }
 
 enum EndpointOutcome {
     Continue,
     Done(AttemptOutcome),
+}
+
+enum ResponseAction {
+    RetryAfter(Duration),
+    RefreshAndRetry,
+    NextEndpoint,
+    Finalize(reqwest::Response, Instant),
+    Return(AttemptOutcome),
 }
 
 async fn prepare_kiro_context<'a>(
@@ -112,6 +115,7 @@ async fn prepare_kiro_context<'a>(
     let is_idc = record.auth_method.trim().eq_ignore_ascii_case("idc");
     let endpoints = resolve_endpoints(state, upstream, is_idc);
     let (model_id, is_agentic, is_chat_only) = resolve_model(&mapped_meta);
+    let source_format = resolve_source_format(response_transform);
     let client = build_client(state, upstream)?;
 
     Ok(KiroContext {
@@ -131,6 +135,7 @@ async fn prepare_kiro_context<'a>(
         model_id,
         is_agentic,
         is_chat_only,
+        source_format,
         client,
     })
 }
@@ -157,60 +162,261 @@ async fn attempt_endpoint(
     endpoint: &KiroEndpointConfig,
     is_last: bool,
 ) -> EndpointOutcome {
-    let payload = match build_endpoint_payload(context, endpoint) {
+    let mut payload = match build_endpoint_payload(context, endpoint).await {
         Ok(payload) => payload,
         Err(outcome) => return EndpointOutcome::Done(outcome),
     };
 
-    let (response, start_time) = match send_endpoint_request(context, endpoint, &payload.payload).await
-    {
-        Ok(result) => result,
-        Err(outcome) => return EndpointOutcome::Done(outcome),
-    };
+    for attempt in 0..=MAX_KIRO_RETRIES {
+        let (response, start_time) =
+            match send_endpoint_request(context, endpoint, &payload.payload).await {
+                Ok(result) => result,
+                Err(outcome) => return EndpointOutcome::Done(outcome),
+            };
 
-    if response.status() == StatusCode::UNAUTHORIZED || response.status() == StatusCode::FORBIDDEN {
-        return EndpointOutcome::Done(
-            handle_auth_response(context, endpoint, payload.payload).await,
-        );
+        match handle_response_action(context, response, start_time, attempt, is_last)
+        .await
+        {
+            ResponseAction::RetryAfter(delay) => {
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            ResponseAction::RefreshAndRetry => {
+                match refresh_and_rebuild_payload(context, endpoint).await {
+                    Ok(updated) => payload = updated,
+                    Err(outcome) => return EndpointOutcome::Done(outcome),
+                }
+                continue;
+            }
+            ResponseAction::NextEndpoint => return EndpointOutcome::Continue,
+            ResponseAction::Finalize(response, start_time) => {
+                return EndpointOutcome::Done(
+                    finalize_response(
+                        context.state,
+                        &context.mapped_meta,
+                        context.upstream,
+                        context.inbound_path,
+                        context.response_transform,
+                        context.request_detail.clone(),
+                        response,
+                        false,
+                        start_time,
+                    )
+                    .await,
+                );
+            }
+            ResponseAction::Return(outcome) => return EndpointOutcome::Done(outcome),
+        }
     }
 
-    if response.status() == StatusCode::TOO_MANY_REQUESTS && !is_last {
-        return EndpointOutcome::Continue;
-    }
-
-    let is_forbidden = response.status() == StatusCode::FORBIDDEN;
-    EndpointOutcome::Done(
-        finalize_response(
-            context.state,
-            &context.mapped_meta,
-            context.upstream,
-            context.inbound_path,
-            context.response_transform,
-            context.request_detail.clone(),
-            response,
-            is_forbidden,
-            start_time,
-        )
-        .await,
-    )
+    EndpointOutcome::Done(AttemptOutcome::Fatal(http::error_response(
+        StatusCode::BAD_GATEWAY,
+        "Kiro upstream request failed.",
+    )))
 }
 
-fn build_endpoint_payload(
+async fn build_endpoint_payload(
     context: &KiroContext<'_>,
     endpoint: &KiroEndpointConfig,
-) -> Result<crate::proxy::kiro::BuildPayloadResult, AttemptOutcome> {
+) -> Result<BuildPayloadResult, AttemptOutcome> {
+    let payload = match context.source_format {
+        KiroSourceFormat::OpenAIChat => build_payload_from_chat(
+            &context.request_value,
+            &context.model_id,
+            context.record.profile_arn.as_deref(),
+            endpoint.origin,
+            context.is_agentic,
+            context.is_chat_only,
+            context.headers,
+        ),
+        KiroSourceFormat::Anthropic => {
+            build_payload_from_anthropic(context, endpoint.origin).await
+        }
+        KiroSourceFormat::Responses => build_payload_from_responses(
+            &context.request_value,
+            &context.model_id,
+            context.record.profile_arn.as_deref(),
+            endpoint.origin,
+            context.is_agentic,
+            context.is_chat_only,
+            context.headers,
+        ),
+    };
+    payload.map_err(|message| {
+        AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
+    })
+}
+
+async fn handle_response_action(
+    context: &mut KiroContext<'_>,
+    response: reqwest::Response,
+    start_time: Instant,
+    attempt: usize,
+    is_last: bool,
+) -> ResponseAction {
+    let status = response.status();
+    // Kiro-specific retry/fallback: 5xx backoff, 401 refresh, 403 token-only refresh, 429 endpoint switch.
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return if is_last {
+            ResponseAction::Finalize(response, start_time)
+        } else {
+            ResponseAction::NextEndpoint
+        };
+    }
+    if status.is_server_error() {
+        if attempt < MAX_KIRO_RETRIES {
+            return ResponseAction::RetryAfter(backoff_delay(attempt));
+        }
+        return ResponseAction::Finalize(response, start_time);
+    }
+    if status == StatusCode::UNAUTHORIZED {
+        if attempt < MAX_KIRO_RETRIES {
+            return ResponseAction::RefreshAndRetry;
+        }
+        return ResponseAction::Finalize(response, start_time);
+    }
+    if status == StatusCode::FORBIDDEN {
+        return handle_forbidden_response(context, response, start_time, attempt).await;
+    }
+    if status == StatusCode::PAYMENT_REQUIRED {
+        return ResponseAction::Finalize(response, start_time);
+    }
+
+    ResponseAction::Finalize(response, start_time)
+}
+
+async fn handle_forbidden_response(
+    context: &mut KiroContext<'_>,
+    response: reqwest::Response,
+    start_time: Instant,
+    attempt: usize,
+) -> ResponseAction {
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let message = format!("Failed to read upstream response: {err}");
+            return ResponseAction::Return(AttemptOutcome::Fatal(http::error_response(
+                StatusCode::BAD_GATEWAY,
+                message,
+            )));
+        }
+    };
+    let body_text = String::from_utf8_lossy(&body);
+
+    if contains_suspended_flag(&body_text) {
+        let outcome = build_error_outcome(context, status, &headers, body, start_time);
+        return ResponseAction::Return(outcome);
+    }
+
+    if contains_token_error(&body_text) && attempt < MAX_KIRO_RETRIES {
+        return ResponseAction::RefreshAndRetry;
+    }
+
+    let outcome = build_error_outcome(context, status, &headers, body, start_time);
+    ResponseAction::Return(outcome)
+}
+
+async fn refresh_and_rebuild_payload(
+    context: &mut KiroContext<'_>,
+    endpoint: &KiroEndpointConfig,
+) -> Result<BuildPayloadResult, AttemptOutcome> {
+    refresh_kiro_account(context.state, &context.account_id).await?;
+    context.record = load_account_record(context.state, &context.account_id).await?;
+    let was_idc = context.is_idc;
+    context.is_idc = context
+        .record
+        .auth_method
+        .trim()
+        .eq_ignore_ascii_case("idc");
+    if context.is_idc != was_idc {
+        context.endpoints = resolve_endpoints(context.state, context.upstream, context.is_idc);
+    }
+    build_endpoint_payload(context, endpoint).await
+}
+
+fn backoff_delay(attempt: usize) -> Duration {
+    let exp = 1u64 << attempt;
+    Duration::from_secs(exp.min(MAX_KIRO_BACKOFF_SECS))
+}
+
+fn contains_suspended_flag(body: &str) -> bool {
+    let upper = body.to_ascii_uppercase();
+    upper.contains("SUSPENDED") || upper.contains("TEMPORARILY_SUSPENDED")
+}
+
+fn contains_token_error(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("token")
+        || lower.contains("expired")
+        || lower.contains("invalid")
+        || lower.contains("unauthorized")
+}
+
+fn build_error_outcome(
+    context: &KiroContext<'_>,
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: Bytes,
+    start_time: Instant,
+) -> AttemptOutcome {
+    let message = summarize_error_body(&body);
+    result::log_upstream_error_if_needed(
+        &context.state.log,
+        context.request_detail.as_ref(),
+        &context.mapped_meta,
+        "kiro",
+        &context.upstream.id,
+        context.inbound_path,
+        status,
+        message,
+        start_time,
+    );
+    AttemptOutcome::Success(build_passthrough_response(status, headers, body))
+}
+
+fn build_passthrough_response(
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: Bytes,
+) -> axum::response::Response {
+    let filtered = http::filter_response_headers(headers);
+    http::build_response(status, filtered, Body::from(body))
+}
+
+fn summarize_error_body(body: &Bytes) -> String {
+    const LIMIT: usize = 2048;
+    let text = String::from_utf8_lossy(body);
+    if text.len() > LIMIT {
+        format!("{}…", &text[..LIMIT])
+    } else {
+        text.to_string()
+    }
+}
+
+async fn build_payload_from_anthropic(
+    context: &KiroContext<'_>,
+    origin: &str,
+) -> Result<BuildPayloadResult, String> {
+    let request_bytes = serde_json::to_vec(&context.request_value)
+        .map_err(|err| format!("Failed to serialize request payload: {err}"))?;
+    let responses_bytes = anthropic_compat::anthropic_request_to_responses(
+        &Bytes::from(request_bytes),
+        &context.state.http_clients,
+    )
+    .await?;
+    let value: Value = serde_json::from_slice(&responses_bytes)
+        .map_err(|_| "Failed to parse transformed request.".to_string())?;
     build_payload_from_responses(
-        &context.request_value,
+        &value,
         &context.model_id,
         context.record.profile_arn.as_deref(),
-        endpoint.origin,
+        origin,
         context.is_agentic,
         context.is_chat_only,
         context.headers,
     )
-    .map_err(|message| {
-        AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
-    })
 }
 
 async fn send_endpoint_request(
@@ -248,63 +454,6 @@ async fn send_endpoint_request(
         }
     };
     Ok((response, start_time))
-}
-
-async fn handle_auth_response(
-    context: &mut KiroContext<'_>,
-    endpoint: &KiroEndpointConfig,
-    payload: Vec<u8>,
-) -> AttemptOutcome {
-    if let Err(outcome) = refresh_kiro_account(context.state, &context.account_id).await {
-        return outcome;
-    }
-    context.record = match load_account_record(context.state, &context.account_id).await {
-        Ok(record) => record,
-        Err(outcome) => return outcome,
-    };
-
-    let retry_start = Instant::now();
-    let retry = match send_kiro_request(
-        &context.client,
-        context.method.clone(),
-        endpoint.url,
-        &context.record.access_token,
-        endpoint.amz_target,
-        context.is_idc,
-        &payload,
-        context.upstream.header_overrides.as_deref(),
-    )
-    .await
-    {
-        Ok(response) => response,
-        Err(err) => {
-            return handle_send_error(
-                context.state,
-                &context.mapped_meta,
-                context.upstream,
-                context.inbound_path,
-                context.response_transform,
-                context.request_detail.clone(),
-                err,
-                retry_start,
-            )
-            .await
-        }
-    };
-
-    let is_forbidden = retry.status() == StatusCode::FORBIDDEN;
-    finalize_response(
-        context.state,
-        &context.mapped_meta,
-        context.upstream,
-        context.inbound_path,
-        context.response_transform,
-        context.request_detail.clone(),
-        retry,
-        is_forbidden,
-        retry_start,
-    )
-    .await
 }
 
 fn resolve_account_id(upstream: &UpstreamRuntime) -> Result<String, AttemptOutcome> {
@@ -354,134 +503,12 @@ fn resolve_model(meta: &RequestMeta) -> (String, bool, bool) {
     (map_model_to_kiro(model_source), is_agentic, is_chat_only)
 }
 
-fn build_client(
-    state: &ProxyState,
-    upstream: &UpstreamRuntime,
-) -> Result<reqwest::Client, AttemptOutcome> {
-    state
-        .http_clients
-        .client_for_proxy_url(upstream.proxy_url.as_deref())
-        .map_err(|message| {
-            AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
-        })
-}
-
-async fn read_request_json(
-    state: &ProxyState,
-    body: &ReplayableBody,
-) -> Result<Value, AttemptOutcome> {
-    let Some(bytes) = body
-        .read_bytes_if_small(state.config.max_request_body_bytes)
-        .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(
-                StatusCode::BAD_REQUEST,
-                format!("Failed to read request body: {err}"),
-            ))
-        })?
-    else {
-        return Err(AttemptOutcome::Fatal(http::error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "Request body is too large to transform.",
-        )));
-    };
-    serde_json::from_slice::<Value>(&bytes).map_err(|_| {
-        AttemptOutcome::Fatal(http::error_response(
-            StatusCode::BAD_REQUEST,
-            "Request body must be JSON.",
-        ))
-    })
-}
-
-enum KiroSendError {
-    Timeout,
-    Upstream(reqwest::Error),
-}
-
-async fn send_kiro_request(
-    client: &reqwest::Client,
-    method: Method,
-    url: &str,
-    access_token: &str,
-    amz_target: &str,
-    is_idc: bool,
-    payload: &[u8],
-    overrides: Option<&[crate::proxy::config::HeaderOverride]>,
-) -> Result<reqwest::Response, KiroSendError> {
-    let mut request_headers = build_kiro_headers(access_token, amz_target, is_idc);
-    if let Some(overrides) = overrides {
-        request::apply_header_overrides(&mut request_headers, overrides);
+fn resolve_source_format(transform: FormatTransform) -> KiroSourceFormat {
+    match transform {
+        FormatTransform::KiroToChat => KiroSourceFormat::OpenAIChat,
+        FormatTransform::KiroToAnthropic => KiroSourceFormat::Anthropic,
+        _ => KiroSourceFormat::Responses,
     }
-
-    let result = timeout(
-        UPSTREAM_NO_DATA_TIMEOUT,
-        client
-            .request(method, url)
-            .headers(request_headers)
-            .body(payload.to_vec())
-            .send(),
-    )
-    .await;
-    match result {
-        Ok(Ok(response)) => Ok(response),
-        Ok(Err(err)) => Err(KiroSendError::Upstream(err)),
-        Err(_) => Err(KiroSendError::Timeout),
-    }
-}
-
-fn build_kiro_headers(access_token: &str, amz_target: &str, is_idc: bool) -> HeaderMap {
-    let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static(KIRO_REQUEST_CONTENT_TYPE));
-    headers.insert(ACCEPT, HeaderValue::from_static(KIRO_REQUEST_ACCEPT));
-    if let Ok(value) = HeaderValue::from_str(amz_target) {
-        headers.insert(HEADER_AMZ_TARGET, value);
-    }
-    headers.insert(HEADER_AMZ_SDK_REQUEST, HeaderValue::from_static(KIRO_SDK_REQUEST));
-    if let Ok(value) = HeaderValue::from_str(&crate::proxy::kiro::utils::random_uuid()) {
-        headers.insert(HEADER_AMZ_SDK_INVOCATION_ID, value);
-    }
-    headers.insert(
-        HEADER_KIRO_AGENT_MODE,
-        HeaderValue::from_static(if is_idc {
-            KIRO_AGENT_MODE_IDC
-        } else {
-            KIRO_AGENT_MODE_DEFAULT
-        }),
-    );
-    headers.insert(HEADER_KIRO_OPTOUT, HeaderValue::from_static(KIRO_OPT_OUT));
-    headers.insert(
-        USER_AGENT,
-        HeaderValue::from_static(if is_idc {
-            KIRO_USER_AGENT_IDC
-        } else {
-            KIRO_USER_AGENT_DEFAULT
-        }),
-    );
-    headers.insert(
-        HEADER_AMZ_USER_AGENT,
-        HeaderValue::from_static(if is_idc {
-            KIRO_USER_AGENT_IDC_AMZ
-        } else {
-            KIRO_USER_AGENT_DEFAULT_AMZ
-        }),
-    );
-    if let Some(auth) = http::bearer_header(access_token) {
-        headers.insert(axum::http::header::AUTHORIZATION, auth);
-    }
-    headers
-}
-
-async fn refresh_kiro_account(
-    state: &ProxyState,
-    account_id: &str,
-) -> Result<(), AttemptOutcome> {
-    state
-        .kiro_accounts
-        .refresh_account(account_id)
-        .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
-        })
 }
 
 async fn finalize_response(
@@ -524,55 +551,4 @@ async fn finalize_response(
         request_detail,
     )
     .await
-}
-
-async fn handle_send_error(
-    state: &ProxyState,
-    meta: &RequestMeta,
-    upstream: &UpstreamRuntime,
-    inbound_path: &str,
-    response_transform: FormatTransform,
-    request_detail: Option<RequestDetailSnapshot>,
-    err: KiroSendError,
-    start_time: Instant,
-) -> AttemptOutcome {
-    match err {
-        KiroSendError::Upstream(err) => {
-            result::handle_upstream_result(
-                Err(err),
-                meta,
-                "kiro",
-                &upstream.id,
-                inbound_path,
-                state.log.clone(),
-                state.token_rate.clone(),
-                start_time,
-                response_transform,
-                request_detail,
-            )
-            .await
-        }
-        KiroSendError::Timeout => {
-            let message = format!(
-                "Upstream did not respond within {}s.",
-                UPSTREAM_NO_DATA_TIMEOUT.as_secs()
-            );
-            result::log_upstream_error_if_needed(
-                &state.log,
-                request_detail.as_ref(),
-                meta,
-                "kiro",
-                &upstream.id,
-                inbound_path,
-                StatusCode::GATEWAY_TIMEOUT,
-                message.clone(),
-                start_time,
-            );
-            AttemptOutcome::Retryable {
-                message,
-                response: None,
-                is_timeout: true,
-            }
-        }
-    }
 }

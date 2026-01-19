@@ -19,7 +19,6 @@
   "theme_system": "System",
   "theme_light": "Light",
   "theme_dark": "Dark",
-
   "config_status_working": "Working",
   "config_status_error": "Error",
   "config_status_unsaved": "Unsaved",
@@ -27,10 +26,8 @@
   "config_status_idle": "Idle",
   "config_request_failed_title": "Request failed",
   "config_invalid_configuration": "Invalid configuration.",
-
   "sidebar_hide": "Hide sidebar",
   "sidebar_show": "Show sidebar",
-
   "config_section_dashboard_label": "Dashboard",
   "config_section_dashboard_desc": "Requests and token usage",
   "config_section_logs_label": "Logs",
@@ -47,7 +44,6 @@
   "config_section_agents_desc": "Agents auto-setup",
   "config_section_settings_label": "Settings",
   "config_section_settings_desc": "Config file, validation, and updates",
-
   "proxy_core_title": "Core",
   "proxy_core_desc": "Listening address, access control, and log output.",
   "proxy_core_host_label": "Host",
@@ -75,16 +71,13 @@
   "auto_start_aria": "Enable launch at login",
   "auto_start_status_loading": "Loading autostart status...",
   "auto_start_status_error": "Failed to read autostart status: {message}",
-
   "strategy_title": "Upstream Strategy",
   "strategy_desc": "Choose how upstreams are selected globally.",
   "strategy_label": "Strategy",
   "strategy_placeholder": "Select strategy",
   "strategy_help": "Priority round robin rotates within the highest priority group. Priority fill first uses the top entry until it fails.",
-
   "upstream_strategy_priority_round_robin": "Priority Round Robin",
   "upstream_strategy_priority_fill_first": "Priority Fill First",
-
   "upstreams_title": "Upstreams",
   "upstreams_desc": "Define provider pools and credentials. Use provider names openai, openai-response, anthropic, gemini, and kiro.",
   "upstreams_add": "Add Upstream",
@@ -139,7 +132,6 @@
   "kiro_login_polling": "Authorizing...",
   "kiro_login_success": "Login successful.",
   "kiro_login_failed": "Login failed.",
-
   "providers_kiro_title": "Kiro",
   "providers_kiro_desc": "Manage Kiro accounts and quota usage.",
   "providers_load_failed": "Failed to load providers data",
@@ -177,7 +169,6 @@
   "upstreams_delete_description": "{rowLabel} will be removed.",
   "upstreams_columns_title": "Visible columns",
   "upstreams_columns_description": "Select which fields to display in the table.",
-
   "config_file_title": "Config File",
   "config_file_desc": "Disk location and maintenance actions.",
   "config_file_location_label": "Location",
@@ -191,7 +182,6 @@
   "project_links_desc": "Source code and related links.",
   "project_links_github_label": "GitHub",
   "project_links_open": "Open",
-
   "client_setup_title": "Agents Auto Setup",
   "client_setup_desc": "Write local config files so tools can use Token Proxy directly.",
   "client_setup_proxy_base_url_label": "Proxy Base URL",
@@ -239,7 +229,6 @@
   "update_toast_view_details": "View details",
   "update_restart_prompt_title": "Update ready",
   "update_restart_prompt_desc": "Restart now to finish installing the update?",
-
   "proxy_service_title": "Proxy Service",
   "proxy_service_desc": "Safe stop/restart and manual config reload.",
   "proxy_service_state_label": "State",
@@ -255,7 +244,6 @@
   "proxy_service_badge_unknown": "Unknown",
   "proxy_service_badge_running": "Running",
   "proxy_service_badge_stopped": "Stopped",
-
   "validation_title": "Validation",
   "validation_desc": "Keep fields consistent before saving.",
   "validation_host_row": "Host",
@@ -266,7 +254,6 @@
   "validation_ok": "OK",
   "validation_check": "Check",
   "validation_disabled": "Disabled",
-
   "dashboard_title": "Dashboard",
   "dashboard_subtitle": "Overview of requests and token usage",
   "dashboard_truncated": "Truncated",
@@ -335,5 +322,19 @@
   "error_model_mapping_pattern_duplicate": "Upstream {id} has duplicated mapping pattern: {pattern}.",
   "error_model_mapping_pattern_invalid": "Upstream {id} has invalid mapping pattern: {pattern}.",
   "error_model_mapping_wildcard_multiple": "Upstream {id} can only define one wildcard mapping \"*\".",
-  "error_model_mapping_prefix_required": "Upstream {id} mapping row {row} prefix cannot be empty."
+  "error_model_mapping_prefix_required": "Upstream {id} mapping row {row} prefix cannot be empty.",
+  "providers_toolbar_search_placeholder": "Search accounts",
+  "providers_filter_provider_label": "Provider",
+  "providers_filter_status_label": "Status",
+  "providers_filter_all_providers": "All providers",
+  "providers_filter_all_statuses": "All statuses",
+  "providers_section_accounts_title": "Your Accounts",
+  "providers_section_accounts_desc": "Manage connected provider accounts.",
+  "providers_section_custom_title": "Custom Providers",
+  "providers_section_custom_desc": "Add and manage custom providers for proxy routing.",
+  "providers_custom_empty": "No custom providers yet.",
+  "providers_accounts_empty_filtered": "No accounts match current filters.",
+  "providers_add_account": "Add account",
+  "providers_status_summary": "Active {active} · Expired {expired}",
+  "providers_quota_loading": "Loading quota..."
 }

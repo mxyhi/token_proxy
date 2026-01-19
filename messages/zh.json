@@ -132,7 +132,6 @@
   "kiro_login_polling": "正在授权…",
   "kiro_login_success": "登录成功。",
   "kiro_login_failed": "登录失败。",
-
   "providers_kiro_title": "Kiro",
   "providers_kiro_desc": "管理 Kiro 账户与额度使用情况。",
   "providers_load_failed": "加载提供商数据失败",
@@ -184,7 +183,6 @@
   "project_links_desc": "源码仓库与相关链接。",
   "project_links_github_label": "GitHub",
   "project_links_open": "打开",
-
   "client_setup_title": "Agents自动配置",
   "client_setup_desc": "一键写入本机配置文件，让工具直接接入 Token Proxy。",
   "client_setup_proxy_base_url_label": "代理 Base URL",
@@ -324,5 +322,19 @@
   "error_model_mapping_pattern_duplicate": "上游 {id} 映射重复的匹配模式：{pattern}。",
   "error_model_mapping_pattern_invalid": "上游 {id} 映射匹配模式无效：{pattern}。",
   "error_model_mapping_wildcard_multiple": "上游 {id} 只能定义一个通配映射“*”。",
-  "error_model_mapping_prefix_required": "上游 {id} 第 {row} 行映射的前缀不能为空。"
+  "error_model_mapping_prefix_required": "上游 {id} 第 {row} 行映射的前缀不能为空。",
+  "providers_toolbar_search_placeholder": "搜索账户",
+  "providers_filter_provider_label": "提供商",
+  "providers_filter_status_label": "状态",
+  "providers_filter_all_providers": "全部提供商",
+  "providers_filter_all_statuses": "全部状态",
+  "providers_section_accounts_title": "已连接账户",
+  "providers_section_accounts_desc": "管理已连接的提供商账户。",
+  "providers_section_custom_title": "自定义 Providers",
+  "providers_section_custom_desc": "为代理路由添加并管理自定义提供商。",
+  "providers_custom_empty": "暂无自定义提供商。",
+  "providers_accounts_empty_filtered": "暂无符合筛选条件的账户。",
+  "providers_add_account": "添加账户",
+  "providers_status_summary": "正常 {active} · 过期 {expired}",
+  "providers_quota_loading": "正在加载额度…"
 }

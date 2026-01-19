@@ -374,6 +374,7 @@ mod tests {
             enable_api_format_conversion: false,
             upstream_strategy: crate::proxy::config::UpstreamStrategy::PriorityFillFirst,
             upstreams: HashMap::new(),
+            kiro_preferred_endpoint: None,
         }
     }
 

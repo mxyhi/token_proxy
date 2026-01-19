@@ -7,6 +7,7 @@ pub(crate) mod service;
 mod gemini;
 mod gemini_compat;
 mod http;
+mod kiro;
 mod log;
 mod model;
 mod anthropic_compat;

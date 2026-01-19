@@ -90,7 +90,7 @@ fn normalize_single_upstream(
         ));
     }
     let base_url = upstream.base_url.trim();
-    if base_url.is_empty() {
+    if base_url.is_empty() && provider != "kiro" {
         return Err(format!(
             "Upstream {} base_url cannot be empty.",
             upstream.id
@@ -126,6 +126,7 @@ fn normalize_single_upstream(
         base_url: base_url.to_string(),
         api_key,
         kiro_account_id,
+        kiro_preferred_endpoint: upstream.preferred_endpoint.clone(),
         proxy_url,
         priority: upstream.priority.unwrap_or(0),
         model_mappings,

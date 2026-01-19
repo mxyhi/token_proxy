@@ -22,6 +22,7 @@ fn config_with_providers(
         enable_api_format_conversion,
         upstream_strategy: UpstreamStrategy::PriorityRoundRobin,
         upstreams,
+        kiro_preferred_endpoint: None,
     }
 }
 

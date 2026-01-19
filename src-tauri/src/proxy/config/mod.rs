@@ -10,6 +10,7 @@ const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 20 * 1024 * 1024;
 pub(crate) use io::config_dir_path;
 pub(crate) use types::{
     ConfigResponse,
+    KiroPreferredEndpoint,
     ProxyConfig,
     ProxyConfigFile,
     ProviderUpstreams,
@@ -71,6 +72,7 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
         enable_api_format_conversion: config.enable_api_format_conversion,
         upstream_strategy: config.upstream_strategy,
         upstreams,
+        kiro_preferred_endpoint: config.kiro_preferred_endpoint,
     })
 }
 

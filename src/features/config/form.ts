@@ -16,6 +16,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://api.openai.com",
     apiKey: "",
     kiroAccountId: "",
+    preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
     enabled: true,
@@ -28,6 +29,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://api.openai.com",
     apiKey: "",
     kiroAccountId: "",
+    preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
     enabled: true,
@@ -40,6 +42,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://api.anthropic.com",
     apiKey: "",
     kiroAccountId: "",
+    preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
     enabled: true,
@@ -52,6 +55,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://generativelanguage.googleapis.com",
     apiKey: "",
     kiroAccountId: "",
+    preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
     enabled: true,
@@ -77,6 +81,7 @@ const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "port",
   "local_api_key",
   "app_proxy_url",
+  "kiro_preferred_endpoint",
   "log_level",
   "tray_token_rate",
   "enable_api_format_conversion",
@@ -89,6 +94,7 @@ export const EMPTY_FORM: ConfigForm = {
   port: "9208",
   localApiKey: "",
   appProxyUrl: "",
+  kiroPreferredEndpoint: "ide",
   logLevel: "silent",
   trayTokenRate: { ...DEFAULT_TRAY_TOKEN_RATE },
   enableApiFormatConversion: false,
@@ -103,6 +109,7 @@ export function createEmptyUpstream(): UpstreamForm {
     baseUrl: "",
     apiKey: "",
     kiroAccountId: "",
+    preferredEndpoint: "",
     proxyUrl: "",
     priority: "",
     enabled: true,
@@ -147,6 +154,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     port: String(config.port),
     localApiKey: config.local_api_key ?? "",
     appProxyUrl: config.app_proxy_url ?? "",
+    kiroPreferredEndpoint: config.kiro_preferred_endpoint ?? "ide",
     logLevel: config.log_level ?? "silent",
     trayTokenRate: normalizeTrayTokenRate(config.tray_token_rate),
     enableApiFormatConversion: config.enable_api_format_conversion,
@@ -157,6 +165,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
       baseUrl: upstream.base_url,
       apiKey: upstream.api_key ?? "",
       kiroAccountId: upstream.kiro_account_id ?? "",
+      preferredEndpoint: upstream.preferred_endpoint ?? "",
       proxyUrl: upstream.proxy_url ?? "",
       priority: upstream.priority === null ? "" : String(upstream.priority),
       enabled: upstream.enabled,
@@ -173,6 +182,9 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     port,
     local_api_key: form.localApiKey.trim() ? form.localApiKey.trim() : null,
     app_proxy_url: form.appProxyUrl.trim() ? form.appProxyUrl.trim() : null,
+    kiro_preferred_endpoint: form.kiroPreferredEndpoint.trim()
+      ? form.kiroPreferredEndpoint.trim()
+      : null,
     log_level: form.logLevel,
     tray_token_rate: form.trayTokenRate,
     enable_api_format_conversion: form.enableApiFormatConversion,
@@ -184,6 +196,9 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       api_key: upstream.apiKey.trim() ? upstream.apiKey.trim() : null,
       kiro_account_id: upstream.kiroAccountId.trim()
         ? upstream.kiroAccountId.trim()
+        : null,
+      preferred_endpoint: upstream.preferredEndpoint.trim()
+        ? upstream.preferredEndpoint.trim()
         : null,
       proxy_url: upstream.proxyUrl.trim() ? upstream.proxyUrl.trim() : null,
       priority: parseOptionalInt(upstream.priority),
@@ -229,7 +244,7 @@ export function validate(form: ConfigForm) {
     if (provider === "kiro" && !upstream.kiroAccountId.trim()) {
       return { valid: false, message: m.error_upstream_kiro_account_required({ id }) };
     }
-    if (!upstream.baseUrl.trim()) {
+    if (provider !== "kiro" && !upstream.baseUrl.trim()) {
       return { valid: false, message: m.error_upstream_base_url_required({ id }) };
     }
     const upstreamProxyUrl = upstream.proxyUrl.trim();

@@ -109,6 +109,14 @@ impl KiroAccountStore {
         Ok(refreshed.access_token)
     }
 
+    pub(crate) async fn get_account_record(
+        &self,
+        account_id: &str,
+    ) -> Result<KiroTokenRecord, String> {
+        let record = self.load_account(account_id).await?;
+        self.refresh_if_needed(account_id, record).await
+    }
+
     pub(crate) async fn refresh_account(&self, account_id: &str) -> Result<(), String> {
         let record = self.load_account(account_id).await?;
         let refreshed = self.refresh_record(account_id, record).await?;

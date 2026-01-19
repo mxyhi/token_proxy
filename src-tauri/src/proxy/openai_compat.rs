@@ -42,6 +42,9 @@ pub(crate) enum FormatTransform {
     GeminiToChat,
     ResponsesToGemini,
     GeminiToResponses,
+    KiroToResponses,
+    KiroToChat,
+    KiroToAnthropic,
 }
 
 pub(crate) fn inbound_format(path: &str) -> Option<ApiFormat> {

@@ -7,6 +7,7 @@ use super::types::KiroAccountSummary;
 
 const KIRO_USAGE_ENDPOINT: &str = "https://codewhisperer.us-east-1.amazonaws.com";
 const KIRO_USAGE_PATH: &str = "/getUsageLimits";
+const KIRO_USAGE_QUERY: &str = "isEmailRequired=true&origin=AI_EDITOR";
 const KIRO_USER_AGENT: &str = "token-proxy/1.0.0";
 
 #[derive(Clone, Serialize)]
@@ -62,13 +63,12 @@ async fn request_usage_limits(access_token: &str) -> Result<Value, String> {
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|err| format!("Failed to build Kiro usage client: {err}"))?;
-    let url = format!("{KIRO_USAGE_ENDPOINT}{KIRO_USAGE_PATH}");
+    let url = format!("{KIRO_USAGE_ENDPOINT}{KIRO_USAGE_PATH}?{KIRO_USAGE_QUERY}");
     let response = http
-        .post(url)
-        .header("Content-Type", "application/json")
+        .get(url)
         .header("Authorization", format!("Bearer {access_token}"))
         .header("User-Agent", KIRO_USER_AGENT)
-        .json(&serde_json::json!({}))
+        .header("x-amz-user-agent", KIRO_USER_AGENT)
         .send()
         .await
         .map_err(|err| format!("Kiro usage request failed: {err}"))?;

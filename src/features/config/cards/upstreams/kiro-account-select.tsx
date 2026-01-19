@@ -1,4 +1,5 @@
 import { Link } from "@tanstack/react-router";
+import { RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -48,29 +49,34 @@ export function KiroAccountSelect({
     <div data-slot="kiro-account-select" className="contents">
       <Label>{m.field_kiro_account()}</Label>
       <div className="space-y-2">
-        <Select value={accountId.trim() ? accountId : undefined} onValueChange={onSelect}>
-          <SelectTrigger>
-            <SelectValue placeholder={m.kiro_account_placeholder()} />
-          </SelectTrigger>
-          <SelectContent>
-            {accounts.map((account) => (
-              <SelectItem key={account.account_id} value={account.account_id}>
-                {formatAccountLabel(account)} · {formatAccountStatus(account)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <Select value={accountId.trim() ? accountId : undefined} onValueChange={onSelect}>
+            <SelectTrigger className="flex-1">
+              <SelectValue placeholder={m.kiro_account_placeholder()} />
+            </SelectTrigger>
+            <SelectContent>
+              {accounts.map((account) => (
+                <SelectItem key={account.account_id} value={account.account_id}>
+                  {formatAccountLabel(account)} · {formatAccountStatus(account)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
             type="button"
-            size="sm"
-            variant="ghost"
+            size="icon"
+            variant="outline"
             onClick={onRefresh}
             disabled={loading}
+            aria-label={m.common_refresh()}
           >
-            {m.common_refresh()}
+            <RefreshCw
+              className={["size-4", loading ? "animate-spin" : ""].filter(Boolean).join(" ")}
+              aria-hidden="true"
+            />
           </Button>
-          <span aria-hidden="true">·</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Link className="text-primary hover:underline" to={getSectionRoute("providers")}>
             {m.kiro_account_manage()}
           </Link>

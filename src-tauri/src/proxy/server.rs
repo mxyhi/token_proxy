@@ -185,6 +185,18 @@ fn resolve_anthropic_plan(
     // Claude Code uses /v1/messages. If Anthropic upstream is missing but Responses is available,
     // fall back to OpenAI Responses format conversion when enabled (new-api style).
     if path == "/v1/messages" {
+        if !config.enable_api_format_conversion {
+            if config.provider_upstreams(PROVIDER_KIRO).is_some() {
+                // Kiro uses Claude-compatible format natively; allow it without conversion.
+                return Some(Ok(DispatchPlan {
+                    provider: PROVIDER_KIRO,
+                    outbound_path: Some(RESPONSES_PATH),
+                    request_transform: FormatTransform::None,
+                    response_transform: FormatTransform::KiroToAnthropic,
+                }));
+            }
+            return Some(Err(ERROR_ANTHROPIC_CONVERSION_DISABLED.to_string()));
+        }
         let fallback = choose_provider_by_priority(
             config,
             &[PROVIDER_RESPONSES, PROVIDER_CHAT, PROVIDER_GEMINI, PROVIDER_KIRO],

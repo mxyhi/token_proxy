@@ -192,6 +192,15 @@ fn resolve_anthropic_plan(
         let Some(fallback) = fallback else {
             return Some(Err(ERROR_NO_UPSTREAM.to_string()));
         };
+        if fallback == PROVIDER_KIRO {
+            // Kiro uses Claude-compatible format natively; allow it without conversion.
+            return Some(Ok(DispatchPlan {
+                provider: PROVIDER_KIRO,
+                outbound_path: Some(RESPONSES_PATH),
+                request_transform: FormatTransform::None,
+                response_transform: FormatTransform::KiroToAnthropic,
+            }));
+        }
         if !config.enable_api_format_conversion {
             return Some(Err(ERROR_ANTHROPIC_CONVERSION_DISABLED.to_string()));
         }
@@ -214,12 +223,6 @@ fn resolve_anthropic_plan(
                 request_transform: FormatTransform::AnthropicToGemini,
                 response_transform: FormatTransform::GeminiToAnthropic,
             },
-        PROVIDER_KIRO => DispatchPlan {
-            provider: PROVIDER_KIRO,
-            outbound_path: Some(RESPONSES_PATH),
-            request_transform: FormatTransform::None,
-            response_transform: FormatTransform::KiroToAnthropic,
-        },
             _ => base_plan(PROVIDER_RESPONSES),
         }));
     }

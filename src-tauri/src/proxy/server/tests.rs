@@ -143,6 +143,16 @@ fn anthropic_messages_fallback_requires_format_conversion_enabled() {
 }
 
 #[test]
+fn anthropic_messages_fallbacks_to_kiro_without_conversion() {
+    let config = config_with_providers(&[PROVIDER_KIRO], false);
+    let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should fallback");
+    assert_eq!(plan.provider, PROVIDER_KIRO);
+    assert_eq!(plan.outbound_path, Some(RESPONSES_PATH));
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::KiroToAnthropic);
+}
+
+#[test]
 fn responses_fallback_to_anthropic_requires_format_conversion_enabled() {
     let config = config_with_providers(&[PROVIDER_ANTHROPIC], false);
     let error = resolve_dispatch_plan(&config, RESPONSES_PATH)

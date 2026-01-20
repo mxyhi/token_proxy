@@ -60,7 +60,7 @@ curl -X POST \
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 = fallback to default. Protects inbound body size. |
 | `tray_token_rate.enabled` | `true` | macOS tray live rate; harmless elsewhere. |
 | `tray_token_rate.format` | `split` | `combined` (`total`), `split` (`↑in ↓out`), `both` (`total | ↑in ↓out`). |
-| `enable_api_format_conversion` | `false` | Allow OpenAI/Anthropic/Gemini fallback via request/response body and SSE stream conversion. |
+| `enable_api_format_conversion` | `true` | Allow OpenAI/Anthropic/Gemini fallback via request/response body and SSE stream conversion. |
 | `upstream_strategy` | `priority_fill_first` | `priority_fill_first` (default) keeps trying the highest-priority group in list order; `priority_round_robin` rotates within each priority group. |
 
 ### Upstream entries (`upstreams[]`)

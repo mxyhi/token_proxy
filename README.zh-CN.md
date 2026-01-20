@@ -60,7 +60,7 @@ curl -X POST \
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 表示回落到默认；保护入站体积 |
 | `tray_token_rate.enabled` | `true` | macOS 托盘实时速率；其他平台无害 |
 | `tray_token_rate.format` | `split` | `combined`(总数) / `split`(↑入 ↓出) / `both`(总数 | ↑入 ↓出) |
-| `enable_api_format_conversion` | `false` | 允许 OpenAI/Anthropic/Gemini 自动 fallback（含请求/响应体转换与 SSE 流式转换） |
+| `enable_api_format_conversion` | `true` | 允许 OpenAI/Anthropic/Gemini 自动 fallback（含请求/响应体转换与 SSE 流式转换） |
 | `upstream_strategy` | `priority_fill_first` | `priority_fill_first` 默认先填满高优先级；`priority_round_robin` 在同组内轮询 |
 
 ### 上游条目（`upstreams[]`）

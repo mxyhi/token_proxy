@@ -118,7 +118,7 @@ pub(crate) struct ProxyConfigFile {
     #[serde(default)]
     pub(crate) tray_token_rate: TrayTokenRateConfig,
     /// 是否允许在不同 API 格式之间自动互转（例如 OpenAI Chat↔Responses、Claude Messages↔OpenAI Responses）。
-    /// 默认为关闭；关闭时将严格按 provider 路由，不做格式转换。
+    /// 默认为开启；关闭时将严格按 provider 路由，不做格式转换。
     #[serde(default)]
     pub(crate) enable_api_format_conversion: bool,
     #[serde(default)]
@@ -138,7 +138,7 @@ impl Default for ProxyConfigFile {
             log_level: LogLevel::default(),
             max_request_body_bytes: None,
             tray_token_rate: TrayTokenRateConfig::default(),
-            enable_api_format_conversion: false,
+            enable_api_format_conversion: true,
             upstream_strategy: UpstreamStrategy::PriorityFillFirst,
             upstreams: vec![
                 UpstreamConfig {

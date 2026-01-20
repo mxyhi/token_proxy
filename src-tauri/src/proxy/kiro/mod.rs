@@ -12,6 +12,9 @@ pub(crate) mod utils;
 pub(crate) use endpoint::{select_endpoints, KiroEndpointConfig};
 pub(crate) use event_stream::EventStreamDecoder;
 pub(crate) use model::{determine_agentic_mode, map_model_to_kiro};
-pub(crate) use payload::{build_payload_from_chat, build_payload_from_responses, BuildPayloadResult};
+pub(crate) use payload::{
+    build_payload_from_chat, build_payload_from_claude, build_payload_from_responses,
+    BuildPayloadResult,
+};
 pub(crate) use response::{parse_event_stream, KiroUsage};
 pub(crate) use types::KiroToolUse;

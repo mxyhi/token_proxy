@@ -20,6 +20,7 @@ mod inference;
 mod input;
 mod messages;
 mod system;
+mod claude;
 
 const THINKING_HINT: &str =
     "<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>200000</max_thinking_length>";
@@ -27,6 +28,8 @@ const THINKING_HINT: &str =
 pub(crate) struct BuildPayloadResult {
     pub(crate) payload: Vec<u8>,
 }
+
+pub(crate) use claude::build_payload_from_claude;
 
 pub(crate) fn build_payload_from_responses(
     request: &Value,
@@ -135,7 +138,7 @@ fn prepare_system_prompt(
 ) -> String {
     let mut system_prompt = extract_system_prompt(object, messages);
     let thinking_enabled = is_thinking_enabled(object, headers, &system_prompt);
-    if thinking_enabled {
+    if thinking_enabled && !system::has_thinking_tags(&system_prompt) {
         system_prompt = inject_hint(system_prompt, THINKING_HINT);
     }
     system_prompt = inject_timestamp(system_prompt);

@@ -40,6 +40,7 @@ struct ToolUseState {
     name: String,
     sent_start: bool,
     sent_stop: bool,
+    sent_input: bool,
 }
 
 struct ResponsesToAnthropicState<S> {
@@ -289,8 +290,10 @@ where
         let Some(item_id) = value.get("item_id").and_then(Value::as_str) else {
             return;
         };
+        let arguments = value.get("arguments").and_then(Value::as_str).unwrap_or("");
         self.ensure_message_start();
         self.ensure_tool_use_state(item_id);
+        self.emit_tool_use_arguments(item_id, arguments);
         self.stop_tool_use_block(item_id);
     }
 
@@ -343,12 +346,14 @@ where
                     if let Some(item_id) = item.get("id").and_then(Value::as_str) {
                         let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
                         let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+                        let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("");
                         let tool_use_id = if !call_id.is_empty() {
                             call_id.to_string()
                         } else {
                             item_id.to_string()
                         };
                         self.ensure_tool_use_block(item_id, &tool_use_id, name);
+                        self.emit_tool_use_arguments(item_id, arguments);
                         self.stop_tool_use_block(item_id);
                     }
                 }
@@ -460,6 +465,7 @@ where
                 name: name.to_string(),
                 sent_start: false,
                 sent_stop: false,
+                sent_input: false,
             });
         }
 
@@ -487,6 +493,7 @@ where
                 name: String::new(),
                 sent_start: false,
                 sent_stop: false,
+                sent_input: false,
             }
         })
     }
@@ -527,6 +534,34 @@ where
                 }
             }),
         ));
+    }
+
+    fn emit_tool_use_arguments(&mut self, item_id: &str, arguments: &str) {
+        if arguments.trim().is_empty() {
+            return;
+        }
+        let state = self.ensure_tool_use_state(item_id);
+        if state.sent_input {
+            return;
+        }
+        if !state.sent_start {
+            self.start_tool_use_block(item_id);
+        }
+        self.set_active_tool_use(item_id);
+        let Some(index) = self.tool_uses.get(item_id).map(|state| state.index) else {
+            return;
+        };
+        self.out.push_back(super::anthropic_event_sse(
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": { "type": "input_json_delta", "partial_json": arguments }
+            }),
+        ));
+        if let Some(state) = self.tool_uses.get_mut(item_id) {
+            state.sent_input = true;
+        }
     }
 
     fn set_active_tool_use(&mut self, item_id: &str) {

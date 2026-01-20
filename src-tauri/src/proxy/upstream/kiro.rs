@@ -13,10 +13,10 @@ use super::kiro_http::{
 };
 use crate::proxy::http;
 use crate::proxy::kiro::{
-    build_payload_from_chat, build_payload_from_responses, determine_agentic_mode, map_model_to_kiro,
-    select_endpoints, BuildPayloadResult, KiroEndpointConfig,
+    build_payload_from_chat, build_payload_from_claude, build_payload_from_responses,
+    determine_agentic_mode, map_model_to_kiro, select_endpoints, BuildPayloadResult,
+    KiroEndpointConfig,
 };
-use crate::proxy::anthropic_compat;
 use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_body::ReplayableBody;
 use crate::proxy::{ProxyState, RequestMeta};
@@ -68,6 +68,7 @@ struct KiroContext<'a> {
     request_value: Value,
     account_id: String,
     record: KiroTokenRecord,
+    profile_arn: Option<String>,
     endpoints: Vec<KiroEndpointConfig>,
     is_idc: bool,
     model_id: String,
@@ -113,6 +114,7 @@ async fn prepare_kiro_context<'a>(
     let account_id = resolve_account_id(upstream)?;
     let record = load_account_record(state, &account_id).await?;
     let is_idc = record.auth_method.trim().eq_ignore_ascii_case("idc");
+    let profile_arn = resolve_profile_arn(&record);
     let endpoints = resolve_endpoints(state, upstream, is_idc);
     let (model_id, is_agentic, is_chat_only) = resolve_model(&mapped_meta);
     let source_format = resolve_source_format(response_transform);
@@ -130,6 +132,7 @@ async fn prepare_kiro_context<'a>(
         request_value,
         account_id,
         record,
+        profile_arn,
         endpoints,
         is_idc,
         model_id,
@@ -223,7 +226,7 @@ async fn build_endpoint_payload(
         KiroSourceFormat::OpenAIChat => build_payload_from_chat(
             &context.request_value,
             &context.model_id,
-            context.record.profile_arn.as_deref(),
+            context.profile_arn.as_deref(),
             endpoint.origin,
             context.is_agentic,
             context.is_chat_only,
@@ -235,7 +238,7 @@ async fn build_endpoint_payload(
         KiroSourceFormat::Responses => build_payload_from_responses(
             &context.request_value,
             &context.model_id,
-            context.record.profile_arn.as_deref(),
+            context.profile_arn.as_deref(),
             endpoint.origin,
             context.is_agentic,
             context.is_chat_only,
@@ -399,19 +402,10 @@ async fn build_payload_from_anthropic(
     context: &KiroContext<'_>,
     origin: &str,
 ) -> Result<BuildPayloadResult, String> {
-    let request_bytes = serde_json::to_vec(&context.request_value)
-        .map_err(|err| format!("Failed to serialize request payload: {err}"))?;
-    let responses_bytes = anthropic_compat::anthropic_request_to_responses(
-        &Bytes::from(request_bytes),
-        &context.state.http_clients,
-    )
-    .await?;
-    let value: Value = serde_json::from_slice(&responses_bytes)
-        .map_err(|_| "Failed to parse transformed request.".to_string())?;
-    build_payload_from_responses(
-        &value,
+    build_payload_from_claude(
+        &context.request_value,
         &context.model_id,
-        context.record.profile_arn.as_deref(),
+        context.profile_arn.as_deref(),
         origin,
         context.is_agentic,
         context.is_chat_only,
@@ -467,6 +461,13 @@ fn resolve_account_id(upstream: &UpstreamRuntime) -> Result<String, AttemptOutco
                 "Kiro account is not configured.",
             ))
         })
+}
+
+fn resolve_profile_arn(record: &KiroTokenRecord) -> Option<String> {
+    match record.auth_method.as_str() {
+        "builder-id" | "idc" => None,
+        _ => record.profile_arn.clone(),
+    }
 }
 
 async fn load_account_record(

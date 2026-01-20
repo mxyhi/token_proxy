@@ -66,11 +66,19 @@ fn responses_function_call_output_item_to_chat_message(
         .and_then(Value::as_str)
         .ok_or_else(|| "function_call_output must include call_id.".to_string())?;
     let output = item.get("output").and_then(Value::as_str).unwrap_or("");
-    Ok(serde_json::json!({
-        "role": "tool",
-        "tool_call_id": call_id,
-        "content": output
-    }))
+    let mut message = Map::new();
+    message.insert("role".to_string(), Value::String("tool".to_string()));
+    message.insert("tool_call_id".to_string(), Value::String(call_id.to_string()));
+    message.insert("content".to_string(), Value::String(output.to_string()));
+    if let Some(is_error) = item.get("is_error").and_then(Value::as_bool) {
+        if is_error {
+            message.insert("is_error".to_string(), Value::Bool(true));
+        }
+    }
+    if let Some(parts) = item.get("output_parts") {
+        message.insert("content_parts".to_string(), parts.clone());
+    }
+    Ok(Value::Object(message))
 }
 
 fn responses_function_call_item_to_chat_message(item: &Map<String, Value>) -> Result<Value, String> {

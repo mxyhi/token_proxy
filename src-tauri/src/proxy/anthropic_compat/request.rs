@@ -391,16 +391,23 @@ fn claude_message_to_responses_input_items(message: &Value, input_items: &mut Ve
             }
             "tool_result" => {
                 let call_id = block.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
-                let output = block.get("content").cloned().unwrap_or_else(|| json!(""));
-                let output = match output {
-                    Value::String(text) => text,
-                    other => serde_json::to_string(&other).unwrap_or_default(),
+                let output_raw = block.get("content").cloned().unwrap_or_else(|| json!(""));
+                let output_text = match &output_raw {
+                    Value::String(text) => text.clone(),
+                    other => serde_json::to_string(other).unwrap_or_default(),
                 };
-                input_items.push(json!({
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": output
-                }));
+                let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                let mut item = Map::new();
+                item.insert("type".to_string(), json!("function_call_output"));
+                item.insert("call_id".to_string(), Value::String(call_id.to_string()));
+                item.insert("output".to_string(), Value::String(output_text));
+                if is_error {
+                    item.insert("is_error".to_string(), Value::Bool(true));
+                }
+                if !matches!(output_raw, Value::String(_)) {
+                    item.insert("output_parts".to_string(), output_raw);
+                }
+                input_items.push(Value::Object(item));
             }
             _ => {}
         }

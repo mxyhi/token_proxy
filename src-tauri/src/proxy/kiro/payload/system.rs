@@ -47,31 +47,21 @@ pub(super) fn is_thinking_enabled(
     headers: &HeaderMap,
     system_prompt: &str,
 ) -> bool {
-    if let Some(beta) = headers.get("anthropic-beta").or_else(|| headers.get("Anthropic-Beta")) {
-        if let Ok(value) = beta.to_str() {
-            if value.contains("interleaved-thinking") {
-                return true;
-            }
-        }
-    }
-
-    if let Some(reasoning) = object.get("reasoning_effort").and_then(Value::as_str) {
-        if !reasoning.trim().is_empty() && reasoning != "none" {
-            return true;
-        }
-    }
-
-    if system_prompt.contains("<thinking_mode>") && system_prompt.contains("</thinking_mode>") {
+    if thinking_enabled_from_header(headers) {
         return true;
     }
-
-    if let Some(model) = object.get("model").and_then(Value::as_str) {
-        let lower = model.to_ascii_lowercase();
-        if lower.contains("thinking") || lower.contains("reason") {
-            return true;
-        }
+    if thinking_enabled_from_claude(object) {
+        return true;
     }
-
+    if thinking_enabled_from_reasoning_effort(object) {
+        return true;
+    }
+    if thinking_enabled_from_system_prompt(system_prompt) {
+        return true;
+    }
+    if thinking_enabled_from_model_hint(object) {
+        return true;
+    }
     false
 }
 
@@ -103,20 +93,30 @@ pub(super) fn extract_tool_choice_hint(object: &Map<String, Value>) -> Option<St
             "none" => Some(
                 "[INSTRUCTION: Do NOT use any tools. Respond with text only.]".to_string(),
             ),
-            "required" => Some("[INSTRUCTION: You MUST use at least one of the available tools to respond. Do not respond with text only - always make a tool call.]".to_string()),
+            "required" | "any" => Some("[INSTRUCTION: You MUST use at least one of the available tools to respond. Do not respond with text only - always make a tool call.]".to_string()),
             "auto" => None,
             _ => None,
         };
     }
     if let Some(choice) = tool_choice.as_object() {
-        if choice.get("type").and_then(Value::as_str) == Some("function") {
-            if let Some(function) = choice.get("function").and_then(Value::as_object) {
-                if let Some(name) = function.get("name").and_then(Value::as_str) {
-                    if !name.trim().is_empty() {
-                        return Some(format!("[INSTRUCTION: You MUST use the tool named '{name}' to respond. Do not use any other tool or respond with text only.]"));
-                    }
-                }
-            }
+        let choice_type = choice.get("type").and_then(Value::as_str).unwrap_or("");
+        let name = match choice_type {
+            "function" => choice
+                .get("function")
+                .and_then(Value::as_object)
+                .and_then(|function| function.get("name"))
+                .and_then(Value::as_str)
+                .or_else(|| choice.get("name").and_then(Value::as_str))
+                .unwrap_or(""),
+            "tool" => choice.get("name").and_then(Value::as_str).unwrap_or(""),
+            "any" => "",
+            _ => "",
+        };
+        if choice_type == "any" {
+            return Some("[INSTRUCTION: You MUST use at least one of the available tools to respond. Do not respond with text only - always make a tool call.]".to_string());
+        }
+        if !name.trim().is_empty() {
+            return Some(format!("[INSTRUCTION: You MUST use the tool named '{name}' to respond. Do not use any other tool or respond with text only.]"));
         }
     }
     None
@@ -163,4 +163,64 @@ fn format_timestamp() -> String {
     OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| "unknown".to_string())
+}
+
+fn thinking_enabled_from_header(headers: &HeaderMap) -> bool {
+    let beta = headers.get("anthropic-beta").or_else(|| headers.get("Anthropic-Beta"));
+    let Some(beta) = beta else {
+        return false;
+    };
+    beta.to_str()
+        .ok()
+        .is_some_and(|value| value.contains("interleaved-thinking"))
+}
+
+fn thinking_enabled_from_claude(object: &Map<String, Value>) -> bool {
+    let Some(thinking) = object.get("thinking").and_then(Value::as_object) else {
+        return false;
+    };
+    if thinking.get("type").and_then(Value::as_str) != Some("enabled") {
+        return false;
+    }
+    if let Some(budget) = thinking.get("budget_tokens").and_then(Value::as_i64) {
+        return budget > 0;
+    }
+    true
+}
+
+fn thinking_enabled_from_reasoning_effort(object: &Map<String, Value>) -> bool {
+    let Some(reasoning) = object.get("reasoning_effort").and_then(Value::as_str) else {
+        return false;
+    };
+    !reasoning.trim().is_empty() && reasoning != "none"
+}
+
+fn thinking_enabled_from_system_prompt(system_prompt: &str) -> bool {
+    extract_thinking_mode(system_prompt)
+        .is_some_and(|value| matches!(value.trim(), "interleaved" | "enabled"))
+}
+
+fn thinking_enabled_from_model_hint(object: &Map<String, Value>) -> bool {
+    if object.get("max_completion_tokens").is_none() {
+        return false;
+    }
+    let Some(model) = object.get("model").and_then(Value::as_str) else {
+        return false;
+    };
+    let lower = model.to_ascii_lowercase();
+    lower.contains("thinking") || lower.contains("reason")
+}
+
+pub(super) fn has_thinking_tags(system_prompt: &str) -> bool {
+    system_prompt.contains("<thinking_mode>") || system_prompt.contains("<max_thinking_length>")
+}
+
+fn extract_thinking_mode(system_prompt: &str) -> Option<String> {
+    let start = system_prompt.find("<thinking_mode>")?;
+    let end = system_prompt.find("</thinking_mode>")?;
+    if end <= start {
+        return None;
+    }
+    let value_start = start + "<thinking_mode>".len();
+    Some(system_prompt[value_start..end].to_string())
 }

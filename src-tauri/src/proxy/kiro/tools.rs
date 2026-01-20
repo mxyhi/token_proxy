@@ -23,19 +23,15 @@ pub(crate) fn convert_openai_tools(tools: Option<&Value>, is_chat_only: bool) ->
         if tool_type != "function" {
             continue;
         }
-        let Some(function) = tool.get("function").and_then(Value::as_object) else {
-            continue;
+        let (name, description, parameters) = match extract_tool_fields(tool) {
+            Some(fields) => fields,
+            None => continue,
         };
-        let name = function.get("name").and_then(Value::as_str).unwrap_or("");
         if name.is_empty() {
             continue;
         }
         let name = shorten_tool_name(name);
-        let mut description = function
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+        let mut description = description.to_string();
         if description.trim().is_empty() {
             description = format!("Tool: {name}");
         }
@@ -43,10 +39,7 @@ pub(crate) fn convert_openai_tools(tools: Option<&Value>, is_chat_only: bool) ->
             description = truncate_utf8(&description, KIRO_MAX_TOOL_DESC_LEN - 30)
                 + "... (description truncated)";
         }
-        let parameters = function
-            .get("parameters")
-            .cloned()
-            .unwrap_or_else(|| Value::Object(Map::new()));
+        let parameters = parameters.unwrap_or_else(|| Value::Object(Map::new()));
 
         output.push(KiroToolWrapper {
             tool_specification: KiroToolSpecification {
@@ -58,6 +51,29 @@ pub(crate) fn convert_openai_tools(tools: Option<&Value>, is_chat_only: bool) ->
     }
 
     compress_tools_if_needed(output)
+}
+
+fn extract_tool_fields(tool: &Map<String, Value>) -> Option<(&str, &str, Option<Value>)> {
+    if let Some(function) = tool.get("function").and_then(Value::as_object) {
+        let name = function.get("name").and_then(Value::as_str).unwrap_or("");
+        let description = function
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let parameters = function.get("parameters").cloned();
+        return Some((name, description, parameters));
+    }
+
+    let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
+    let description = tool
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let parameters = tool
+        .get("parameters")
+        .cloned()
+        .or_else(|| tool.get("input_schema").cloned());
+    Some((name, description, parameters))
 }
 
 fn shorten_tool_name(name: &str) -> String {

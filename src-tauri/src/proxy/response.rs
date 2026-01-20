@@ -461,21 +461,12 @@ async fn build_stream_response(
             .boxed()
         }
         FormatTransform::KiroToAnthropic => {
-            let intermediate_log = Arc::new(LogWriter::new(None));
-            let intermediate_tracker = RequestTokenTracker::disabled();
-            let responses_stream = kiro_to_responses::stream_kiro_to_responses(
+            kiro_to_anthropic::stream_kiro_to_anthropic(
                 upstream,
-                context.clone(),
-                intermediate_log,
-                intermediate_tracker,
-                estimated_input_tokens,
-            )
-            .boxed();
-            responses_to_anthropic::stream_responses_to_anthropic(
-                responses_stream,
                 context,
                 log,
                 request_tracker,
+                estimated_input_tokens,
             )
             .boxed()
         }
@@ -595,7 +586,7 @@ async fn build_buffered_response(
                 }
             }
             FormatTransform::KiroToAnthropic => {
-                let responses = match kiro_to_responses::convert_kiro_response(
+                let converted = match kiro_to_anthropic::convert_kiro_response(
                     &bytes,
                     context.model.as_deref(),
                     estimated_input_tokens,
@@ -611,20 +602,11 @@ async fn build_buffered_response(
                 };
                 usage = resolve_kiro_usage(
                     &bytes,
-                    &responses,
+                    &converted,
                     context.model.as_deref(),
                     estimated_input_tokens,
                 );
-                match transform_response_body(FormatTransform::ResponsesToAnthropic, &responses, context.model.as_deref()) {
-                    Ok(converted) => converted,
-                    Err(message) => {
-                        let error_message = format!("Failed to transform upstream response: {message}");
-                        context.status = StatusCode::BAD_GATEWAY.as_u16();
-                        let entry = build_log_entry(&context, usage, Some(error_message.clone()));
-                        log.clone().write_detached(entry);
-                        return http::error_response(StatusCode::BAD_GATEWAY, error_message);
-                    }
-                }
+                converted
             }
             _ if response_transform != FormatTransform::None => {
                 match transform_response_body(response_transform, &bytes, context.model.as_deref()) {
@@ -730,6 +712,7 @@ mod chat_to_responses;
 mod anthropic_to_responses;
 mod responses_to_chat;
 mod responses_to_anthropic;
+mod kiro_to_anthropic;
 mod kiro_to_responses;
 mod kiro_to_responses_helpers;
 mod kiro_to_responses_stream;

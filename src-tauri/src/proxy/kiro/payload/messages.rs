@@ -263,17 +263,66 @@ fn build_tool_result(message: &Map<String, Value>) -> Option<KiroToolResult> {
     if tool_use_id.is_empty() {
         return None;
     }
+    let is_error = message
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let mut contents = extract_tool_result_contents(message);
+    if contents.is_empty() {
+        contents = vec![KiroTextContent {
+            text: "Tool use was cancelled by the user".to_string(),
+        }];
+    }
+    Some(KiroToolResult {
+        content: contents,
+        status: if is_error {
+            "error".to_string()
+        } else {
+            "success".to_string()
+        },
+        tool_use_id: tool_use_id.to_string(),
+    })
+}
+
+fn extract_tool_result_contents(message: &Map<String, Value>) -> Vec<KiroTextContent> {
+    if let Some(parts) = message.get("content_parts").and_then(Value::as_array) {
+        let mut out = Vec::new();
+        for part in parts {
+            match part {
+                Value::String(text) => {
+                    if !text.is_empty() {
+                        out.push(KiroTextContent { text: text.clone() });
+                    }
+                }
+                Value::Object(obj) => {
+                    if obj.get("type").and_then(Value::as_str) == Some("text") {
+                        if let Some(text) = obj.get("text").and_then(Value::as_str) {
+                            if !text.is_empty() {
+                                out.push(KiroTextContent {
+                                    text: text.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !out.is_empty() {
+            return out;
+        }
+    }
+
     let content = message
         .get("content")
         .and_then(Value::as_str)
         .unwrap_or("");
-    Some(KiroToolResult {
-        content: vec![KiroTextContent {
-            text: content.to_string(),
-        }],
-        status: "success".to_string(),
-        tool_use_id: tool_use_id.to_string(),
-    })
+    if content.is_empty() {
+        return Vec::new();
+    }
+    vec![KiroTextContent {
+        text: content.to_string(),
+    }]
 }
 
 fn parse_image_url(value: Option<&Value>) -> Option<KiroImage> {

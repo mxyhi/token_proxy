@@ -6,9 +6,11 @@ use super::store::KiroAccountStore;
 use super::types::KiroAccountSummary;
 
 const KIRO_USAGE_ENDPOINT: &str = "https://codewhisperer.us-east-1.amazonaws.com";
-const KIRO_USAGE_PATH: &str = "/getUsageLimits";
-const KIRO_USAGE_QUERY: &str = "isEmailRequired=true&origin=AI_EDITOR";
-const KIRO_USER_AGENT: &str = "token-proxy/1.0.0";
+const KIRO_USAGE_TARGET: &str = "AmazonCodeWhispererService.GetUsageLimits";
+const KIRO_USAGE_ORIGIN: &str = "AI_EDITOR";
+const KIRO_USAGE_RESOURCE_TYPE: &str = "AGENTIC_REQUEST";
+const KIRO_CONTENT_TYPE: &str = "application/x-amz-json-1.0";
+const KIRO_ACCEPT: &str = "application/json";
 
 #[derive(Clone, Serialize)]
 pub(crate) struct KiroQuotaItem {
@@ -53,22 +55,32 @@ async fn fetch_account_quota(
     store: &KiroAccountStore,
     account: &KiroAccountSummary,
 ) -> Result<KiroQuotaSummary, String> {
-    let access_token = store.get_access_token(&account.account_id).await?;
-    let response = request_usage_limits(&access_token).await?;
+    let record = store.get_account_record(&account.account_id).await?;
+    let profile_arn = record
+        .profile_arn
+        .as_deref()
+        .ok_or_else(|| "Missing Kiro profile ARN.".to_string())?;
+    let response = request_usage_limits(&record.access_token, profile_arn).await?;
     Ok(map_usage_response(account, &response))
 }
 
-async fn request_usage_limits(access_token: &str) -> Result<Value, String> {
+async fn request_usage_limits(access_token: &str, profile_arn: &str) -> Result<Value, String> {
     let http = Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|err| format!("Failed to build Kiro usage client: {err}"))?;
-    let url = format!("{KIRO_USAGE_ENDPOINT}{KIRO_USAGE_PATH}?{KIRO_USAGE_QUERY}");
+    let payload = serde_json::json!({
+        "origin": KIRO_USAGE_ORIGIN,
+        "profileArn": profile_arn,
+        "resourceType": KIRO_USAGE_RESOURCE_TYPE,
+    });
     let response = http
-        .get(url)
+        .post(KIRO_USAGE_ENDPOINT)
         .header("Authorization", format!("Bearer {access_token}"))
-        .header("User-Agent", KIRO_USER_AGENT)
-        .header("x-amz-user-agent", KIRO_USER_AGENT)
+        .header("Content-Type", KIRO_CONTENT_TYPE)
+        .header("x-amz-target", KIRO_USAGE_TARGET)
+        .header("Accept", KIRO_ACCEPT)
+        .json(&payload)
         .send()
         .await
         .map_err(|err| format!("Kiro usage request failed: {err}"))?;
@@ -93,10 +105,7 @@ fn map_usage_response(account: &KiroAccountSummary, value: &Value) -> KiroQuotaS
         .get("subscriptionInfo")
         .and_then(Value::as_object)
         .and_then(|info| get_string(info, "subscriptionTitle"));
-    let reset_at = value
-        .get("nextDateReset")
-        .and_then(Value::as_str)
-        .map(|val| val.to_string());
+    let reset_at = extract_reset_at(value);
     let quotas = value
         .get("usageBreakdownList")
         .and_then(Value::as_array)
@@ -209,4 +218,13 @@ fn calc_percentage(used: Option<f64>, limit: Option<f64>) -> f64 {
     }
     let remaining = (limit - used) / limit * 100.0;
     remaining.clamp(0.0, 100.0)
+}
+
+fn extract_reset_at(value: &Value) -> Option<String> {
+    let reset = value.get("nextDateReset")?;
+    match reset {
+        Value::String(val) => Some(val.to_string()),
+        Value::Number(val) => Some(val.to_string()),
+        _ => None,
+    }
 }

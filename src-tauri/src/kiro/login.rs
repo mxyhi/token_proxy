@@ -441,10 +441,14 @@ async fn handle_builder_success(
     token: CreateTokenResponse,
     reg: RegisterClientResponse,
 ) {
+    let profile_arn = match SsoOidcClient::new() {
+        Ok(client) => client.fetch_profile_arn(&token.access_token).await,
+        Err(_) => None,
+    };
     let record = KiroTokenRecord {
         access_token: token.access_token,
         refresh_token: token.refresh_token,
-        profile_arn: None,
+        profile_arn,
         expires_at: expires_at_from_seconds(token.expires_in),
         auth_method: "builder-id".to_string(),
         provider: "AWS".to_string(),

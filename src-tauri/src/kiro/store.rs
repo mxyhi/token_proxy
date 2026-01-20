@@ -39,7 +39,7 @@ impl KiroAccountStore {
     ) -> Result<Vec<KiroAccountSummary>, String> {
         let home_dir = resolve_home_dir(app)?;
         let cache_dir = home_dir.join(".aws").join("sso").join("cache");
-        // Mirror CLIProxyAPIPlus: only import ~/.aws/sso/cache/kiro*.json.
+        // Mirror CLIProxyAPIPlus: only import ~/.aws/sso/cache/kiro-auth-token.json.
         let mut entries = match tokio::fs::read_dir(&cache_dir).await {
             Ok(entries) => entries,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -60,7 +60,7 @@ impl KiroAccountStore {
                 Some(name) => name,
                 None => continue,
             };
-            if !file_name.starts_with("kiro") || !file_name.ends_with(".json") {
+            if file_name != "kiro-auth-token.json" {
                 continue;
             }
             let contents = match tokio::fs::read_to_string(&path).await {
@@ -80,7 +80,7 @@ impl KiroAccountStore {
             }
         }
         if imported.is_empty() {
-            return Err("No valid Kiro IDE token files found.".to_string());
+            return Err("No valid Kiro IDE token file found.".to_string());
         }
         Ok(imported)
     }

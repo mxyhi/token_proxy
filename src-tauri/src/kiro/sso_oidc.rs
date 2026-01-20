@@ -1,5 +1,6 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use url::form_urlencoded;
 
 use super::types::KiroTokenRecord;
@@ -8,6 +9,15 @@ use super::util::{expires_at_from_seconds, now_rfc3339};
 const SSO_OIDC_ENDPOINT: &str = "https://oidc.us-east-1.amazonaws.com";
 const BUILDER_ID_START_URL: &str = "https://view.awsapps.com/start";
 const KIRO_USER_AGENT: &str = "KiroIDE";
+const DEFAULT_IDC_REGION: &str = "us-east-1";
+const IDC_AMZ_USER_AGENT: &str =
+    "aws-sdk-js/3.738.0 ua/2.1 os/other lang/js md/browser#unknown_unknown api/sso-oidc#3.738.0 m/E KiroIDE";
+const IDC_USER_AGENT: &str = "node";
+const CODEWHISPERER_ENDPOINT: &str = "https://codewhisperer.us-east-1.amazonaws.com";
+const CODEWHISPERER_CONTENT_TYPE: &str = "application/x-amz-json-1.0";
+const CODEWHISPERER_ACCEPT: &str = "application/json";
+const CW_TARGET_LIST_PROFILES: &str = "AmazonCodeWhispererService.ListProfiles";
+const CW_TARGET_LIST_CUSTOMIZATIONS: &str = "AmazonCodeWhispererService.ListAvailableCustomizations";
 const DEFAULT_SCOPES: [&str; 5] = [
     "codewhisperer:completions",
     "codewhisperer:analysis",
@@ -112,6 +122,110 @@ impl SsoOidcClient {
         self.post_json("/token", &payload).await
     }
 
+    pub(crate) async fn refresh_token_with_region(
+        &self,
+        client_id: &str,
+        client_secret: &str,
+        refresh_token: &str,
+        region: &str,
+    ) -> Result<CreateTokenResponse, String> {
+        let payload = RefreshTokenRequest {
+            client_id: client_id.to_string(),
+            client_secret: client_secret.to_string(),
+            refresh_token: refresh_token.to_string(),
+            grant_type: "refresh_token".to_string(),
+        };
+        let endpoint = oidc_endpoint_for_region(region);
+        let url = format!("{endpoint}/token");
+        let host = format!("oidc.{region}.amazonaws.com");
+        let response = self
+            .http
+            .post(url)
+            .header("Content-Type", "application/json")
+            .header("Host", host)
+            .header("Connection", "keep-alive")
+            .header("x-amz-user-agent", IDC_AMZ_USER_AGENT)
+            .header("Accept", "*/*")
+            .header("Accept-Language", "*")
+            .header("sec-fetch-mode", "cors")
+            .header("User-Agent", IDC_USER_AGENT)
+            .header("Accept-Encoding", "br, gzip, deflate")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| format!("IDC refresh request failed: {err}"))?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|err| format!("Failed to read IDC refresh response: {err}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "IDC token refresh failed (status {})",
+                status.as_u16()
+            ));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|err| format!("Failed to parse IDC refresh response: {err}"))
+    }
+
+    pub(crate) async fn fetch_profile_arn(&self, access_token: &str) -> Option<String> {
+        if let Some(arn) = self.try_list_profiles(access_token).await {
+            return Some(arn);
+        }
+        self.try_list_customizations(access_token).await
+    }
+
+    async fn try_list_profiles(&self, access_token: &str) -> Option<String> {
+        let payload = json!({"origin": "AI_EDITOR"});
+        let value = self
+            .post_codewhisperer(access_token, CW_TARGET_LIST_PROFILES, &payload)
+            .await
+            .ok()?;
+        parse_profile_arn_from_profiles(&value)
+    }
+
+    async fn try_list_customizations(&self, access_token: &str) -> Option<String> {
+        let payload = json!({"origin": "AI_EDITOR"});
+        let value = self
+            .post_codewhisperer(access_token, CW_TARGET_LIST_CUSTOMIZATIONS, &payload)
+            .await
+            .ok()?;
+        parse_profile_arn_from_customizations(&value)
+    }
+
+    async fn post_codewhisperer(
+        &self,
+        access_token: &str,
+        target: &str,
+        payload: &Value,
+    ) -> Result<Value, String> {
+        let response = self
+            .http
+            .post(CODEWHISPERER_ENDPOINT)
+            .header("Content-Type", CODEWHISPERER_CONTENT_TYPE)
+            .header("x-amz-target", target)
+            .header("Authorization", format!("Bearer {access_token}"))
+            .header("Accept", CODEWHISPERER_ACCEPT)
+            .json(payload)
+            .send()
+            .await
+            .map_err(|err| format!("CodeWhisperer request failed: {err}"))?;
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|err| format!("Failed to read CodeWhisperer response: {err}"))?;
+        if !status.is_success() {
+            return Err(format!(
+                "CodeWhisperer request failed (status {})",
+                status.as_u16()
+            ));
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|err| format!("Failed to parse CodeWhisperer response: {err}"))
+    }
+
     pub(crate) async fn refresh_builder_token(
         &self,
         client_id: &str,
@@ -211,8 +325,43 @@ pub(crate) async fn refresh_builder_token(record: &KiroTokenRecord) -> Result<Ki
         .await
 }
 
-pub(crate) async fn refresh_idc_token(_record: &KiroTokenRecord) -> Result<KiroTokenRecord, String> {
-    Err("IDC refresh is not supported in this build.".to_string())
+pub(crate) async fn refresh_idc_token(record: &KiroTokenRecord) -> Result<KiroTokenRecord, String> {
+    let client_id = record
+        .client_id
+        .as_deref()
+        .ok_or_else(|| "Missing OIDC client_id.".to_string())?;
+    let client_secret = record
+        .client_secret
+        .as_deref()
+        .ok_or_else(|| "Missing OIDC client_secret.".to_string())?;
+    let region = record
+        .region
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(DEFAULT_IDC_REGION);
+    let client = SsoOidcClient::new()?;
+    let response = client
+        .refresh_token_with_region(
+            client_id,
+            client_secret,
+            &record.refresh_token,
+            region,
+        )
+        .await?;
+    Ok(KiroTokenRecord {
+        access_token: response.access_token,
+        refresh_token: response.refresh_token,
+        profile_arn: record.profile_arn.clone(),
+        expires_at: expires_at_from_seconds(response.expires_in),
+        auth_method: "idc".to_string(),
+        provider: "AWS".to_string(),
+        client_id: Some(client_id.to_string()),
+        client_secret: Some(client_secret.to_string()),
+        email: record.email.clone(),
+        last_refresh: Some(now_rfc3339()),
+        start_url: record.start_url.clone(),
+        region: Some(region.to_string()),
+    })
 }
 
 pub(crate) fn build_auth_code_url(
@@ -232,6 +381,48 @@ pub(crate) fn build_auth_code_url(
         .append_pair("code_challenge_method", "S256")
         .finish();
     format!("{SSO_OIDC_ENDPOINT}/authorize?{query}")
+}
+
+fn oidc_endpoint_for_region(region: &str) -> String {
+    let trimmed = region.trim();
+    let region = if trimmed.is_empty() {
+        DEFAULT_IDC_REGION
+    } else {
+        trimmed
+    };
+    format!("https://oidc.{region}.amazonaws.com")
+}
+
+fn parse_profile_arn_from_profiles(value: &Value) -> Option<String> {
+    value
+        .get("profileArn")
+        .and_then(Value::as_str)
+        .map(|value| value.to_string())
+        .or_else(|| {
+            value
+                .get("profiles")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("arn"))
+                .and_then(Value::as_str)
+                .map(|value| value.to_string())
+        })
+}
+
+fn parse_profile_arn_from_customizations(value: &Value) -> Option<String> {
+    value
+        .get("profileArn")
+        .and_then(Value::as_str)
+        .map(|value| value.to_string())
+        .or_else(|| {
+            value
+                .get("customizations")
+                .and_then(Value::as_array)
+                .and_then(|items| items.first())
+                .and_then(|item| item.get("arn"))
+                .and_then(Value::as_str)
+                .map(|value| value.to_string())
+        })
 }
 
 #[derive(Serialize)]

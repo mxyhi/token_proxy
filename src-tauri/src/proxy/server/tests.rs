@@ -166,6 +166,32 @@ fn anthropic_messages_prefers_kiro_without_conversion() {
 }
 
 #[test]
+fn anthropic_messages_prefers_anthropic_when_priority_higher() {
+    let config = config_with_upstreams(
+        &[(PROVIDER_ANTHROPIC, 5, "anthro"), (PROVIDER_KIRO, 1, "kiro")],
+        false,
+    );
+    let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_ANTHROPIC);
+    assert_eq!(plan.outbound_path, None);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn anthropic_messages_tiebreaks_by_id_between_anthropic_and_kiro() {
+    let config = config_with_upstreams(
+        &[(PROVIDER_ANTHROPIC, 5, "b-anthro"), (PROVIDER_KIRO, 5, "a-kiro")],
+        false,
+    );
+    let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_KIRO);
+    assert_eq!(plan.outbound_path, Some(RESPONSES_PATH));
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::KiroToAnthropic);
+}
+
+#[test]
 fn responses_fallback_to_anthropic_requires_format_conversion_enabled() {
     let config = config_with_providers(&[PROVIDER_ANTHROPIC], false);
     let error = resolve_dispatch_plan(&config, RESPONSES_PATH)

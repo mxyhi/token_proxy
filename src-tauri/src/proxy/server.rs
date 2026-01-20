@@ -178,44 +178,33 @@ fn resolve_anthropic_plan(
     if !is_anthropic_path(path) {
         return None;
     }
-    if config.provider_upstreams(PROVIDER_ANTHROPIC).is_some() {
-        return Some(Ok(base_plan(PROVIDER_ANTHROPIC)));
-    }
-
-    // Claude Code uses /v1/messages. If Anthropic upstream is missing but Responses is available,
-    // fall back to OpenAI Responses format conversion when enabled (new-api style).
     if path == "/v1/messages" {
-        if !config.enable_api_format_conversion {
-            if config.provider_upstreams(PROVIDER_KIRO).is_some() {
-                // Kiro uses Claude-compatible format natively; allow it without conversion.
-                return Some(Ok(DispatchPlan {
+        // Claude Code uses /v1/messages. Prefer native providers (Anthropic/Kiro) by priority.
+        if let Some(selected) =
+            choose_provider_by_priority(config, &[PROVIDER_ANTHROPIC, PROVIDER_KIRO])
+        {
+            return Some(Ok(match selected {
+                PROVIDER_ANTHROPIC => base_plan(PROVIDER_ANTHROPIC),
+                PROVIDER_KIRO => DispatchPlan {
                     provider: PROVIDER_KIRO,
                     outbound_path: Some(RESPONSES_PATH),
                     request_transform: FormatTransform::None,
                     response_transform: FormatTransform::KiroToAnthropic,
-                }));
-            }
-            return Some(Err(ERROR_ANTHROPIC_CONVERSION_DISABLED.to_string()));
-        }
-        let fallback = choose_provider_by_priority(
-            config,
-            &[PROVIDER_RESPONSES, PROVIDER_CHAT, PROVIDER_GEMINI, PROVIDER_KIRO],
-        );
-        let Some(fallback) = fallback else {
-            return Some(Err(ERROR_NO_UPSTREAM.to_string()));
-        };
-        if fallback == PROVIDER_KIRO {
-            // Kiro uses Claude-compatible format natively; allow it without conversion.
-            return Some(Ok(DispatchPlan {
-                provider: PROVIDER_KIRO,
-                outbound_path: Some(RESPONSES_PATH),
-                request_transform: FormatTransform::None,
-                response_transform: FormatTransform::KiroToAnthropic,
+                },
+                _ => base_plan(PROVIDER_ANTHROPIC),
             }));
         }
         if !config.enable_api_format_conversion {
             return Some(Err(ERROR_ANTHROPIC_CONVERSION_DISABLED.to_string()));
         }
+        // If native providers are missing, fall back to other formats when enabled (new-api style).
+        let fallback = choose_provider_by_priority(
+            config,
+            &[PROVIDER_RESPONSES, PROVIDER_CHAT, PROVIDER_GEMINI],
+        );
+        let Some(fallback) = fallback else {
+            return Some(Err(ERROR_NO_UPSTREAM.to_string()));
+        };
         return Some(Ok(match fallback {
             PROVIDER_RESPONSES => DispatchPlan {
                 provider: PROVIDER_RESPONSES,
@@ -238,7 +227,9 @@ fn resolve_anthropic_plan(
             _ => base_plan(PROVIDER_RESPONSES),
         }));
     }
-
+    if config.provider_upstreams(PROVIDER_ANTHROPIC).is_some() {
+        return Some(Ok(base_plan(PROVIDER_ANTHROPIC)));
+    }
     Some(Err(ERROR_NO_UPSTREAM.to_string()))
 }
 

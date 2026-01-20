@@ -133,7 +133,7 @@
   "kiro_account_missing": "账户不存在",
   "kiro_account_status_active": "正常",
   "kiro_account_status_expired": "已过期",
-  "kiro_account_logout": "登出",
+  "kiro_account_logout": "删除",
   "kiro_account_manage": "前往 Providers 管理",
   "kiro_login_method_aws": "AWS Builder ID",
   "kiro_login_method_aws_authcode": "AWS Builder ID（授权码）",

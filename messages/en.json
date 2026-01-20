@@ -133,7 +133,7 @@
   "kiro_account_missing": "Account not found",
   "kiro_account_status_active": "Active",
   "kiro_account_status_expired": "Expired",
-  "kiro_account_logout": "Logout",
+  "kiro_account_logout": "Delete",
   "kiro_account_manage": "Manage in Providers",
   "kiro_login_method_aws": "AWS Builder ID",
   "kiro_login_method_aws_authcode": "AWS Builder ID (Auth Code)",

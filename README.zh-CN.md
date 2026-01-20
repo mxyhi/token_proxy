@@ -9,7 +9,7 @@
 ---
 
 ## 你能得到什么
-- 多提供商：`openai`、`openai-response`、`anthropic`、`gemini`
+- 多提供商：`openai`、`openai-response`、`anthropic`、`gemini`、`kiro`
 - 内置路由，支持可选的 API 格式互转（OpenAI Chat ⇄ Responses；Anthropic Messages ↔ OpenAI；Gemini ↔ OpenAI/Anthropic，含 SSE）
 - 上游优先级 + 两种策略（填满优先级组 / 轮询）
 - 模型别名映射（精确 / 前缀* / 通配*），响应会回写原始别名
@@ -67,9 +67,11 @@ curl -X POST \
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `id` | 必填 | 唯一 |
-| `provider` | 必填 | `openai` / `openai-response` / `anthropic` / `gemini` |
-| `base_url` | 必填 | 完整基址，重复路径段会去重 |
+| `provider` | 必填 | `openai` / `openai-response` / `anthropic` / `gemini` / `kiro` |
+| `base_url` | 必填 | 完整基址，重复路径段会去重（`kiro` 可为空） |
 | `api_key` | `null` | 该 provider 的密钥；优先于请求头 |
+| `kiro_account_id` | `null` | `provider=kiro` 时必填 |
+| `preferred_endpoint` | `null` | `kiro` 专用：`ide` 或 `cli` |
 | `proxy_url` | `null` | 每个上游独立代理，支持 `http/https/socks5/socks5h`；默认**不走系统代理**；支持 `$app_proxy_url` |
 | `priority` | `0` | 越大越先尝试；同组按列表顺序或轮询 |
 | `enabled` | `true` | 可临时禁用上游 |
@@ -78,12 +80,13 @@ curl -X POST \
 
 ## 路由与格式转换
 - Gemini：`/v1beta/models/*:generateContent`、`*:streamGenerateContent` → `gemini`（支持 SSE）
-- Anthropic：`/v1/messages`（含子路径）与 `/v1/complete` → `anthropic`
+- Anthropic：`/v1/messages`（含子路径）与 `/v1/complete` → `anthropic`（Kiro 同格式）
 - OpenAI：`/v1/chat/completions` → `openai`；`/v1/responses` → `openai-response`
 - 其他路径：按已配置 provider 的最高优先级选择；优先级相同则按 `openai` > `openai-response` > `anthropic` 打破平局
 - 若首选 provider 缺失且 `enable_api_format_conversion=true`，将自动在已支持的格式之间转换请求与响应（含 SSE 流式）
 - `/v1/chat/completions` 缺少 `openai`：可 fallback 到 `openai-response` / `anthropic` / `gemini`（按优先级选择，平级优先 `openai-response`）
-- `/v1/messages` 缺少 `anthropic`：可 fallback 到 `openai-response` / `openai` / `gemini`（按优先级选择，平级优先 `openai-response`）
+- `/v1/messages`：在 `anthropic` 与 `kiro` 间按优先级选择；平级按 upstream id 排序
+- 当 `/v1/messages` 缺少 `anthropic` 且 `kiro` 也不存在，且 `enable_api_format_conversion=true` 时：可 fallback 到 `openai-response` / `openai` / `gemini`（按优先级选择，平级优先 `openai-response`）
 - `/v1/responses` 缺少 `openai-response`：可 fallback 到 `openai` / `anthropic` / `gemini`（按优先级选择，平级优先 `openai`）
 - `/v1beta/models/*:generateContent` 缺少 `gemini`：可 fallback 到 `openai-response` / `openai` / `anthropic`（按优先级选择，平级优先 `openai-response`）
 

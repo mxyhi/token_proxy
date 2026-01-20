@@ -9,7 +9,7 @@ Local AI API gateway for OpenAI / Gemini / Anthropic. Runs on your machine, keep
 ---
 
 ## What you get
-- Multiple providers: `openai`, `openai-response`, `anthropic`, `gemini`
+- Multiple providers: `openai`, `openai-response`, `anthropic`, `gemini`, `kiro`
 - Built-in routing + optional format conversion (OpenAI Chat ⇄ Responses; Anthropic Messages ↔ OpenAI; Gemini ↔ OpenAI/Anthropic; SSE supported)
 - Per-upstream priority + two balancing strategies (fill-first / round-robin)
 - Model alias mapping (exact / prefix* / wildcard*) and response model rewrite
@@ -67,9 +67,11 @@ curl -X POST \
 | Field | Default | Notes |
 | --- | --- | --- |
 | `id` | required | Unique per upstream. |
-| `provider` | required | One of `openai`, `openai-response`, `anthropic`, `gemini`. |
-| `base_url` | required | Full base; overlapping path parts are de-duplicated. |
+| `provider` | required | One of `openai`, `openai-response`, `anthropic`, `gemini`, `kiro`. |
+| `base_url` | required | Full base; overlapping path parts are de-duplicated. (`kiro` can be empty.) |
 | `api_key` | `null` | Provider-specific bearer/key; overrides request headers. |
+| `kiro_account_id` | `null` | Required when `provider=kiro`. |
+| `preferred_endpoint` | `null` | `kiro` only: `ide` or `cli`. |
 | `proxy_url` | `null` | Per-upstream proxy; supports `http/https/socks5/socks5h`; default is **no system proxy**. `$app_proxy_url` placeholder allowed. |
 | `priority` | `0` | Higher = tried earlier. Grouped by priority then by order (or round-robin). |
 | `enabled` | `true` | Disabled upstreams are skipped. |
@@ -78,12 +80,13 @@ curl -X POST \
 
 ## Routing & format conversion
 - Gemini: `/v1beta/models/*:generateContent` and `*:streamGenerateContent` → `gemini` (SSE supported).
-- Anthropic: `/v1/messages` (and subpaths) and `/v1/complete` → `anthropic`.
+- Anthropic: `/v1/messages` (and subpaths) and `/v1/complete` → `anthropic` (Kiro shares the same format).
 - OpenAI: `/v1/chat/completions` → `openai`; `/v1/responses` → `openai-response`.
 - Other paths: choose the provider with the highest configured priority; tie-break is `openai` > `openai-response` > `anthropic`.
 - If the preferred provider is missing but `enable_api_format_conversion=true`, the proxy auto-converts request/response bodies and streams between supported formats (including SSE).
 - If `openai` is missing for `/v1/chat/completions`: fallback can be `openai-response`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai-response`).
-- If `anthropic` is missing for `/v1/messages`: fallback can be `openai-response`, `openai`, or `gemini` (priority-based; tie-break prefers `openai-response`).
+- For `/v1/messages`: choose between `anthropic` and `kiro` by priority; tie-break uses upstream id.
+- If neither `anthropic` nor `kiro` exists for `/v1/messages` and `enable_api_format_conversion=true`: fallback can be `openai-response`, `openai`, or `gemini` (priority-based; tie-break prefers `openai-response`).
 - If `openai-response` is missing for `/v1/responses`: fallback can be `openai`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai`).
 - If `gemini` is missing for `/v1beta/models/*:generateContent`: fallback can be `openai-response`, `openai`, or `anthropic` (priority-based; tie-break prefers `openai-response`).
 

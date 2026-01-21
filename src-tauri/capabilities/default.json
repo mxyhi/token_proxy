@@ -9,6 +9,7 @@
     "autostart:allow-disable",
     "autostart:allow-is-enabled",
     "deep-link:default",
+    "dialog:default",
     "opener:default",
     "process:default",
     "updater:default"

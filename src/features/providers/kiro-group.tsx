@@ -113,6 +113,7 @@ function KiroLoginSection({
   loading,
   onLogin,
   onImport,
+  onImportKam,
   statusText,
   deviceLink,
   deviceCode,
@@ -120,6 +121,7 @@ function KiroLoginSection({
   loading: boolean;
   onLogin: (method: KiroLoginMethod) => void;
   onImport: () => Promise<void>;
+  onImportKam: () => Promise<void>;
   statusText: string;
   deviceLink: string;
   deviceCode: string;
@@ -141,6 +143,9 @@ function KiroLoginSection({
         ))}
         <Button type="button" variant="outline" size="sm" onClick={onImport} disabled={loading}>
           {m.kiro_login_method_import()}
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={onImportKam} disabled={loading}>
+          {m.kiro_login_method_import_kam()}
         </Button>
       </div>
       {statusText ? (
@@ -164,6 +169,7 @@ type KiroLoginDialogProps = {
   loading: boolean;
   onLogin: (method: KiroLoginMethod) => void;
   onImport: () => Promise<void>;
+  onImportKam: () => Promise<void>;
   statusText: string;
   deviceLink: string;
   deviceCode: string;
@@ -175,6 +181,7 @@ function KiroLoginDialog({
   loading,
   onLogin,
   onImport,
+  onImportKam,
   statusText,
   deviceLink,
   deviceCode,
@@ -190,6 +197,7 @@ function KiroLoginDialog({
             loading={loading}
             onLogin={onLogin}
             onImport={onImport}
+            onImportKam={onImportKam}
             statusText={statusText}
             deviceLink={deviceLink}
             deviceCode={deviceCode}
@@ -309,6 +317,7 @@ export type KiroProviderGroupProps = {
   onLogout: (accountId: string) => Promise<void>;
   onLogin: (method: KiroLoginMethod) => void;
   onImport: () => Promise<void>;
+  onImportKam: () => Promise<void>;
   statusText: string;
   deviceLink: string;
   deviceCode: string;
@@ -489,6 +498,7 @@ export function KiroProviderGroup({
   onLogout,
   onLogin,
   onImport,
+  onImportKam,
   statusText,
   deviceLink,
   deviceCode,
@@ -515,6 +525,16 @@ export function KiroProviderGroup({
     }
   };
 
+  const handleImportKam = async () => {
+    try {
+      await onImportKam();
+      toast.success(m.kiro_import_kam_success());
+      window.setTimeout(() => setLoginOpen(false), 1500);
+    } catch {
+      // Keep dialog open on failure.
+    }
+  };
+
   const emptyMessage = accounts.length ? m.providers_accounts_empty_filtered() : m.providers_accounts_empty();
   const bodyProps: KiroProviderBodyProps = { filteredAccounts, quotaMap, accountsLoading, quotasLoading, accountsError, quotasError, emptyMessage, onLogout };
   const handleToggle = (nextOpen: boolean) => { setHasToggled(true); setIsOpen(nextOpen); };
@@ -527,6 +547,7 @@ export function KiroProviderGroup({
         loading={loginBusy || accountsLoading}
         onLogin={onLogin}
         onImport={handleImport}
+        onImportKam={handleImportKam}
         statusText={statusText}
         deviceLink={deviceLink}
         deviceCode={deviceCode}

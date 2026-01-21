@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 
 import { RefreshCw, Search } from "lucide-react";
+import { homeDir, join } from "@tauri-apps/api/path";
+import { open } from "@tauri-apps/plugin-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -67,6 +69,15 @@ type ProvidersAccountsSectionProps = {
   kiroGroupProps: KiroGroupProps;
   codexGroupProps: CodexGroupProps;
 };
+
+async function resolveKiroIdeDir() {
+  try {
+    const home = await homeDir();
+    return await join(home, ".aws", "sso", "cache");
+  } catch {
+    return "";
+  }
+}
 
 function ProvidersSearchInput({
   search,
@@ -335,6 +346,7 @@ function buildKiroGroupProps({
   loginState,
   onRefresh,
   onImport,
+  onImportKam,
 }: {
   accountsState: ReturnType<typeof useKiroAccounts>;
   quotasState: ReturnType<typeof useKiroQuotas>;
@@ -343,6 +355,7 @@ function buildKiroGroupProps({
   loginState: ReturnType<typeof useKiroLoginState>;
   onRefresh: () => void;
   onImport: () => Promise<void>;
+  onImportKam: () => Promise<void>;
 }) {
   return {
     accounts: accountsState.accounts,
@@ -356,6 +369,7 @@ function buildKiroGroupProps({
     onLogout: accountsState.logout,
     onLogin: loginState.beginLogin,
     onImport,
+    onImportKam,
     statusText: loginState.statusText,
     deviceLink: loginState.deviceLink,
     deviceCode: loginState.deviceCode,
@@ -445,11 +459,30 @@ function useProvidersPanelState() {
   const refreshBusy = kiroAccounts.loading || kiroQuotas.loading || codexAccounts.loading || codexQuotas.loading;
 
   const handleImport = useCallback(async () => {
-    try {
-      await kiroAccounts.importIde();
-      await kiroQuotas.refresh();
-    } catch {
+    const defaultPath = await resolveKiroIdeDir();
+    const selection = await open(
+      defaultPath ? { directory: true, defaultPath } : { directory: true }
+    );
+    const directory = Array.isArray(selection) ? selection[0] : selection;
+    if (!directory) {
+      throw new Error("Import cancelled.");
     }
+    await kiroAccounts.importIde(directory);
+    await kiroQuotas.refresh();
+  }, [kiroAccounts, kiroQuotas]);
+
+  const handleImportKam = useCallback(async () => {
+    const selection = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    const path = Array.isArray(selection) ? selection[0] : selection;
+    if (!path) {
+      throw new Error("Import cancelled.");
+    }
+    await kiroAccounts.importKam(path);
+    await kiroQuotas.refresh();
   }, [kiroAccounts, kiroQuotas]);
 
   const toolbarProps = buildToolbarProps(filters, refreshAll, refreshBusy);
@@ -461,6 +494,7 @@ function useProvidersPanelState() {
     loginState: kiroLogin,
     onRefresh: refreshAll,
     onImport: handleImport,
+    onImportKam: handleImportKam,
   });
   const codexGroupProps = buildCodexGroupProps({
     accountsState: codexAccounts,

@@ -20,8 +20,12 @@ export async function pollKiroLogin(state: string) {
   return await invoke<KiroLoginPollResponse>("kiro_poll_login", { state });
 }
 
-export async function importKiroIdeTokens() {
-  return await invoke<KiroAccountSummary[]>("kiro_import_ide");
+export async function importKiroIdeTokens(directory: string) {
+  return await invoke<KiroAccountSummary[]>("kiro_import_ide", { directory });
+}
+
+export async function importKiroKamTokens(path: string) {
+  return await invoke<KiroAccountSummary[]>("kiro_import_kam", { path });
 }
 
 export async function logoutKiroAccount(accountId: string) {

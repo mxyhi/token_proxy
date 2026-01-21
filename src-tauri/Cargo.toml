@@ -30,6 +30,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 sha2 = "0.10"
 tauri = { version = "2.9.5", features = ["image-png", "tray-icon"] }
+tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-opener = "2.5.3"
 tokio = { version = "1.49.0", features = [

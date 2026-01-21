@@ -9,6 +9,7 @@ mod oauth_util;
 mod proxy;
 mod tray;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::Manager;
@@ -205,10 +206,30 @@ async fn kiro_list_accounts(
 
 #[tauri::command]
 async fn kiro_import_ide(
-    app: tauri::AppHandle,
     kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+    directory: String,
 ) -> Result<Vec<kiro::KiroAccountSummary>, String> {
-    kiro_store.import_ide_tokens(&app).await
+    let trimmed = directory.trim();
+    if trimmed.is_empty() {
+        return Err("Directory is required.".to_string());
+    }
+    kiro_store
+        .import_ide_tokens(PathBuf::from(trimmed))
+        .await
+}
+
+#[tauri::command]
+async fn kiro_import_kam(
+    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+    path: String,
+) -> Result<Vec<kiro::KiroAccountSummary>, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("File path is required.".to_string());
+    }
+    kiro_store
+        .import_kam_export(PathBuf::from(trimmed))
+        .await
 }
 
 #[tauri::command]
@@ -387,6 +408,7 @@ pub fn run() {
     let autostart_launch = is_autostart_launch();
 
     let mut builder = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init());
     #[cfg(desktop)]
@@ -532,6 +554,7 @@ pub fn run() {
             set_request_detail_capture,
             kiro_list_accounts,
             kiro_import_ide,
+            kiro_import_kam,
             kiro_start_login,
             kiro_poll_login,
             kiro_logout,

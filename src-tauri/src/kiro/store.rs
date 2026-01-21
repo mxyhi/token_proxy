@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
+use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 
@@ -38,52 +39,74 @@ impl KiroAccountStore {
 
     pub(crate) async fn import_ide_tokens(
         &self,
-        app: &AppHandle,
+        directory: PathBuf,
     ) -> Result<Vec<KiroAccountSummary>, String> {
-        let home_dir = resolve_home_dir(app)?;
-        let cache_dir = home_dir.join(".aws").join("sso").join("cache");
-        // Mirror CLIProxyAPIPlus: only import ~/.aws/sso/cache/kiro-auth-token.json.
-        let mut entries = match tokio::fs::read_dir(&cache_dir).await {
+        if directory.as_os_str().is_empty() {
+            return Err("Directory is required.".to_string());
+        }
+        let mut entries = match tokio::fs::read_dir(&directory).await {
             Ok(entries) => entries,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Err("No Kiro IDE token files found.".to_string());
+                return Err("Selected directory not found.".to_string());
             }
             Err(err) => {
-                return Err(format!("Failed to read Kiro IDE token directory: {err}"));
+                return Err(format!("Failed to read selected directory: {err}"));
             }
         };
         let mut imported = Vec::new();
+        // 仅扫描所选目录本层的 JSON 文件，忽略无效内容。
         while let Some(entry) = entries
             .next_entry()
             .await
-            .map_err(|err| format!("Failed to read Kiro IDE token entry: {err}"))?
+            .map_err(|err| format!("Failed to read directory entry: {err}"))?
         {
             let path = entry.path();
-            let file_name = match path.file_name().and_then(|name| name.to_str()) {
-                Some(name) => name,
-                None => continue,
-            };
-            if file_name != "kiro-auth-token.json" {
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|err| format!("Failed to read entry type: {err}"))?;
+            if !file_type.is_file() || !is_json_file(&path) {
                 continue;
             }
-            let contents = match tokio::fs::read_to_string(&path).await {
-                Ok(contents) => contents,
-                Err(_) => continue,
-            };
-            let token: KiroIdeTokenFile = match serde_json::from_str(&contents) {
-                Ok(token) => token,
-                Err(_) => continue,
-            };
-            let record = match token.into_record() {
-                Ok(record) => record,
-                Err(_) => continue,
+            let Some(record) = load_ide_token_record(&path).await else {
+                continue;
             };
             if let Ok(summary) = self.save_new_account(record).await {
                 imported.push(summary);
             }
         }
         if imported.is_empty() {
-            return Err("No valid Kiro IDE token file found.".to_string());
+            return Err("No valid Kiro token JSON files found.".to_string());
+        }
+        Ok(imported)
+    }
+
+    pub(crate) async fn import_kam_export(
+        &self,
+        path: PathBuf,
+    ) -> Result<Vec<KiroAccountSummary>, String> {
+        if path.as_os_str().is_empty() {
+            return Err("File path is required.".to_string());
+        }
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Err("Selected file not found.".to_string());
+        }
+        let contents = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|err| format!("Failed to read JSON file: {err}"))?;
+        let data: KamExportData = serde_json::from_str(&contents)
+            .map_err(|err| format!("Invalid Kiro account JSON file: {err}"))?;
+        let mut imported = Vec::new();
+        for account in data.accounts {
+            let Some(record) = kam_account_to_record(account) else {
+                continue;
+            };
+            if let Ok(summary) = self.save_new_account(record).await {
+                imported.push(summary);
+            }
+        }
+        if imported.is_empty() {
+            return Err("No valid Kiro accounts found in JSON file.".to_string());
         }
         Ok(imported)
     }
@@ -308,6 +331,123 @@ impl KiroAccountStore {
     }
 }
 
+fn is_json_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+}
+
+async fn load_ide_token_record(path: &Path) -> Option<KiroTokenRecord> {
+    let contents = tokio::fs::read_to_string(path).await.ok()?;
+    let token: KiroIdeTokenFile = serde_json::from_str(&contents).ok()?;
+    token.into_record().ok()
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KamExportData {
+    accounts: Vec<KamAccount>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KamAccount {
+    email: Option<String>,
+    idp: Option<String>,
+    credentials: Option<KamCredentials>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct KamCredentials {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    client_id: Option<String>,
+    client_secret: Option<String>,
+    region: Option<String>,
+    start_url: Option<String>,
+    expires_at: Option<i64>,
+    auth_method: Option<String>,
+    provider: Option<String>,
+}
+
+fn kam_account_to_record(account: KamAccount) -> Option<KiroTokenRecord> {
+    let credentials = account.credentials?;
+    let access_token = credentials.access_token?.trim().to_string();
+    let refresh_token = credentials.refresh_token?.trim().to_string();
+    if access_token.is_empty() || refresh_token.is_empty() {
+        return None;
+    }
+    let provider = credentials
+        .provider
+        .filter(|value| !value.trim().is_empty())
+        .or(account.idp.filter(|value| !value.trim().is_empty()))
+        .unwrap_or_else(|| "AWS".to_string());
+    let auth_method = normalize_auth_method(
+        credentials.auth_method.as_deref(),
+        Some(provider.as_str()),
+    );
+    let expires_at = credentials
+        .expires_at
+        .and_then(format_expires_at)
+        .unwrap_or_else(|| expires_at_from_seconds(3600));
+    Some(KiroTokenRecord {
+        access_token,
+        refresh_token,
+        profile_arn: None,
+        expires_at,
+        auth_method,
+        provider,
+        client_id: credentials.client_id,
+        client_secret: credentials.client_secret,
+        email: account.email.filter(|value| !value.trim().is_empty()),
+        last_refresh: Some(now_rfc3339()),
+        start_url: credentials.start_url,
+        region: credentials.region,
+    })
+}
+
+fn normalize_auth_method(raw: Option<&str>, provider: Option<&str>) -> String {
+    let raw_value = raw.unwrap_or("").trim().to_ascii_lowercase();
+    if matches!(raw_value.as_str(), "idc") {
+        return "idc".to_string();
+    }
+    if matches!(raw_value.as_str(), "social") {
+        return "social".to_string();
+    }
+    if matches!(raw_value.as_str(), "builder-id" | "builder_id") {
+        return "builder-id".to_string();
+    }
+    let provider_value = provider.unwrap_or("").trim().to_ascii_lowercase();
+    if provider_value.contains("google") || provider_value.contains("github") {
+        return "social".to_string();
+    }
+    if provider_value.contains("idc")
+        || provider_value.contains("enterprise")
+        || provider_value.contains("iam")
+    {
+        return "idc".to_string();
+    }
+    "builder-id".to_string()
+}
+
+fn format_expires_at(value: i64) -> Option<String> {
+    let (seconds, nanos) = if value >= 10_000_000_000 {
+        let secs = value / 1000;
+        let ms = value % 1000;
+        (secs, ms * 1_000_000)
+    } else {
+        (value, 0)
+    };
+    let nanos_total = i128::from(seconds)
+        .checked_mul(1_000_000_000)?
+        .checked_add(i128::from(nanos))?;
+    OffsetDateTime::from_unix_timestamp_nanos(nanos_total)
+        .ok()?
+        .format(&Rfc3339)
+        .ok()
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct KiroIdeTokenFile {
@@ -371,14 +511,4 @@ impl KiroIdeTokenFile {
             region: self.region,
         })
     }
-}
-
-fn resolve_home_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    if let Ok(dir) = app.path().home_dir() {
-        return Ok(dir);
-    }
-    if let Some(dir) = std::env::var_os("HOME").map(PathBuf::from) {
-        return Ok(dir);
-    }
-    Err("Failed to resolve home directory.".to_string())
 }

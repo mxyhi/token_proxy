@@ -150,11 +150,15 @@ fn collect_function_tool_names(value: &Value) -> Vec<String> {
         if tool.get("type").and_then(Value::as_str) != Some("function") {
             continue;
         }
-        let Some(function) = tool.get("function") else {
-            continue;
-        };
-        if let Some(name) = function.get("name").and_then(Value::as_str) {
-            names.push(name.to_string());
+        let name = tool
+            .get("function")
+            .and_then(|value| value.get("name"))
+            .and_then(Value::as_str)
+            .or_else(|| tool.get("name").and_then(Value::as_str));
+        if let Some(name) = name {
+            if !name.is_empty() {
+                names.push(name.to_string());
+            }
         }
     }
     names
@@ -280,20 +284,24 @@ fn map_tools(tools: &Value, tool_map: &ToolNameMap) -> Value {
             continue;
         }
         let function = tool.get("function").unwrap_or(&Value::Null);
+        let mut item = Map::new();
+        item.insert("type".to_string(), Value::String("function".to_string()));
         let name = function
             .get("name")
             .and_then(Value::as_str)
-            .unwrap_or_default();
-        let mut item = Map::new();
-        item.insert("type".to_string(), Value::String("function".to_string()));
-        item.insert("name".to_string(), Value::String(tool_map.shorten(name)));
-        if let Some(desc) = function.get("description") {
+            .or_else(|| tool.get("name").and_then(Value::as_str));
+        if let Some(name) = name {
+            if !name.is_empty() {
+                item.insert("name".to_string(), Value::String(tool_map.shorten(name)));
+            }
+        }
+        if let Some(desc) = function.get("description").or_else(|| tool.get("description")) {
             item.insert("description".to_string(), desc.clone());
         }
-        if let Some(params) = function.get("parameters") {
+        if let Some(params) = function.get("parameters").or_else(|| tool.get("parameters")) {
             item.insert("parameters".to_string(), params.clone());
         }
-        if let Some(strict) = function.get("strict") {
+        if let Some(strict) = function.get("strict").or_else(|| tool.get("strict")) {
             item.insert("strict".to_string(), strict.clone());
         }
         output.push(Value::Object(item));
@@ -318,8 +326,15 @@ fn map_tool_choice(choice: &Value, tool_map: &ToolNameMap) -> Value {
         .get("function")
         .and_then(|value| value.get("name"))
         .and_then(Value::as_str)
-        .unwrap_or_default();
-    json!({ "type": "function", "name": tool_map.shorten(name) })
+        .or_else(|| object.get("name").and_then(Value::as_str));
+    let mut output = Map::new();
+    output.insert("type".to_string(), Value::String("function".to_string()));
+    if let Some(name) = name {
+        if !name.is_empty() {
+            output.insert("name".to_string(), Value::String(tool_map.shorten(name)));
+        }
+    }
+    Value::Object(output)
 }
 
 fn apply_text_format(response_format: Option<&Value>, text: Option<&Value>, output: &mut Map<String, Value>) {
@@ -381,6 +396,9 @@ fn normalize_responses_payload(object: &mut Map<String, Value>, model_hint: Opti
         "temperature",
         "top_p",
         "service_tier",
+        "previous_response_id",
+        "prompt_cache_retention",
+        "safety_identifier",
     ] {
         object.remove(key);
     }

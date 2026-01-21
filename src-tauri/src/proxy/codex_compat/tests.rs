@@ -1,7 +1,7 @@
 use axum::body::Bytes;
 use serde_json::json;
 
-use super::{chat_request_to_codex, codex_response_to_chat};
+use super::{chat_request_to_codex, codex_response_to_chat, responses_request_to_codex};
 use super::tool_names::shorten_name_if_needed;
 
 #[test]
@@ -55,4 +55,68 @@ fn codex_response_to_chat_restores_tool_name() {
         .as_str()
         .expect("tool name");
     assert_eq!(name, original);
+}
+
+#[test]
+fn chat_request_to_codex_skips_missing_tool_names() {
+    let input = json!({
+        "model": "gpt-5",
+        "messages": [
+            { "role": "user", "content": "hi" }
+        ],
+        "tools": [
+            { "type": "function", "function": { "description": "noop", "parameters": {} } }
+        ],
+        "tool_choice": { "type": "function", "function": {} }
+    });
+    let bytes = Bytes::from(input.to_string());
+    let output = chat_request_to_codex(&bytes, Some("gpt-5-codex")).expect("convert");
+    let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
+    let tools = value["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 1);
+    assert!(tools[0].get("name").is_none());
+    let tool_choice = value["tool_choice"].as_object().expect("tool_choice");
+    assert_eq!(tool_choice.get("type").and_then(serde_json::Value::as_str), Some("function"));
+    assert!(tool_choice.get("name").is_none());
+}
+
+#[test]
+fn responses_request_to_codex_uses_top_level_tool_name() {
+    let input = json!({
+        "model": "gpt-5",
+        "input": "hi",
+        "tools": [
+            { "type": "function", "name": "demo_tool", "description": "noop", "parameters": {} }
+        ],
+        "tool_choice": { "type": "function", "name": "demo_tool" }
+    });
+    let bytes = Bytes::from(input.to_string());
+    let output = responses_request_to_codex(&bytes, Some("gpt-5-codex")).expect("convert");
+    let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
+    let tools = value["tools"].as_array().expect("tools array");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0]["name"], "demo_tool");
+    assert_eq!(tools[0]["description"], "noop");
+    assert!(tools[0]["parameters"].is_object());
+    assert_eq!(
+        value["tool_choice"].get("name").and_then(serde_json::Value::as_str),
+        Some("demo_tool")
+    );
+}
+
+#[test]
+fn responses_request_to_codex_strips_prompt_cache_retention() {
+    let input = json!({
+        "model": "gpt-5",
+        "input": "hi",
+        "prompt_cache_retention": "24h",
+        "previous_response_id": "resp_123",
+        "safety_identifier": "sid_1"
+    });
+    let bytes = Bytes::from(input.to_string());
+    let output = responses_request_to_codex(&bytes, Some("gpt-5-codex")).expect("convert");
+    let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
+    assert!(value.get("prompt_cache_retention").is_none());
+    assert!(value.get("previous_response_id").is_none());
+    assert!(value.get("safety_identifier").is_none());
 }

@@ -1,8 +1,11 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod app_proxy;
 mod client_config;
 mod jsonc;
+mod codex;
 mod kiro;
 mod logging;
+mod oauth_util;
 mod proxy;
 mod tray;
 
@@ -110,6 +113,7 @@ async fn write_proxy_config(
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,
     logging_state: tauri::State<'_, logging::LoggingState>,
+    app_proxy_state: tauri::State<'_, app_proxy::AppProxyState>,
     config: proxy::config::ProxyConfigFile,
 ) -> Result<ProxyServiceStatus, String> {
     tracing::debug!("write_proxy_config start");
@@ -122,6 +126,7 @@ async fn write_proxy_config(
         "write_proxy_config apply_config done"
     );
     let log_level = config.log_level;
+    let app_proxy_url = proxy::config::app_proxy_url_from_config(&config).ok().flatten();
     if let Err(err) = proxy::config::write_config(app.clone(), config).await {
         tracing::error!(error = %err, "write_proxy_config save failed");
         tray_state.apply_error("保存失败", &err);
@@ -130,6 +135,7 @@ async fn write_proxy_config(
     tracing::debug!(elapsed_ms = start.elapsed().as_millis(), "write_proxy_config saved");
     let reload_start = Instant::now();
     logging_state.apply_level(log_level);
+    app_proxy::set(&app_proxy_state, app_proxy_url).await;
     match proxy_service.reload(app).await {
         Ok(status) => {
             tracing::debug!(
@@ -151,6 +157,7 @@ async fn write_proxy_config(
         }
     }
 }
+
 
 #[tauri::command]
 async fn read_dashboard_snapshot(
@@ -242,6 +249,43 @@ async fn kiro_fetch_quotas(
     kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
 ) -> Result<Vec<kiro::KiroQuotaSummary>, String> {
     kiro::fetch_quotas(kiro_store.as_ref()).await
+}
+
+#[tauri::command]
+async fn codex_list_accounts(
+    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+) -> Result<Vec<codex::CodexAccountSummary>, String> {
+    codex_store.list_accounts().await
+}
+
+#[tauri::command]
+async fn codex_fetch_quotas(
+    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+) -> Result<Vec<codex::CodexQuotaSummary>, String> {
+    codex::fetch_quotas(codex_store.as_ref()).await
+}
+
+#[tauri::command]
+async fn codex_start_login(
+    codex_login: tauri::State<'_, Arc<codex::CodexLoginManager>>,
+) -> Result<codex::CodexLoginStartResponse, String> {
+    codex_login.start_login().await
+}
+
+#[tauri::command]
+async fn codex_poll_login(
+    codex_login: tauri::State<'_, Arc<codex::CodexLoginManager>>,
+    state: String,
+) -> Result<codex::CodexLoginPollResponse, String> {
+    codex_login.poll_login(&state).await
+}
+
+#[tauri::command]
+async fn codex_logout(
+    codex_login: tauri::State<'_, Arc<codex::CodexLoginManager>>,
+    account_id: String,
+) -> Result<(), String> {
+    codex_login.logout(&account_id).await
 }
 
 #[tauri::command]
@@ -387,22 +431,46 @@ pub fn run() {
             let proxy_service = ProxyServiceHandle::new();
             app.manage(proxy_service.clone());
             app.manage(logging_state.clone());
+            let app_proxy_state = app_proxy::new_state();
+            app.manage(app_proxy_state.clone());
             let app_handle = app.handle().clone();
-            let kiro_store = Arc::new(kiro::KiroAccountStore::new(&app_handle)?);
+            let kiro_store = Arc::new(kiro::KiroAccountStore::new(
+                &app_handle,
+                app_proxy_state.clone(),
+            )?);
             app.manage(kiro_store.clone());
-            let kiro_login = Arc::new(kiro::KiroLoginManager::new(kiro_store));
+            let kiro_login = Arc::new(kiro::KiroLoginManager::new(
+                kiro_store,
+                app_proxy_state.clone(),
+            ));
             app.manage(kiro_login);
+            let codex_store = Arc::new(codex::CodexAccountStore::new(
+                &app_handle,
+                app_proxy_state.clone(),
+            )?);
+            app.manage(codex_store.clone());
+            let codex_login = Arc::new(codex::CodexLoginManager::new(
+                codex_store,
+                app_proxy_state.clone(),
+            ));
+            app.manage(codex_login);
             let tray_state = tray::init_tray(&app_handle, proxy_service.clone())?;
             app.manage(tray_state.clone());
 
             let tray_state_for_config = tray_state.clone();
             let app_handle_for_config = app_handle.clone();
+            let app_proxy_for_config = app_proxy_state.clone();
             tauri::async_runtime::spawn(async move {
                 if let Ok(response) = proxy::config::read_config(app_handle_for_config).await {
                     logging_state.apply_level(response.config.log_level);
                     tray_state_for_config
                         .apply_config(&response.config.tray_token_rate)
                         .await;
+                    if let Ok(proxy_url) =
+                        proxy::config::app_proxy_url_from_config(&response.config)
+                    {
+                        app_proxy::set(&app_proxy_for_config, proxy_url).await;
+                    }
                 }
             });
 
@@ -469,6 +537,11 @@ pub fn run() {
             kiro_logout,
             kiro_handle_callback,
             kiro_fetch_quotas,
+            codex_list_accounts,
+            codex_fetch_quotas,
+            codex_start_login,
+            codex_poll_login,
+            codex_logout,
             proxy_status,
             proxy_start,
             proxy_stop,

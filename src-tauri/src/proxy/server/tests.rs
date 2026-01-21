@@ -37,6 +37,7 @@ fn config_with_upstreams(
             base_url: "https://example.com".to_string(),
             api_key: None,
             kiro_account_id: None,
+            codex_account_id: None,
             kiro_preferred_endpoint: None,
             proxy_url: None,
             priority: *priority,
@@ -101,6 +102,32 @@ fn responses_fallback_requires_format_conversion_enabled() {
     assert_eq!(plan.outbound_path, Some(CHAT_PATH));
     assert_eq!(plan.request_transform, FormatTransform::ResponsesToChat);
     assert_eq!(plan.response_transform, FormatTransform::ChatToResponses);
+}
+
+#[test]
+fn chat_to_codex_requires_format_conversion_enabled() {
+    let config = config_with_providers(&[PROVIDER_CODEX], false);
+    let error = resolve_dispatch_plan(&config, CHAT_PATH)
+        .err()
+        .expect("should reject");
+    assert!(error.contains("format conversion is disabled"));
+
+    let config = config_with_providers(&[PROVIDER_CODEX], true);
+    let plan = resolve_dispatch_plan(&config, CHAT_PATH).expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CODEX);
+    assert_eq!(plan.outbound_path, Some(CODEX_RESPONSES_PATH));
+    assert_eq!(plan.request_transform, FormatTransform::ChatToCodex);
+    assert_eq!(plan.response_transform, FormatTransform::CodexToChat);
+}
+
+#[test]
+fn responses_prefers_codex_without_conversion() {
+    let config = config_with_providers(&[PROVIDER_CODEX], false);
+    let plan = resolve_dispatch_plan(&config, RESPONSES_PATH).expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CODEX);
+    assert_eq!(plan.outbound_path, Some(CODEX_RESPONSES_PATH));
+    assert_eq!(plan.request_transform, FormatTransform::ResponsesToCodex);
+    assert_eq!(plan.response_transform, FormatTransform::CodexToResponses);
 }
 
 #[test]

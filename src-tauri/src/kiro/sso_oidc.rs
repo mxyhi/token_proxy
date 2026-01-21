@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use url::form_urlencoded;
 
+use crate::oauth_util::build_reqwest_client;
+
 use super::types::KiroTokenRecord;
 use super::util::{expires_at_from_seconds, now_rfc3339};
 
@@ -37,10 +39,8 @@ pub(crate) struct SsoOidcClient {
 }
 
 impl SsoOidcClient {
-    pub(crate) fn new() -> Result<Self, String> {
-        let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
+    pub(crate) fn new(proxy_url: Option<&str>) -> Result<Self, String> {
+        let http = build_reqwest_client(proxy_url, std::time::Duration::from_secs(30))
             .map_err(|err| format!("Failed to build OIDC client: {err}"))?;
         Ok(Self { http })
     }
@@ -310,7 +310,10 @@ impl SsoOidcClient {
     }
 }
 
-pub(crate) async fn refresh_builder_token(record: &KiroTokenRecord) -> Result<KiroTokenRecord, String> {
+pub(crate) async fn refresh_builder_token(
+    record: &KiroTokenRecord,
+    proxy_url: Option<&str>,
+) -> Result<KiroTokenRecord, String> {
     let client_id = record
         .client_id
         .as_deref()
@@ -319,13 +322,16 @@ pub(crate) async fn refresh_builder_token(record: &KiroTokenRecord) -> Result<Ki
         .client_secret
         .as_deref()
         .ok_or_else(|| "Missing OIDC client_secret.".to_string())?;
-    let client = SsoOidcClient::new()?;
+    let client = SsoOidcClient::new(proxy_url)?;
     client
         .refresh_builder_token(client_id, client_secret, &record.refresh_token)
         .await
 }
 
-pub(crate) async fn refresh_idc_token(record: &KiroTokenRecord) -> Result<KiroTokenRecord, String> {
+pub(crate) async fn refresh_idc_token(
+    record: &KiroTokenRecord,
+    proxy_url: Option<&str>,
+) -> Result<KiroTokenRecord, String> {
     let client_id = record
         .client_id
         .as_deref()
@@ -339,7 +345,7 @@ pub(crate) async fn refresh_idc_token(record: &KiroTokenRecord) -> Result<KiroTo
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .unwrap_or(DEFAULT_IDC_REGION);
-    let client = SsoOidcClient::new()?;
+    let client = SsoOidcClient::new(proxy_url)?;
     let response = client
         .refresh_token_with_region(
             client_id,

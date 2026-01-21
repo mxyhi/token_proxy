@@ -19,6 +19,8 @@ import type {
   UpstreamEditorState,
 } from "@/features/config/cards/upstreams/types";
 import { createEmptyUpstream } from "@/features/config/form";
+import { useCodexAccounts } from "@/features/codex/use-codex-accounts";
+import type { CodexAccountSummary } from "@/features/codex/types";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
 import type { KiroAccountSummary } from "@/features/kiro/types";
 import type { UpstreamForm, UpstreamStrategy } from "@/features/config/types";
@@ -118,6 +120,32 @@ function findIdleKiroAccount(
   return accounts.find((account) => !usedAccountIds.has(account.account_id));
 }
 
+/**
+ * 找到第一个未被其他上游使用的空闲 codex 账户
+ * 优先返回 active 状态的账户
+ */
+function findIdleCodexAccount(
+  accounts: CodexAccountSummary[],
+  upstreams: readonly UpstreamForm[],
+  editingIndex?: number,
+): CodexAccountSummary | undefined {
+  const usedAccountIds = new Set(
+    upstreams
+      .filter((upstream, index) => {
+        if (index === editingIndex) return false;
+        return upstream.provider.trim() === "codex" && upstream.codexAccountId.trim();
+      })
+      .map((upstream) => upstream.codexAccountId.trim()),
+  );
+
+  const activeIdle = accounts.find(
+    (account) => account.status === "active" && !usedAccountIds.has(account.account_id),
+  );
+  if (activeIdle) return activeIdle;
+
+  return accounts.find((account) => !usedAccountIds.has(account.account_id));
+}
+
 function cloneUpstreamDraft(upstream: UpstreamForm): UpstreamForm {
   return {
     ...upstream,
@@ -156,6 +184,12 @@ export function UpstreamsCard({
     error: kiroAccountsError,
     refresh: refreshKiroAccounts,
   } = useKiroAccounts();
+  const {
+    accounts: codexAccounts,
+    loading: codexAccountsLoading,
+    error: codexAccountsError,
+    refresh: refreshCodexAccounts,
+  } = useCodexAccounts();
 
   const columns = useMemo(
     () => UPSTREAM_COLUMNS.filter((column) => columnVisibility[column.id]),
@@ -166,6 +200,10 @@ export function UpstreamsCard({
     const map = new Map(kiroAccounts.map((account) => [account.account_id, account]));
     return map;
   }, [kiroAccounts]);
+  const codexAccountMap = useMemo(() => {
+    const map = new Map(codexAccounts.map((account) => [account.account_id, account]));
+    return map;
+  }, [codexAccounts]);
 
   // 更新 draft，处理 provider 变化时的自动逻辑
   const updateDraft = useCallback(
@@ -177,27 +215,39 @@ export function UpstreamsCard({
         const currentProvider = prev.draft.provider.trim();
         const newProvider = patch.provider?.trim();
 
-        // 如果 provider 变化，自动生成新 ID 并处理 kiro 账户
+        // 如果 provider 变化，自动生成新 ID 并处理账户绑定
         if (newProvider !== undefined && newProvider !== currentProvider) {
           let kiroAccountId = prev.draft.kiroAccountId;
+          let codexAccountId = prev.draft.codexAccountId;
           let autoId: string;
 
-          // 如果切换到 kiro，自动选择空闲账户，并用账户 ID（去掉 .json）作为 upstream ID
           if (newProvider === "kiro") {
             const idleAccount = findIdleKiroAccount(kiroAccounts, upstreams, editingIndex);
             kiroAccountId = idleAccount?.account_id ?? "";
-            autoId = kiroAccountId ? stripJsonSuffix(kiroAccountId) : createAutoUpstreamId(newProvider, upstreams, editingIndex);
+            codexAccountId = "";
+            autoId = kiroAccountId
+              ? stripJsonSuffix(kiroAccountId)
+              : createAutoUpstreamId(newProvider, upstreams, editingIndex);
+          } else if (newProvider === "codex") {
+            const idleAccount = findIdleCodexAccount(codexAccounts, upstreams, editingIndex);
+            codexAccountId = idleAccount?.account_id ?? "";
+            kiroAccountId = "";
+            autoId = codexAccountId
+              ? stripJsonSuffix(codexAccountId)
+              : createAutoUpstreamId(newProvider, upstreams, editingIndex);
           } else {
-            // 其他 provider 用 provider-n 格式
             autoId = createAutoUpstreamId(newProvider, upstreams, editingIndex);
             if (currentProvider === "kiro") {
               kiroAccountId = "";
+            }
+            if (currentProvider === "codex") {
+              codexAccountId = "";
             }
           }
 
           return {
             ...prev,
-            draft: { ...prev.draft, ...patch, id: autoId, kiroAccountId },
+            draft: { ...prev.draft, ...patch, id: autoId, kiroAccountId, codexAccountId },
           };
         }
 
@@ -213,11 +263,22 @@ export function UpstreamsCard({
             draft: { ...prev.draft, ...patch, id: newId },
           };
         }
+        if (
+          prev.draft.provider.trim() === "codex" &&
+          patch.codexAccountId !== undefined &&
+          patch.codexAccountId !== prev.draft.codexAccountId
+        ) {
+          const newId = patch.codexAccountId ? stripJsonSuffix(patch.codexAccountId) : prev.draft.id;
+          return {
+            ...prev,
+            draft: { ...prev.draft, ...patch, id: newId },
+          };
+        }
 
         return { ...prev, draft: { ...prev.draft, ...patch } };
       });
     },
-    [upstreams, kiroAccounts],
+    [upstreams, kiroAccounts, codexAccounts],
   );
 
   const openCreateDialog = () =>
@@ -296,6 +357,7 @@ export function UpstreamsCard({
             columns={columns}
             showApiKeys={showApiKeys}
             kiroAccounts={kiroAccountMap}
+            codexAccounts={codexAccountMap}
             disableDelete={false}
             onEdit={openEditDialog}
             onCopy={openCopyDialog}
@@ -335,6 +397,10 @@ export function UpstreamsCard({
         kiroAccountsLoading={kiroAccountsLoading}
         kiroAccountsError={kiroAccountsError}
         onRefreshKiroAccounts={refreshKiroAccounts}
+        codexAccounts={codexAccounts}
+        codexAccountsLoading={codexAccountsLoading}
+        codexAccountsError={codexAccountsError}
+        onRefreshCodexAccounts={refreshCodexAccounts}
       />
       <DeleteUpstreamDialog
         dialog={deleteDialog}

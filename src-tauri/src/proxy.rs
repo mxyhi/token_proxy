@@ -4,6 +4,7 @@ mod http_client;
 pub(crate) mod logs;
 pub(crate) mod request_detail;
 pub(crate) mod service;
+mod codex_compat;
 mod gemini;
 mod gemini_compat;
 mod http;
@@ -33,6 +34,7 @@ use std::{
     time::Duration,
 };
 
+use crate::codex::CodexAccountStore;
 use crate::kiro::KiroAccountStore;
 // 上游“无数据响应”超时：同时用于等待响应头（TTFB）与流式 body 的空闲超时。
 // - 生产：120s（用户要求写死）
@@ -50,6 +52,7 @@ struct ProxyState {
     request_detail: Arc<request_detail::RequestDetailCapture>,
     token_rate: Arc<token_rate::TokenRateTracker>,
     kiro_accounts: Arc<KiroAccountStore>,
+    codex_accounts: Arc<CodexAccountStore>,
 }
 
 struct RequestMeta {

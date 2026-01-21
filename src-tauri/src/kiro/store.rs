@@ -6,6 +6,7 @@ use tauri::{AppHandle, Manager};
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 
+use crate::app_proxy::AppProxyState;
 use crate::proxy::config::config_dir_path;
 
 use super::oauth;
@@ -18,14 +19,16 @@ const KIRO_AUTH_DIR_NAME: &str = "kiro-auth";
 pub(crate) struct KiroAccountStore {
     dir: PathBuf,
     cache: RwLock<HashMap<String, KiroTokenRecord>>,
+    app_proxy: AppProxyState,
 }
 
 impl KiroAccountStore {
-    pub(crate) fn new(app: &AppHandle) -> Result<Self, String> {
+    pub(crate) fn new(app: &AppHandle, app_proxy: AppProxyState) -> Result<Self, String> {
         let dir = config_dir_path(app)?.join(KIRO_AUTH_DIR_NAME);
         Ok(Self {
             dir,
             cache: RwLock::new(HashMap::new()),
+            app_proxy,
         })
     }
 
@@ -202,10 +205,11 @@ impl KiroAccountStore {
         account_id: &str,
         record: KiroTokenRecord,
     ) -> Result<KiroTokenRecord, String> {
+        let proxy_url = self.app_proxy_url().await;
         let refreshed = match record.auth_method.as_str() {
-            "builder-id" => sso_oidc::refresh_builder_token(&record).await?,
-            "idc" => sso_oidc::refresh_idc_token(&record).await?,
-            "social" => oauth::refresh_social_token(&record).await?,
+            "builder-id" => sso_oidc::refresh_builder_token(&record, proxy_url.as_deref()).await?,
+            "idc" => sso_oidc::refresh_idc_token(&record, proxy_url.as_deref()).await?,
+            "social" => oauth::refresh_social_token(&record, proxy_url.as_deref()).await?,
             _ => return Err("Unsupported Kiro auth method.".to_string()),
         };
         let summary = self.save_record(account_id.to_string(), refreshed.clone()).await?;
@@ -226,6 +230,10 @@ impl KiroAccountStore {
             .get(account_id)
             .cloned()
             .ok_or_else(|| format!("Kiro account not found: {account_id}"))
+    }
+
+    pub(crate) async fn app_proxy_url(&self) -> Option<String> {
+        self.app_proxy.read().await.clone()
     }
 
     async fn refresh_cache(&self) -> Result<(), String> {

@@ -7,6 +7,7 @@ use super::{
 use axum::http::header::{HeaderName, HeaderValue};
 
 const APP_PROXY_URL_PLACEHOLDER: &str = "$app_proxy_url";
+const DEFAULT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 
 #[derive(Clone)]
 pub(super) struct NormalizedUpstream {
@@ -90,12 +91,20 @@ fn normalize_single_upstream(
         ));
     }
     let base_url = upstream.base_url.trim();
-    if base_url.is_empty() && provider != "kiro" {
-        return Err(format!(
-            "Upstream {} base_url cannot be empty.",
-            upstream.id
-        ));
-    }
+    let base_url = if base_url.is_empty() {
+        if provider == "codex" {
+            DEFAULT_CODEX_BASE_URL.to_string()
+        } else if provider == "kiro" {
+            String::new()
+        } else {
+            return Err(format!(
+                "Upstream {} base_url cannot be empty.",
+                upstream.id
+            ));
+        }
+    } else {
+        base_url.to_string()
+    };
     let api_key = upstream
         .api_key
         .as_ref()
@@ -108,9 +117,21 @@ fn normalize_single_upstream(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
+    let codex_account_id = upstream
+        .codex_account_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
     if provider == "kiro" && kiro_account_id.is_none() {
         return Err(format!(
             "Upstream {} requires a Kiro account binding.",
+            upstream.id
+        ));
+    }
+    if provider == "codex" && codex_account_id.is_none() {
+        return Err(format!(
+            "Upstream {} requires a Codex account binding.",
             upstream.id
         ));
     }
@@ -123,9 +144,10 @@ fn normalize_single_upstream(
     let header_overrides = normalize_header_overrides(upstream.overrides.as_ref())?;
     let runtime = UpstreamRuntime {
         id: upstream.id.trim().to_string(),
-        base_url: base_url.to_string(),
+        base_url,
         api_key,
         kiro_account_id,
+        codex_account_id,
         kiro_preferred_endpoint: upstream.preferred_endpoint.clone(),
         proxy_url,
         priority: upstream.priority.unwrap_or(0),

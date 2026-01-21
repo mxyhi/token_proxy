@@ -5,6 +5,7 @@ use super::{
     anthropic_compat,
     compat_content,
     compat_reason,
+    codex_compat,
     gemini_compat,
     http_client::ProxyHttpClients,
 };
@@ -45,6 +46,10 @@ pub(crate) enum FormatTransform {
     KiroToResponses,
     KiroToChat,
     KiroToAnthropic,
+    ChatToCodex,
+    ResponsesToCodex,
+    CodexToChat,
+    CodexToResponses,
 }
 
 pub(crate) fn inbound_format(path: &str) -> Option<ApiFormat> {
@@ -90,6 +95,9 @@ pub(crate) async fn transform_request_body(
         FormatTransform::KiroToResponses
         | FormatTransform::KiroToChat
         | FormatTransform::KiroToAnthropic => Ok(body.clone()),
+        FormatTransform::ChatToCodex => codex_compat::chat_request_to_codex(body, model_hint),
+        FormatTransform::ResponsesToCodex => codex_compat::responses_request_to_codex(body, model_hint),
+        FormatTransform::CodexToChat | FormatTransform::CodexToResponses => Ok(body.clone()),
     }
 }
 
@@ -123,6 +131,12 @@ pub(crate) fn transform_response_body(
         FormatTransform::KiroToResponses
         | FormatTransform::KiroToChat
         | FormatTransform::KiroToAnthropic => Err("Kiro response conversion is handled upstream.".to_string()),
+        FormatTransform::CodexToChat | FormatTransform::CodexToResponses => {
+            Err("Codex response conversion is handled upstream.".to_string())
+        }
+        FormatTransform::ChatToCodex | FormatTransform::ResponsesToCodex => {
+            Err("Codex response conversion is handled upstream.".to_string())
+        }
     }
 }
 

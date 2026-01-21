@@ -11,6 +11,7 @@ use super::sso_oidc::{build_auth_code_url, CreateTokenResponse, RegisterClientRe
 use super::store::KiroAccountStore;
 use super::types::{KiroAccountSummary, KiroLoginMethod, KiroLoginPollResponse, KiroLoginStartResponse, KiroLoginStatus, KiroTokenRecord};
 use super::util::{expires_at_from_seconds, generate_pkce, generate_state, now_rfc3339};
+use crate::app_proxy::AppProxyState;
 
 const SOCIAL_CALLBACK_TIMEOUT: Duration = Duration::from_secs(300);
 const AUTH_CODE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -20,6 +21,7 @@ const KIRO_REDIRECT_URI: &str = "kiro://kiro.kiroAgent/authenticate-success";
 pub(crate) struct KiroLoginManager {
     store: Arc<KiroAccountStore>,
     sessions: Arc<RwLock<HashMap<String, LoginSession>>>,
+    app_proxy: AppProxyState,
 }
 
 #[derive(Clone)]
@@ -31,10 +33,11 @@ struct LoginSession {
 }
 
 impl KiroLoginManager {
-    pub(crate) fn new(store: Arc<KiroAccountStore>) -> Self {
+    pub(crate) fn new(store: Arc<KiroAccountStore>, app_proxy: AppProxyState) -> Self {
         Self {
             store,
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            app_proxy,
         }
     }
 
@@ -90,7 +93,8 @@ impl KiroLoginManager {
         state: String,
         method: KiroLoginMethod,
     ) -> Result<KiroLoginStartResponse, String> {
-        let client = SsoOidcClient::new()?;
+        let proxy_url = self.app_proxy_url().await;
+        let client = SsoOidcClient::new(proxy_url.as_deref())?;
         let reg = client.register_client().await?;
         let auth = client
             .start_device_authorization(&reg.client_id, &reg.client_secret)
@@ -124,7 +128,8 @@ impl KiroLoginManager {
     ) -> Result<KiroLoginStartResponse, String> {
         let (code_verifier, code_challenge) = generate_pkce()?;
         let callback = start_auth_code_callback(state.clone()).await?;
-        let client = SsoOidcClient::new()?;
+        let proxy_url = self.app_proxy_url().await;
+        let client = SsoOidcClient::new(proxy_url.as_deref())?;
         let reg = client
             .register_client_for_auth_code(&callback.redirect_uri)
             .await?;
@@ -210,6 +215,10 @@ impl KiroLoginManager {
             session.error = Some(message);
         }
     }
+
+    async fn app_proxy_url(&self) -> Option<String> {
+        self.app_proxy.read().await.clone()
+    }
 }
 
 struct AuthCodeCallback {
@@ -280,7 +289,8 @@ async fn run_device_code_login(
     let mut interval = Duration::from_secs(auth.interval.max(1) as u64);
     let deadline = OffsetDateTime::now_utc()
         + time::Duration::seconds(auth.expires_in.max(1));
-    let client = match SsoOidcClient::new() {
+    let proxy_url = manager.app_proxy_url().await;
+    let client = match SsoOidcClient::new(proxy_url.as_deref()) {
         Ok(client) => client,
         Err(err) => {
             manager.fail_session(&state, err).await;
@@ -334,7 +344,8 @@ async fn run_auth_code_login(
             return;
         }
     };
-    let client = match SsoOidcClient::new() {
+    let proxy_url = manager.app_proxy_url().await;
+    let client = match SsoOidcClient::new(proxy_url.as_deref()) {
         Ok(client) => client,
         Err(err) => {
             manager.fail_session(&state, err).await;
@@ -441,7 +452,8 @@ async fn handle_builder_success(
     token: CreateTokenResponse,
     reg: RegisterClientResponse,
 ) {
-    let profile_arn = match SsoOidcClient::new() {
+    let proxy_url = manager.app_proxy_url().await;
+    let profile_arn = match SsoOidcClient::new(proxy_url.as_deref()) {
         Ok(client) => client.fetch_profile_arn(&token.access_token).await,
         Err(_) => None,
     };
@@ -472,7 +484,8 @@ async fn handle_social_success(
     code: String,
     code_verifier: String,
 ) {
-    let client = match KiroOAuthClient::new() {
+    let proxy_url = manager.app_proxy_url().await;
+    let client = match KiroOAuthClient::new(proxy_url.as_deref()) {
         Ok(client) => client,
         Err(err) => {
             manager.fail_session(&state, err).await;

@@ -8,6 +8,7 @@ use super::{
     AttemptOutcome,
 };
 use super::super::{
+    codex_compat,
     config::{HeaderOverride, UpstreamRuntime},
     http,
     model,
@@ -32,6 +33,7 @@ pub(super) fn build_request_headers(
     provider: &str,
     headers: &HeaderMap,
     auth: http::UpstreamAuthHeader,
+    extra_headers: Option<&HeaderMap>,
     header_overrides: Option<&[HeaderOverride]>,
 ) -> HeaderMap {
     let mut request_headers = http::build_upstream_headers(headers, auth);
@@ -41,6 +43,13 @@ pub(super) fn build_request_headers(
             ANTHROPIC_VERSION_HEADER,
             HeaderValue::from_static(DEFAULT_ANTHROPIC_VERSION),
         );
+    }
+    codex_compat::apply_codex_headers_if_needed(provider, &mut request_headers, headers);
+
+    if let Some(extra_headers) = extra_headers {
+        for (name, value) in extra_headers.iter() {
+            request_headers.insert(name.clone(), value.clone());
+        }
     }
 
     if let Some(overrides) = header_overrides {

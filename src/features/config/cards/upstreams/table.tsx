@@ -17,6 +17,7 @@ import {
   toStatusLabel,
 } from "@/features/config/cards/upstreams/constants";
 import type { UpstreamColumnDefinition, UpstreamColumnId } from "@/features/config/cards/upstreams/types";
+import type { CodexAccountSummary } from "@/features/codex/types";
 import type { KiroAccountSummary } from "@/features/kiro/types";
 import { UPSTREAM_STRATEGIES, type UpstreamForm, type UpstreamStrategy } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
@@ -135,6 +136,7 @@ function UpstreamsTableHeader({ columns }: UpstreamsTableHeaderProps) {
 }
 
 type KiroAccountMap = Map<string, KiroAccountSummary>;
+type CodexAccountMap = Map<string, CodexAccountSummary>;
 
 function renderTextCell(value: string, placeholder: string) {
   return value.trim() ? (
@@ -152,19 +154,36 @@ function renderPriorityCell(value: string) {
   );
 }
 
-function renderAccountCell(upstream: UpstreamForm, kiroAccounts: KiroAccountMap) {
-  if (upstream.provider.trim() !== "kiro") {
-    return <span className="truncate text-muted-foreground">—</span>;
+function renderAccountCell(
+  upstream: UpstreamForm,
+  kiroAccounts: KiroAccountMap,
+  codexAccounts: CodexAccountMap,
+) {
+  const provider = upstream.provider.trim();
+  if (provider === "kiro") {
+    const accountId = upstream.kiroAccountId.trim();
+    if (!accountId) {
+      return <span className="truncate text-muted-foreground">{m.kiro_account_unset()}</span>;
+    }
+    const account = kiroAccounts.get(accountId);
+    if (!account) {
+      return <span className="truncate text-muted-foreground">{m.kiro_account_missing()}</span>;
+    }
+    return <span className="truncate text-foreground">{account.account_id}</span>;
   }
-  const accountId = upstream.kiroAccountId.trim();
-  if (!accountId) {
-    return <span className="truncate text-muted-foreground">{m.kiro_account_unset()}</span>;
+  if (provider === "codex") {
+    const accountId = upstream.codexAccountId.trim();
+    if (!accountId) {
+      return <span className="truncate text-muted-foreground">{m.codex_account_unset()}</span>;
+    }
+    const account = codexAccounts.get(accountId);
+    if (!account) {
+      return <span className="truncate text-muted-foreground">{m.codex_account_missing()}</span>;
+    }
+    const label = account.email?.trim() ? account.email : account.account_id;
+    return <span className="truncate text-foreground">{label}</span>;
   }
-  const account = kiroAccounts.get(accountId);
-  if (!account) {
-    return <span className="truncate text-muted-foreground">{m.kiro_account_missing()}</span>;
-  }
-  return <span className="truncate text-foreground">{account.account_id}</span>;
+  return <span className="truncate text-muted-foreground">—</span>;
 }
 
 function renderApiKeyCell(upstream: UpstreamForm, showApiKeys: boolean) {
@@ -191,6 +210,7 @@ function renderUpstreamCell(
   upstream: UpstreamForm,
   showApiKeys: boolean,
   kiroAccounts: KiroAccountMap,
+  codexAccounts: CodexAccountMap,
 ) {
   switch (columnId) {
     case "id":
@@ -198,7 +218,7 @@ function renderUpstreamCell(
     case "provider":
       return renderTextCell(upstream.provider, "openai");
     case "account":
-      return renderAccountCell(upstream, kiroAccounts);
+      return renderAccountCell(upstream, kiroAccounts, codexAccounts);
     case "baseUrl":
       return renderTextCell(upstream.baseUrl, "https://api.openai.com");
     case "apiKey":
@@ -290,6 +310,7 @@ type UpstreamsTableRowProps = {
   columns: readonly UpstreamColumnDefinition[];
   showApiKeys: boolean;
   kiroAccounts: KiroAccountMap;
+  codexAccounts: CodexAccountMap;
   disableDelete: boolean;
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
@@ -303,6 +324,7 @@ function UpstreamsTableRow({
   columns,
   showApiKeys,
   kiroAccounts,
+  codexAccounts,
   disableDelete,
   onEdit,
   onCopy,
@@ -318,7 +340,7 @@ function UpstreamsTableRow({
           className={["px-3 py-2 align-top", column.cellClassName].filter(Boolean).join(" ")}
         >
           <div className="flex h-8 items-center">
-            {renderUpstreamCell(column.id, upstream, showApiKeys, kiroAccounts)}
+            {renderUpstreamCell(column.id, upstream, showApiKeys, kiroAccounts, codexAccounts)}
           </div>
         </td>
       ))}
@@ -340,6 +362,7 @@ export type UpstreamsTableProps = {
   columns: readonly UpstreamColumnDefinition[];
   showApiKeys: boolean;
   kiroAccounts: KiroAccountMap;
+  codexAccounts: CodexAccountMap;
   disableDelete: boolean;
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
@@ -352,6 +375,7 @@ export function UpstreamsTable({
   columns,
   showApiKeys,
   kiroAccounts,
+  codexAccounts,
   disableDelete,
   onEdit,
   onCopy,
@@ -371,6 +395,7 @@ export function UpstreamsTable({
               columns={columns}
               showApiKeys={showApiKeys}
               kiroAccounts={kiroAccounts}
+              codexAccounts={codexAccounts}
               disableDelete={disableDelete}
               onEdit={onEdit}
               onCopy={onCopy}

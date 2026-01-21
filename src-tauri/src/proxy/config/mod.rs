@@ -33,6 +33,10 @@ pub(crate) async fn read_config(app: AppHandle) -> Result<ConfigResponse, String
     })
 }
 
+pub(crate) fn app_proxy_url_from_config(config: &ProxyConfigFile) -> Result<Option<String>, String> {
+    normalize_app_proxy_url(config.app_proxy_url.as_deref())
+}
+
 pub(crate) async fn write_config(
     app: AppHandle,
     config: ProxyConfigFile,

@@ -34,8 +34,10 @@ use crate::logging::LogLevel;
 const PROVIDER_ANTHROPIC: &str = "anthropic";
 const PROVIDER_GEMINI: &str = "gemini";
 const PROVIDER_KIRO: &str = "kiro";
+const PROVIDER_CODEX: &str = "codex";
 const PROVIDER_PROXY: &str = "proxy";
 const LOCAL_UPSTREAM_ID: &str = "local";
+const CODEX_RESPONSES_PATH: &str = "/responses";
 
 type ProxyStateHandle = Arc<RwLock<Arc<ProxyState>>>;
 
@@ -248,7 +250,13 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
     }
     let selected = choose_provider_by_priority(
         config,
-        &[PROVIDER_RESPONSES, PROVIDER_ANTHROPIC, PROVIDER_GEMINI, PROVIDER_KIRO],
+        &[
+            PROVIDER_RESPONSES,
+            PROVIDER_CODEX,
+            PROVIDER_ANTHROPIC,
+            PROVIDER_GEMINI,
+            PROVIDER_KIRO,
+        ],
     )
     .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
     if !config.enable_api_format_conversion {
@@ -268,6 +276,12 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
             request_transform: FormatTransform::ChatToAnthropic,
             response_transform: FormatTransform::AnthropicToChat,
         },
+        PROVIDER_CODEX => DispatchPlan {
+            provider: PROVIDER_CODEX,
+            outbound_path: Some(CODEX_RESPONSES_PATH),
+            request_transform: FormatTransform::ChatToCodex,
+            response_transform: FormatTransform::CodexToChat,
+        },
         PROVIDER_GEMINI => DispatchPlan {
             provider: PROVIDER_GEMINI,
             outbound_path: None, // Gemini 路径需要在 upstream 层根据 model 动态构建
@@ -286,10 +300,18 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
 
 fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
     if let Some(selected) =
-        choose_provider_by_priority(config, &[PROVIDER_RESPONSES, PROVIDER_KIRO])
+        choose_provider_by_priority(config, &[PROVIDER_RESPONSES, PROVIDER_CODEX, PROVIDER_KIRO])
     {
         if selected == PROVIDER_RESPONSES {
             return Ok(base_plan(PROVIDER_RESPONSES));
+        }
+        if selected == PROVIDER_CODEX {
+            return Ok(DispatchPlan {
+                provider: PROVIDER_CODEX,
+                outbound_path: Some(CODEX_RESPONSES_PATH),
+                request_transform: FormatTransform::ResponsesToCodex,
+                response_transform: FormatTransform::CodexToResponses,
+            });
         }
         return Ok(DispatchPlan {
             provider: PROVIDER_KIRO,

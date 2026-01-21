@@ -1,5 +1,4 @@
-import { CirclePlus, CircleX, HelpCircle } from "lucide-react";
-import type { ReactNode } from "react";
+import { CirclePlus, HelpCircle } from "lucide-react";
 
 import {
   AlertDialog,
@@ -24,14 +23,20 @@ import {
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getUpstreamLabel } from "@/features/config/cards/upstreams/constants";
+import { CodexAccountSelect } from "@/features/config/cards/upstreams/codex-account-select";
+import {
+  EditorField,
+  HeaderOverridesEditor,
+  ModelMappingsEditor,
+} from "@/features/config/cards/upstreams/editor-fields";
 import { KiroAccountSelect } from "@/features/config/cards/upstreams/kiro-account-select";
 import type { UpstreamEditorState } from "@/features/config/cards/upstreams/types";
 import { createModelMapping } from "@/features/config/form";
+import type { CodexAccountSummary } from "@/features/codex/types";
 import type { KiroAccountSummary } from "@/features/kiro/types";
 import type {
   HeaderOverrideForm,
   KiroPreferredEndpoint,
-  ModelMappingForm,
   UpstreamForm,
 } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
@@ -51,160 +56,6 @@ function isKiroPreferredEndpoint(value: string): value is KiroPreferredEndpoint 
   return value === "ide" || value === "cli";
 }
 
-type EditorFieldProps = {
-  label: string;
-  htmlFor?: string;
-  /** tooltip 提示文字，不传则不显示图标 */
-  tooltip?: string;
-  children: ReactNode;
-};
-
-/** 单个字段：label 左侧（可带 tooltip），input 右侧 */
-function EditorField({ label, htmlFor, tooltip, children }: EditorFieldProps) {
-  const labelContent = (
-    <span className="inline-flex items-center gap-1">
-      {label}
-      {tooltip ? (
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
-          </TooltipTrigger>
-          <TooltipContent side="right" className="max-w-xs">
-            {tooltip}
-          </TooltipContent>
-        </Tooltip>
-      ) : null}
-    </span>
-  );
-
-  return (
-    <>
-      {htmlFor ? (
-        <Label htmlFor={htmlFor}>{labelContent}</Label>
-      ) : (
-        <Label>{labelContent}</Label>
-      )}
-      {children}
-    </>
-  );
-}
-
-type ModelMappingsEditorProps = {
-  mappings: ModelMappingForm[];
-  onChange: (next: ModelMappingForm[]) => void;
-};
-
-function ModelMappingsEditor({ mappings, onChange }: ModelMappingsEditorProps) {
-  const handleUpdate = (index: number, patch: Partial<ModelMappingForm>) => {
-    onChange(
-      mappings.map((mapping, current) =>
-        current === index ? { ...mapping, ...patch } : mapping
-      )
-    );
-  };
-
-  const handleRemove = (index: number) => {
-    onChange(mappings.filter((_, current) => current !== index));
-  };
-
-  return (
-    <div data-slot="model-mappings" className="space-y-2">
-      <div className="grid grid-cols-[1fr_1fr_auto] gap-2 text-xs text-muted-foreground">
-        <span>{m.field_model_mapping_pattern()}</span>
-        <span>{m.field_model_mapping_target()}</span>
-        <span className="sr-only">{m.model_mappings_remove()}</span>
-      </div>
-      {mappings.map((mapping, index) => (
-        <div key={mapping.id} className="grid grid-cols-[1fr_1fr_auto] gap-2">
-          <Input
-            value={mapping.pattern}
-            onChange={(e) => handleUpdate(index, { pattern: e.target.value })}
-            placeholder={m.model_mappings_placeholder_pattern()}
-          />
-          <Input
-            value={mapping.target}
-            onChange={(e) => handleUpdate(index, { target: e.target.value })}
-            placeholder={m.model_mappings_placeholder_target()}
-          />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={m.model_mappings_remove()}
-            onClick={() => handleRemove(index)}
-          >
-            <CircleX className="size-4" aria-hidden="true" />
-          </Button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-type HeaderOverridesEditorProps = {
-  overrides: UpstreamForm["overrides"]["header"];
-  onChange: (next: UpstreamForm["overrides"]["header"]) => void;
-};
-
-function HeaderOverridesEditor({ overrides, onChange }: HeaderOverridesEditorProps) {
-  const handleUpdate = (index: number, patch: Partial<HeaderOverrideForm>) => {
-    onChange(
-      overrides.map((item, current) => (current === index ? { ...item, ...patch } : item)),
-    );
-  };
-
-  const handleRemove = (index: number) => {
-    onChange(overrides.filter((_, current) => current !== index));
-  };
-
-  return (
-    <div data-slot="header-overrides" className="space-y-2">
-      <div className="grid grid-cols-[1fr_1fr_auto_auto] gap-2 text-xs text-muted-foreground">
-        <span>{m.header_overrides_placeholder_name()}</span>
-        <span>{m.header_overrides_placeholder_value()}</span>
-        <span className="sr-only">{m.common_enabled()}</span>
-        <span className="sr-only">{m.header_overrides_remove()}</span>
-      </div>
-      {overrides.map((item, index) => (
-        <div
-          key={item.id}
-          className="grid grid-cols-[1fr_1fr_auto_auto] items-center gap-2"
-        >
-          <Input
-            value={item.name}
-            onChange={(e) => handleUpdate(index, { name: e.target.value })}
-            placeholder={m.header_overrides_placeholder_name()}
-          />
-          <Input
-            value={item.isNull ? "" : item.value}
-            onChange={(e) => handleUpdate(index, { value: e.target.value, isNull: false })}
-            placeholder={m.header_overrides_placeholder_value()}
-            disabled={item.isNull}
-          />
-          <Button
-            type="button"
-            variant={item.isNull ? "secondary" : "ghost"}
-            size="icon-sm"
-            aria-label={item.isNull ? m.common_disabled() : m.common_enabled()}
-            onClick={() => handleUpdate(index, { isNull: !item.isNull })}
-          >
-            {item.isNull ? m.common_disabled() : m.common_enabled()}
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            aria-label={m.header_overrides_remove()}
-            onClick={() => handleRemove(index)}
-          >
-            <CircleX className="size-4" aria-hidden="true" />
-          </Button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 type UpstreamEditorFieldsProps = {
   draft: UpstreamForm;
   providerOptions: readonly string[];
@@ -216,6 +67,10 @@ type UpstreamEditorFieldsProps = {
   kiroAccountsLoading: boolean;
   kiroAccountsError: string;
   onRefreshKiroAccounts: () => void;
+  codexAccounts: CodexAccountSummary[];
+  codexAccountsLoading: boolean;
+  codexAccountsError: string;
+  onRefreshCodexAccounts: () => void;
 };
 
 type UpstreamIdentityFieldsProps = {
@@ -229,6 +84,11 @@ type UpstreamIdentityFieldsProps = {
   kiroAccountsLoading: boolean;
   kiroAccountsError: string;
   onRefreshKiroAccounts: () => void;
+  /** codex 账户相关 props，仅 provider=codex 时使用 */
+  codexAccounts: CodexAccountSummary[];
+  codexAccountsLoading: boolean;
+  codexAccountsError: string;
+  onRefreshCodexAccounts: () => void;
 };
 
 function UpstreamIdentityFields({
@@ -241,9 +101,14 @@ function UpstreamIdentityFields({
   kiroAccountsLoading,
   kiroAccountsError,
   onRefreshKiroAccounts,
+  codexAccounts,
+  codexAccountsLoading,
+  codexAccountsError,
+  onRefreshCodexAccounts,
 }: UpstreamIdentityFieldsProps) {
   const canUseAppProxy = !!appProxyUrl.trim();
   const isKiro = draft.provider.trim() === "kiro";
+  const isCodex = draft.provider.trim() === "codex";
   const kiroEndpointValue = draft.preferredEndpoint.trim()
     ? draft.preferredEndpoint
     : KIRO_ENDPOINT_INHERIT;
@@ -305,7 +170,7 @@ function UpstreamIdentityFields({
         </Select>
       </div>
 
-      {/* 第二行：kiro 账户选择器（仅 kiro provider） */}
+      {/* 第二行：kiro / codex 账户选择器 */}
       {isKiro ? (
         <KiroAccountSelect
           accountId={draft.kiroAccountId}
@@ -314,6 +179,16 @@ function UpstreamIdentityFields({
           error={kiroAccountsError}
           onRefresh={onRefreshKiroAccounts}
           onSelect={(accountId) => onChangeDraft({ kiroAccountId: accountId })}
+        />
+      ) : null}
+      {isCodex ? (
+        <CodexAccountSelect
+          accountId={draft.codexAccountId}
+          accounts={codexAccounts}
+          loading={codexAccountsLoading}
+          error={codexAccountsError}
+          onRefresh={onRefreshCodexAccounts}
+          onSelect={(accountId) => onChangeDraft({ codexAccountId: accountId })}
         />
       ) : null}
       {isKiro ? (
@@ -558,8 +433,13 @@ function UpstreamEditorFields({
   kiroAccountsLoading,
   kiroAccountsError,
   onRefreshKiroAccounts,
+  codexAccounts,
+  codexAccountsLoading,
+  codexAccountsError,
+  onRefreshCodexAccounts,
 }: UpstreamEditorFieldsProps) {
   const isKiro = draft.provider.trim() === "kiro";
+  const isCodex = draft.provider.trim() === "codex";
   return (
     <div
       data-slot="upstream-editor-fields"
@@ -575,8 +455,12 @@ function UpstreamEditorFields({
         kiroAccountsLoading={kiroAccountsLoading}
         kiroAccountsError={kiroAccountsError}
         onRefreshKiroAccounts={onRefreshKiroAccounts}
+        codexAccounts={codexAccounts}
+        codexAccountsLoading={codexAccountsLoading}
+        codexAccountsError={codexAccountsError}
+        onRefreshCodexAccounts={onRefreshCodexAccounts}
       />
-      {isKiro ? null : (
+      {isKiro || isCodex ? null : (
         <UpstreamAuthFields
           draft={draft}
           showApiKeys={showApiKeys}
@@ -604,6 +488,10 @@ type UpstreamEditorDialogProps = {
   kiroAccountsLoading: boolean;
   kiroAccountsError: string;
   onRefreshKiroAccounts: () => void;
+  codexAccounts: CodexAccountSummary[];
+  codexAccountsLoading: boolean;
+  codexAccountsError: string;
+  onRefreshCodexAccounts: () => void;
 };
 
 export function UpstreamEditorDialog({
@@ -619,6 +507,10 @@ export function UpstreamEditorDialog({
   kiroAccountsLoading,
   kiroAccountsError,
   onRefreshKiroAccounts,
+  codexAccounts,
+  codexAccountsLoading,
+  codexAccountsError,
+  onRefreshCodexAccounts,
 }: UpstreamEditorDialogProps) {
   const title = editor.open
     ? editor.mode === "create"
@@ -657,11 +549,15 @@ export function UpstreamEditorDialog({
               showApiKeys={showApiKeys}
               onToggleApiKeys={onToggleApiKeys}
               onChangeDraft={onChangeDraft}
-          kiroAccounts={kiroAccounts}
-          kiroAccountsLoading={kiroAccountsLoading}
-          kiroAccountsError={kiroAccountsError}
-          onRefreshKiroAccounts={onRefreshKiroAccounts}
-        />
+              kiroAccounts={kiroAccounts}
+              kiroAccountsLoading={kiroAccountsLoading}
+              kiroAccountsError={kiroAccountsError}
+              onRefreshKiroAccounts={onRefreshKiroAccounts}
+              codexAccounts={codexAccounts}
+              codexAccountsLoading={codexAccountsLoading}
+              codexAccountsError={codexAccountsError}
+              onRefreshCodexAccounts={onRefreshCodexAccounts}
+            />
           ) : null}
         </AlertDialogBody>
         <AlertDialogFooter>

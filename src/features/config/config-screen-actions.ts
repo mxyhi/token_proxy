@@ -105,6 +105,7 @@ async function applyAutoStartChange({
   }
 }
 
+
 type LoadConfigArgs = Pick<
   ConfigActionsArgs,
   "setConfigPath" | "setForm" | "setLastConfig" | "setStatus" | "setStatusMessage"

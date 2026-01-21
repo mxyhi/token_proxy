@@ -17,6 +17,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://api.openai.com",
     apiKey: "",
     kiroAccountId: "",
+    codexAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
@@ -30,6 +31,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://api.openai.com",
     apiKey: "",
     kiroAccountId: "",
+    codexAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
@@ -43,6 +45,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://api.anthropic.com",
     apiKey: "",
     kiroAccountId: "",
+    codexAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
@@ -56,6 +59,7 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     baseUrl: "https://generativelanguage.googleapis.com",
     apiKey: "",
     kiroAccountId: "",
+    codexAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
@@ -122,6 +126,7 @@ export function createEmptyUpstream(): UpstreamForm {
     baseUrl: "",
     apiKey: "",
     kiroAccountId: "",
+    codexAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "",
@@ -178,6 +183,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
       baseUrl: upstream.base_url,
       apiKey: upstream.api_key ?? "",
       kiroAccountId: upstream.kiro_account_id ?? "",
+      codexAccountId: upstream.codex_account_id ?? "",
       preferredEndpoint: upstream.preferred_endpoint ?? "",
       proxyUrl: upstream.proxy_url ?? "",
       priority: upstream.priority === null ? "" : String(upstream.priority),
@@ -207,6 +213,9 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       api_key: upstream.apiKey.trim() ? upstream.apiKey.trim() : null,
       kiro_account_id: upstream.kiroAccountId.trim()
         ? upstream.kiroAccountId.trim()
+        : null,
+      codex_account_id: upstream.codexAccountId.trim()
+        ? upstream.codexAccountId.trim()
         : null,
       preferred_endpoint: normalizeKiroPreferredEndpoint(upstream.preferredEndpoint),
       proxy_url: upstream.proxyUrl.trim() ? upstream.proxyUrl.trim() : null,
@@ -253,7 +262,10 @@ export function validate(form: ConfigForm) {
     if (provider === "kiro" && !upstream.kiroAccountId.trim()) {
       return { valid: false, message: m.error_upstream_kiro_account_required({ id }) };
     }
-    if (provider !== "kiro" && !upstream.baseUrl.trim()) {
+    if (provider === "codex" && !upstream.codexAccountId.trim()) {
+      return { valid: false, message: m.error_upstream_codex_account_required({ id }) };
+    }
+    if (provider !== "kiro" && provider !== "codex" && !upstream.baseUrl.trim()) {
       return { valid: false, message: m.error_upstream_base_url_required({ id }) };
     }
     const upstreamProxyUrl = upstream.proxyUrl.trim();

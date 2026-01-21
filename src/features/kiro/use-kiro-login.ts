@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { toast } from "sonner";
 import { pollKiroLogin, startKiroLogin } from "@/features/kiro/api";
 import type { KiroLoginMethod, KiroLoginStartResponse } from "@/features/kiro/types";
 import { parseError } from "@/lib/error";
@@ -66,6 +67,7 @@ export function useKiroLogin({ onRefresh, onSelect }: UseKiroLoginOptions) {
           clearPoller();
           setLogin({ status: "success" });
           await Promise.resolve(onRefresh());
+          toast.success(m.kiro_login_success());
           if (accountId && onSelect) {
             onSelect(accountId);
           }

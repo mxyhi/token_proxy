@@ -1,6 +1,7 @@
-use reqwest::Client;
 use serde::Serialize;
 use serde_json::{Map, Value};
+
+use crate::oauth_util::build_reqwest_client;
 
 use super::store::KiroAccountStore;
 use super::types::KiroAccountSummary;
@@ -35,9 +36,10 @@ pub(crate) async fn fetch_quotas(
     store: &KiroAccountStore,
 ) -> Result<Vec<KiroQuotaSummary>, String> {
     let accounts = store.list_accounts().await?;
+    let proxy_url = store.app_proxy_url().await;
     let mut results = Vec::with_capacity(accounts.len());
     for account in accounts {
-        match fetch_account_quota(store, &account).await {
+        match fetch_account_quota(store, &account, proxy_url.as_deref()).await {
             Ok(summary) => results.push(summary),
             Err(err) => results.push(KiroQuotaSummary {
                 account_id: account.account_id.clone(),
@@ -54,20 +56,23 @@ pub(crate) async fn fetch_quotas(
 async fn fetch_account_quota(
     store: &KiroAccountStore,
     account: &KiroAccountSummary,
+    proxy_url: Option<&str>,
 ) -> Result<KiroQuotaSummary, String> {
     let record = store.get_account_record(&account.account_id).await?;
     let profile_arn = record
         .profile_arn
         .as_deref()
         .ok_or_else(|| "Missing Kiro profile ARN.".to_string())?;
-    let response = request_usage_limits(&record.access_token, profile_arn).await?;
+    let response = request_usage_limits(&record.access_token, profile_arn, proxy_url).await?;
     Ok(map_usage_response(account, &response))
 }
 
-async fn request_usage_limits(access_token: &str, profile_arn: &str) -> Result<Value, String> {
-    let http = Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
+async fn request_usage_limits(
+    access_token: &str,
+    profile_arn: &str,
+    proxy_url: Option<&str>,
+) -> Result<Value, String> {
+    let http = build_reqwest_client(proxy_url, std::time::Duration::from_secs(30))
         .map_err(|err| format!("Failed to build Kiro usage client: {err}"))?;
     let payload = serde_json::json!({
         "origin": KIRO_USAGE_ORIGIN,

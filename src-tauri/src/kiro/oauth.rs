@@ -1,6 +1,8 @@
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
+use crate::oauth_util::build_reqwest_client;
+
 use super::types::KiroTokenRecord;
 use super::util::{expires_at_from_seconds, now_rfc3339};
 
@@ -13,10 +15,8 @@ pub(crate) struct KiroOAuthClient {
 }
 
 impl KiroOAuthClient {
-    pub(crate) fn new() -> Result<Self, String> {
-        let http = Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
+    pub(crate) fn new(proxy_url: Option<&str>) -> Result<Self, String> {
+        let http = build_reqwest_client(proxy_url, std::time::Duration::from_secs(30))
             .map_err(|err| format!("Failed to build Kiro OAuth client: {err}"))?;
         Ok(Self { http })
     }
@@ -90,8 +90,11 @@ pub(crate) fn build_login_url(
     format!("{KIRO_AUTH_ENDPOINT}/login?{query}")
 }
 
-pub(crate) async fn refresh_social_token(record: &KiroTokenRecord) -> Result<KiroTokenRecord, String> {
-    let client = KiroOAuthClient::new()?;
+pub(crate) async fn refresh_social_token(
+    record: &KiroTokenRecord,
+    proxy_url: Option<&str>,
+) -> Result<KiroTokenRecord, String> {
+    let client = KiroOAuthClient::new(proxy_url)?;
     let response = client.refresh_token(&record.refresh_token).await?;
     Ok(KiroTokenRecord {
         access_token: response.access_token,

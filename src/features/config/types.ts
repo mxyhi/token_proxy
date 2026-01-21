@@ -30,6 +30,7 @@ export type UpstreamConfig = {
   base_url: string;
   api_key: string | null;
   kiro_account_id?: string | null;
+  codex_account_id?: string | null;
   preferred_endpoint?: KiroPreferredEndpoint | null;
   proxy_url: string | null;
   priority: number | null;
@@ -76,6 +77,7 @@ export type UpstreamForm = {
   baseUrl: string;
   apiKey: string;
   kiroAccountId: string;
+  codexAccountId: string;
   preferredEndpoint: "" | KiroPreferredEndpoint;
   proxyUrl: string;
   priority: string;

@@ -14,7 +14,7 @@ pub(super) async fn apply_output_tokens_from_response(
     let mut texts = Vec::new();
 
     match provider {
-        "openai" | "openai-response" => {
+        "openai" | "openai-response" | "codex" => {
             if let Some(choices) = value.get("choices").and_then(Value::as_array) {
                 for choice in choices {
                     if let Some(content) = choice
@@ -93,4 +93,3 @@ fn collect_gemini_output(candidates: &[Value], texts: &mut Vec<String>) {
         }
     }
 }
-

@@ -39,7 +39,12 @@ type ProxyCoreFieldsProps = Pick<
   "form" | "showLocalKey" | "onToggleLocalKey" | "onChange"
 >;
 
-function ProxyCoreFields({ form, showLocalKey, onToggleLocalKey, onChange }: ProxyCoreFieldsProps) {
+function ProxyCoreFields({
+  form,
+  showLocalKey,
+  onToggleLocalKey,
+  onChange,
+}: ProxyCoreFieldsProps) {
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-2">

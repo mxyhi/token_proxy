@@ -200,10 +200,16 @@ fn merge_group_result(state: &mut ForwardAttemptState, result: GroupAttemptResul
 }
 
 pub(super) struct PreparedUpstreamRequest {
+    upstream_path_with_query: String,
     upstream_url: String,
     request_headers: HeaderMap,
-    upstream_body: reqwest::Body,
     meta: RequestMeta,
+}
+
+struct ResolvedUpstreamAuth {
+    upstream_url: String,
+    auth: http::UpstreamAuthHeader,
+    extra_headers: Option<HeaderMap>,
 }
 
 fn resolve_provider_upstreams<'a>(
@@ -368,7 +374,6 @@ async fn prepare_upstream_request(
     upstream: &UpstreamRuntime,
     upstream_path_with_query: &str,
     headers: &HeaderMap,
-    body: &ReplayableBody,
     meta: &RequestMeta,
     request_auth: &RequestAuth,
 ) -> Result<PreparedUpstreamRequest, AttemptOutcome> {
@@ -376,7 +381,7 @@ async fn prepare_upstream_request(
     let upstream_path_with_query =
         resolve_upstream_path_with_query(provider, upstream_path_with_query, &mapped_meta);
     let upstream_url = upstream.upstream_url(&upstream_path_with_query);
-    let (upstream_url, auth) = resolve_upstream_auth(
+    let resolved = resolve_upstream_auth(
         state,
         provider,
         upstream,
@@ -385,18 +390,22 @@ async fn prepare_upstream_request(
         &upstream_url,
     )
     .await?;
+    let ResolvedUpstreamAuth {
+        upstream_url,
+        auth,
+        extra_headers,
+    } = resolved;
     let request_headers = request::build_request_headers(
         provider,
         headers,
         auth,
+        extra_headers.as_ref(),
         upstream.header_overrides.as_deref(),
     );
-    let upstream_body =
-        request::build_upstream_body(provider, &upstream_path_with_query, body, &mapped_meta).await?;
     Ok(PreparedUpstreamRequest {
+        upstream_path_with_query,
         upstream_url,
         request_headers,
-        upstream_body,
         meta: mapped_meta,
     })
 }
@@ -408,31 +417,43 @@ async fn resolve_upstream_auth(
     request_auth: &RequestAuth,
     upstream_path_with_query: &str,
     upstream_url: &str,
-) -> Result<(String, http::UpstreamAuthHeader), AttemptOutcome> {
+) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
     if provider == "gemini" {
-        return request::resolve_gemini_upstream(
+        let (upstream_url, auth) = request::resolve_gemini_upstream(
             upstream,
             request_auth,
             upstream_path_with_query,
             upstream_url,
-        );
+        )?;
+        return Ok(ResolvedUpstreamAuth {
+            upstream_url,
+            auth,
+            extra_headers: None,
+        });
     }
     if provider == "kiro" {
         return resolve_kiro_upstream(state, upstream, upstream_url).await;
+    }
+    if provider == "codex" {
+        return resolve_codex_upstream(state, upstream, upstream_url).await;
     }
     let auth = match http::resolve_upstream_auth(provider, upstream, request_auth) {
         Ok(Some(auth)) => auth,
         Ok(None) => return Err(AttemptOutcome::SkippedAuth),
         Err(response) => return Err(AttemptOutcome::Fatal(response)),
     };
-    Ok((upstream_url.to_string(), auth))
+    Ok(ResolvedUpstreamAuth {
+        upstream_url: upstream_url.to_string(),
+        auth,
+        extra_headers: None,
+    })
 }
 
 async fn resolve_kiro_upstream(
     state: &ProxyState,
     upstream: &UpstreamRuntime,
     upstream_url: &str,
-) -> Result<(String, http::UpstreamAuthHeader), AttemptOutcome> {
+) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
     let Some(account_id) = upstream.kiro_account_id.as_deref() else {
         return Err(AttemptOutcome::Fatal(http::error_response(
             StatusCode::UNAUTHORIZED,
@@ -450,13 +471,57 @@ async fn resolve_kiro_upstream(
             "Upstream access token contains invalid characters.",
         ))
     })?;
-    Ok((
-        upstream_url.to_string(),
-        http::UpstreamAuthHeader {
+    Ok(ResolvedUpstreamAuth {
+        upstream_url: upstream_url.to_string(),
+        auth: http::UpstreamAuthHeader {
             name: AUTHORIZATION,
             value,
         },
-    ))
+        extra_headers: None,
+    })
+}
+
+async fn resolve_codex_upstream(
+    state: &ProxyState,
+    upstream: &UpstreamRuntime,
+    upstream_url: &str,
+) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
+    let Some(account_id) = upstream.codex_account_id.as_deref() else {
+        return Err(AttemptOutcome::Fatal(http::error_response(
+            StatusCode::UNAUTHORIZED,
+            "Codex account is not configured.",
+        )));
+    };
+    let record = state
+        .codex_accounts
+        .get_account_record(account_id)
+        .await
+        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
+    let value = http::bearer_header(&record.access_token).ok_or_else(|| {
+        AttemptOutcome::Fatal(http::error_response(
+            StatusCode::UNAUTHORIZED,
+            "Upstream access token contains invalid characters.",
+        ))
+    })?;
+    let mut extra_headers = HeaderMap::new();
+    if let Some(account_id) = record.account_id.as_deref() {
+        if let Ok(value) = axum::http::HeaderValue::from_str(account_id) {
+            extra_headers.insert(axum::http::HeaderName::from_static("chatgpt-account-id"), value);
+        }
+    }
+    let extra_headers = if extra_headers.is_empty() {
+        None
+    } else {
+        Some(extra_headers)
+    };
+    Ok(ResolvedUpstreamAuth {
+        upstream_url: upstream_url.to_string(),
+        auth: http::UpstreamAuthHeader {
+            name: AUTHORIZATION,
+            value,
+        },
+        extra_headers,
+    })
 }
 
 fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestMeta {

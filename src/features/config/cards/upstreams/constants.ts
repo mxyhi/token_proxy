@@ -59,7 +59,15 @@ export function createDefaultColumnVisibility() {
   return visibility;
 }
 
-const DEFAULT_PROVIDER_OPTIONS = ["openai", "openai-response", "anthropic", "gemini", "kiro", "codex"] as const;
+const DEFAULT_PROVIDER_OPTIONS = [
+  "openai",
+  "openai-response",
+  "anthropic",
+  "gemini",
+  "kiro",
+  "codex",
+  "antigravity",
+] as const;
 
 export function mergeProviderOptions(values: readonly string[]) {
   const seen = new Set<string>();

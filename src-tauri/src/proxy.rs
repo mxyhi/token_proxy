@@ -5,6 +5,7 @@ pub(crate) mod logs;
 pub(crate) mod request_detail;
 pub(crate) mod service;
 mod codex_compat;
+mod antigravity_compat;
 mod gemini;
 mod gemini_compat;
 mod http;
@@ -15,6 +16,7 @@ mod anthropic_compat;
 mod compat_content;
 mod compat_reason;
 mod openai_compat;
+mod antigravity_schema;
 mod request_body;
 mod request_token_estimate;
 mod response;
@@ -34,6 +36,7 @@ use std::{
     time::Duration,
 };
 
+use crate::antigravity::AntigravityAccountStore;
 use crate::codex::CodexAccountStore;
 use crate::kiro::KiroAccountStore;
 // 上游“无数据响应”超时：同时用于等待响应头（TTFB）与流式 body 的空闲超时。
@@ -53,6 +56,7 @@ struct ProxyState {
     token_rate: Arc<token_rate::TokenRateTracker>,
     kiro_accounts: Arc<KiroAccountStore>,
     codex_accounts: Arc<CodexAccountStore>,
+    antigravity_accounts: Arc<AntigravityAccountStore>,
 }
 
 struct RequestMeta {

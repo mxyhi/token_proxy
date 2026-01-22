@@ -9,6 +9,10 @@ fn default_enabled() -> bool {
     true
 }
 
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 fn default_proxy_port() -> u16 {
     // Dev 与安装包需要可并行运行；debug 默认换一个端口，避免与 release/安装包冲突。
     if cfg!(debug_assertions) {
@@ -83,10 +87,18 @@ pub(crate) struct UpstreamConfig {
     pub(crate) provider: String,
     pub(crate) base_url: String,
     pub(crate) api_key: Option<String>,
+    /// Only meaningful for provider "openai-response": strip `prompt_cache_retention` from /v1/responses requests.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) filter_prompt_cache_retention: bool,
+    /// Only meaningful for provider "openai-response": strip `safety_identifier` from /v1/responses requests.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) filter_safety_identifier: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) kiro_account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) codex_account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) antigravity_account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) preferred_endpoint: Option<KiroPreferredEndpoint>,
     pub(crate) proxy_url: Option<String>,
@@ -113,6 +125,14 @@ pub(crate) struct ProxyConfigFile {
     pub(crate) app_proxy_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) antigravity_ide_db_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) antigravity_app_paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) antigravity_process_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) antigravity_user_agent: Option<String>,
     #[serde(default = "default_log_level", deserialize_with = "deserialize_log_level")]
     pub(crate) log_level: LogLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -137,6 +157,10 @@ impl Default for ProxyConfigFile {
             local_api_key: None,
             app_proxy_url: None,
             kiro_preferred_endpoint: None,
+            antigravity_ide_db_path: None,
+            antigravity_app_paths: Vec::new(),
+            antigravity_process_names: Vec::new(),
+            antigravity_user_agent: None,
             log_level: LogLevel::default(),
             max_request_body_bytes: None,
             tray_token_rate: TrayTokenRateConfig::default(),
@@ -148,8 +172,11 @@ impl Default for ProxyConfigFile {
                     provider: "openai".to_string(),
                     base_url: "https://api.openai.com".to_string(),
                     api_key: None,
+                    filter_prompt_cache_retention: false,
+                    filter_safety_identifier: false,
                     kiro_account_id: None,
                     codex_account_id: None,
+                    antigravity_account_id: None,
                     preferred_endpoint: None,
                     proxy_url: None,
                     priority: Some(0),
@@ -162,8 +189,11 @@ impl Default for ProxyConfigFile {
                     provider: "openai-response".to_string(),
                     base_url: "https://api.openai.com".to_string(),
                     api_key: None,
+                    filter_prompt_cache_retention: false,
+                    filter_safety_identifier: false,
                     kiro_account_id: None,
                     codex_account_id: None,
+                    antigravity_account_id: None,
                     preferred_endpoint: None,
                     proxy_url: None,
                     priority: Some(0),
@@ -176,8 +206,11 @@ impl Default for ProxyConfigFile {
                     provider: "anthropic".to_string(),
                     base_url: "https://api.anthropic.com".to_string(),
                     api_key: None,
+                    filter_prompt_cache_retention: false,
+                    filter_safety_identifier: false,
                     kiro_account_id: None,
                     codex_account_id: None,
+                    antigravity_account_id: None,
                     preferred_endpoint: None,
                     proxy_url: None,
                     priority: Some(0),
@@ -190,8 +223,11 @@ impl Default for ProxyConfigFile {
                     provider: "gemini".to_string(),
                     base_url: "https://generativelanguage.googleapis.com".to_string(),
                     api_key: None,
+                    filter_prompt_cache_retention: false,
+                    filter_safety_identifier: false,
                     kiro_account_id: None,
                     codex_account_id: None,
+                    antigravity_account_id: None,
                     preferred_endpoint: None,
                     proxy_url: None,
                     priority: Some(0),
@@ -215,6 +251,7 @@ pub(crate) struct ProxyConfig {
     pub(crate) upstream_strategy: UpstreamStrategy,
     pub(crate) upstreams: HashMap<String, ProviderUpstreams>,
     pub(crate) kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
+    pub(crate) antigravity_user_agent: Option<String>,
 }
 
 fn deserialize_log_level<'de, D>(deserializer: D) -> Result<LogLevel, D::Error>
@@ -253,8 +290,11 @@ pub(crate) struct UpstreamRuntime {
     pub(crate) id: String,
     pub(crate) base_url: String,
     pub(crate) api_key: Option<String>,
+    pub(crate) filter_prompt_cache_retention: bool,
+    pub(crate) filter_safety_identifier: bool,
     pub(crate) kiro_account_id: Option<String>,
     pub(crate) codex_account_id: Option<String>,
+    pub(crate) antigravity_account_id: Option<String>,
     pub(crate) kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
     pub(crate) proxy_url: Option<String>,
     pub(crate) priority: i32,
@@ -384,8 +424,11 @@ mod tests {
             id: "test".to_string(),
             base_url: "https://api.example.com/openai/v1".to_string(),
             api_key: None,
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: false,
             kiro_account_id: None,
             codex_account_id: None,
+            antigravity_account_id: None,
             kiro_preferred_endpoint: None,
             proxy_url: None,
             priority: 0,
@@ -402,8 +445,11 @@ mod tests {
             id: "test".to_string(),
             base_url: "https://api.example.com/openai/v1".to_string(),
             api_key: None,
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: false,
             kiro_account_id: None,
             codex_account_id: None,
+            antigravity_account_id: None,
             kiro_preferred_endpoint: None,
             proxy_url: None,
             priority: 0,
@@ -420,8 +466,11 @@ mod tests {
             id: "test".to_string(),
             base_url: "https://api.openai.com".to_string(),
             api_key: None,
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: false,
             kiro_account_id: None,
             codex_account_id: None,
+            antigravity_account_id: None,
             kiro_preferred_endpoint: None,
             proxy_url: None,
             priority: 0,
@@ -442,8 +491,11 @@ mod tests {
             id: "test".to_string(),
             base_url: "https://api.example.com/openai/v1/".to_string(),
             api_key: None,
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: false,
             kiro_account_id: None,
             codex_account_id: None,
+            antigravity_account_id: None,
             kiro_preferred_endpoint: None,
             proxy_url: None,
             priority: 0,

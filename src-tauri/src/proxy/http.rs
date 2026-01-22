@@ -375,6 +375,7 @@ mod tests {
             upstream_strategy: crate::proxy::config::UpstreamStrategy::PriorityFillFirst,
             upstreams: HashMap::new(),
             kiro_preferred_endpoint: None,
+            antigravity_user_agent: None,
         }
     }
 

@@ -13,9 +13,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useAntigravityAccounts } from "@/features/antigravity/use-antigravity-accounts";
+import { useAntigravityIde } from "@/features/antigravity/use-antigravity-ide";
+import { useAntigravityLogin } from "@/features/antigravity/use-antigravity-login";
+import { useAntigravityQuotas } from "@/features/antigravity/use-antigravity-quotas";
+import { useAntigravityWarmup } from "@/features/antigravity/use-antigravity-warmup";
+import type { AntigravityIdeStatus } from "@/features/antigravity/types";
 import { useCodexAccounts } from "@/features/codex/use-codex-accounts";
 import { useCodexLogin } from "@/features/codex/use-codex-login";
 import { useCodexQuotas } from "@/features/codex/use-codex-quotas";
+import { AntigravityProviderGroup } from "@/features/providers/antigravity-group";
 import { CodexProviderGroup } from "@/features/providers/codex-group";
 import { KiroProviderGroup } from "@/features/providers/kiro-group";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
@@ -26,7 +33,7 @@ import { m } from "@/paraglide/messages.js";
 const PROVIDER_FILTER_ALL = "all";
 const STATUS_FILTER_ALL = "all";
 
-type ProviderFilterValue = typeof PROVIDER_FILTER_ALL | "kiro" | "codex";
+type ProviderFilterValue = typeof PROVIDER_FILTER_ALL | "kiro" | "codex" | "antigravity";
 
 type StatusFilterValue = typeof STATUS_FILTER_ALL | "active" | "expired";
 
@@ -47,9 +54,13 @@ type QuotaEntry = ReturnType<typeof useKiroQuotas>["quotas"][number];
 
 type CodexQuotaEntry = ReturnType<typeof useCodexQuotas>["quotas"][number];
 
+type AntigravityQuotaEntry = ReturnType<typeof useAntigravityQuotas>["quotas"][number];
+
 type KiroGroupProps = Parameters<typeof KiroProviderGroup>[0];
 
 type CodexGroupProps = Parameters<typeof CodexProviderGroup>[0];
+
+type AntigravityGroupProps = Parameters<typeof AntigravityProviderGroup>[0];
 
 type ProvidersToolbarProps = {
   search: string;
@@ -66,14 +77,33 @@ type ProvidersAccountsSectionProps = {
   visibleCount: number;
   showKiro: boolean;
   showCodex: boolean;
+  showAntigravity: boolean;
   kiroGroupProps: KiroGroupProps;
   codexGroupProps: CodexGroupProps;
+  antigravityGroupProps: AntigravityGroupProps;
 };
 
 async function resolveKiroIdeDir() {
   try {
     const home = await homeDir();
     return await join(home, ".aws", "sso", "cache");
+  } catch {
+    return "";
+  }
+}
+
+async function resolveAntigravityIdeDbPath() {
+  try {
+    const home = await homeDir();
+    return await join(
+      home,
+      "Library",
+      "Application Support",
+      "Antigravity",
+      "User",
+      "globalStorage",
+      "state.vscdb"
+    );
   } catch {
     return "";
   }
@@ -117,6 +147,7 @@ function ProviderFilterSelect({
           <SelectItem value={PROVIDER_FILTER_ALL}>{m.providers_filter_all_providers()}</SelectItem>
           <SelectItem value="kiro">{m.providers_kiro_title()}</SelectItem>
           <SelectItem value="codex">{m.providers_codex_title()}</SelectItem>
+          <SelectItem value="antigravity">{m.providers_antigravity_title()}</SelectItem>
         </SelectContent>
       </Select>
     </div>
@@ -274,6 +305,19 @@ function buildCodexQuotaMap(quotas: CodexQuotaEntry[]) {
   );
 }
 
+function buildAntigravityQuotaMap(quotas: AntigravityQuotaEntry[]) {
+  return new Map(
+    quotas.map((item) => [
+      item.account_id,
+      {
+        planType: item.plan_type ?? null,
+        quotas: item.quotas,
+        error: item.error ?? null,
+      },
+    ])
+  );
+}
+
 function useKiroLoginState(onRefresh: () => Promise<void>) {
   const { login, beginLogin } = useKiroLogin({ onRefresh });
   const statusText = useMemo(
@@ -307,6 +351,29 @@ function useCodexLoginState(onRefresh: () => Promise<void>) {
         success: m.codex_login_success,
         polling: m.codex_login_polling,
         waiting: m.codex_login_waiting,
+      }),
+    [login]
+  );
+  const loginBusy = login.status === "polling" || login.status === "waiting";
+
+  return {
+    beginLogin,
+    statusText,
+    loginBusy,
+    loginStatus: login.status,
+    loginUrl: login.start?.login_url ?? "",
+  };
+}
+
+function useAntigravityLoginState(onRefresh: () => Promise<void>) {
+  const { login, beginLogin } = useAntigravityLogin({ onRefresh });
+  const statusText = useMemo(
+    () =>
+      resolveLoginStatusText(login.status, login.error, {
+        failed: m.antigravity_login_failed,
+        success: m.antigravity_login_success,
+        polling: m.antigravity_login_polling,
+        waiting: m.antigravity_login_waiting,
       }),
     [login]
   );
@@ -411,19 +478,82 @@ function buildCodexGroupProps({
   };
 }
 
+function buildAntigravityGroupProps({
+  accountsState,
+  quotasState,
+  ideState,
+  warmupState,
+  filteredAccounts,
+  quotaMap,
+  loginState,
+  onRefresh,
+  onImport,
+  onSwitchIdeAccount,
+}: {
+  accountsState: ReturnType<typeof useAntigravityAccounts>;
+  quotasState: ReturnType<typeof useAntigravityQuotas>;
+  ideState: ReturnType<typeof useAntigravityIde>;
+  warmupState: ReturnType<typeof useAntigravityWarmup>;
+  filteredAccounts: AntigravityGroupProps["filteredAccounts"];
+  quotaMap: AntigravityGroupProps["quotaMap"];
+  loginState: ReturnType<typeof useAntigravityLoginState>;
+  onRefresh: () => void;
+  onImport: () => Promise<void>;
+  onSwitchIdeAccount: (accountId: string) => Promise<AntigravityIdeStatus>;
+}) {
+  return {
+    accounts: accountsState.accounts,
+    filteredAccounts,
+    quotaMap,
+    accountsLoading: accountsState.loading,
+    quotasLoading: quotasState.loading,
+    accountsError: accountsState.error,
+    quotasError: quotasState.error,
+    ideStatus: ideState.status,
+    ideLoading: ideState.loading,
+    ideError: ideState.error,
+    onRefreshIde: ideState.refresh,
+    warmupProps: {
+      accounts: accountsState.accounts,
+      quotaMap,
+      schedules: warmupState.schedules,
+      loading: warmupState.loading,
+      quotasLoading: quotasState.loading,
+      running: warmupState.running,
+      error: warmupState.error,
+      onRunWarmup: warmupState.runWarmup,
+      onRefreshQuotas: quotasState.refresh,
+      onSetSchedule: warmupState.setSchedule,
+      onToggleSchedule: warmupState.toggleSchedule,
+    },
+    onRefresh,
+    onLogout: accountsState.logout,
+    onLogin: loginState.beginLogin,
+    onImport,
+    statusText: loginState.statusText,
+    loginUrl: loginState.loginUrl,
+    loginBusy: loginState.loginBusy,
+    loginStatus: loginState.loginStatus,
+    onSwitchIdeAccount,
+  };
+}
+
 function ProvidersAccountsSection({
   visibleCount,
   showKiro,
   showCodex,
+  showAntigravity,
   kiroGroupProps,
   codexGroupProps,
+  antigravityGroupProps,
 }: ProvidersAccountsSectionProps) {
   return (
     <section className="space-y-3">
       <ProvidersSectionHeader title={m.providers_section_accounts_title()} count={visibleCount} />
+      {showAntigravity ? <AntigravityProviderGroup {...antigravityGroupProps} /> : null}
       {showKiro ? <KiroProviderGroup {...kiroGroupProps} /> : null}
       {showCodex ? <CodexProviderGroup {...codexGroupProps} /> : null}
-      {!showKiro && !showCodex ? (
+      {!showKiro && !showCodex && !showAntigravity ? (
         <p className="text-sm text-muted-foreground">{m.providers_accounts_empty_filtered()}</p>
       ) : null}
     </section>
@@ -434,29 +564,74 @@ function useProvidersPanelState() {
   const filters = useProviderFilters();
   const kiroAccounts = useKiroAccounts();
   const codexAccounts = useCodexAccounts();
+  const antigravityAccounts = useAntigravityAccounts();
   const kiroQuotas = useKiroQuotas();
   const codexQuotas = useCodexQuotas();
+  const antigravityQuotas = useAntigravityQuotas();
+  const antigravityIde = useAntigravityIde({ onRefreshAccounts: antigravityAccounts.refresh });
+  const antigravityWarmup = useAntigravityWarmup();
+  const refreshAntigravity = useCallback(async () => {
+    await antigravityAccounts.refresh();
+    await antigravityQuotas.refresh();
+    await antigravityIde.refresh();
+    await antigravityWarmup.refresh();
+  }, [antigravityAccounts, antigravityQuotas, antigravityIde, antigravityWarmup]);
   const refreshAll = useCallback(async () => {
     await kiroAccounts.refresh();
     await kiroQuotas.refresh();
     await codexAccounts.refresh();
     await codexQuotas.refresh();
-  }, [kiroAccounts, kiroQuotas, codexAccounts, codexQuotas]);
+    await antigravityAccounts.refresh();
+    await antigravityQuotas.refresh();
+    await antigravityIde.refresh();
+    await antigravityWarmup.refresh();
+  }, [
+    kiroAccounts,
+    kiroQuotas,
+    codexAccounts,
+    codexQuotas,
+    antigravityAccounts,
+    antigravityQuotas,
+    antigravityIde,
+    antigravityWarmup,
+  ]);
   const kiroLogin = useKiroLoginState(refreshAll);
   const codexLogin = useCodexLoginState(refreshAll);
+  const antigravityLogin = useAntigravityLoginState(refreshAll);
   const quotaMap = useMemo(() => buildQuotaMap(kiroQuotas.quotas), [kiroQuotas.quotas]);
   const codexQuotaMap = useMemo(() => buildCodexQuotaMap(codexQuotas.quotas), [codexQuotas.quotas]);
+  const antigravityQuotaMap = useMemo(
+    () => buildAntigravityQuotaMap(antigravityQuotas.quotas),
+    [antigravityQuotas.quotas]
+  );
   const filteredAccounts = useFilteredAccounts(kiroAccounts.accounts, filters.searchKeyword, filters.statusFilter);
   const filteredCodexAccounts = useFilteredAccounts(
     codexAccounts.accounts,
     filters.searchKeyword,
     filters.statusFilter
   );
+  const filteredAntigravityAccounts = useFilteredAccounts(
+    antigravityAccounts.accounts,
+    filters.searchKeyword,
+    filters.statusFilter
+  );
 
   const showKiro = filters.providerFilter === PROVIDER_FILTER_ALL || filters.providerFilter === "kiro";
   const showCodex = filters.providerFilter === PROVIDER_FILTER_ALL || filters.providerFilter === "codex";
-  const visibleCount = (showKiro ? filteredAccounts.length : 0) + (showCodex ? filteredCodexAccounts.length : 0);
-  const refreshBusy = kiroAccounts.loading || kiroQuotas.loading || codexAccounts.loading || codexQuotas.loading;
+  const showAntigravity = filters.providerFilter === PROVIDER_FILTER_ALL || filters.providerFilter === "antigravity";
+  const visibleCount =
+    (showKiro ? filteredAccounts.length : 0) +
+    (showCodex ? filteredCodexAccounts.length : 0) +
+    (showAntigravity ? filteredAntigravityAccounts.length : 0);
+  const refreshBusy =
+    kiroAccounts.loading ||
+    kiroQuotas.loading ||
+    codexAccounts.loading ||
+    codexQuotas.loading ||
+    antigravityAccounts.loading ||
+    antigravityQuotas.loading ||
+    antigravityIde.loading ||
+    antigravityWarmup.loading;
 
   const handleImport = useCallback(async () => {
     const defaultPath = await resolveKiroIdeDir();
@@ -485,6 +660,26 @@ function useProvidersPanelState() {
     await kiroQuotas.refresh();
   }, [kiroAccounts, kiroQuotas]);
 
+  const handleAntigravityImport = useCallback(async () => {
+    const defaultPath = await resolveAntigravityIdeDbPath();
+    const selection = await open(
+      defaultPath
+        ? {
+            multiple: false,
+            directory: false,
+            defaultPath,
+            filters: [{ name: "SQLite", extensions: ["vscdb"] }],
+          }
+        : { multiple: false, directory: false }
+    );
+    const path = Array.isArray(selection) ? selection[0] : selection;
+    if (!path) {
+      throw new Error("Import cancelled.");
+    }
+    await antigravityIde.importIde(path);
+    await antigravityQuotas.refresh();
+  }, [antigravityIde, antigravityQuotas]);
+
   const toolbarProps = buildToolbarProps(filters, refreshAll, refreshBusy);
   const kiroGroupProps = buildKiroGroupProps({
     accountsState: kiroAccounts,
@@ -504,7 +699,27 @@ function useProvidersPanelState() {
     loginState: codexLogin,
     onRefresh: refreshAll,
   });
-  const sectionProps: ProvidersAccountsSectionProps = { visibleCount, showKiro, showCodex, kiroGroupProps, codexGroupProps };
+  const antigravityGroupProps = buildAntigravityGroupProps({
+    accountsState: antigravityAccounts,
+    quotasState: antigravityQuotas,
+    ideState: antigravityIde,
+    warmupState: antigravityWarmup,
+    filteredAccounts: filteredAntigravityAccounts,
+    quotaMap: antigravityQuotaMap,
+    loginState: antigravityLogin,
+    onRefresh: refreshAntigravity,
+    onImport: handleAntigravityImport,
+    onSwitchIdeAccount: antigravityIde.switchAccount,
+  });
+  const sectionProps: ProvidersAccountsSectionProps = {
+    visibleCount,
+    showKiro,
+    showCodex,
+    showAntigravity,
+    kiroGroupProps,
+    codexGroupProps,
+    antigravityGroupProps,
+  };
 
   return { toolbarProps, sectionProps };
 }

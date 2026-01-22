@@ -29,8 +29,21 @@ export type UpstreamConfig = {
   provider: string;
   base_url: string;
   api_key: string | null;
+  /**
+   * Whether to drop OpenAI Responses request field `prompt_cache_retention` before sending upstream.
+   *
+   * Only meaningful for provider "openai-response".
+   */
+  filter_prompt_cache_retention?: boolean;
+  /**
+   * Whether to drop OpenAI Responses request field `safety_identifier` before sending upstream.
+   *
+   * Only meaningful for provider "openai-response".
+   */
+  filter_safety_identifier?: boolean;
   kiro_account_id?: string | null;
   codex_account_id?: string | null;
+  antigravity_account_id?: string | null;
   preferred_endpoint?: KiroPreferredEndpoint | null;
   proxy_url: string | null;
   priority: number | null;
@@ -47,6 +60,10 @@ export type ProxyConfigFileBase = {
   local_api_key: string | null;
   app_proxy_url: string | null;
   kiro_preferred_endpoint?: KiroPreferredEndpoint | null;
+  antigravity_ide_db_path?: string | null;
+  antigravity_app_paths?: string[];
+  antigravity_process_names?: string[];
+  antigravity_user_agent?: string | null;
   log_level?: LogLevel;
   tray_token_rate: TrayTokenRateConfig;
   enable_api_format_conversion: boolean;
@@ -76,8 +93,11 @@ export type UpstreamForm = {
   provider: string;
   baseUrl: string;
   apiKey: string;
+  filterPromptCacheRetention: boolean;
+  filterSafetyIdentifier: boolean;
   kiroAccountId: string;
   codexAccountId: string;
+  antigravityAccountId: string;
   preferredEndpoint: "" | KiroPreferredEndpoint;
   proxyUrl: string;
   priority: string;
@@ -107,6 +127,10 @@ export type ConfigForm = {
   localApiKey: string;
   appProxyUrl: string;
   kiroPreferredEndpoint: "" | KiroPreferredEndpoint;
+  antigravityIdeDbPath: string;
+  antigravityAppPaths: string;
+  antigravityProcessNames: string;
+  antigravityUserAgent: string;
   logLevel: LogLevel;
   trayTokenRate: TrayTokenRateConfig;
   enableApiFormatConversion: boolean;

@@ -32,6 +32,7 @@ use super::{
 use crate::logging::LogLevel;
 
 const PROVIDER_ANTHROPIC: &str = "anthropic";
+const PROVIDER_ANTIGRAVITY: &str = "antigravity";
 const PROVIDER_GEMINI: &str = "gemini";
 const PROVIDER_KIRO: &str = "kiro";
 const PROVIDER_CODEX: &str = "codex";
@@ -137,8 +138,10 @@ fn resolve_gemini_plan(config: &ProxyConfig, path: &str) -> Option<Result<Dispat
     if !gemini::is_gemini_path(path) {
         return None;
     }
-    if config.provider_upstreams(PROVIDER_GEMINI).is_some() {
-        return Some(Ok(base_plan(PROVIDER_GEMINI)));
+    if let Some(selected) =
+        choose_provider_by_priority(config, &[PROVIDER_GEMINI, PROVIDER_ANTIGRAVITY])
+    {
+        return Some(Ok(base_plan(selected)));
     }
     let fallback = choose_provider_by_priority(
         config,
@@ -197,12 +200,25 @@ fn resolve_anthropic_plan(
             }));
         }
         if !config.enable_api_format_conversion {
+            if config.provider_upstreams(PROVIDER_ANTIGRAVITY).is_some() {
+                return Some(Ok(DispatchPlan {
+                    provider: PROVIDER_ANTIGRAVITY,
+                    outbound_path: None,
+                    request_transform: FormatTransform::AnthropicToGemini,
+                    response_transform: FormatTransform::GeminiToAnthropic,
+                }));
+            }
             return Some(Err(ERROR_ANTHROPIC_CONVERSION_DISABLED.to_string()));
         }
         // If native providers are missing, fall back to other formats when enabled (new-api style).
         let fallback = choose_provider_by_priority(
             config,
-            &[PROVIDER_RESPONSES, PROVIDER_CHAT, PROVIDER_GEMINI],
+            &[
+                PROVIDER_RESPONSES,
+                PROVIDER_CHAT,
+                PROVIDER_GEMINI,
+                PROVIDER_ANTIGRAVITY,
+            ],
         );
         let Some(fallback) = fallback else {
             return Some(Err(ERROR_NO_UPSTREAM.to_string()));
@@ -222,6 +238,12 @@ fn resolve_anthropic_plan(
             },
             PROVIDER_GEMINI => DispatchPlan {
                 provider: PROVIDER_GEMINI,
+                outbound_path: None,
+                request_transform: FormatTransform::AnthropicToGemini,
+                response_transform: FormatTransform::GeminiToAnthropic,
+            },
+            PROVIDER_ANTIGRAVITY => DispatchPlan {
+                provider: PROVIDER_ANTIGRAVITY,
                 outbound_path: None,
                 request_transform: FormatTransform::AnthropicToGemini,
                 response_transform: FormatTransform::GeminiToAnthropic,
@@ -255,6 +277,7 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
             PROVIDER_CODEX,
             PROVIDER_ANTHROPIC,
             PROVIDER_GEMINI,
+            PROVIDER_ANTIGRAVITY,
             PROVIDER_KIRO,
         ],
     )
@@ -285,6 +308,12 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
         PROVIDER_GEMINI => DispatchPlan {
             provider: PROVIDER_GEMINI,
             outbound_path: None, // Gemini 路径需要在 upstream 层根据 model 动态构建
+            request_transform: FormatTransform::ChatToGemini,
+            response_transform: FormatTransform::GeminiToChat,
+        },
+        PROVIDER_ANTIGRAVITY => DispatchPlan {
+            provider: PROVIDER_ANTIGRAVITY,
+            outbound_path: None,
             request_transform: FormatTransform::ChatToGemini,
             response_transform: FormatTransform::GeminiToChat,
         },
@@ -326,7 +355,12 @@ fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> 
 
     let selected = choose_provider_by_priority(
         config,
-        &[PROVIDER_CHAT, PROVIDER_ANTHROPIC, PROVIDER_GEMINI],
+        &[
+            PROVIDER_CHAT,
+            PROVIDER_ANTHROPIC,
+            PROVIDER_GEMINI,
+            PROVIDER_ANTIGRAVITY,
+        ],
     )
     .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
     Ok(match selected {
@@ -344,6 +378,12 @@ fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> 
         },
         PROVIDER_GEMINI => DispatchPlan {
             provider: PROVIDER_GEMINI,
+            outbound_path: None,
+            request_transform: FormatTransform::ResponsesToGemini,
+            response_transform: FormatTransform::GeminiToResponses,
+        },
+        PROVIDER_ANTIGRAVITY => DispatchPlan {
+            provider: PROVIDER_ANTIGRAVITY,
             outbound_path: None,
             request_transform: FormatTransform::ResponsesToGemini,
             response_transform: FormatTransform::GeminiToResponses,

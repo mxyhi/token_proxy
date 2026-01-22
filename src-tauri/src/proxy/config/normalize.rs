@@ -8,6 +8,7 @@ use axum::http::header::{HeaderName, HeaderValue};
 
 const APP_PROXY_URL_PLACEHOLDER: &str = "$app_proxy_url";
 const DEFAULT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
+const DEFAULT_ANTIGRAVITY_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
 
 #[derive(Clone)]
 pub(super) struct NormalizedUpstream {
@@ -94,6 +95,8 @@ fn normalize_single_upstream(
     let base_url = if base_url.is_empty() {
         if provider == "codex" {
             DEFAULT_CODEX_BASE_URL.to_string()
+        } else if provider == "antigravity" {
+            DEFAULT_ANTIGRAVITY_BASE_URL.to_string()
         } else if provider == "kiro" {
             String::new()
         } else {
@@ -123,6 +126,12 @@ fn normalize_single_upstream(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
+    let antigravity_account_id = upstream
+        .antigravity_account_id
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
     if provider == "kiro" && kiro_account_id.is_none() {
         return Err(format!(
             "Upstream {} requires a Kiro account binding.",
@@ -132,6 +141,12 @@ fn normalize_single_upstream(
     if provider == "codex" && codex_account_id.is_none() {
         return Err(format!(
             "Upstream {} requires a Codex account binding.",
+            upstream.id
+        ));
+    }
+    if provider == "antigravity" && antigravity_account_id.is_none() {
+        return Err(format!(
+            "Upstream {} requires an Antigravity account binding.",
             upstream.id
         ));
     }
@@ -146,8 +161,11 @@ fn normalize_single_upstream(
         id: upstream.id.trim().to_string(),
         base_url,
         api_key,
+        filter_prompt_cache_retention: upstream.filter_prompt_cache_retention,
+        filter_safety_identifier: upstream.filter_safety_identifier,
         kiro_account_id,
         codex_account_id,
+        antigravity_account_id,
         kiro_preferred_endpoint: upstream.preferred_endpoint.clone(),
         proxy_url,
         priority: upstream.priority.unwrap_or(0),

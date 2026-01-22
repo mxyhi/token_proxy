@@ -22,6 +22,7 @@ import {
   ClientSetupCard,
   ConfigFileCard,
   AutoStartCard,
+  AntigravitySettingsCard,
   ProjectLinksCard,
   ProxyCoreCard,
   TrayTokenRateCard,
@@ -218,18 +219,21 @@ function ConfigSectionBody({
       );
     case "upstreams":
       return (
-        <UpstreamsCard
-          upstreams={props.form.upstreams}
-          appProxyUrl={props.form.appProxyUrl}
-          strategy={props.form.upstreamStrategy}
-          showApiKeys={props.showUpstreamKeys}
-          providerOptions={props.providerOptions}
-          onToggleApiKeys={props.onToggleUpstreamKeys}
-          onStrategyChange={props.onStrategyChange}
-          onAdd={props.onAddUpstream}
-          onRemove={props.onRemoveUpstream}
-          onChange={props.onChangeUpstream}
-        />
+        <div className="flex flex-col gap-4">
+          <UpstreamsCard
+            upstreams={props.form.upstreams}
+            appProxyUrl={props.form.appProxyUrl}
+            strategy={props.form.upstreamStrategy}
+            showApiKeys={props.showUpstreamKeys}
+            providerOptions={props.providerOptions}
+            onToggleApiKeys={props.onToggleUpstreamKeys}
+            onStrategyChange={props.onStrategyChange}
+            onAdd={props.onAddUpstream}
+            onRemove={props.onRemoveUpstream}
+            onChange={props.onChangeUpstream}
+          />
+          <AntigravitySettingsCard form={props.form} onChange={props.onFormChange} />
+        </div>
       );
     case "settings":
       return (

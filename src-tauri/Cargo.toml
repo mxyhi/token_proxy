@@ -29,6 +29,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "socks",
 ] }
 sha2 = "0.10"
+sysinfo = "0.33"
 tauri = { version = "2.9.5", features = ["image-png", "tray-icon"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-deep-link = "2"
@@ -44,6 +45,7 @@ tokio = { version = "1.49.0", features = [
 time = { version = "0.3", features = ["formatting", "parsing"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.149"
+serde_urlencoded = "0.7"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }
 tiktoken-rs = "0.9.1"
 toml_edit = "0.23"

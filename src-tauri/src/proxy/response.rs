@@ -17,6 +17,7 @@ use super::{
 const PROVIDER_OPENAI: &str = "openai";
 const PROVIDER_OPENAI_RESPONSES: &str = "openai-response";
 const PROVIDER_ANTHROPIC: &str = "anthropic";
+const PROVIDER_ANTIGRAVITY: &str = "antigravity";
 const PROVIDER_GEMINI: &str = "gemini";
 const PROVIDER_CODEX: &str = "codex";
 const RESPONSE_ERROR_LIMIT_BYTES: usize = 256 * 1024;

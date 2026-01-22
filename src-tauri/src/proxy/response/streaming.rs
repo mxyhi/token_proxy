@@ -4,7 +4,8 @@ use serde_json::Value;
 use std::{collections::VecDeque, sync::Arc};
 
 use super::{
-    PROVIDER_ANTHROPIC, PROVIDER_CODEX, PROVIDER_GEMINI, PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES,
+    PROVIDER_ANTHROPIC, PROVIDER_ANTIGRAVITY, PROVIDER_CODEX, PROVIDER_GEMINI, PROVIDER_OPENAI,
+    PROVIDER_OPENAI_RESPONSES,
 };
 use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::model;
@@ -222,7 +223,7 @@ fn extract_stream_text(provider: &str, data: &str) -> Option<String> {
             extract_openai_stream_text(&value)
         }
         PROVIDER_ANTHROPIC => extract_anthropic_stream_text(&value),
-        PROVIDER_GEMINI => extract_gemini_stream_text(&value),
+        PROVIDER_GEMINI | PROVIDER_ANTIGRAVITY => extract_gemini_stream_text(&value),
         _ => None,
     }
     .or_else(|| extract_fallback_stream_text(&value))

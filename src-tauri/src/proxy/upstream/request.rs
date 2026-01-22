@@ -1,7 +1,11 @@
-use axum::http::{
+use axum::{
+    body::Bytes,
+    http::{
     header::{HeaderName, HeaderValue, CONTENT_LENGTH, HOST},
     HeaderMap, StatusCode,
+    },
 };
+use serde_json::Value;
 
 use super::{
     utils::{ensure_query_param, extract_query_param},
@@ -21,6 +25,9 @@ const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const GEMINI_API_KEY_QUERY: &str = "key";
 const GEMINI_API_KEY_HEADER: HeaderName = HeaderName::from_static("x-goog-api-key");
+const OPENAI_RESPONSES_PATH: &str = "/v1/responses";
+// Keep in sync with server_helpers request transform limit (20 MiB).
+const REQUEST_FILTER_LIMIT_BYTES: usize = 20 * 1024 * 1024;
 
 pub(super) fn split_path_query(path_with_query: &str) -> (&str, Option<&str>) {
     match path_with_query.split_once('?') {
@@ -81,10 +88,15 @@ pub(super) fn apply_header_overrides(request_headers: &mut HeaderMap, overrides:
 
 pub(super) async fn build_upstream_body(
     provider: &str,
+    upstream: &UpstreamRuntime,
     upstream_path_with_query: &str,
     body: &ReplayableBody,
     meta: &RequestMeta,
+    antigravity: Option<&super::AntigravityRequestInfo>,
 ) -> Result<reqwest::Body, AttemptOutcome> {
+    if provider == "antigravity" {
+        return build_antigravity_body(body, meta, antigravity).await;
+    }
     let mapped_body = maybe_rewrite_request_body_model(body, meta).await?;
     let mapped_source = mapped_body.as_ref().unwrap_or(body);
     let upstream_path = split_path_query(upstream_path_with_query).0;
@@ -105,7 +117,11 @@ pub(super) async fn build_upstream_body(
         .as_ref()
         .or(mapped_body.as_ref())
         .unwrap_or(body);
-    source
+    let filtered =
+        maybe_filter_openai_responses_request_fields(provider, upstream, upstream_path_with_query, source)
+            .await?;
+    let final_source = filtered.as_ref().unwrap_or(source);
+    final_source
         .to_reqwest_body()
         .await
         .map_err(|err| {
@@ -114,6 +130,105 @@ pub(super) async fn build_upstream_body(
                 format!("Failed to read cached request body: {err}"),
             ))
         })
+}
+
+async fn maybe_filter_openai_responses_request_fields(
+    provider: &str,
+    upstream: &UpstreamRuntime,
+    upstream_path_with_query: &str,
+    body: &ReplayableBody,
+) -> Result<Option<ReplayableBody>, AttemptOutcome> {
+    let should_filter_prompt_cache_retention = upstream.filter_prompt_cache_retention;
+    let should_filter_safety_identifier = upstream.filter_safety_identifier;
+    if provider != "openai-response"
+        || (!should_filter_prompt_cache_retention && !should_filter_safety_identifier)
+    {
+        return Ok(None);
+    }
+    let upstream_path = split_path_query(upstream_path_with_query).0;
+    if upstream_path != OPENAI_RESPONSES_PATH {
+        return Ok(None);
+    }
+
+    let Some(bytes) = body
+        .read_bytes_if_small(REQUEST_FILTER_LIMIT_BYTES)
+        .await
+        .map_err(|err| {
+            AttemptOutcome::Fatal(http::error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to read cached request body: {err}"),
+            ))
+        })?
+    else {
+        // Best-effort: request body too large to rewrite.
+        return Ok(None);
+    };
+
+    let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(None);
+    };
+    let Some(object) = value.as_object_mut() else {
+        return Ok(None);
+    };
+    let mut changed = false;
+    if should_filter_prompt_cache_retention {
+        changed = changed || object.remove("prompt_cache_retention").is_some();
+    }
+    if should_filter_safety_identifier {
+        changed = changed || object.remove("safety_identifier").is_some();
+    }
+    if !changed {
+        return Ok(None);
+    }
+
+    let outbound_bytes = serde_json::to_vec(&value)
+        .map(Bytes::from)
+        .map_err(|err| {
+            AttemptOutcome::Fatal(http::error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to serialize request: {err}"),
+            ))
+        })?;
+    Ok(Some(ReplayableBody::from_bytes(outbound_bytes)))
+}
+
+async fn build_antigravity_body(
+    body: &ReplayableBody,
+    meta: &RequestMeta,
+    antigravity: Option<&super::AntigravityRequestInfo>,
+) -> Result<reqwest::Body, AttemptOutcome> {
+    let Some(info) = antigravity else {
+        return Err(AttemptOutcome::Fatal(http::error_response(
+            StatusCode::UNAUTHORIZED,
+            "Antigravity account is not configured.",
+        )));
+    };
+    let Some(bytes) = body
+        .read_bytes_if_small(super::REQUEST_MODEL_MAPPING_LIMIT_BYTES)
+        .await
+        .map_err(|err| {
+            AttemptOutcome::Fatal(http::error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to read request body: {err}"),
+            ))
+        })?
+    else {
+        return Err(AttemptOutcome::Fatal(http::error_response(
+            StatusCode::BAD_GATEWAY,
+            "Antigravity request body is too large.",
+        )));
+    };
+    let model = meta.mapped_model.as_deref().or(meta.original_model.as_deref());
+    let wrapped = super::super::antigravity_compat::wrap_gemini_request(
+        &bytes,
+        model,
+        info.project_id.as_deref(),
+        &info.user_agent,
+    )
+    .map_err(|message| {
+        AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
+    })?;
+    Ok(reqwest::Body::from(wrapped))
 }
 
 async fn maybe_rewrite_request_body_model(
@@ -142,6 +257,174 @@ async fn maybe_rewrite_request_body_model(
         return Ok(None);
     };
     Ok(Some(ReplayableBody::from_bytes(rewritten)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn filters_prompt_cache_retention_for_openai_responses_upstream() {
+        let upstream = UpstreamRuntime {
+            id: "test".to_string(),
+            base_url: "https://api.openai.com".to_string(),
+            api_key: None,
+            filter_prompt_cache_retention: true,
+            filter_safety_identifier: false,
+            kiro_account_id: None,
+            codex_account_id: None,
+            antigravity_account_id: None,
+            kiro_preferred_endpoint: None,
+            proxy_url: None,
+            priority: 0,
+            model_mappings: None,
+            header_overrides: None,
+        };
+        let body = ReplayableBody::from_bytes(Bytes::from_static(
+            br#"{"model":"gpt-4o","prompt_cache_retention":"24h","input":"hi"}"#,
+        ));
+
+        let rewritten = maybe_filter_openai_responses_request_fields(
+            "openai-response",
+            &upstream,
+            "/v1/responses?foo=bar",
+            &body,
+        )
+        .await;
+        let rewritten = match rewritten {
+            Ok(value) => value,
+            Err(_) => panic!("rewrite result"),
+        };
+
+        let rewritten = rewritten.expect("should rewrite");
+        let bytes = rewritten
+            .read_bytes_if_small(1024)
+            .await
+            .expect("read rewritten bytes")
+            .expect("rewritten body exists");
+        let value: Value = serde_json::from_slice(&bytes).expect("json");
+
+        assert!(value.get("prompt_cache_retention").is_none());
+        assert_eq!(value.get("model").and_then(Value::as_str), Some("gpt-4o"));
+    }
+
+    #[tokio::test]
+    async fn filter_prompt_cache_retention_is_noop_when_disabled() {
+        let upstream = UpstreamRuntime {
+            id: "test".to_string(),
+            base_url: "https://api.openai.com".to_string(),
+            api_key: None,
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: false,
+            kiro_account_id: None,
+            codex_account_id: None,
+            antigravity_account_id: None,
+            kiro_preferred_endpoint: None,
+            proxy_url: None,
+            priority: 0,
+            model_mappings: None,
+            header_overrides: None,
+        };
+        let body = ReplayableBody::from_bytes(Bytes::from_static(
+            br#"{"model":"gpt-4o","prompt_cache_retention":"24h","input":"hi"}"#,
+        ));
+
+        let rewritten = maybe_filter_openai_responses_request_fields(
+            "openai-response",
+            &upstream,
+            "/v1/responses",
+            &body,
+        )
+        .await;
+        let rewritten = match rewritten {
+            Ok(value) => value,
+            Err(_) => panic!("rewrite result"),
+        };
+
+        assert!(rewritten.is_none());
+    }
+
+    #[tokio::test]
+    async fn filters_safety_identifier_for_openai_responses_upstream() {
+        let upstream = UpstreamRuntime {
+            id: "test".to_string(),
+            base_url: "https://api.openai.com".to_string(),
+            api_key: None,
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: true,
+            kiro_account_id: None,
+            codex_account_id: None,
+            antigravity_account_id: None,
+            kiro_preferred_endpoint: None,
+            proxy_url: None,
+            priority: 0,
+            model_mappings: None,
+            header_overrides: None,
+        };
+        let body = ReplayableBody::from_bytes(Bytes::from_static(
+            br#"{"model":"gpt-4o","safety_identifier":"sid_1","input":"hi"}"#,
+        ));
+
+        let rewritten = maybe_filter_openai_responses_request_fields(
+            "openai-response",
+            &upstream,
+            "/v1/responses",
+            &body,
+        )
+        .await;
+        let rewritten = match rewritten {
+            Ok(value) => value,
+            Err(_) => panic!("rewrite result"),
+        };
+
+        let rewritten = rewritten.expect("should rewrite");
+        let bytes = rewritten
+            .read_bytes_if_small(1024)
+            .await
+            .expect("read rewritten bytes")
+            .expect("rewritten body exists");
+        let value: Value = serde_json::from_slice(&bytes).expect("json");
+
+        assert!(value.get("safety_identifier").is_none());
+        assert_eq!(value.get("prompt_cache_retention"), None);
+        assert_eq!(value.get("model").and_then(Value::as_str), Some("gpt-4o"));
+    }
+
+    #[tokio::test]
+    async fn filter_safety_identifier_is_noop_when_disabled() {
+        let upstream = UpstreamRuntime {
+            id: "test".to_string(),
+            base_url: "https://api.openai.com".to_string(),
+            api_key: None,
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: false,
+            kiro_account_id: None,
+            codex_account_id: None,
+            antigravity_account_id: None,
+            kiro_preferred_endpoint: None,
+            proxy_url: None,
+            priority: 0,
+            model_mappings: None,
+            header_overrides: None,
+        };
+        let body = ReplayableBody::from_bytes(Bytes::from_static(
+            br#"{"model":"gpt-4o","safety_identifier":"sid_1","input":"hi"}"#,
+        ));
+
+        let rewritten = maybe_filter_openai_responses_request_fields(
+            "openai-response",
+            &upstream,
+            "/v1/responses",
+            &body,
+        )
+        .await;
+        let rewritten = match rewritten {
+            Ok(value) => value,
+            Err(_) => panic!("rewrite result"),
+        };
+
+        assert!(rewritten.is_none());
+    }
 }
 
 pub(super) fn resolve_gemini_upstream(

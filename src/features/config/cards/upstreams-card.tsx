@@ -23,6 +23,8 @@ import { useCodexAccounts } from "@/features/codex/use-codex-accounts";
 import type { CodexAccountSummary } from "@/features/codex/types";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
 import type { KiroAccountSummary } from "@/features/kiro/types";
+import { useAntigravityAccounts } from "@/features/antigravity/use-antigravity-accounts";
+import type { AntigravityAccountSummary } from "@/features/antigravity/types";
 import type { UpstreamForm, UpstreamStrategy } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
@@ -146,6 +148,35 @@ function findIdleCodexAccount(
   return accounts.find((account) => !usedAccountIds.has(account.account_id));
 }
 
+/**
+ * 找到第一个未被其他上游使用的空闲 antigravity 账户
+ * 优先返回 active 状态的账户
+ */
+function findIdleAntigravityAccount(
+  accounts: AntigravityAccountSummary[],
+  upstreams: readonly UpstreamForm[],
+  editingIndex?: number,
+): AntigravityAccountSummary | undefined {
+  const usedAccountIds = new Set(
+    upstreams
+      .filter((upstream, index) => {
+        if (index === editingIndex) return false;
+        return (
+          upstream.provider.trim() === "antigravity" &&
+          upstream.antigravityAccountId.trim()
+        );
+      })
+      .map((upstream) => upstream.antigravityAccountId.trim()),
+  );
+
+  const activeIdle = accounts.find(
+    (account) => account.status === "active" && !usedAccountIds.has(account.account_id),
+  );
+  if (activeIdle) return activeIdle;
+
+  return accounts.find((account) => !usedAccountIds.has(account.account_id));
+}
+
 function cloneUpstreamDraft(upstream: UpstreamForm): UpstreamForm {
   return {
     ...upstream,
@@ -190,6 +221,12 @@ export function UpstreamsCard({
     error: codexAccountsError,
     refresh: refreshCodexAccounts,
   } = useCodexAccounts();
+  const {
+    accounts: antigravityAccounts,
+    loading: antigravityAccountsLoading,
+    error: antigravityAccountsError,
+    refresh: refreshAntigravityAccounts,
+  } = useAntigravityAccounts();
 
   const columns = useMemo(
     () => UPSTREAM_COLUMNS.filter((column) => columnVisibility[column.id]),
@@ -204,6 +241,10 @@ export function UpstreamsCard({
     const map = new Map(codexAccounts.map((account) => [account.account_id, account]));
     return map;
   }, [codexAccounts]);
+  const antigravityAccountMap = useMemo(() => {
+    const map = new Map(antigravityAccounts.map((account) => [account.account_id, account]));
+    return map;
+  }, [antigravityAccounts]);
 
   // 更新 draft，处理 provider 变化时的自动逻辑
   const updateDraft = useCallback(
@@ -219,12 +260,17 @@ export function UpstreamsCard({
         if (newProvider !== undefined && newProvider !== currentProvider) {
           let kiroAccountId = prev.draft.kiroAccountId;
           let codexAccountId = prev.draft.codexAccountId;
+          let antigravityAccountId = prev.draft.antigravityAccountId;
           let autoId: string;
+          // openai-response 专属开关：切换到其它 provider 时清零，避免把无效字段写进配置。
+          let filterPromptCacheRetention = prev.draft.filterPromptCacheRetention;
+          let filterSafetyIdentifier = prev.draft.filterSafetyIdentifier;
 
           if (newProvider === "kiro") {
             const idleAccount = findIdleKiroAccount(kiroAccounts, upstreams, editingIndex);
             kiroAccountId = idleAccount?.account_id ?? "";
             codexAccountId = "";
+            antigravityAccountId = "";
             autoId = kiroAccountId
               ? stripJsonSuffix(kiroAccountId)
               : createAutoUpstreamId(newProvider, upstreams, editingIndex);
@@ -232,8 +278,21 @@ export function UpstreamsCard({
             const idleAccount = findIdleCodexAccount(codexAccounts, upstreams, editingIndex);
             codexAccountId = idleAccount?.account_id ?? "";
             kiroAccountId = "";
+            antigravityAccountId = "";
             autoId = codexAccountId
               ? stripJsonSuffix(codexAccountId)
+              : createAutoUpstreamId(newProvider, upstreams, editingIndex);
+          } else if (newProvider === "antigravity") {
+            const idleAccount = findIdleAntigravityAccount(
+              antigravityAccounts,
+              upstreams,
+              editingIndex
+            );
+            antigravityAccountId = idleAccount?.account_id ?? "";
+            kiroAccountId = "";
+            codexAccountId = "";
+            autoId = antigravityAccountId
+              ? stripJsonSuffix(antigravityAccountId)
               : createAutoUpstreamId(newProvider, upstreams, editingIndex);
           } else {
             autoId = createAutoUpstreamId(newProvider, upstreams, editingIndex);
@@ -243,11 +302,34 @@ export function UpstreamsCard({
             if (currentProvider === "codex") {
               codexAccountId = "";
             }
+            if (currentProvider === "antigravity") {
+              antigravityAccountId = "";
+            }
+          }
+
+          if (newProvider !== "openai-response") {
+            filterPromptCacheRetention = false;
+            filterSafetyIdentifier = false;
+          }
+          if (patch.filterPromptCacheRetention !== undefined) {
+            filterPromptCacheRetention = patch.filterPromptCacheRetention;
+          }
+          if (patch.filterSafetyIdentifier !== undefined) {
+            filterSafetyIdentifier = patch.filterSafetyIdentifier;
           }
 
           return {
             ...prev,
-            draft: { ...prev.draft, ...patch, id: autoId, kiroAccountId, codexAccountId },
+            draft: {
+              ...prev.draft,
+              ...patch,
+              id: autoId,
+              kiroAccountId,
+              codexAccountId,
+              antigravityAccountId,
+              filterPromptCacheRetention,
+              filterSafetyIdentifier,
+            },
           };
         }
 
@@ -274,11 +356,24 @@ export function UpstreamsCard({
             draft: { ...prev.draft, ...patch, id: newId },
           };
         }
+        if (
+          prev.draft.provider.trim() === "antigravity" &&
+          patch.antigravityAccountId !== undefined &&
+          patch.antigravityAccountId !== prev.draft.antigravityAccountId
+        ) {
+          const newId = patch.antigravityAccountId
+            ? stripJsonSuffix(patch.antigravityAccountId)
+            : prev.draft.id;
+          return {
+            ...prev,
+            draft: { ...prev.draft, ...patch, id: newId },
+          };
+        }
 
         return { ...prev, draft: { ...prev.draft, ...patch } };
       });
     },
-    [upstreams, kiroAccounts, codexAccounts],
+    [upstreams, kiroAccounts, codexAccounts, antigravityAccounts],
   );
 
   const openCreateDialog = () =>
@@ -358,6 +453,7 @@ export function UpstreamsCard({
             showApiKeys={showApiKeys}
             kiroAccounts={kiroAccountMap}
             codexAccounts={codexAccountMap}
+            antigravityAccounts={antigravityAccountMap}
             disableDelete={false}
             onEdit={openEditDialog}
             onCopy={openCopyDialog}
@@ -401,6 +497,10 @@ export function UpstreamsCard({
         codexAccountsLoading={codexAccountsLoading}
         codexAccountsError={codexAccountsError}
         onRefreshCodexAccounts={refreshCodexAccounts}
+        antigravityAccounts={antigravityAccounts}
+        antigravityAccountsLoading={antigravityAccountsLoading}
+        antigravityAccountsError={antigravityAccountsError}
+        onRefreshAntigravityAccounts={refreshAntigravityAccounts}
       />
       <DeleteUpstreamDialog
         dialog={deleteDialog}

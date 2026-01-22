@@ -3,6 +3,7 @@ export { ProxyCoreCard } from "./proxy-core-card";
 export { AutoStartCard } from "./auto-start-card";
 export { TrayTokenRateCard } from "./tray-token-rate-card";
 export { UpstreamsCard } from "./upstreams-card";
+export { AntigravitySettingsCard } from "./antigravity-settings-card";
 export { ConfigFileCard } from "./config-file-card";
 export { ClientSetupCard } from "./client-setup-card";
 export { ValidationCard } from "./validation-card";

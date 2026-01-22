@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use super::super::{
     kiro_to_anthropic, kiro_to_responses, token_count, upstream_read, upstream_stream,
-    PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
+    PROVIDER_ANTIGRAVITY, PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
 };
 use super::super::super::{
-    codex_compat,
+    antigravity_compat, codex_compat,
     http,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     model,
@@ -36,6 +36,16 @@ pub(super) async fn build_buffered_response(
     let bytes = match read_upstream_bytes(upstream_res, &mut context, &log).await {
         Ok(bytes) => bytes,
         Err(response) => return response,
+    };
+    let bytes = if context.provider == PROVIDER_ANTIGRAVITY {
+        match antigravity_compat::unwrap_response(&bytes) {
+            Ok(unwrapped) => unwrapped,
+            Err(message) => {
+                return http::error_response(StatusCode::BAD_GATEWAY, message);
+            }
+        }
+    } else {
+        bytes
     };
     let mut usage = extract_usage_from_response(&bytes);
     let response_error = response_error_for_status(status, &bytes);
@@ -377,6 +387,7 @@ fn provider_for_tokens(transform: FormatTransform, provider: &str) -> &str {
         FormatTransform::KiroToAnthropic => "anthropic",
         FormatTransform::CodexToChat => "openai",
         FormatTransform::CodexToResponses => "openai-response",
+        _ if provider == PROVIDER_ANTIGRAVITY => PROVIDER_GEMINI,
         _ => provider,
     }
 }

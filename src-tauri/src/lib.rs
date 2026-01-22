@@ -2,6 +2,7 @@
 mod app_proxy;
 mod client_config;
 mod jsonc;
+mod antigravity;
 mod codex;
 mod kiro;
 mod logging;
@@ -310,6 +311,111 @@ async fn codex_logout(
 }
 
 #[tauri::command]
+async fn antigravity_list_accounts(
+    store: tauri::State<'_, Arc<antigravity::AntigravityAccountStore>>,
+) -> Result<Vec<antigravity::AntigravityAccountSummary>, String> {
+    store.list_accounts().await
+}
+
+#[tauri::command]
+async fn antigravity_fetch_quotas(
+    store: tauri::State<'_, Arc<antigravity::AntigravityAccountStore>>,
+) -> Result<Vec<antigravity::AntigravityQuotaSummary>, String> {
+    antigravity::fetch_quotas(store.as_ref()).await
+}
+
+#[tauri::command]
+async fn antigravity_start_login(
+    login: tauri::State<'_, Arc<antigravity::AntigravityLoginManager>>,
+) -> Result<antigravity::AntigravityLoginStartResponse, String> {
+    login.start_login().await
+}
+
+#[tauri::command]
+async fn antigravity_poll_login(
+    login: tauri::State<'_, Arc<antigravity::AntigravityLoginManager>>,
+    state: String,
+) -> Result<antigravity::AntigravityLoginPollResponse, String> {
+    login.poll_login(&state).await
+}
+
+#[tauri::command]
+async fn antigravity_logout(
+    login: tauri::State<'_, Arc<antigravity::AntigravityLoginManager>>,
+    account_id: String,
+) -> Result<(), String> {
+    login.logout(&account_id).await
+}
+
+#[tauri::command]
+async fn antigravity_import_ide(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Arc<antigravity::AntigravityAccountStore>>,
+    ide_db_path: Option<String>,
+) -> Result<Vec<antigravity::AntigravityAccountSummary>, String> {
+    let path = ide_db_path.map(PathBuf::from);
+    antigravity::import_from_ide(&app, store.as_ref(), path).await
+}
+
+#[tauri::command]
+async fn antigravity_switch_ide_account(
+    app: tauri::AppHandle,
+    store: tauri::State<'_, Arc<antigravity::AntigravityAccountStore>>,
+    account_id: String,
+    ide_db_path: Option<String>,
+) -> Result<antigravity::AntigravityIdeStatus, String> {
+    let path = ide_db_path.map(PathBuf::from);
+    antigravity::switch_ide_account(&app, store.as_ref(), &account_id, path).await
+}
+
+#[tauri::command]
+async fn antigravity_ide_status(
+    app: tauri::AppHandle,
+) -> Result<antigravity::AntigravityIdeStatus, String> {
+    antigravity::ide_status(&app, None).await
+}
+
+#[tauri::command]
+async fn antigravity_run_warmup(
+    scheduler: tauri::State<'_, Arc<antigravity::AntigravityWarmupScheduler>>,
+    account_id: String,
+    model: String,
+    stream: bool,
+) -> Result<(), String> {
+    scheduler.run_warmup(&account_id, &model, stream).await
+}
+
+#[tauri::command]
+async fn antigravity_list_warmup_schedules(
+    scheduler: tauri::State<'_, Arc<antigravity::AntigravityWarmupScheduler>>,
+) -> Result<Vec<antigravity::AntigravityWarmupScheduleSummary>, String> {
+    Ok(scheduler.list_schedules().await)
+}
+
+#[tauri::command]
+async fn antigravity_set_warmup_schedule(
+    scheduler: tauri::State<'_, Arc<antigravity::AntigravityWarmupScheduler>>,
+    account_id: String,
+    model: String,
+    interval_minutes: u64,
+    enabled: bool,
+) -> Result<antigravity::AntigravityWarmupScheduleSummary, String> {
+    scheduler
+        .set_schedule(account_id, model, interval_minutes, enabled)
+        .await
+}
+
+#[tauri::command]
+async fn antigravity_toggle_warmup_schedule(
+    scheduler: tauri::State<'_, Arc<antigravity::AntigravityWarmupScheduler>>,
+    account_id: String,
+    model: String,
+    enabled: bool,
+) -> Result<(), String> {
+    scheduler.toggle_schedule(account_id, model, enabled).await
+}
+
+#[tauri::command]
 async fn proxy_status(
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,
@@ -476,6 +582,25 @@ pub fn run() {
                 app_proxy_state.clone(),
             ));
             app.manage(codex_login);
+            let antigravity_store = Arc::new(antigravity::AntigravityAccountStore::new(
+                &app_handle,
+                app_proxy_state.clone(),
+            )?);
+            app.manage(antigravity_store.clone());
+            let antigravity_login = Arc::new(antigravity::AntigravityLoginManager::new(
+                antigravity_store.clone(),
+                app_proxy_state.clone(),
+            ));
+            app.manage(antigravity_login);
+            let antigravity_warmup = Arc::new(antigravity::AntigravityWarmupScheduler::new(
+                antigravity_store,
+                app_proxy_state.clone(),
+            ));
+            app.manage(antigravity_warmup.clone());
+            let antigravity_warmup_for_start = antigravity_warmup.clone();
+            tauri::async_runtime::spawn(async move {
+                antigravity_warmup_for_start.start().await;
+            });
             let tray_state = tray::init_tray(&app_handle, proxy_service.clone())?;
             app.manage(tray_state.clone());
 
@@ -565,6 +690,18 @@ pub fn run() {
             codex_start_login,
             codex_poll_login,
             codex_logout,
+            antigravity_list_accounts,
+            antigravity_fetch_quotas,
+            antigravity_start_login,
+            antigravity_poll_login,
+            antigravity_logout,
+            antigravity_import_ide,
+            antigravity_switch_ide_account,
+            antigravity_ide_status,
+            antigravity_run_warmup,
+            antigravity_list_warmup_schedules,
+            antigravity_set_warmup_schedule,
+            antigravity_toggle_warmup_schedule,
             proxy_status,
             proxy_start,
             proxy_stop,

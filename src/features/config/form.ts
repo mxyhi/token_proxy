@@ -16,8 +16,11 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "openai",
     baseUrl: "https://api.openai.com",
     apiKey: "",
+    filterPromptCacheRetention: false,
+    filterSafetyIdentifier: false,
     kiroAccountId: "",
     codexAccountId: "",
+    antigravityAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
@@ -30,8 +33,11 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "openai-response",
     baseUrl: "https://api.openai.com",
     apiKey: "",
+    filterPromptCacheRetention: false,
+    filterSafetyIdentifier: false,
     kiroAccountId: "",
     codexAccountId: "",
+    antigravityAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
@@ -44,8 +50,11 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "anthropic",
     baseUrl: "https://api.anthropic.com",
     apiKey: "",
+    filterPromptCacheRetention: false,
+    filterSafetyIdentifier: false,
     kiroAccountId: "",
     codexAccountId: "",
+    antigravityAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
@@ -58,8 +67,11 @@ const DEFAULT_UPSTREAMS: UpstreamForm[] = [
     provider: "gemini",
     baseUrl: "https://generativelanguage.googleapis.com",
     apiKey: "",
+    filterPromptCacheRetention: false,
+    filterSafetyIdentifier: false,
     kiroAccountId: "",
     codexAccountId: "",
+    antigravityAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "0",
@@ -93,12 +105,27 @@ function normalizeKiroPreferredEndpoint(value: string) {
   return null;
 }
 
+function joinListInput(values: string[] | null | undefined) {
+  return values && values.length ? values.join(", ") : "";
+}
+
+function parseListInput(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
 const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "host",
   "port",
   "local_api_key",
   "app_proxy_url",
   "kiro_preferred_endpoint",
+  "antigravity_ide_db_path",
+  "antigravity_app_paths",
+  "antigravity_process_names",
+  "antigravity_user_agent",
   "log_level",
   "tray_token_rate",
   "enable_api_format_conversion",
@@ -112,6 +139,10 @@ export const EMPTY_FORM: ConfigForm = {
   localApiKey: "",
   appProxyUrl: "",
   kiroPreferredEndpoint: "ide",
+  antigravityIdeDbPath: "",
+  antigravityAppPaths: "",
+  antigravityProcessNames: "",
+  antigravityUserAgent: "",
   logLevel: "silent",
   trayTokenRate: { ...DEFAULT_TRAY_TOKEN_RATE },
   enableApiFormatConversion: false,
@@ -125,8 +156,11 @@ export function createEmptyUpstream(): UpstreamForm {
     provider: "",
     baseUrl: "",
     apiKey: "",
+    filterPromptCacheRetention: false,
+    filterSafetyIdentifier: false,
     kiroAccountId: "",
     codexAccountId: "",
+    antigravityAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "",
@@ -173,6 +207,10 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     localApiKey: config.local_api_key ?? "",
     appProxyUrl: config.app_proxy_url ?? "",
     kiroPreferredEndpoint: config.kiro_preferred_endpoint ?? "ide",
+    antigravityIdeDbPath: config.antigravity_ide_db_path ?? "",
+    antigravityAppPaths: joinListInput(config.antigravity_app_paths),
+    antigravityProcessNames: joinListInput(config.antigravity_process_names),
+    antigravityUserAgent: config.antigravity_user_agent ?? "",
     logLevel: config.log_level ?? "silent",
     trayTokenRate: normalizeTrayTokenRate(config.tray_token_rate),
     enableApiFormatConversion: config.enable_api_format_conversion,
@@ -182,8 +220,11 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
       provider: upstream.provider,
       baseUrl: upstream.base_url,
       apiKey: upstream.api_key ?? "",
+      filterPromptCacheRetention: upstream.filter_prompt_cache_retention ?? false,
+      filterSafetyIdentifier: upstream.filter_safety_identifier ?? false,
       kiroAccountId: upstream.kiro_account_id ?? "",
       codexAccountId: upstream.codex_account_id ?? "",
+      antigravityAccountId: upstream.antigravity_account_id ?? "",
       preferredEndpoint: upstream.preferred_endpoint ?? "",
       proxyUrl: upstream.proxy_url ?? "",
       priority: upstream.priority === null ? "" : String(upstream.priority),
@@ -202,6 +243,14 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     local_api_key: form.localApiKey.trim() ? form.localApiKey.trim() : null,
     app_proxy_url: form.appProxyUrl.trim() ? form.appProxyUrl.trim() : null,
     kiro_preferred_endpoint: normalizeKiroPreferredEndpoint(form.kiroPreferredEndpoint),
+    antigravity_ide_db_path: form.antigravityIdeDbPath.trim()
+      ? form.antigravityIdeDbPath.trim()
+      : null,
+    antigravity_app_paths: parseListInput(form.antigravityAppPaths),
+    antigravity_process_names: parseListInput(form.antigravityProcessNames),
+    antigravity_user_agent: form.antigravityUserAgent.trim()
+      ? form.antigravityUserAgent.trim()
+      : null,
     log_level: form.logLevel,
     tray_token_rate: form.trayTokenRate,
     enable_api_format_conversion: form.enableApiFormatConversion,
@@ -211,11 +260,16 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       provider: upstream.provider.trim(),
       base_url: upstream.baseUrl.trim(),
       api_key: upstream.apiKey.trim() ? upstream.apiKey.trim() : null,
+      filter_prompt_cache_retention: upstream.filterPromptCacheRetention,
+      filter_safety_identifier: upstream.filterSafetyIdentifier,
       kiro_account_id: upstream.kiroAccountId.trim()
         ? upstream.kiroAccountId.trim()
         : null,
       codex_account_id: upstream.codexAccountId.trim()
         ? upstream.codexAccountId.trim()
+        : null,
+      antigravity_account_id: upstream.antigravityAccountId.trim()
+        ? upstream.antigravityAccountId.trim()
         : null,
       preferred_endpoint: normalizeKiroPreferredEndpoint(upstream.preferredEndpoint),
       proxy_url: upstream.proxyUrl.trim() ? upstream.proxyUrl.trim() : null,
@@ -265,7 +319,15 @@ export function validate(form: ConfigForm) {
     if (provider === "codex" && !upstream.codexAccountId.trim()) {
       return { valid: false, message: m.error_upstream_codex_account_required({ id }) };
     }
-    if (provider !== "kiro" && provider !== "codex" && !upstream.baseUrl.trim()) {
+    if (provider === "antigravity" && !upstream.antigravityAccountId.trim()) {
+      return { valid: false, message: m.error_upstream_antigravity_account_required({ id }) };
+    }
+    if (
+      provider !== "kiro" &&
+      provider !== "codex" &&
+      provider !== "antigravity" &&
+      !upstream.baseUrl.trim()
+    ) {
       return { valid: false, message: m.error_upstream_base_url_required({ id }) };
     }
     const upstreamProxyUrl = upstream.proxyUrl.trim();

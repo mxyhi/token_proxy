@@ -23,6 +23,7 @@ fn config_with_providers(
         upstream_strategy: UpstreamStrategy::PriorityRoundRobin,
         upstreams,
         kiro_preferred_endpoint: None,
+        antigravity_user_agent: None,
     }
 }
 
@@ -36,8 +37,11 @@ fn config_with_upstreams(
             id: (*id).to_string(),
             base_url: "https://example.com".to_string(),
             api_key: None,
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: false,
             kiro_account_id: None,
             codex_account_id: None,
+            antigravity_account_id: None,
             kiro_preferred_endpoint: None,
             proxy_url: None,
             priority: *priority,
@@ -69,6 +73,7 @@ fn config_with_upstreams(
         upstream_strategy: UpstreamStrategy::PriorityRoundRobin,
         upstreams: provider_map,
         kiro_preferred_endpoint: None,
+        antigravity_user_agent: None,
     }
 }
 
@@ -177,6 +182,16 @@ fn anthropic_messages_fallbacks_to_kiro_without_conversion() {
     assert_eq!(plan.outbound_path, Some(RESPONSES_PATH));
     assert_eq!(plan.request_transform, FormatTransform::None);
     assert_eq!(plan.response_transform, FormatTransform::KiroToAnthropic);
+}
+
+#[test]
+fn anthropic_messages_allows_antigravity_without_conversion() {
+    let config = config_with_providers(&[PROVIDER_ANTIGRAVITY], false);
+    let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should fallback");
+    assert_eq!(plan.provider, PROVIDER_ANTIGRAVITY);
+    assert_eq!(plan.outbound_path, None);
+    assert_eq!(plan.request_transform, FormatTransform::AnthropicToGemini);
+    assert_eq!(plan.response_transform, FormatTransform::GeminiToAnthropic);
 }
 
 #[test]

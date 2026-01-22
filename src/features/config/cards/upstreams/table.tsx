@@ -19,6 +19,7 @@ import {
 import type { UpstreamColumnDefinition, UpstreamColumnId } from "@/features/config/cards/upstreams/types";
 import type { CodexAccountSummary } from "@/features/codex/types";
 import type { KiroAccountSummary } from "@/features/kiro/types";
+import type { AntigravityAccountSummary } from "@/features/antigravity/types";
 import { UPSTREAM_STRATEGIES, type UpstreamForm, type UpstreamStrategy } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
@@ -137,6 +138,7 @@ function UpstreamsTableHeader({ columns }: UpstreamsTableHeaderProps) {
 
 type KiroAccountMap = Map<string, KiroAccountSummary>;
 type CodexAccountMap = Map<string, CodexAccountSummary>;
+type AntigravityAccountMap = Map<string, AntigravityAccountSummary>;
 
 function renderTextCell(value: string, placeholder: string) {
   return value.trim() ? (
@@ -158,6 +160,7 @@ function renderAccountCell(
   upstream: UpstreamForm,
   kiroAccounts: KiroAccountMap,
   codexAccounts: CodexAccountMap,
+  antigravityAccounts: AntigravityAccountMap,
 ) {
   const provider = upstream.provider.trim();
   if (provider === "kiro") {
@@ -179,6 +182,18 @@ function renderAccountCell(
     const account = codexAccounts.get(accountId);
     if (!account) {
       return <span className="truncate text-muted-foreground">{m.codex_account_missing()}</span>;
+    }
+    const label = account.email?.trim() ? account.email : account.account_id;
+    return <span className="truncate text-foreground">{label}</span>;
+  }
+  if (provider === "antigravity") {
+    const accountId = upstream.antigravityAccountId.trim();
+    if (!accountId) {
+      return <span className="truncate text-muted-foreground">{m.antigravity_account_unset()}</span>;
+    }
+    const account = antigravityAccounts.get(accountId);
+    if (!account) {
+      return <span className="truncate text-muted-foreground">{m.antigravity_account_missing()}</span>;
     }
     const label = account.email?.trim() ? account.email : account.account_id;
     return <span className="truncate text-foreground">{label}</span>;
@@ -211,6 +226,7 @@ function renderUpstreamCell(
   showApiKeys: boolean,
   kiroAccounts: KiroAccountMap,
   codexAccounts: CodexAccountMap,
+  antigravityAccounts: AntigravityAccountMap,
 ) {
   switch (columnId) {
     case "id":
@@ -218,7 +234,7 @@ function renderUpstreamCell(
     case "provider":
       return renderTextCell(upstream.provider, "openai");
     case "account":
-      return renderAccountCell(upstream, kiroAccounts, codexAccounts);
+      return renderAccountCell(upstream, kiroAccounts, codexAccounts, antigravityAccounts);
     case "baseUrl":
       return renderTextCell(upstream.baseUrl, "https://api.openai.com");
     case "apiKey":
@@ -311,6 +327,7 @@ type UpstreamsTableRowProps = {
   showApiKeys: boolean;
   kiroAccounts: KiroAccountMap;
   codexAccounts: CodexAccountMap;
+  antigravityAccounts: AntigravityAccountMap;
   disableDelete: boolean;
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
@@ -325,6 +342,7 @@ function UpstreamsTableRow({
   showApiKeys,
   kiroAccounts,
   codexAccounts,
+  antigravityAccounts,
   disableDelete,
   onEdit,
   onCopy,
@@ -340,7 +358,14 @@ function UpstreamsTableRow({
           className={["px-3 py-2 align-top", column.cellClassName].filter(Boolean).join(" ")}
         >
           <div className="flex h-8 items-center">
-            {renderUpstreamCell(column.id, upstream, showApiKeys, kiroAccounts, codexAccounts)}
+            {renderUpstreamCell(
+              column.id,
+              upstream,
+              showApiKeys,
+              kiroAccounts,
+              codexAccounts,
+              antigravityAccounts
+            )}
           </div>
         </td>
       ))}
@@ -363,6 +388,7 @@ export type UpstreamsTableProps = {
   showApiKeys: boolean;
   kiroAccounts: KiroAccountMap;
   codexAccounts: CodexAccountMap;
+  antigravityAccounts: AntigravityAccountMap;
   disableDelete: boolean;
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
@@ -376,6 +402,7 @@ export function UpstreamsTable({
   showApiKeys,
   kiroAccounts,
   codexAccounts,
+  antigravityAccounts,
   disableDelete,
   onEdit,
   onCopy,
@@ -396,6 +423,7 @@ export function UpstreamsTable({
               showApiKeys={showApiKeys}
               kiroAccounts={kiroAccounts}
               codexAccounts={codexAccounts}
+              antigravityAccounts={antigravityAccounts}
               disableDelete={disableDelete}
               onEdit={onEdit}
               onCopy={onCopy}

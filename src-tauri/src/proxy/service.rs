@@ -353,6 +353,10 @@ async fn build_proxy_state(
         .state::<Arc<crate::codex::CodexAccountStore>>()
         .inner()
         .clone();
+    let antigravity_accounts = app
+        .state::<Arc<crate::antigravity::AntigravityAccountStore>>()
+        .inner()
+        .clone();
     Ok(Arc::new(ProxyState {
         config,
         http_clients,
@@ -362,5 +366,6 @@ async fn build_proxy_state(
         token_rate,
         kiro_accounts,
         codex_accounts,
+        antigravity_accounts,
     }))
 }

@@ -340,35 +340,48 @@ function UpstreamOpenAIResponsesFields({
 
   return (
     <div data-slot="upstream-openai-responses-fields" className="contents">
-      <EditorField
-        label={m.field_filter_prompt_cache_retention()}
-        tooltip={m.field_filter_prompt_cache_retention_tip()}
-      >
-        <div className="flex items-center justify-end">
-          <Switch
-            checked={draft.filterPromptCacheRetention}
-            onCheckedChange={(checked) =>
-              onChangeDraft({ filterPromptCacheRetention: checked })
-            }
-            aria-label={m.field_filter_prompt_cache_retention_aria()}
-          />
-        </div>
-      </EditorField>
-      <EditorField
-        label={m.field_filter_safety_identifier()}
-        tooltip={m.field_filter_safety_identifier_tip()}
-      >
-        <div className="flex items-center justify-end">
-          <Switch
-            checked={draft.filterSafetyIdentifier}
-            onCheckedChange={(checked) => onChangeDraft({ filterSafetyIdentifier: checked })}
-            aria-label={m.field_filter_safety_identifier_aria()}
-          />
-        </div>
-      </EditorField>
+      <div className="col-span-2 flex items-center gap-3">
+        <Label className="inline-flex items-center gap-1">
+          {m.field_filter_prompt_cache_retention()}
+     <Tooltip>
+            <TooltipTrigger asChild>
+        <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+            </TooltipTrigger>
+     <TooltipContent side="right" className="max-w-xs">
+         {m.field_filter_prompt_cache_retention_tip()}
+</TooltipContent>
+        </Tooltip>
+        </Label>
+        <Switch
+checked={draft.filterPromptCacheRetention}
+          onCheckedChange={(checked) =>
+            onChangeDraft({ filterPromptCacheRetention: checked })
+          }
+          aria-label={m.field_filter_prompt_cache_retention_aria()}
+ />
+      </div>
+      <div className="col-span-2 flex items-center gap-3">
+ <Label className="inline-flex items-center gap-1">
+          {m.field_filter_safety_identifier()}
+      <Tooltip>
+    <TooltipTrigger asChild>
+       <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+  </TooltipTrigger>
+     <TooltipContent side="right" className="max-w-xs">
+              {m.field_filter_safety_identifier_tip()}
+       </TooltipContent>
+      </Tooltip>
+        </Label>
+     <Switch
+          checked={draft.filterSafetyIdentifier}
+      onCheckedChange={(checked) => onChangeDraft({ filterSafetyIdentifier: checked })}
+     aria-label={m.field_filter_safety_identifier_aria()}
+        />
+      </div>
     </div>
   );
 }
+
 
 type UpstreamOrderFieldsProps = {
   draft: UpstreamForm;
@@ -550,10 +563,10 @@ export function UpstreamEditorFields({
           onChangeDraft={onChangeDraft}
         />
       )}
-      <UpstreamOpenAIResponsesFields draft={draft} onChangeDraft={onChangeDraft} />
       <UpstreamOrderFields draft={draft} onChangeDraft={onChangeDraft} />
       <UpstreamModelMappingFields draft={draft} onChangeDraft={onChangeDraft} />
       <UpstreamHeaderOverrideFields draft={draft} onChangeDraft={onChangeDraft} />
+      <UpstreamOpenAIResponsesFields draft={draft} onChangeDraft={onChangeDraft} />
     </div>
   );
 }

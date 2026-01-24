@@ -6,20 +6,25 @@ mod antigravity;
 mod codex;
 mod kiro;
 mod logging;
-mod oauth_util;
 mod proxy;
 mod tray;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 type ProxyServiceHandle = proxy::service::ProxyServiceHandle;
 type ProxyServiceStatus = proxy::service::ProxyServiceStatus;
 type LogLevel = logging::LogLevel;
 
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
+const REQUEST_DETAIL_CAPTURE_EVENT: &str = "request-detail-capture-changed";
+
+#[derive(Clone, serde::Serialize)]
+struct RequestDetailCaptureEvent {
+    enabled: bool,
+}
 
 // 主窗口显示/销毁时同步 Dock/任务栏展示状态。
 pub(crate) fn set_main_window_visibility(app: &tauri::AppHandle, visible: bool) {
@@ -82,7 +87,8 @@ fn is_autostart_launch() -> bool {
 
 #[tauri::command]
 async fn read_proxy_config(app: tauri::AppHandle) -> Result<proxy::config::ConfigResponse, String> {
-    proxy::config::read_config(app).await
+    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
+    proxy::config::read_config(paths.inner().as_ref()).await
 }
 
 #[tauri::command]
@@ -129,7 +135,8 @@ async fn write_proxy_config(
     );
     let log_level = config.log_level;
     let app_proxy_url = proxy::config::app_proxy_url_from_config(&config).ok().flatten();
-    if let Err(err) = proxy::config::write_config(app.clone(), config).await {
+    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
+    if let Err(err) = proxy::config::write_config(paths.inner().as_ref(), config).await {
         tracing::error!(error = %err, "write_proxy_config save failed");
         tray_state.apply_error("保存失败", &err);
         return Err(err);
@@ -138,7 +145,8 @@ async fn write_proxy_config(
     let reload_start = Instant::now();
     logging_state.apply_level(log_level);
     app_proxy::set(&app_proxy_state, app_proxy_url).await;
-    match proxy_service.reload(app).await {
+    let proxy_context = app.state::<proxy::service::ProxyContext>();
+    match proxy_service.reload(proxy_context.inner()).await {
         Ok(status) => {
             tracing::debug!(
                 elapsed_ms = reload_start.elapsed().as_millis(),
@@ -167,7 +175,9 @@ async fn read_dashboard_snapshot(
     range: proxy::dashboard::DashboardRange,
     offset: Option<u32>,
 ) -> Result<proxy::dashboard::DashboardSnapshot, String> {
-    proxy::dashboard::read_snapshot(app, range, offset).await
+    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
+    let pool = proxy::sqlite::open_read_pool(paths.inner().as_ref()).await?;
+    proxy::dashboard::read_snapshot(&pool, range, offset).await
 }
 
 #[tauri::command]
@@ -175,7 +185,9 @@ async fn read_request_log_detail(
     app: tauri::AppHandle,
     id: u64,
 ) -> Result<proxy::logs::RequestLogDetail, String> {
-    proxy::logs::read_request_log_detail(app, id).await
+    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
+    let pool = proxy::sqlite::open_read_pool(paths.inner().as_ref()).await?;
+    proxy::logs::read_request_log_detail(&pool, id).await
 }
 
 #[tauri::command]
@@ -353,8 +365,9 @@ async fn antigravity_import_ide(
     store: tauri::State<'_, Arc<antigravity::AntigravityAccountStore>>,
     ide_db_path: Option<String>,
 ) -> Result<Vec<antigravity::AntigravityAccountSummary>, String> {
+    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
     let path = ide_db_path.map(PathBuf::from);
-    antigravity::import_from_ide(&app, store.as_ref(), path).await
+    antigravity::import_from_ide(paths.inner().as_ref(), store.as_ref(), path).await
 }
 
 #[tauri::command]
@@ -364,15 +377,17 @@ async fn antigravity_switch_ide_account(
     account_id: String,
     ide_db_path: Option<String>,
 ) -> Result<antigravity::AntigravityIdeStatus, String> {
+    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
     let path = ide_db_path.map(PathBuf::from);
-    antigravity::switch_ide_account(&app, store.as_ref(), &account_id, path).await
+    antigravity::switch_ide_account(paths.inner().as_ref(), store.as_ref(), &account_id, path).await
 }
 
 #[tauri::command]
 async fn antigravity_ide_status(
     app: tauri::AppHandle,
 ) -> Result<antigravity::AntigravityIdeStatus, String> {
-    antigravity::ide_status(&app, None).await
+    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
+    antigravity::ide_status(paths.inner().as_ref()).await
 }
 
 #[tauri::command]
@@ -431,7 +446,8 @@ async fn proxy_start(
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,
 ) -> Result<ProxyServiceStatus, String> {
-    match proxy_service.start(app).await {
+    let proxy_context = app.state::<proxy::service::ProxyContext>();
+    match proxy_service.start(proxy_context.inner()).await {
         Ok(status) => {
             tray_state.apply_status(&status);
             Ok(status)
@@ -476,7 +492,8 @@ async fn proxy_restart(
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,
 ) -> Result<ProxyServiceStatus, String> {
-    match proxy_service.restart(app).await {
+    let proxy_context = app.state::<proxy::service::ProxyContext>();
+    match proxy_service.restart(proxy_context.inner()).await {
         Ok(status) => {
             tray_state.apply_status(&status);
             Ok(status)
@@ -494,7 +511,8 @@ async fn proxy_reload(
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,
 ) -> Result<ProxyServiceStatus, String> {
-    match proxy_service.reload(app).await {
+    let proxy_context = app.state::<proxy::service::ProxyContext>();
+    match proxy_service.reload(proxy_context.inner()).await {
         Ok(status) => {
             tray_state.apply_status(&status);
             Ok(status)
@@ -551,11 +569,29 @@ pub fn run() {
                     .plugin(tauri_plugin_updater::Builder::new().build())?;
             }
 
+            let data_dir = app
+                .handle()
+                .path()
+                .app_config_dir()
+                .map_err(|err| format!("Failed to resolve app config dir: {err}"))?;
+            let paths = Arc::new(token_proxy_core::paths::TokenProxyPaths::from_app_data_dir(
+                data_dir,
+            )?);
+            app.manage(paths.clone());
+
             let token_rate = proxy::token_rate::TokenRateTracker::new();
             app.manage(token_rate.clone());
-            let request_detail =
-                Arc::new(proxy::request_detail::RequestDetailCapture::new(app.handle().clone()));
-            app.manage(request_detail);
+            let app_handle_for_request_detail = app.handle().clone();
+            let on_request_detail_change = Arc::new(move |enabled: bool| {
+                let _ = app_handle_for_request_detail.emit(
+                    REQUEST_DETAIL_CAPTURE_EVENT,
+                    RequestDetailCaptureEvent { enabled },
+                );
+            });
+            let request_detail = Arc::new(proxy::request_detail::RequestDetailCapture::new(Some(
+                on_request_detail_change,
+            )));
+            app.manage(request_detail.clone());
             let proxy_service = ProxyServiceHandle::new();
             app.manage(proxy_service.clone());
             app.manage(logging_state.clone());
@@ -563,27 +599,27 @@ pub fn run() {
             app.manage(app_proxy_state.clone());
             let app_handle = app.handle().clone();
             let kiro_store = Arc::new(kiro::KiroAccountStore::new(
-                &app_handle,
+                paths.as_ref(),
                 app_proxy_state.clone(),
             )?);
             app.manage(kiro_store.clone());
             let kiro_login = Arc::new(kiro::KiroLoginManager::new(
-                kiro_store,
+                kiro_store.clone(),
                 app_proxy_state.clone(),
             ));
             app.manage(kiro_login);
             let codex_store = Arc::new(codex::CodexAccountStore::new(
-                &app_handle,
+                paths.as_ref(),
                 app_proxy_state.clone(),
             )?);
             app.manage(codex_store.clone());
             let codex_login = Arc::new(codex::CodexLoginManager::new(
-                codex_store,
+                codex_store.clone(),
                 app_proxy_state.clone(),
             ));
             app.manage(codex_login);
             let antigravity_store = Arc::new(antigravity::AntigravityAccountStore::new(
-                &app_handle,
+                paths.as_ref(),
                 app_proxy_state.clone(),
             )?);
             app.manage(antigravity_store.clone());
@@ -593,7 +629,7 @@ pub fn run() {
             ));
             app.manage(antigravity_login);
             let antigravity_warmup = Arc::new(antigravity::AntigravityWarmupScheduler::new(
-                antigravity_store,
+                antigravity_store.clone(),
                 app_proxy_state.clone(),
             ));
             app.manage(antigravity_warmup.clone());
@@ -601,14 +637,25 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 antigravity_warmup_for_start.start().await;
             });
+
+            let proxy_context = proxy::service::ProxyContext {
+                paths: paths.clone(),
+                logging: logging_state.clone(),
+                request_detail: request_detail.clone(),
+                token_rate: token_rate.clone(),
+                kiro_accounts: kiro_store.clone(),
+                codex_accounts: codex_store.clone(),
+                antigravity_accounts: antigravity_store.clone(),
+            };
+            app.manage(proxy_context.clone());
             let tray_state = tray::init_tray(&app_handle, proxy_service.clone())?;
             app.manage(tray_state.clone());
 
             let tray_state_for_config = tray_state.clone();
-            let app_handle_for_config = app_handle.clone();
+            let paths_for_config = paths.clone();
             let app_proxy_for_config = app_proxy_state.clone();
             tauri::async_runtime::spawn(async move {
-                if let Ok(response) = proxy::config::read_config(app_handle_for_config).await {
+                if let Ok(response) = proxy::config::read_config(paths_for_config.as_ref()).await {
                     logging_state.apply_level(response.config.log_level);
                     tray_state_for_config
                         .apply_config(&response.config.tray_token_rate)
@@ -623,9 +670,9 @@ pub fn run() {
 
             let tray_state_for_start = tray_state.clone();
             let proxy_for_start = proxy_service.clone();
-            let app_handle_for_start = app_handle.clone();
+            let proxy_context_for_start = proxy_context.clone();
             tauri::async_runtime::spawn(async move {
-                match proxy_for_start.start(app_handle_for_start).await {
+                match proxy_for_start.start(&proxy_context_for_start).await {
                     Ok(status) => tray_state_for_start.apply_status(&status),
                     Err(err) => {
                         tray_state_for_start.apply_error("启动失败", &err);

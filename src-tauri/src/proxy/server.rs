@@ -826,4 +826,5 @@ async fn proxy_request(
 }
 
 #[cfg(test)]
+#[path = "server.test.rs"]
 mod tests;

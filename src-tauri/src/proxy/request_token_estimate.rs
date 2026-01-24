@@ -552,4 +552,5 @@ enum MediaKind {
 }
 
 #[cfg(test)]
+#[path = "request_token_estimate.test.rs"]
 mod tests;

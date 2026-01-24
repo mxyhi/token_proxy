@@ -33,4 +33,5 @@ pub(crate) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
 }
 
 #[cfg(test)]
+#[path = "anthropic_compat.test.rs"]
 mod tests;

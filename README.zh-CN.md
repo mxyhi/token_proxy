@@ -45,9 +45,28 @@ curl -X POST \
   -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":256,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}'
 ```
 
+## Workspace & CLI（Rust）
+- 现在是 Cargo workspace；Tauri 仍在 `src-tauri/`。
+- CLI crate：`crates/token_proxy_cli`（二进制名 `token-proxy`）。
+- 默认配置路径：`./config.jsonc`（用 `--config` 覆盖）。
+
+```bash
+# 启动代理
+cargo run -p token_proxy_cli -- serve
+
+# 使用自定义配置路径
+cargo run -p token_proxy_cli -- --config ./config.jsonc serve
+
+# 配置辅助命令
+cargo run -p token_proxy_cli -- config init
+cargo run -p token_proxy_cli -- --config ./config.jsonc config path
+```
+
 ## 配置参考
 - 文件：`config.jsonc`（支持注释与尾随逗号）
-- 位置：Tauri **AppConfig** 目录（应用自动解析）
+- 位置：
+  - CLI：`--config`（默认：`./config.jsonc`）
+  - Tauri：**AppConfig** 目录（应用自动解析）
 
 ### 核心字段
 | 字段 | 默认值 | 说明 |

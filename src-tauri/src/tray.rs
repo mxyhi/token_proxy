@@ -298,7 +298,9 @@ pub(crate) fn init_tray(
                 let tray_state = tray_state_for_menu.clone();
                 let proxy_service = proxy_for_menu.clone();
                 tauri::async_runtime::spawn(async move {
-                    match proxy_service.start(app).await {
+                    let proxy_context =
+                        app.state::<crate::proxy::service::ProxyContext>().inner().clone();
+                    match proxy_service.start(&proxy_context).await {
                         Ok(status) => tray_state.apply_status(&status),
                         Err(err) => tray_state.apply_error("启动失败", &err),
                     }
@@ -319,7 +321,9 @@ pub(crate) fn init_tray(
                 let tray_state = tray_state_for_menu.clone();
                 let proxy_service = proxy_for_menu.clone();
                 tauri::async_runtime::spawn(async move {
-                    match proxy_service.restart(app).await {
+                    let proxy_context =
+                        app.state::<crate::proxy::service::ProxyContext>().inner().clone();
+                    match proxy_service.restart(&proxy_context).await {
                         Ok(status) => tray_state.apply_status(&status),
                         Err(err) => tray_state.apply_error("重启失败", &err),
                     }

@@ -196,4 +196,5 @@ mod upstream_read;
 mod upstream_stream;
 
 #[cfg(test)]
+#[path = "response.test.rs"]
 mod tests;

@@ -1,13 +1,6 @@
-use std::sync::Arc;
+pub use token_proxy_core::app_proxy::{set, AppProxyState};
 
-use tokio::sync::RwLock;
-
-pub(crate) type AppProxyState = Arc<RwLock<Option<String>>>;
-
-pub(crate) fn new_state() -> AppProxyState {
-    Arc::new(RwLock::new(None))
+pub fn new_state() -> AppProxyState {
+    token_proxy_core::app_proxy::new_state()
 }
 
-pub(crate) async fn set(state: &AppProxyState, value: Option<String>) {
-    *state.write().await = value;
-}

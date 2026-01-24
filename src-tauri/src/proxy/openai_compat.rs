@@ -550,4 +550,5 @@ fn copy_key(source: &serde_json::Map<String, Value>, target: &mut Map<String, Va
 }
 
 #[cfg(test)]
+#[path = "openai_compat.test.rs"]
 mod tests;

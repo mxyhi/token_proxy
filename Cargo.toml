@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/token_proxy_core",
+  "crates/token_proxy_cli",
+  "src-tauri",
+]
+
+[profile.release]
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+opt-level = "s"

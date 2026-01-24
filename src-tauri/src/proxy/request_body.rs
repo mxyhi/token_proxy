@@ -172,4 +172,5 @@ impl ReplayableBody {
 }
 
 #[cfg(test)]
+#[path = "request_body.test.rs"]
 mod tests;

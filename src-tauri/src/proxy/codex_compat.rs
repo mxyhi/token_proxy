@@ -34,4 +34,5 @@ pub(crate) fn apply_codex_headers_if_needed(
 }
 
 #[cfg(test)]
+#[path = "codex_compat.test.rs"]
 mod tests;

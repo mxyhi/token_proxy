@@ -1,0 +1,555 @@
+use axum::body::Bytes;
+use axum::body::Body;
+use axum::http::{HeaderMap, Method, StatusCode};
+use serde_json::Value;
+use std::time::{Duration, Instant};
+use super::{result, AttemptOutcome};
+use super::kiro_http::{
+    build_client,
+    handle_send_error,
+    read_request_json,
+    refresh_kiro_account,
+    send_kiro_request,
+};
+use crate::proxy::http;
+use crate::proxy::kiro::{
+    build_payload_from_chat, build_payload_from_claude, build_payload_from_responses,
+    determine_agentic_mode, map_model_to_kiro, select_endpoints, BuildPayloadResult,
+    KiroEndpointConfig,
+};
+use crate::proxy::openai_compat::FormatTransform;
+use crate::proxy::request_body::ReplayableBody;
+use crate::proxy::{ProxyState, RequestMeta};
+use crate::proxy::{config::UpstreamRuntime, request_detail::RequestDetailSnapshot};
+use crate::kiro::KiroTokenRecord;
+
+const MAX_KIRO_RETRIES: usize = 2;
+const MAX_KIRO_BACKOFF_SECS: u64 = 30;
+
+pub(super) async fn attempt_kiro_upstream(
+    state: &ProxyState,
+    method: Method,
+    upstream: &UpstreamRuntime,
+    inbound_path: &str,
+    headers: &HeaderMap,
+    body: &ReplayableBody,
+    meta: &RequestMeta,
+    response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
+) -> AttemptOutcome {
+    let mut context = match prepare_kiro_context(
+        state,
+        upstream,
+        body,
+        meta,
+        headers,
+        method,
+        inbound_path,
+        response_transform,
+        request_detail,
+    )
+    .await
+    {
+        Ok(context) => context,
+        Err(outcome) => return outcome,
+    };
+    run_kiro_endpoints(&mut context).await
+}
+
+struct KiroContext<'a> {
+    state: &'a ProxyState,
+    method: Method,
+    upstream: &'a UpstreamRuntime,
+    inbound_path: &'a str,
+    headers: &'a HeaderMap,
+    response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
+    mapped_meta: RequestMeta,
+    request_value: Value,
+    account_id: String,
+    record: KiroTokenRecord,
+    profile_arn: Option<String>,
+    endpoints: Vec<KiroEndpointConfig>,
+    is_idc: bool,
+    model_id: String,
+    is_agentic: bool,
+    is_chat_only: bool,
+    source_format: KiroSourceFormat,
+    client: reqwest::Client,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum KiroSourceFormat {
+    OpenAIChat,
+    Responses,
+    Anthropic,
+}
+
+enum EndpointOutcome {
+    Continue,
+    Done(AttemptOutcome),
+}
+
+enum ResponseAction {
+    RetryAfter(Duration),
+    RefreshAndRetry,
+    NextEndpoint,
+    Finalize(reqwest::Response, Instant),
+    Return(AttemptOutcome),
+}
+
+async fn prepare_kiro_context<'a>(
+    state: &'a ProxyState,
+    upstream: &'a UpstreamRuntime,
+    body: &ReplayableBody,
+    meta: &RequestMeta,
+    headers: &'a HeaderMap,
+    method: Method,
+    inbound_path: &'a str,
+    response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
+) -> Result<KiroContext<'a>, AttemptOutcome> {
+    let mapped_meta = super::build_mapped_meta(meta, upstream);
+    let request_value = read_request_json(state, body).await?;
+    let account_id = resolve_account_id(upstream)?;
+    let record = load_account_record(state, &account_id).await?;
+    let is_idc = record.auth_method.trim().eq_ignore_ascii_case("idc");
+    let profile_arn = resolve_profile_arn(&record);
+    let endpoints = resolve_endpoints(state, upstream, is_idc);
+    let (model_id, is_agentic, is_chat_only) = resolve_model(&mapped_meta);
+    let source_format = resolve_source_format(response_transform);
+    let client = build_client(state, upstream)?;
+
+    Ok(KiroContext {
+        state,
+        method,
+        upstream,
+        inbound_path,
+        headers,
+        response_transform,
+        request_detail,
+        mapped_meta,
+        request_value,
+        account_id,
+        record,
+        profile_arn,
+        endpoints,
+        is_idc,
+        model_id,
+        is_agentic,
+        is_chat_only,
+        source_format,
+        client,
+    })
+}
+
+async fn run_kiro_endpoints(context: &mut KiroContext<'_>) -> AttemptOutcome {
+    let endpoints = context.endpoints.clone();
+    let total = endpoints.len();
+    for (index, endpoint) in endpoints.iter().enumerate() {
+        let is_last = index + 1 >= total;
+        match attempt_endpoint(context, endpoint, is_last).await {
+            EndpointOutcome::Continue => continue,
+            EndpointOutcome::Done(outcome) => return outcome,
+        }
+    }
+
+    AttemptOutcome::Fatal(http::error_response(
+        StatusCode::BAD_GATEWAY,
+        "Kiro upstream request failed.",
+    ))
+}
+
+async fn attempt_endpoint(
+    context: &mut KiroContext<'_>,
+    endpoint: &KiroEndpointConfig,
+    is_last: bool,
+) -> EndpointOutcome {
+    let mut payload = match build_endpoint_payload(context, endpoint).await {
+        Ok(payload) => payload,
+        Err(outcome) => return EndpointOutcome::Done(outcome),
+    };
+
+    for attempt in 0..=MAX_KIRO_RETRIES {
+        let (response, start_time) =
+            match send_endpoint_request(context, endpoint, &payload.payload).await {
+                Ok(result) => result,
+                Err(outcome) => return EndpointOutcome::Done(outcome),
+            };
+
+        match handle_response_action(context, response, start_time, attempt, is_last)
+        .await
+        {
+            ResponseAction::RetryAfter(delay) => {
+                tokio::time::sleep(delay).await;
+                continue;
+            }
+            ResponseAction::RefreshAndRetry => {
+                match refresh_and_rebuild_payload(context, endpoint).await {
+                    Ok(updated) => payload = updated,
+                    Err(outcome) => return EndpointOutcome::Done(outcome),
+                }
+                continue;
+            }
+            ResponseAction::NextEndpoint => return EndpointOutcome::Continue,
+            ResponseAction::Finalize(response, start_time) => {
+                return EndpointOutcome::Done(
+                    finalize_response(
+                        context.state,
+                        &context.mapped_meta,
+                        context.upstream,
+                        context.inbound_path,
+                        context.response_transform,
+                        context.request_detail.clone(),
+                        response,
+                        false,
+                        start_time,
+                    )
+                    .await,
+                );
+            }
+            ResponseAction::Return(outcome) => return EndpointOutcome::Done(outcome),
+        }
+    }
+
+    EndpointOutcome::Done(AttemptOutcome::Fatal(http::error_response(
+        StatusCode::BAD_GATEWAY,
+        "Kiro upstream request failed.",
+    )))
+}
+
+async fn build_endpoint_payload(
+    context: &KiroContext<'_>,
+    endpoint: &KiroEndpointConfig,
+) -> Result<BuildPayloadResult, AttemptOutcome> {
+    let payload = match context.source_format {
+        KiroSourceFormat::OpenAIChat => build_payload_from_chat(
+            &context.request_value,
+            &context.model_id,
+            context.profile_arn.as_deref(),
+            endpoint.origin,
+            context.is_agentic,
+            context.is_chat_only,
+            context.headers,
+        ),
+        KiroSourceFormat::Anthropic => {
+            build_payload_from_anthropic(context, endpoint.origin).await
+        }
+        KiroSourceFormat::Responses => build_payload_from_responses(
+            &context.request_value,
+            &context.model_id,
+            context.profile_arn.as_deref(),
+            endpoint.origin,
+            context.is_agentic,
+            context.is_chat_only,
+            context.headers,
+        ),
+    };
+    payload.map_err(|message| {
+        AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
+    })
+}
+
+async fn handle_response_action(
+    context: &mut KiroContext<'_>,
+    response: reqwest::Response,
+    start_time: Instant,
+    attempt: usize,
+    is_last: bool,
+) -> ResponseAction {
+    let status = response.status();
+    // Kiro-specific retry/fallback: 5xx backoff, 401 refresh, 403 token-only refresh, 429 endpoint switch.
+    if status == StatusCode::TOO_MANY_REQUESTS {
+        return if is_last {
+            ResponseAction::Finalize(response, start_time)
+        } else {
+            ResponseAction::NextEndpoint
+        };
+    }
+    if status.is_server_error() {
+        if attempt < MAX_KIRO_RETRIES {
+            return ResponseAction::RetryAfter(backoff_delay(attempt));
+        }
+        return ResponseAction::Finalize(response, start_time);
+    }
+    if status == StatusCode::UNAUTHORIZED {
+        if attempt < MAX_KIRO_RETRIES {
+            return ResponseAction::RefreshAndRetry;
+        }
+        return ResponseAction::Finalize(response, start_time);
+    }
+    if status == StatusCode::FORBIDDEN {
+        return handle_forbidden_response(context, response, start_time, attempt).await;
+    }
+    if status == StatusCode::PAYMENT_REQUIRED {
+        return ResponseAction::Finalize(response, start_time);
+    }
+
+    ResponseAction::Finalize(response, start_time)
+}
+
+async fn handle_forbidden_response(
+    context: &mut KiroContext<'_>,
+    response: reqwest::Response,
+    start_time: Instant,
+    attempt: usize,
+) -> ResponseAction {
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = match response.bytes().await {
+        Ok(bytes) => bytes,
+        Err(err) => {
+            let message = format!("Failed to read upstream response: {err}");
+            return ResponseAction::Return(AttemptOutcome::Fatal(http::error_response(
+                StatusCode::BAD_GATEWAY,
+                message,
+            )));
+        }
+    };
+    let body_text = String::from_utf8_lossy(&body);
+
+    if contains_suspended_flag(&body_text) {
+        let outcome = build_error_outcome(context, status, &headers, body, start_time);
+        return ResponseAction::Return(outcome);
+    }
+
+    if contains_token_error(&body_text) && attempt < MAX_KIRO_RETRIES {
+        return ResponseAction::RefreshAndRetry;
+    }
+
+    let outcome = build_error_outcome(context, status, &headers, body, start_time);
+    ResponseAction::Return(outcome)
+}
+
+async fn refresh_and_rebuild_payload(
+    context: &mut KiroContext<'_>,
+    endpoint: &KiroEndpointConfig,
+) -> Result<BuildPayloadResult, AttemptOutcome> {
+    refresh_kiro_account(context.state, &context.account_id).await?;
+    context.record = load_account_record(context.state, &context.account_id).await?;
+    let was_idc = context.is_idc;
+    context.is_idc = context
+        .record
+        .auth_method
+        .trim()
+        .eq_ignore_ascii_case("idc");
+    if context.is_idc != was_idc {
+        context.endpoints = resolve_endpoints(context.state, context.upstream, context.is_idc);
+    }
+    build_endpoint_payload(context, endpoint).await
+}
+
+fn backoff_delay(attempt: usize) -> Duration {
+    let exp = 1u64 << attempt;
+    Duration::from_secs(exp.min(MAX_KIRO_BACKOFF_SECS))
+}
+
+fn contains_suspended_flag(body: &str) -> bool {
+    let upper = body.to_ascii_uppercase();
+    upper.contains("SUSPENDED") || upper.contains("TEMPORARILY_SUSPENDED")
+}
+
+fn contains_token_error(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("token")
+        || lower.contains("expired")
+        || lower.contains("invalid")
+        || lower.contains("unauthorized")
+}
+
+fn build_error_outcome(
+    context: &KiroContext<'_>,
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: Bytes,
+    start_time: Instant,
+) -> AttemptOutcome {
+    let message = summarize_error_body(&body);
+    result::log_upstream_error_if_needed(
+        &context.state.log,
+        context.request_detail.as_ref(),
+        &context.mapped_meta,
+        "kiro",
+        &context.upstream.id,
+        context.inbound_path,
+        status,
+        message,
+        start_time,
+    );
+    AttemptOutcome::Success(build_passthrough_response(status, headers, body))
+}
+
+fn build_passthrough_response(
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+    body: Bytes,
+) -> axum::response::Response {
+    let filtered = http::filter_response_headers(headers);
+    http::build_response(status, filtered, Body::from(body))
+}
+
+fn summarize_error_body(body: &Bytes) -> String {
+    const LIMIT: usize = 2048;
+    let text = String::from_utf8_lossy(body);
+    if text.len() > LIMIT {
+        format!("{}…", &text[..LIMIT])
+    } else {
+        text.to_string()
+    }
+}
+
+async fn build_payload_from_anthropic(
+    context: &KiroContext<'_>,
+    origin: &str,
+) -> Result<BuildPayloadResult, String> {
+    build_payload_from_claude(
+        &context.request_value,
+        &context.model_id,
+        context.profile_arn.as_deref(),
+        origin,
+        context.is_agentic,
+        context.is_chat_only,
+        context.headers,
+    )
+}
+
+async fn send_endpoint_request(
+    context: &KiroContext<'_>,
+    endpoint: &KiroEndpointConfig,
+    payload: &[u8],
+) -> Result<(reqwest::Response, Instant), AttemptOutcome> {
+    let start_time = Instant::now();
+    let response = match send_kiro_request(
+        &context.client,
+        context.method.clone(),
+        endpoint.url,
+        &context.record.access_token,
+        endpoint.amz_target,
+        context.is_idc,
+        payload,
+        context.upstream.header_overrides.as_deref(),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(err) => {
+            let outcome = handle_send_error(
+                context.state,
+                &context.mapped_meta,
+                context.upstream,
+                context.inbound_path,
+                context.response_transform,
+                context.request_detail.clone(),
+                err,
+                start_time,
+            )
+            .await;
+            return Err(outcome);
+        }
+    };
+    Ok((response, start_time))
+}
+
+fn resolve_account_id(upstream: &UpstreamRuntime) -> Result<String, AttemptOutcome> {
+    upstream
+        .kiro_account_id
+        .as_ref()
+        .map(|value| value.to_string())
+        .ok_or_else(|| {
+            AttemptOutcome::Fatal(http::error_response(
+                StatusCode::UNAUTHORIZED,
+                "Kiro account is not configured.",
+            ))
+        })
+}
+
+fn resolve_profile_arn(record: &KiroTokenRecord) -> Option<String> {
+    match record.auth_method.as_str() {
+        "builder-id" | "idc" => None,
+        _ => record.profile_arn.clone(),
+    }
+}
+
+async fn load_account_record(
+    state: &ProxyState,
+    account_id: &str,
+) -> Result<KiroTokenRecord, AttemptOutcome> {
+    state
+        .kiro_accounts
+        .get_account_record(account_id)
+        .await
+        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))
+}
+
+fn resolve_endpoints(
+    state: &ProxyState,
+    upstream: &UpstreamRuntime,
+    is_idc: bool,
+) -> Vec<KiroEndpointConfig> {
+    let preferred = upstream
+        .kiro_preferred_endpoint
+        .clone()
+        .or(state.config.kiro_preferred_endpoint.clone());
+    select_endpoints(preferred, is_idc)
+}
+
+fn resolve_model(meta: &RequestMeta) -> (String, bool, bool) {
+    let model_source = meta
+        .mapped_model
+        .as_deref()
+        .or(meta.original_model.as_deref())
+        .unwrap_or("claude-sonnet-4.5");
+    let (is_agentic, is_chat_only) =
+        determine_agentic_mode(meta.original_model.as_deref().unwrap_or(model_source));
+    (map_model_to_kiro(model_source), is_agentic, is_chat_only)
+}
+
+fn resolve_source_format(transform: FormatTransform) -> KiroSourceFormat {
+    match transform {
+        FormatTransform::KiroToChat => KiroSourceFormat::OpenAIChat,
+        FormatTransform::KiroToAnthropic => KiroSourceFormat::Anthropic,
+        _ => KiroSourceFormat::Responses,
+    }
+}
+
+async fn finalize_response(
+    state: &ProxyState,
+    meta: &RequestMeta,
+    upstream: &UpstreamRuntime,
+    inbound_path: &str,
+    response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
+    response: reqwest::Response,
+    force_success: bool,
+    start_time: Instant,
+) -> AttemptOutcome {
+    if force_success {
+        let output = crate::proxy::response::build_proxy_response(
+            meta,
+            "kiro",
+            &upstream.id,
+            inbound_path,
+            response,
+            state.log.clone(),
+            state.token_rate.clone(),
+            start_time,
+            response_transform,
+            request_detail,
+        )
+        .await;
+        return AttemptOutcome::Success(output);
+    }
+    result::handle_upstream_result(
+        Ok(response),
+        meta,
+        "kiro",
+        &upstream.id,
+        inbound_path,
+        state.log.clone(),
+        state.token_rate.clone(),
+        start_time,
+        response_transform,
+        request_detail,
+    )
+    .await
+}

@@ -28,3 +28,5 @@ src/paraglide/
 *.njsproj
 *.sln
 *.sw?
+
+target/

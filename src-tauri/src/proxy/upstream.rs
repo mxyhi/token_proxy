@@ -702,4 +702,5 @@ fn resolve_upstream_path_with_query(
 }
 
 #[cfg(test)]
+#[path = "upstream.test.rs"]
 mod tests;

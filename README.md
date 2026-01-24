@@ -45,9 +45,28 @@ curl -X POST \
   -d '{"model":"claude-3-5-sonnet-20241022","max_tokens":256,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}'
 ```
 
+## Workspace & CLI (Rust)
+- This repo is now a Cargo workspace; the Tauri app still lives in `src-tauri/`.
+- CLI crate: `crates/token_proxy_cli` (binary `token-proxy`).
+- Default config path: `./config.jsonc` (override with `--config`).
+
+```bash
+# start proxy
+cargo run -p token_proxy_cli -- serve
+
+# start with custom config path
+cargo run -p token_proxy_cli -- --config ./config.jsonc serve
+
+# config helpers
+cargo run -p token_proxy_cli -- config init
+cargo run -p token_proxy_cli -- --config ./config.jsonc config path
+```
+
 ## Configuration reference
 - File: `config.jsonc` (comments + trailing commas allowed)
-- Location: Tauri **AppConfig** directory (resolved automatically by the app)
+- Location:
+  - CLI: `--config` (default: `./config.jsonc`)
+  - Tauri: **AppConfig** directory (resolved automatically by the app)
 
 ### Core fields
 | Field | Default | Notes |

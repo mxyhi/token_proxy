@@ -381,4 +381,5 @@ fn ensure_json_object_field<'a>(
 }
 
 #[cfg(test)]
+#[path = "server_helpers.test.rs"]
 mod tests;

@@ -3,6 +3,7 @@ use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
 };
 use tauri::AppHandle;
 use tauri::Manager;
@@ -267,7 +268,8 @@ pub(crate) async fn write_opencode_config(app: AppHandle) -> Result<ClientConfig
 }
 
 async fn load_proxy_config(app: &AppHandle) -> Result<ProxyConfigFile, String> {
-    Ok(crate::proxy::config::read_config(app.clone()).await?.config)
+    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
+    Ok(crate::proxy::config::read_config(paths.inner().as_ref()).await?.config)
 }
 
 fn resolve_home_dir(app: &AppHandle) -> Result<PathBuf, String> {

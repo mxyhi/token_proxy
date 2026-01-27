@@ -122,7 +122,7 @@ cargo run -p token_proxy_cli -- --config ./config.jsonc config path
 
 ## Load balancing & retries
 - Priorities: higher `priority` groups first; inside a group use list order (fill-first) or round-robin (if `priority_round_robin`).
-- Retryable conditions: network timeout/connect errors, or status 403/429/307/5xx **except** 504/524. Retries stay within the same priority group; then the next lower priority group is tried.
+- Retryable conditions: network timeout/connect errors, or status 400/403/429/307/5xx **except** 504/524. Retries stay within the same priority group; then the next lower priority group is tried.
 
 ## Observability
 - SQLite log: `data.db` in config dir. Stores per-request stats (tokens, cached tokens, latency, model, upstream).

@@ -69,8 +69,9 @@ pub(super) fn is_retryable_error(err: &reqwest::Error) -> bool {
 }
 
 pub(super) fn is_retryable_status(status: StatusCode) -> bool {
-    // 对齐 new-api 的重试策略：429/307/5xx（排除 504/524）；额外允许 403 触发 fallback。
-    if status == StatusCode::FORBIDDEN
+    // 基于 new-api 的重试策略：400/429/307/5xx（排除 504/524）；额外允许 403 触发 fallback。
+    if status == StatusCode::BAD_REQUEST
+        || status == StatusCode::FORBIDDEN
         || status == StatusCode::TOO_MANY_REQUESTS
         || status == StatusCode::TEMPORARY_REDIRECT
     {

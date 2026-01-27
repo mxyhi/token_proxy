@@ -2,17 +2,17 @@ use super::*;
 use super::utils::is_retryable_status;
 
 #[test]
-fn retryable_status_matches_new_api_policy() {
+fn retryable_status_matches_proxy_policy() {
+    assert!(is_retryable_status(StatusCode::BAD_REQUEST));
     assert!(is_retryable_status(StatusCode::FORBIDDEN));
     assert!(is_retryable_status(StatusCode::TOO_MANY_REQUESTS));
     assert!(is_retryable_status(StatusCode::TEMPORARY_REDIRECT));
     assert!(is_retryable_status(StatusCode::INTERNAL_SERVER_ERROR));
 
-    // new-api excludes 504/524 timeouts from retries.
+    // Exclude 504/524 timeouts from retries.
     assert!(!is_retryable_status(StatusCode::GATEWAY_TIMEOUT));
     assert!(!is_retryable_status(StatusCode::from_u16(524).expect("524")));
 
-    assert!(!is_retryable_status(StatusCode::BAD_REQUEST));
     assert!(!is_retryable_status(StatusCode::UNAUTHORIZED));
 }
 

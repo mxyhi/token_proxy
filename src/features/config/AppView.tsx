@@ -22,7 +22,6 @@ import {
   ClientSetupCard,
   ConfigFileCard,
   AutoStartCard,
-  AntigravitySettingsCard,
   ProjectLinksCard,
   ProxyCoreCard,
   TrayTokenRateCard,
@@ -232,7 +231,6 @@ function ConfigSectionBody({
             onRemove={props.onRemoveUpstream}
             onChange={props.onChangeUpstream}
           />
-          <AntigravitySettingsCard form={props.form} onChange={props.onFormChange} />
         </div>
       );
     case "settings":

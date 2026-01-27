@@ -38,6 +38,7 @@ export type DashboardRequestItem = {
   provider: string;
   upstreamId: string;
   model: string | null;
+  mappedModel: string | null;
   stream: boolean;
   status: number;
   totalTokens: number | null;

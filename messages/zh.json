@@ -391,6 +391,7 @@
   "dashboard_table_time": "时间",
   "dashboard_table_path": "路径",
   "dashboard_table_provider": "Provider",
+  "dashboard_table_model": "Model",
   "dashboard_table_status": "状态",
   "dashboard_table_tokens": "Tokens",
   "dashboard_table_latency_ms": "首字延迟 (ms)",

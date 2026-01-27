@@ -54,6 +54,7 @@ pub struct DashboardRequestItem {
     pub provider: String,
     pub upstream_id: String,
     pub model: Option<String>,
+    pub mapped_model: Option<String>,
     pub stream: bool,
     pub status: u16,
     pub total_tokens: Option<u64>,
@@ -349,6 +350,7 @@ SELECT
   provider,
   upstream_id,
   model,
+  mapped_model,
   stream,
   status,
   CASE
@@ -380,6 +382,7 @@ LIMIT ?3 OFFSET ?4;
         let provider: String = row.try_get("provider").ok()?;
         let upstream_id: String = row.try_get("upstream_id").ok()?;
         let model: Option<String> = row.try_get("model").ok()?;
+        let mapped_model: Option<String> = row.try_get("mapped_model").ok()?;
         let stream: bool = row.try_get("stream").unwrap_or(false);
         let status: i64 = row.try_get("status").unwrap_or(0);
         let total_tokens: Option<i64> = row.try_get("total_tokens").ok()?;
@@ -393,6 +396,7 @@ LIMIT ?3 OFFSET ?4;
             provider,
             upstream_id,
             model,
+            mapped_model,
             stream,
             status: i64_to_u16(status),
             total_tokens: total_tokens.map(i64_to_u64),

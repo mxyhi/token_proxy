@@ -390,6 +390,7 @@
   "dashboard_table_time": "Time",
   "dashboard_table_path": "Path",
   "dashboard_table_provider": "Provider",
+  "dashboard_table_model": "Model",
   "dashboard_table_status": "Status",
   "dashboard_table_tokens": "Tokens",
   "dashboard_table_latency_ms": "TTFB (ms)",

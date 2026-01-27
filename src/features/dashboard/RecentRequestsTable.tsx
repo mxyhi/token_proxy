@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type ReactElement } from "react";
 
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
 import {
   flexRender,
@@ -11,6 +12,7 @@ import {
 } from "@tanstack/react-table";
 
 import { Badge } from "@/components/ui/badge";
+import { TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   createDashboardTimeFormatter,
   formatDashboardTimestamp,
@@ -25,7 +27,10 @@ const TABLE_HEIGHT_PX = 360;
 const ROW_HEIGHT_PX = 44;
 const OVERSCAN = 6;
 
-const GRID_COLS = "grid-cols-[170px_1fr_1fr_90px_140px_90px]";
+// 让 time/tokens 列更紧凑、model 列更宽（同时保持其它列的响应式伸缩）。
+const GRID_COLS = "grid-cols-[154px_1fr_1fr_1.6fr_67.5px_80px_81px]";
+const CELL_PLACEHOLDER = "—";
+const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 
 function statusToVariant(status: number): BadgeVariant {
@@ -41,15 +46,43 @@ function statusToVariant(status: number): BadgeVariant {
   return "outline";
 }
 
+type CellTooltipProps = {
+  content: string;
+  disabled?: boolean;
+  children: ReactElement;
+};
+
+function shouldDisableTooltip(content: string) {
+  const trimmed = content.trim();
+  return trimmed.length === 0 || trimmed === CELL_PLACEHOLDER;
+}
+
+function CellTooltip({ content, disabled, children }: CellTooltipProps) {
+  if (disabled || shouldDisableTooltip(content)) {
+    return children;
+  }
+  return (
+    <TooltipPrimitive.Root>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="top" className={TOOLTIP_CONTENT_CLASS}>
+        {content}
+      </TooltipContent>
+    </TooltipPrimitive.Root>
+  );
+}
+
 function timeColumn(formatter: Intl.DateTimeFormat): ColumnDef<DashboardRequestItem> {
   return {
     id: "time",
     header: m.dashboard_table_time(),
-    cell: ({ row }) => (
-      <span className="whitespace-nowrap text-xs text-muted-foreground">
-        {formatDashboardTimestamp(row.original.tsMs, formatter)}
-      </span>
-    ),
+    cell: ({ row }) => {
+      const timestamp = formatDashboardTimestamp(row.original.tsMs, formatter);
+      return (
+        <CellTooltip content={timestamp}>
+          <span className="block truncate text-xs text-muted-foreground">{timestamp}</span>
+        </CellTooltip>
+      );
+    },
   };
 }
 
@@ -57,7 +90,11 @@ function pathColumn(): ColumnDef<DashboardRequestItem> {
   return {
     id: "path",
     header: m.dashboard_table_path(),
-    cell: ({ row }) => <span className="block truncate font-medium text-foreground">{row.original.path}</span>,
+    cell: ({ row }) => (
+      <CellTooltip content={row.original.path}>
+        <span className="block truncate font-medium text-foreground">{row.original.path}</span>
+      </CellTooltip>
+    ),
   };
 }
 
@@ -65,12 +102,42 @@ function providerColumn(): ColumnDef<DashboardRequestItem> {
   return {
     id: "provider",
     header: m.dashboard_table_provider(),
-    cell: ({ row }) => (
-      <span className="block truncate text-xs text-muted-foreground">
-        {row.original.upstreamId}
-        <span className="text-muted-foreground/70"> · {row.original.provider}</span>
-      </span>
-    ),
+    cell: ({ row }) => {
+      const full = `${row.original.upstreamId} · ${row.original.provider}`;
+      return (
+        <CellTooltip content={full}>
+          <span className="block truncate text-xs text-muted-foreground">
+            {row.original.upstreamId}
+            <span className="text-muted-foreground/70"> · {row.original.provider}</span>
+          </span>
+        </CellTooltip>
+      );
+    },
+  };
+}
+
+function modelColumn(): ColumnDef<DashboardRequestItem> {
+  return {
+    id: "model",
+    header: m.dashboard_table_model(),
+    cell: ({ row }) => {
+      const primary = row.original.model?.trim() ? row.original.model : CELL_PLACEHOLDER;
+      const mapped = row.original.mappedModel?.trim() ? row.original.mappedModel : null;
+      const tooltipText = mapped ? `${primary}\n${mapped}` : primary;
+
+      return (
+        <CellTooltip content={tooltipText} disabled={primary === CELL_PLACEHOLDER && !mapped}>
+          <div className="flex min-w-0 flex-col items-start gap-0.5">
+            <span className="block w-full truncate font-medium text-foreground">{primary}</span>
+            {mapped ? (
+              <span className="block w-full truncate text-xs font-normal text-muted-foreground">
+                {mapped}
+              </span>
+            ) : null}
+          </div>
+        </CellTooltip>
+      );
+    },
   };
 }
 
@@ -86,16 +153,25 @@ function tokensColumn(): ColumnDef<DashboardRequestItem> {
   return {
     id: "tokens",
     header: m.dashboard_table_tokens(),
-    cell: ({ row }) => (
-      <div className="flex flex-col items-end gap-0.5 font-medium text-foreground">
-        <span>{row.original.totalTokens === null ? "—" : formatInteger(row.original.totalTokens)}</span>
-        {row.original.cachedTokens ? (
-          <span className="text-xs font-normal text-muted-foreground">
-            {formatInteger(row.original.cachedTokens)}
-          </span>
-        ) : null}
-      </div>
-    ),
+    cell: ({ row }) => {
+      const totalText =
+        row.original.totalTokens === null ? CELL_PLACEHOLDER : formatInteger(row.original.totalTokens);
+      const cachedText = row.original.cachedTokens ? formatInteger(row.original.cachedTokens) : null;
+      const tooltipText = cachedText ? `${totalText}\n${cachedText}` : totalText;
+
+      return (
+        <CellTooltip content={tooltipText} disabled={totalText === CELL_PLACEHOLDER && !cachedText}>
+          <div className="flex min-w-0 flex-col items-end gap-0.5 font-medium text-foreground">
+            <span className="block w-full truncate text-right">{totalText}</span>
+            {cachedText ? (
+              <span className="block w-full truncate text-xs font-normal text-muted-foreground text-right">
+                {cachedText}
+              </span>
+            ) : null}
+          </div>
+        </CellTooltip>
+      );
+    },
   };
 }
 
@@ -103,14 +179,29 @@ function latencyColumn(): ColumnDef<DashboardRequestItem> {
   return {
     id: "latency",
     header: m.dashboard_table_latency_ms(),
-    cell: ({ row }) => (
-      <span className="text-xs text-muted-foreground">{formatInteger(row.original.latencyMs)}</span>
-    ),
+    cell: ({ row }) => {
+      const latencyText = formatInteger(row.original.latencyMs);
+      return (
+        <CellTooltip content={latencyText}>
+          <span className="block w-full truncate text-xs text-muted-foreground text-right">
+            {latencyText}
+          </span>
+        </CellTooltip>
+      );
+    },
   };
 }
 
 function buildColumns(formatter: Intl.DateTimeFormat) {
-  return [timeColumn(formatter), pathColumn(), providerColumn(), statusColumn(), tokensColumn(), latencyColumn()];
+  return [
+    timeColumn(formatter),
+    pathColumn(),
+    providerColumn(),
+    modelColumn(),
+    statusColumn(),
+    tokensColumn(),
+    latencyColumn(),
+  ];
 }
 
 function headerCellClass(columnId: string) {
@@ -122,7 +213,7 @@ function headerCellClass(columnId: string) {
 
 function rowCellClass(columnId: string) {
   if (columnId === "time") {
-    return "px-3 py-2";
+    return "min-w-0 px-3 py-2";
   }
   if (columnId === "path") {
     return "min-w-0 px-3 py-2";
@@ -130,11 +221,14 @@ function rowCellClass(columnId: string) {
   if (columnId === "provider") {
     return "min-w-0 px-3 py-2";
   }
+  if (columnId === "model") {
+    return "min-w-0 px-3 py-2";
+  }
   if (columnId === "status") {
     return "px-3 py-2";
   }
   if (columnId === "tokens" || columnId === "latency") {
-    return "px-3 py-2 text-right";
+    return "min-w-0 px-3 py-2 text-right";
   }
   return "px-3 py-2";
 }
@@ -269,13 +363,15 @@ export function RecentRequestsTable({ items, scrollKey, onSelectItem }: RecentRe
   });
 
   return (
-    <div data-slot="recent-requests-table" className="overflow-hidden rounded-lg border border-border/60">
-      <RecentRequestsHeader table={table} />
-      <RecentRequestsBody
-        rows={table.getRowModel().rows}
-        scrollKey={scrollKey}
-        onSelectItem={onSelectItem}
-      />
-    </div>
+    <TooltipProvider>
+      <div data-slot="recent-requests-table" className="overflow-hidden rounded-lg border border-border/60">
+        <RecentRequestsHeader table={table} />
+        <RecentRequestsBody
+          rows={table.getRowModel().rows}
+          scrollKey={scrollKey}
+          onSelectItem={onSelectItem}
+        />
+      </div>
+    </TooltipProvider>
   );
 }

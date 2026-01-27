@@ -15,7 +15,8 @@ const PATHS = {
   packageJson: path.join(ROOT, "package.json"),
   tauriConf: path.join(ROOT, "src-tauri", "tauri.conf.json"),
   cargoToml: path.join(ROOT, "src-tauri", "Cargo.toml"),
-  cargoLock: path.join(ROOT, "src-tauri", "Cargo.lock"),
+  // 本仓库是 Cargo workspace，锁文件默认位于 workspace 根目录而不是成员 crate 目录。
+  cargoLock: path.join(ROOT, "Cargo.lock"),
 };
 
 function readJson(filePath) {

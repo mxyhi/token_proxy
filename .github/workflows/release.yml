@@ -287,7 +287,7 @@ jobs:
           git config --local user.name "GitHub Action"
           git fetch origin "$branch" || true
           git switch -C "$branch"
-          git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json src-tauri/Cargo.lock
+          git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json Cargo.lock
           git commit -m "chore: release v${version}"
           git push --force-with-lease=refs/heads/$branch origin "HEAD:$branch"
           echo "branch=$branch" >> "$GITHUB_OUTPUT"

@@ -104,7 +104,7 @@ cargo run -p token_proxy_cli -- --config ./config.jsonc config path
 - Other paths: choose the provider with the highest configured priority; tie-break is `openai` > `openai-response` > `anthropic`.
 - If the preferred provider is missing but `enable_api_format_conversion=true`, the proxy auto-converts request/response bodies and streams between supported formats (including SSE).
 - If `openai` is missing for `/v1/chat/completions`: fallback can be `openai-response`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai-response`).
-- For `/v1/messages`: choose between `anthropic` and `kiro` by priority; tie-break uses upstream id.
+- For `/v1/messages`: choose between `anthropic` and `kiro` by priority; tie-break uses upstream id. If the chosen provider returns a retryable error, the proxy will fall back to the other native provider (Anthropic ↔ Kiro) when configured.
 - If neither `anthropic` nor `kiro` exists for `/v1/messages` and `enable_api_format_conversion=true`: fallback can be `openai-response`, `openai`, or `gemini` (priority-based; tie-break prefers `openai-response`).
 - If `openai-response` is missing for `/v1/responses`: fallback can be `openai`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai`).
 - If `gemini` is missing for `/v1beta/models/*:generateContent`: fallback can be `openai-response`, `openai`, or `anthropic` (priority-based; tie-break prefers `openai-response`).
@@ -122,7 +122,8 @@ cargo run -p token_proxy_cli -- --config ./config.jsonc config path
 
 ## Load balancing & retries
 - Priorities: higher `priority` groups first; inside a group use list order (fill-first) or round-robin (if `priority_round_robin`).
-- Retryable conditions: network timeout/connect errors, or status 400/403/429/307/5xx **except** 504/524. Retries stay within the same priority group; then the next lower priority group is tried.
+- Retryable conditions: network timeout/connect errors, or status 400/403/429/307/5xx **except** 504/524. Retries stay within the same provider's priority groups.
+- `/v1/messages` only: after the chosen native provider is exhausted (retryable errors), the proxy can fall back to the other native provider (`anthropic` ↔ `kiro`) if it is configured.
 
 ## Observability
 - SQLite log: `data.db` in config dir. Stores per-request stats (tokens, cached tokens, latency, model, upstream).

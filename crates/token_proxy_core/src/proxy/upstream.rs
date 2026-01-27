@@ -48,28 +48,39 @@ use super::{
 
 const REQUEST_MODEL_MAPPING_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 
+pub(super) struct ForwardUpstreamResult {
+    pub(super) response: Response,
+    pub(super) should_fallback: bool,
+}
+
 pub(super) async fn forward_upstream_request(
     state: Arc<ProxyState>,
     method: Method,
     provider: &str,
     inbound_path: &str,
     upstream_path_with_query: &str,
-    headers: HeaderMap,
-    body: ReplayableBody,
-    meta: RequestMeta,
-    request_auth: RequestAuth,
+    headers: &HeaderMap,
+    body: &ReplayableBody,
+    meta: &RequestMeta,
+    request_auth: &RequestAuth,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
-) -> Response {
+) -> ForwardUpstreamResult {
     let upstreams = match resolve_provider_upstreams(
         &state,
         provider,
         inbound_path,
-        &meta,
+        meta,
         request_detail.as_ref(),
     ) {
         Ok(upstreams) => upstreams,
-        Err(response) => return response,
+        Err(response) => {
+            return ForwardUpstreamResult {
+                response,
+                // Treat missing upstream config as retryable for higher-level fallback (e.g. cross-provider).
+                should_fallback: true,
+            };
+        }
     };
     let summary = run_upstream_groups(
         &state,
@@ -77,26 +88,37 @@ pub(super) async fn forward_upstream_request(
         provider,
         inbound_path,
         upstream_path_with_query,
-        &headers,
-        &body,
-        &meta,
-        &request_auth,
+        headers,
+        body,
+        meta,
+        request_auth,
         response_transform,
         request_detail.clone(),
         upstreams,
     )
     .await;
     if let Some(response) = summary.response {
-        return response;
+        return ForwardUpstreamResult {
+            response,
+            should_fallback: false,
+        };
     }
-    finalize_forward_response(
+    let should_fallback = summary.last_retry_response.is_some()
+        || summary.last_timeout_error.is_some()
+        || summary.last_retry_error.is_some()
+        || (summary.attempted == 0 && summary.missing_auth);
+    let response = finalize_forward_response(
         &state,
         provider,
         inbound_path,
-        &meta,
+        meta,
         request_detail.as_ref(),
         summary,
-    )
+    );
+    ForwardUpstreamResult {
+        response,
+        should_fallback,
+    }
 }
 
 struct GroupAttemptResult {

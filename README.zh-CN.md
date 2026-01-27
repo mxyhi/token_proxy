@@ -104,7 +104,7 @@ cargo run -p token_proxy_cli -- --config ./config.jsonc config path
 - 其他路径：按已配置 provider 的最高优先级选择；优先级相同则按 `openai` > `openai-response` > `anthropic` 打破平局
 - 若首选 provider 缺失且 `enable_api_format_conversion=true`，将自动在已支持的格式之间转换请求与响应（含 SSE 流式）
 - `/v1/chat/completions` 缺少 `openai`：可 fallback 到 `openai-response` / `anthropic` / `gemini`（按优先级选择，平级优先 `openai-response`）
-- `/v1/messages`：在 `anthropic` 与 `kiro` 间按优先级选择；平级按 upstream id 排序
+- `/v1/messages`：在 `anthropic` 与 `kiro` 间按优先级选择；平级按 upstream id 排序。若命中 provider 返回“可重试错误”，且另一个 native provider 已配置，则会自动 fallback（Anthropic ↔ Kiro）
 - 当 `/v1/messages` 缺少 `anthropic` 且 `kiro` 也不存在，且 `enable_api_format_conversion=true` 时：可 fallback 到 `openai-response` / `openai` / `gemini`（按优先级选择，平级优先 `openai-response`）
 - `/v1/responses` 缺少 `openai-response`：可 fallback 到 `openai` / `anthropic` / `gemini`（按优先级选择，平级优先 `openai`）
 - `/v1beta/models/*:generateContent` 缺少 `gemini`：可 fallback 到 `openai-response` / `openai` / `anthropic`（按优先级选择，平级优先 `openai-response`）
@@ -122,7 +122,8 @@ cargo run -p token_proxy_cli -- --config ./config.jsonc config path
 
 ## 负载均衡与重试
 - 优先级：高优先级组先尝试；组内按列表顺序（fill-first）或轮询（round-robin）
-- 可重试条件：网络超时/连接错误，或状态码 400/403/429/307/5xx（排除 504/524）；先在当前优先级组内重试，再降级到下一优先级组
+- 可重试条件：网络超时/连接错误，或状态码 400/403/429/307/5xx（排除 504/524）；重试只在同一 provider 的优先级组内进行
+- 仅 `/v1/messages`：当命中的 native provider（`anthropic`/`kiro`）被耗尽（仍是可重试错误）时，若另一个 native provider 已配置，会自动 fallback（Anthropic ↔ Kiro）
 
 ## 可观测性
 - SQLite 日志：`data.db` 位于配置目录，记录每次请求（tokens、cached tokens、延迟、模型、上游）

@@ -809,20 +809,71 @@ async fn proxy_request(
         Ok(prepared) => prepared,
         Err(response) => return response,
     };
-    forward_upstream_request(
-        state,
-        method,
+    let primary = forward_upstream_request(
+        state.clone(),
+        method.clone(),
         prepared.plan.provider,
         &prepared.path,
         &prepared.outbound_path_with_query,
-        headers,
-        prepared.outbound_body,
-        prepared.meta,
-        prepared.request_auth,
+        &headers,
+        &prepared.outbound_body,
+        &prepared.meta,
+        &prepared.request_auth,
         prepared.plan.response_transform,
-        prepared.request_detail,
+        prepared.request_detail.clone(),
     )
-    .await
+    .await;
+
+    // /v1/messages: provider selection happens upfront (Anthropic vs Kiro).
+    // When the selected provider returns a retryable response (e.g. upstream 400/429/5xx), but the
+    // provider itself has no more upstreams to try, we can still fall back to the other native
+    // provider if configured.
+    if prepared.path == "/v1/messages"
+        && primary.should_fallback
+        && matches!(prepared.plan.provider, PROVIDER_ANTHROPIC | PROVIDER_KIRO)
+    {
+        let fallback_provider = match prepared.plan.provider {
+            PROVIDER_ANTHROPIC => Some(PROVIDER_KIRO),
+            PROVIDER_KIRO => Some(PROVIDER_ANTHROPIC),
+            _ => None,
+        };
+        if let Some(fallback_provider) = fallback_provider {
+            if state.config.provider_upstreams(fallback_provider).is_some() {
+                tracing::warn!(
+                    path = %prepared.path,
+                    primary = %prepared.plan.provider,
+                    fallback = %fallback_provider,
+                    "primary provider exhausted, falling back to alternate provider"
+                );
+
+                let (fallback_path, fallback_transform) = if fallback_provider == PROVIDER_KIRO {
+                    (RESPONSES_PATH, FormatTransform::KiroToAnthropic)
+                } else {
+                    (prepared.path.as_str(), FormatTransform::None)
+                };
+                let fallback_path_with_query = build_outbound_path_with_query(fallback_path, &uri);
+                let fallback = forward_upstream_request(
+                    state,
+                    method,
+                    fallback_provider,
+                    &prepared.path,
+                    &fallback_path_with_query,
+                    &headers,
+                    &prepared.outbound_body,
+                    &prepared.meta,
+                    &prepared.request_auth,
+                    fallback_transform,
+                    prepared.request_detail,
+                )
+                .await;
+                if !fallback.should_fallback {
+                    return fallback.response;
+                }
+            }
+        }
+    }
+
+    primary.response
 }
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。

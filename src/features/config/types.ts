@@ -24,9 +24,20 @@ export type TrayTokenRateConfig = {
   format: TrayTokenRateFormat;
 };
 
+export type InboundApiFormat =
+  | "openai_chat"
+  | "openai_responses"
+  | "anthropic_messages"
+  | "gemini";
+
 export type UpstreamConfig = {
   id: string;
-  provider: string;
+  /**
+   * 一个 upstream 可以同时声明多个 provider（同一条 base_url/api_key 复用）。
+   *
+   * 说明：后端会把它展开为“每个 provider 一条运行时 upstream”，并按 provider 维度做负载均衡。
+   */
+  providers?: string[];
   base_url: string;
   api_key: string | null;
   /**
@@ -49,6 +60,14 @@ export type UpstreamConfig = {
   priority: number | null;
   enabled: boolean;
   model_mappings: Record<string, string>;
+  /**
+   * 允许从哪些“入站 API 格式”转换后再使用该 provider。
+   * key 必须在 `providers[]` 内。
+   *
+   * - 为空/缺失：仅允许该 provider 的 native 格式（更安全、可控）
+   * - 非空：允许跨格式 fallback（例如 /v1/messages → openai-response）
+   */
+  convert_from_map?: Record<string, InboundApiFormat[]>;
   overrides?: {
     header?: Record<string, string | null>;
   };
@@ -66,7 +85,6 @@ export type ProxyConfigFileBase = {
   antigravity_user_agent?: string | null;
   log_level?: LogLevel;
   tray_token_rate: TrayTokenRateConfig;
-  enable_api_format_conversion: boolean;
   upstream_strategy: UpstreamStrategy;
   upstreams: UpstreamConfig[];
 };
@@ -90,7 +108,7 @@ export type ProxyServiceRequestState = "idle" | "working" | "error";
 
 export type UpstreamForm = {
   id: string;
-  provider: string;
+  providers: string[];
   baseUrl: string;
   apiKey: string;
   filterPromptCacheRetention: boolean;
@@ -103,6 +121,7 @@ export type UpstreamForm = {
   priority: string;
   enabled: boolean;
   modelMappings: ModelMappingForm[];
+  convertFromMap: Record<string, InboundApiFormat[]>;
   overrides: {
     header: HeaderOverrideForm[];
   };
@@ -133,7 +152,6 @@ export type ConfigForm = {
   antigravityUserAgent: string;
   logLevel: LogLevel;
   trayTokenRate: TrayTokenRateConfig;
-  enableApiFormatConversion: boolean;
   upstreamStrategy: UpstreamStrategy;
   upstreams: UpstreamForm[];
 };

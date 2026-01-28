@@ -1,4 +1,5 @@
 mod io;
+mod migrate;
 mod model_mapping;
 mod normalize;
 mod types;
@@ -9,6 +10,7 @@ const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 20 * 1024 * 1024;
 
 pub use types::{
     ConfigResponse,
+    InboundApiFormat,
     KiroPreferredEndpoint,
     ProxyConfig,
     ProxyConfigFile,
@@ -76,7 +78,6 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
         local_api_key: config.local_api_key,
         log_level,
         max_request_body_bytes,
-        enable_api_format_conversion: config.enable_api_format_conversion,
         upstream_strategy: config.upstream_strategy,
         upstreams,
         kiro_preferred_endpoint: config.kiro_preferred_endpoint,

@@ -11,13 +11,13 @@ use std::{
 use tokio::sync::RwLock;
 
 use super::{
-    config::ProxyConfig,
+    config::{InboundApiFormat, ProxyConfig},
     gemini,
     http,
+    inbound::detect_inbound_api_format,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     openai_compat::{
-        inbound_format, ApiFormat, FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES,
-        RESPONSES_PATH,
+        FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES, RESPONSES_PATH,
     },
     request_detail::{capture_request_detail, serialize_request_headers, RequestDetailSnapshot},
     request_body::ReplayableBody,
@@ -71,14 +71,6 @@ struct InboundRequest {
 }
 
 const ERROR_NO_UPSTREAM: &str = "No available upstream configured.";
-const ERROR_CHAT_CONVERSION_DISABLED: &str =
-    "API format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai\" for /v1/chat/completions or enable conversion.";
-const ERROR_RESPONSES_CONVERSION_DISABLED: &str =
-    "API format conversion is disabled (enable_api_format_conversion=false). Configure provider \"openai-response\" for /v1/responses or enable conversion.";
-const ERROR_ANTHROPIC_CONVERSION_DISABLED: &str =
-    "API format conversion is disabled (enable_api_format_conversion=false). Configure provider \"anthropic\" for /v1/messages or enable conversion.";
-const ERROR_GEMINI_CONVERSION_DISABLED: &str =
-    "API format conversion is disabled (enable_api_format_conversion=false). Configure provider \"gemini\" for Gemini paths or enable conversion.";
 
 fn base_plan(provider: &'static str) -> DispatchPlan {
     DispatchPlan {
@@ -114,10 +106,48 @@ fn provider_rank(config: &ProxyConfig, provider: &str) -> Option<ProviderRank> {
     })
 }
 
-fn choose_provider_by_priority(config: &ProxyConfig, candidates: &[&'static str]) -> Option<&'static str> {
+fn provider_rank_for_inbound(
+    config: &ProxyConfig,
+    provider: &str,
+    inbound_format: Option<InboundApiFormat>,
+) -> Option<ProviderRank> {
+    let upstreams = config.provider_upstreams(provider)?;
+    let Some(inbound_format) = inbound_format else {
+        return provider_rank(config, provider);
+    };
+
+    for group in &upstreams.groups {
+        let mut min_id: Option<&str> = None;
+        let mut has_candidate = false;
+        for item in &group.items {
+            if !item.supports_inbound(inbound_format) {
+                continue;
+            }
+            has_candidate = true;
+            min_id = match min_id {
+                None => Some(item.id.as_str()),
+                Some(current) => Some(std::cmp::min(current, item.id.as_str())),
+            };
+        }
+        if has_candidate {
+            return Some(ProviderRank {
+                priority: group.priority,
+                min_id: min_id.unwrap_or(provider).to_string(),
+            });
+        }
+    }
+
+    None
+}
+
+fn choose_provider_by_priority(
+    config: &ProxyConfig,
+    inbound_format: Option<InboundApiFormat>,
+    candidates: &[&'static str],
+) -> Option<&'static str> {
     let mut selected: Option<(&'static str, ProviderRank)> = None;
     for candidate in candidates {
-        let Some(rank) = provider_rank(config, candidate) else {
+        let Some(rank) = provider_rank_for_inbound(config, candidate, inbound_format) else {
             continue;
         };
         match &selected {
@@ -138,21 +168,20 @@ fn resolve_gemini_plan(config: &ProxyConfig, path: &str) -> Option<Result<Dispat
     if !gemini::is_gemini_path(path) {
         return None;
     }
+    let inbound_format = Some(InboundApiFormat::Gemini);
     if let Some(selected) =
-        choose_provider_by_priority(config, &[PROVIDER_GEMINI, PROVIDER_ANTIGRAVITY])
+        choose_provider_by_priority(config, inbound_format, &[PROVIDER_GEMINI, PROVIDER_ANTIGRAVITY])
     {
         return Some(Ok(base_plan(selected)));
     }
     let fallback = choose_provider_by_priority(
         config,
+        inbound_format,
         &[PROVIDER_RESPONSES, PROVIDER_CHAT, PROVIDER_ANTHROPIC],
     );
     let Some(fallback) = fallback else {
         return Some(Err(ERROR_NO_UPSTREAM.to_string()));
     };
-    if !config.enable_api_format_conversion {
-        return Some(Err(ERROR_GEMINI_CONVERSION_DISABLED.to_string()));
-    }
     Some(Ok(match fallback {
         PROVIDER_RESPONSES => DispatchPlan {
             provider: PROVIDER_RESPONSES,
@@ -183,10 +212,11 @@ fn resolve_anthropic_plan(
     if !is_anthropic_path(path) {
         return None;
     }
+    let inbound_format = Some(InboundApiFormat::AnthropicMessages);
     if path == "/v1/messages" {
         // Claude Code uses /v1/messages. Prefer native providers (Anthropic/Kiro) by priority.
         if let Some(selected) =
-            choose_provider_by_priority(config, &[PROVIDER_ANTHROPIC, PROVIDER_KIRO])
+            choose_provider_by_priority(config, inbound_format, &[PROVIDER_ANTHROPIC, PROVIDER_KIRO])
         {
             return Some(Ok(match selected {
                 PROVIDER_ANTHROPIC => base_plan(PROVIDER_ANTHROPIC),
@@ -199,20 +229,9 @@ fn resolve_anthropic_plan(
                 _ => base_plan(PROVIDER_ANTHROPIC),
             }));
         }
-        if !config.enable_api_format_conversion {
-            if config.provider_upstreams(PROVIDER_ANTIGRAVITY).is_some() {
-                return Some(Ok(DispatchPlan {
-                    provider: PROVIDER_ANTIGRAVITY,
-                    outbound_path: None,
-                    request_transform: FormatTransform::AnthropicToGemini,
-                    response_transform: FormatTransform::GeminiToAnthropic,
-                }));
-            }
-            return Some(Err(ERROR_ANTHROPIC_CONVERSION_DISABLED.to_string()));
-        }
-        // If native providers are missing, fall back to other formats when enabled (new-api style).
         let fallback = choose_provider_by_priority(
             config,
+            inbound_format,
             &[
                 PROVIDER_RESPONSES,
                 PROVIDER_CHAT,
@@ -251,7 +270,7 @@ fn resolve_anthropic_plan(
             _ => base_plan(PROVIDER_RESPONSES),
         }));
     }
-    if config.provider_upstreams(PROVIDER_ANTHROPIC).is_some() {
+    if provider_rank_for_inbound(config, PROVIDER_ANTHROPIC, inbound_format).is_some() {
         return Some(Ok(base_plan(PROVIDER_ANTHROPIC)));
     }
     Some(Err(ERROR_NO_UPSTREAM.to_string()))
@@ -260,6 +279,7 @@ fn resolve_anthropic_plan(
 fn resolve_formatless_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
     let provider = choose_provider_by_priority(
         config,
+        None,
         &[PROVIDER_CHAT, PROVIDER_RESPONSES, PROVIDER_ANTHROPIC],
     )
     .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
@@ -267,24 +287,22 @@ fn resolve_formatless_plan(config: &ProxyConfig) -> Result<DispatchPlan, String>
 }
 
 fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
-    if config.provider_upstreams(PROVIDER_CHAT).is_some() {
+    let inbound_format = Some(InboundApiFormat::OpenaiChat);
+    if provider_rank_for_inbound(config, PROVIDER_CHAT, inbound_format).is_some() {
         return Ok(base_plan(PROVIDER_CHAT));
     }
     let selected = choose_provider_by_priority(
         config,
+        inbound_format,
         &[
             PROVIDER_RESPONSES,
             PROVIDER_CODEX,
             PROVIDER_ANTHROPIC,
             PROVIDER_GEMINI,
             PROVIDER_ANTIGRAVITY,
-            PROVIDER_KIRO,
         ],
     )
     .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
-    if !config.enable_api_format_conversion {
-        return Err(ERROR_CHAT_CONVERSION_DISABLED.to_string());
-    }
 
     Ok(match selected {
         PROVIDER_RESPONSES => DispatchPlan {
@@ -317,19 +335,14 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
             request_transform: FormatTransform::ChatToGemini,
             response_transform: FormatTransform::GeminiToChat,
         },
-        PROVIDER_KIRO => DispatchPlan {
-            provider: PROVIDER_KIRO,
-            outbound_path: Some(RESPONSES_PATH),
-            request_transform: FormatTransform::None,
-            response_transform: FormatTransform::KiroToChat,
-        },
         _ => base_plan(PROVIDER_RESPONSES),
     })
 }
 
 fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
+    let inbound_format = Some(InboundApiFormat::OpenaiResponses);
     if let Some(selected) =
-        choose_provider_by_priority(config, &[PROVIDER_RESPONSES, PROVIDER_CODEX, PROVIDER_KIRO])
+        choose_provider_by_priority(config, inbound_format, &[PROVIDER_RESPONSES, PROVIDER_CODEX])
     {
         if selected == PROVIDER_RESPONSES {
             return Ok(base_plan(PROVIDER_RESPONSES));
@@ -342,19 +355,11 @@ fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> 
                 response_transform: FormatTransform::CodexToResponses,
             });
         }
-        return Ok(DispatchPlan {
-            provider: PROVIDER_KIRO,
-            outbound_path: Some(RESPONSES_PATH),
-            request_transform: FormatTransform::None,
-            response_transform: FormatTransform::KiroToResponses,
-        });
-    }
-    if !config.enable_api_format_conversion {
-        return Err(ERROR_RESPONSES_CONVERSION_DISABLED.to_string());
     }
 
     let selected = choose_provider_by_priority(
         config,
+        inbound_format,
         &[
             PROVIDER_CHAT,
             PROVIDER_ANTHROPIC,
@@ -400,13 +405,14 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
         return plan;
     }
 
-    let Some(format) = inbound_format(path) else {
+    let Some(format) = detect_inbound_api_format(path) else {
         return resolve_formatless_plan(config);
     };
 
     match format {
-        ApiFormat::ChatCompletions => resolve_chat_plan(config),
-        ApiFormat::Responses => resolve_responses_plan(config),
+        InboundApiFormat::OpenaiChat => resolve_chat_plan(config),
+        InboundApiFormat::OpenaiResponses => resolve_responses_plan(config),
+        _ => resolve_formatless_plan(config),
     }
 }
 

@@ -43,8 +43,6 @@ pub(crate) enum FormatTransform {
     GeminiToChat,
     ResponsesToGemini,
     GeminiToResponses,
-    KiroToResponses,
-    KiroToChat,
     KiroToAnthropic,
     ChatToCodex,
     ResponsesToCodex,
@@ -92,9 +90,7 @@ pub(crate) async fn transform_request_body(
         FormatTransform::GeminiToChat => gemini_compat::gemini_request_to_chat(body, model_hint),
         FormatTransform::ResponsesToGemini => responses_request_to_gemini(body),
         FormatTransform::GeminiToResponses => gemini_request_to_responses(body, model_hint),
-        FormatTransform::KiroToResponses
-        | FormatTransform::KiroToChat
-        | FormatTransform::KiroToAnthropic => Ok(body.clone()),
+        FormatTransform::KiroToAnthropic => Ok(body.clone()),
         FormatTransform::ChatToCodex => codex_compat::chat_request_to_codex(body, model_hint),
         FormatTransform::ResponsesToCodex => codex_compat::responses_request_to_codex(body, model_hint),
         FormatTransform::CodexToChat | FormatTransform::CodexToResponses => Ok(body.clone()),
@@ -128,9 +124,9 @@ pub(crate) fn transform_response_body(
         FormatTransform::GeminiToChat => gemini_compat::gemini_response_to_chat(bytes, model_hint),
         FormatTransform::ResponsesToGemini => responses_response_to_gemini(bytes, model_hint),
         FormatTransform::GeminiToResponses => gemini_response_to_responses(bytes, model_hint),
-        FormatTransform::KiroToResponses
-        | FormatTransform::KiroToChat
-        | FormatTransform::KiroToAnthropic => Err("Kiro response conversion is handled upstream.".to_string()),
+        FormatTransform::KiroToAnthropic => {
+            Err("Kiro response conversion is handled upstream.".to_string())
+        }
         FormatTransform::CodexToChat | FormatTransform::CodexToResponses => {
             Err("Codex response conversion is handled upstream.".to_string())
         }

@@ -188,7 +188,6 @@ mod responses_to_anthropic;
 mod kiro_to_anthropic;
 mod kiro_to_responses;
 mod kiro_to_responses_helpers;
-mod kiro_to_responses_stream;
 mod dispatch;
 mod streaming;
 mod token_count;

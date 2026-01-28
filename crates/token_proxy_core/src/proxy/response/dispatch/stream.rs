@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 use std::sync::Arc;
 
 use super::super::{
-    anthropic_to_responses, chat_to_responses, kiro_to_anthropic, kiro_to_responses,
+    anthropic_to_responses, chat_to_responses, kiro_to_anthropic,
     responses_to_anthropic, responses_to_chat, streaming, upstream_stream, PROVIDER_CODEX,
     PROVIDER_ANTIGRAVITY, PROVIDER_GEMINI, PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES,
 };
@@ -88,7 +88,6 @@ fn stream_for_transform(
         context,
         log,
         request_tracker,
-        estimated_input_tokens,
     )
 }
 
@@ -102,7 +101,6 @@ fn is_simple_transform(transform: FormatTransform) -> bool {
             | FormatTransform::AnthropicToResponses
             | FormatTransform::GeminiToChat
             | FormatTransform::ChatToGemini
-            | FormatTransform::KiroToResponses
             | FormatTransform::KiroToAnthropic
             | FormatTransform::CodexToChat
             | FormatTransform::CodexToResponses
@@ -193,14 +191,6 @@ fn stream_for_simple_extended(
         FormatTransform::ChatToGemini => {
             gemini_compat::stream_chat_to_gemini(upstream, context, log, request_tracker).boxed()
         }
-        FormatTransform::KiroToResponses => kiro_to_responses::stream_kiro_to_responses(
-            upstream,
-            context,
-            log,
-            request_tracker,
-            estimated_input_tokens,
-        )
-        .boxed(),
         FormatTransform::KiroToAnthropic => kiro_to_anthropic::stream_kiro_to_anthropic(
             upstream,
             context,
@@ -228,7 +218,6 @@ fn stream_for_composed_transform(
     context: LogContext,
     log: Arc<LogWriter>,
     request_tracker: RequestTokenTracker,
-    estimated_input_tokens: Option<u64>,
 ) -> ResponseStream {
     match transform {
         FormatTransform::ChatToAnthropic => stream_chat_to_anthropic(upstream, context, log, request_tracker),
@@ -237,9 +226,6 @@ fn stream_for_composed_transform(
         FormatTransform::AnthropicToGemini => stream_anthropic_to_gemini(upstream, context, log, request_tracker),
         FormatTransform::ResponsesToGemini => stream_responses_to_gemini(upstream, context, log, request_tracker),
         FormatTransform::GeminiToResponses => stream_gemini_to_responses(upstream, context, log, request_tracker),
-        FormatTransform::KiroToChat => {
-            stream_kiro_to_chat(upstream, context, log, request_tracker, estimated_input_tokens)
-        }
         _ => streaming::stream_with_logging(upstream, context, log, request_tracker).boxed(),
     }
 }
@@ -386,32 +372,6 @@ fn stream_gemini_to_responses(
     )
     .boxed();
     chat_to_responses::stream_chat_to_responses(chat_stream, context, log, request_tracker).boxed()
-}
-
-fn stream_kiro_to_chat(
-    upstream: UpstreamBytesStream,
-    context: LogContext,
-    log: Arc<LogWriter>,
-    request_tracker: RequestTokenTracker,
-    estimated_input_tokens: Option<u64>,
-) -> ResponseStream {
-    let intermediate_log = Arc::new(LogWriter::new(None));
-    let intermediate_tracker = RequestTokenTracker::disabled();
-    let responses_stream = kiro_to_responses::stream_kiro_to_responses(
-        upstream,
-        context.clone(),
-        intermediate_log,
-        intermediate_tracker,
-        estimated_input_tokens,
-    )
-    .boxed();
-    responses_to_chat::stream_responses_to_chat(
-        responses_stream,
-        context,
-        log,
-        request_tracker,
-    )
-    .boxed()
 }
 
 async fn prepare_upstream_stream(

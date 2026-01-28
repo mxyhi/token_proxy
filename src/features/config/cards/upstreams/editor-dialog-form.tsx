@@ -15,12 +15,14 @@ import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { AntigravityAccountSelect } from "@/features/config/cards/upstreams/antigravity-account-select";
 import { CodexAccountSelect } from "@/features/config/cards/upstreams/codex-account-select";
+import { ConvertFromMapEditor } from "@/features/config/cards/upstreams/convert-from-map-editor";
 import {
   EditorField,
   HeaderOverridesEditor,
   ModelMappingsEditor,
 } from "@/features/config/cards/upstreams/editor-fields";
 import { KiroAccountSelect } from "@/features/config/cards/upstreams/kiro-account-select";
+import { ProviderMultiSelect } from "@/features/config/cards/upstreams/provider-multi-select";
 import { createModelMapping } from "@/features/config/form";
 import type { AntigravityAccountSummary } from "@/features/antigravity/types";
 import type { CodexAccountSummary } from "@/features/codex/types";
@@ -111,9 +113,10 @@ function UpstreamIdentityFields({
   onRefreshAntigravityAccounts,
 }: UpstreamIdentityFieldsProps) {
   const canUseAppProxy = !!appProxyUrl.trim();
-  const isKiro = draft.provider.trim() === "kiro";
-  const isCodex = draft.provider.trim() === "codex";
-  const isAntigravity = draft.provider.trim() === "antigravity";
+  const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
+  const isKiro = providers.includes("kiro");
+  const isCodex = providers.includes("codex");
+  const isAntigravity = providers.includes("antigravity");
   const kiroEndpointValue = draft.preferredEndpoint.trim()
     ? draft.preferredEndpoint
     : KIRO_ENDPOINT_INHERIT;
@@ -133,21 +136,11 @@ function UpstreamIdentityFields({
         </Tooltip>
       </Label>
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-        <Select
-          value={draft.provider.trim() ? draft.provider : undefined}
-          onValueChange={(value) => onChangeDraft({ provider: value })}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="openai" />
-          </SelectTrigger>
-          <SelectContent>
-            {providerOptions.map((option) => (
-              <SelectItem key={option} value={option}>
-                {option}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <ProviderMultiSelect
+          providerOptions={providerOptions}
+          value={draft.providers}
+          onChange={(next) => onChangeDraft({ providers: next })}
+        />
         <Label className="inline-flex items-center gap-1">
           {m.field_status()}
           <Tooltip>
@@ -334,7 +327,7 @@ function UpstreamOpenAIResponsesFields({
   draft,
   onChangeDraft,
 }: UpstreamOpenAIResponsesFieldsProps) {
-  if (draft.provider.trim() !== "openai-response") {
+  if (!draft.providers.some((value) => value.trim() === "openai-response")) {
     return null;
   }
 
@@ -528,9 +521,10 @@ export function UpstreamEditorFields({
   antigravityAccountsError,
   onRefreshAntigravityAccounts,
 }: UpstreamEditorFieldsProps) {
-  const isKiro = draft.provider.trim() === "kiro";
-  const isCodex = draft.provider.trim() === "codex";
-  const isAntigravity = draft.provider.trim() === "antigravity";
+  const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
+  const isKiro = providers.includes("kiro");
+  const isCodex = providers.includes("codex");
+  const isAntigravity = providers.includes("antigravity");
   return (
     <div
       data-slot="upstream-editor-fields"
@@ -554,6 +548,11 @@ export function UpstreamEditorFields({
         antigravityAccountsLoading={antigravityAccountsLoading}
         antigravityAccountsError={antigravityAccountsError}
         onRefreshAntigravityAccounts={onRefreshAntigravityAccounts}
+      />
+      <ConvertFromMapEditor
+        providers={draft.providers}
+        value={draft.convertFromMap}
+        onChange={(convertFromMap) => onChangeDraft({ convertFromMap })}
       />
       {isKiro || isCodex || isAntigravity ? null : (
         <UpstreamAuthFields

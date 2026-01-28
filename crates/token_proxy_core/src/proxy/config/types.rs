@@ -30,6 +30,45 @@ fn default_log_level() -> LogLevel {
     LogLevel::Silent
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InboundApiFormat {
+    OpenaiChat,
+    OpenaiResponses,
+    AnthropicMessages,
+    Gemini,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct InboundApiFormatMask(u8);
+
+impl InboundApiFormatMask {
+    pub(crate) fn contains(self, format: InboundApiFormat) -> bool {
+        self.0 & format.bit() != 0
+    }
+
+    pub(crate) fn insert(&mut self, format: InboundApiFormat) {
+        self.0 |= format.bit();
+    }
+
+    pub(crate) fn extend(&mut self, formats: impl IntoIterator<Item = InboundApiFormat>) {
+        for format in formats {
+            self.insert(format);
+        }
+    }
+}
+
+impl InboundApiFormat {
+    const fn bit(self) -> u8 {
+        match self {
+            Self::OpenaiChat => 1 << 0,
+            Self::OpenaiResponses => 1 << 1,
+            Self::AnthropicMessages => 1 << 2,
+            Self::Gemini => 1 << 3,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpstreamStrategy {
@@ -84,7 +123,8 @@ impl Default for TrayTokenRateConfig {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct UpstreamConfig {
     pub id: String,
-    pub provider: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub providers: Vec<String>,
     pub base_url: String,
     pub api_key: Option<String>,
     /// Only meaningful for provider "openai-response": strip `prompt_cache_retention` from /v1/responses requests.
@@ -107,6 +147,8 @@ pub struct UpstreamConfig {
     pub enabled: bool,
     #[serde(default)]
     pub model_mappings: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub convert_from_map: HashMap<String, Vec<InboundApiFormat>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overrides: Option<UpstreamOverrides>,
 }
@@ -139,10 +181,6 @@ pub struct ProxyConfigFile {
     pub max_request_body_bytes: Option<u64>,
     #[serde(default)]
     pub tray_token_rate: TrayTokenRateConfig,
-    /// 是否允许在不同 API 格式之间自动互转（例如 OpenAI Chat↔Responses、Claude Messages↔OpenAI Responses）。
-    /// 默认为开启；关闭时将严格按 provider 路由，不做格式转换。
-    #[serde(default)]
-    pub enable_api_format_conversion: bool,
     #[serde(default)]
     pub upstream_strategy: UpstreamStrategy,
     #[serde(default)]
@@ -164,7 +202,6 @@ impl Default for ProxyConfigFile {
             log_level: LogLevel::default(),
             max_request_body_bytes: None,
             tray_token_rate: TrayTokenRateConfig::default(),
-            enable_api_format_conversion: true,
             upstream_strategy: UpstreamStrategy::PriorityFillFirst,
             upstreams: Vec::new(),
         }
@@ -178,7 +215,6 @@ pub struct ProxyConfig {
     pub local_api_key: Option<String>,
     pub log_level: LogLevel,
     pub max_request_body_bytes: usize,
-    pub enable_api_format_conversion: bool,
     pub upstream_strategy: UpstreamStrategy,
     pub upstreams: HashMap<String, ProviderUpstreams>,
     pub kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
@@ -231,6 +267,7 @@ pub struct UpstreamRuntime {
     pub(crate) priority: i32,
     pub(crate) model_mappings: Option<ModelMappingRules>,
     pub(crate) header_overrides: Option<Vec<HeaderOverride>>,
+    pub(crate) allowed_inbound_formats: InboundApiFormatMask,
 }
 
 #[derive(Clone)]
@@ -254,6 +291,10 @@ impl UpstreamRuntime {
             .as_ref()
             .and_then(|rules| rules.map_model(model))
             .map(|value| value.to_string())
+    }
+
+    pub(crate) fn supports_inbound(&self, format: InboundApiFormat) -> bool {
+        self.allowed_inbound_formats.contains(format)
     }
 }
 

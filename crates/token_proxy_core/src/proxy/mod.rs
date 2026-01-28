@@ -9,6 +9,7 @@ mod antigravity_compat;
 mod gemini;
 mod gemini_compat;
 mod http;
+mod inbound;
 mod kiro;
 mod log;
 mod model;

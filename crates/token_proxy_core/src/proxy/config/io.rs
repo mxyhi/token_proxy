@@ -4,13 +4,22 @@ use std::time::Instant;
 use crate::paths::TokenProxyPaths;
 
 use super::ProxyConfigFile;
+use super::migrate::migrate_config_json;
 
 const DEFAULT_CONFIG_HEADER: &str = concat!(
     "// Token Proxy config (JSONC). Comments and trailing commas are supported.\n",
     "// log_level (optional): silent|error|warn|info|debug|trace. Default: silent.\n",
     "// app_proxy_url (optional): http(s)://... | socks5(h)://... (used for app updates and upstream proxy reuse).\n",
-    "// upstreams[].proxy_url (optional): empty => direct; \"$app_proxy_url\" => use app_proxy_url; or an explicit proxy URL.\n"
+    "// upstreams[].proxy_url (optional): empty => direct; \"$app_proxy_url\" => use app_proxy_url; or an explicit proxy URL.\n",
+    "// upstreams[].providers (required): one upstream can serve multiple providers. Example: [\"openai\", \"openai-response\"].\n",
+    "// upstreams[].convert_from_map (optional): explicitly allow inbound format conversion per provider.\n",
+    "//   Example: { \"openai-response\": [\"openai_chat\", \"anthropic_messages\"] }\n"
 );
+
+struct ParsedConfigFile {
+    config: ProxyConfigFile,
+    migrated: bool,
+}
 
 pub(super) async fn load_config_file(paths: &TokenProxyPaths) -> Result<ProxyConfigFile, String> {
     let path = paths.config_file();
@@ -24,7 +33,12 @@ pub(super) async fn load_config_file(paths: &TokenProxyPaths) -> Result<ProxyCon
                 elapsed_ms = start.elapsed().as_millis(),
                 "load_config_file read"
             );
-            parse_config_file(&contents, &path)
+            let parsed = parse_config_file(&contents, &path)?;
+            if parsed.migrated {
+                tracing::info!(path = %path.display(), "config migrated, writing back");
+                save_config_file(paths, &parsed.config).await?;
+            }
+            Ok(parsed.config)
         }
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             tracing::debug!(
@@ -91,10 +105,14 @@ pub(super) async fn init_default_config_file(paths: &TokenProxyPaths) -> Result<
     save_config_file(paths, &ProxyConfigFile::default()).await
 }
 
-fn parse_config_file(contents: &str, path: &Path) -> Result<ProxyConfigFile, String> {
+fn parse_config_file(contents: &str, path: &Path) -> Result<ParsedConfigFile, String> {
     let sanitized = crate::jsonc::sanitize_jsonc(contents);
-    serde_json::from_str(&sanitized)
-        .map_err(|err| format!("Failed to parse config file {}: {err}", path.display()))
+    let mut value: serde_json::Value = serde_json::from_str(&sanitized)
+        .map_err(|err| format!("Failed to parse config file {}: {err}", path.display()))?;
+    let migrated = migrate_config_json(&mut value);
+    let config: ProxyConfigFile = serde_json::from_value(value)
+        .map_err(|err| format!("Failed to parse config file {}: {err}", path.display()))?;
+    Ok(ParsedConfigFile { config, migrated })
 }
 
 async fn read_existing_header(path: &Path) -> Option<String> {

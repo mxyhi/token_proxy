@@ -95,20 +95,6 @@ fn convert_success_body(
     request_body: Option<&str>,
 ) -> Result<ConvertedBody, Response> {
     match transform {
-        FormatTransform::KiroToResponses => convert_kiro_to_responses_body(
-            bytes,
-            context,
-            usage,
-            log,
-            estimated_input_tokens,
-        ),
-        FormatTransform::KiroToChat => convert_kiro_to_chat_body(
-            bytes,
-            context,
-            usage,
-            log,
-            estimated_input_tokens,
-        ),
         FormatTransform::KiroToAnthropic => convert_kiro_to_anthropic_body(
             bytes,
             context,
@@ -130,71 +116,6 @@ fn convert_success_body(
             usage,
         }),
     }
-}
-
-fn convert_kiro_to_responses_body(
-    bytes: &Bytes,
-    context: &mut LogContext,
-    usage: UsageSnapshot,
-    log: Arc<LogWriter>,
-    estimated_input_tokens: Option<u64>,
-) -> Result<ConvertedBody, Response> {
-    let converted = match kiro_to_responses::convert_kiro_response(
-        bytes,
-        context.model.as_deref(),
-        estimated_input_tokens,
-    ) {
-        Ok(converted) => converted,
-        Err(message) => {
-            return Err(respond_transform_error(context, usage, log, message));
-        }
-    };
-    let usage = resolve_kiro_usage(
-        bytes,
-        &converted,
-        context.model.as_deref(),
-        estimated_input_tokens,
-    );
-    Ok(ConvertedBody {
-        output: converted,
-        usage,
-    })
-}
-
-fn convert_kiro_to_chat_body(
-    bytes: &Bytes,
-    context: &mut LogContext,
-    usage: UsageSnapshot,
-    log: Arc<LogWriter>,
-    estimated_input_tokens: Option<u64>,
-) -> Result<ConvertedBody, Response> {
-    let responses = match kiro_to_responses::convert_kiro_response(
-        bytes,
-        context.model.as_deref(),
-        estimated_input_tokens,
-    ) {
-        Ok(converted) => converted,
-        Err(message) => {
-            return Err(respond_transform_error(context, usage, log, message));
-        }
-    };
-    let usage = resolve_kiro_usage(
-        bytes,
-        &responses,
-        context.model.as_deref(),
-        estimated_input_tokens,
-    );
-    let converted =
-        match transform_response_body(FormatTransform::ResponsesToChat, &responses, context.model.as_deref()) {
-            Ok(converted) => converted,
-            Err(message) => {
-                return Err(respond_transform_error(context, usage, log, message));
-            }
-        };
-    Ok(ConvertedBody {
-        output: converted,
-        usage,
-    })
 }
 
 fn convert_kiro_to_anthropic_body(
@@ -382,8 +303,6 @@ fn response_error_for_status(status: StatusCode, bytes: &Bytes) -> Option<String
 
 fn provider_for_tokens(transform: FormatTransform, provider: &str) -> &str {
     match transform {
-        FormatTransform::KiroToResponses => "openai-response",
-        FormatTransform::KiroToChat => "openai",
         FormatTransform::KiroToAnthropic => "anthropic",
         FormatTransform::CodexToChat => "openai",
         FormatTransform::CodexToResponses => "openai-response",

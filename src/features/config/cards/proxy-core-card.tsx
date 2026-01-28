@@ -1,4 +1,3 @@
-import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -123,39 +122,6 @@ function ProxyCoreFields({
   );
 }
 
-type ProxyCoreFormatConversionProps = {
-  enabled: boolean;
-  onToggle: (value: boolean) => void;
-};
-
-function ProxyCoreFormatConversion({ enabled, onToggle }: ProxyCoreFormatConversionProps) {
-  return (
-    <div className="rounded-md border border-border/60 bg-background/60 p-3">
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
-          <p className="text-sm font-medium text-foreground">{m.proxy_core_format_conversion_title()}</p>
-          <p className="text-xs text-muted-foreground">
-            {m.proxy_core_format_conversion_desc({
-              chat: "/v1/chat/completions",
-              responses: "/v1/responses",
-              messages: "/v1/messages",
-            })}
-          </p>
-        </div>
-        <Switch
-          id="enable-format-conversion"
-          checked={enabled}
-          onCheckedChange={onToggle}
-          aria-label={m.proxy_core_format_conversion_aria()}
-        />
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        {m.proxy_core_format_conversion_default_disabled()}
-      </p>
-    </div>
-  );
-}
-
 type ProxyCoreServiceSectionProps = {
   proxyService: ProxyServiceViewProps;
 };
@@ -189,10 +155,6 @@ export function ProxyCoreCard({
           showLocalKey={showLocalKey}
           onToggleLocalKey={onToggleLocalKey}
           onChange={onChange}
-        />
-        <ProxyCoreFormatConversion
-          enabled={form.enableApiFormatConversion}
-          onToggle={(checked) => onChange({ enableApiFormatConversion: checked })}
         />
         <ProxyCoreServiceSection proxyService={proxyService} />
       </CardContent>

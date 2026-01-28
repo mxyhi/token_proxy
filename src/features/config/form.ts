@@ -1,5 +1,6 @@
 import {
   type ConfigForm,
+  type InboundApiFormat,
   type KiroPreferredEndpoint,
   type ModelMappingForm,
   type ProxyConfigFile,
@@ -57,7 +58,6 @@ const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "antigravity_user_agent",
   "log_level",
   "tray_token_rate",
-  "enable_api_format_conversion",
   "upstream_strategy",
   "upstreams",
 ]);
@@ -74,7 +74,6 @@ export const EMPTY_FORM: ConfigForm = {
   antigravityUserAgent: "",
   logLevel: "silent",
   trayTokenRate: { ...DEFAULT_TRAY_TOKEN_RATE },
-  enableApiFormatConversion: false,
   upstreamStrategy: "priority_fill_first",
   upstreams: [],
 };
@@ -82,7 +81,7 @@ export const EMPTY_FORM: ConfigForm = {
 export function createEmptyUpstream(): UpstreamForm {
   return {
     id: "",
-    provider: "",
+    providers: [],
     baseUrl: "",
     apiKey: "",
     filterPromptCacheRetention: false,
@@ -95,6 +94,7 @@ export function createEmptyUpstream(): UpstreamForm {
     priority: "",
     enabled: true,
     modelMappings: [],
+    convertFromMap: {},
     overrides: { header: [] },
   };
 }
@@ -142,11 +142,10 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     antigravityUserAgent: config.antigravity_user_agent ?? "",
     logLevel: config.log_level ?? "silent",
     trayTokenRate: normalizeTrayTokenRate(config.tray_token_rate),
-    enableApiFormatConversion: config.enable_api_format_conversion,
     upstreamStrategy: config.upstream_strategy,
     upstreams: config.upstreams.map((upstream) => ({
       id: upstream.id,
-      provider: upstream.provider,
+      providers: upstream.providers ?? [],
       baseUrl: upstream.base_url,
       apiKey: upstream.api_key ?? "",
       filterPromptCacheRetention: upstream.filter_prompt_cache_retention ?? false,
@@ -159,6 +158,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
       priority: upstream.priority === null ? "" : String(upstream.priority),
       enabled: upstream.enabled,
       modelMappings: toModelMappingForm(upstream.model_mappings),
+      convertFromMap: upstream.convert_from_map ?? {},
       overrides: normalizeOverrides(upstream.overrides),
     })),
   };
@@ -182,31 +182,34 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       : null,
     log_level: form.logLevel,
     tray_token_rate: form.trayTokenRate,
-    enable_api_format_conversion: form.enableApiFormatConversion,
     upstream_strategy: form.upstreamStrategy,
-    upstreams: form.upstreams.map((upstream) => ({
-      id: upstream.id.trim(),
-      provider: upstream.provider.trim(),
-      base_url: upstream.baseUrl.trim(),
-      api_key: upstream.apiKey.trim() ? upstream.apiKey.trim() : null,
-      filter_prompt_cache_retention: upstream.filterPromptCacheRetention,
-      filter_safety_identifier: upstream.filterSafetyIdentifier,
-      kiro_account_id: upstream.kiroAccountId.trim()
-        ? upstream.kiroAccountId.trim()
-        : null,
-      codex_account_id: upstream.codexAccountId.trim()
-        ? upstream.codexAccountId.trim()
-        : null,
-      antigravity_account_id: upstream.antigravityAccountId.trim()
-        ? upstream.antigravityAccountId.trim()
-        : null,
-      preferred_endpoint: normalizeKiroPreferredEndpoint(upstream.preferredEndpoint),
-      proxy_url: upstream.proxyUrl.trim() ? upstream.proxyUrl.trim() : null,
-      priority: parseOptionalInt(upstream.priority),
-      enabled: upstream.enabled,
-      model_mappings: toModelMappingPayload(upstream.modelMappings),
-      overrides: toOverridesPayload(upstream.overrides),
-    })),
+    upstreams: form.upstreams.map((upstream) => {
+      const providers = normalizeProviders(upstream.providers);
+      return {
+        id: upstream.id.trim(),
+        providers,
+        base_url: upstream.baseUrl.trim(),
+        api_key: upstream.apiKey.trim() ? upstream.apiKey.trim() : null,
+        filter_prompt_cache_retention: upstream.filterPromptCacheRetention,
+        filter_safety_identifier: upstream.filterSafetyIdentifier,
+        kiro_account_id: upstream.kiroAccountId.trim()
+          ? upstream.kiroAccountId.trim()
+          : null,
+        codex_account_id: upstream.codexAccountId.trim()
+          ? upstream.codexAccountId.trim()
+          : null,
+        antigravity_account_id: upstream.antigravityAccountId.trim()
+          ? upstream.antigravityAccountId.trim()
+          : null,
+        preferred_endpoint: normalizeKiroPreferredEndpoint(upstream.preferredEndpoint),
+        proxy_url: upstream.proxyUrl.trim() ? upstream.proxyUrl.trim() : null,
+        priority: parseOptionalInt(upstream.priority),
+        enabled: upstream.enabled,
+        model_mappings: toModelMappingPayload(upstream.modelMappings),
+        convert_from_map: normalizeConvertFromMap(upstream.convertFromMap, providers),
+        overrides: toOverridesPayload(upstream.overrides),
+      };
+    }),
   };
 }
 
@@ -238,27 +241,43 @@ export function validate(form: ConfigForm) {
       continue;
     }
 
-    const provider = upstream.provider.trim();
-    if (!provider) {
+    const providers = normalizeProviders(upstream.providers);
+    if (!providers.length) {
       return { valid: false, message: m.error_upstream_provider_required({ id }) };
     }
-    if (provider === "kiro" && !upstream.kiroAccountId.trim()) {
+    const specialProviders = providers.filter((provider) =>
+      provider === "kiro" || provider === "codex" || provider === "antigravity",
+    );
+    if (specialProviders.length && providers.length > 1) {
+      return {
+        valid: false,
+        message: m.error_upstream_provider_required({ id }),
+      };
+    }
+    if (providers.includes("kiro") && !upstream.kiroAccountId.trim()) {
       return { valid: false, message: m.error_upstream_kiro_account_required({ id }) };
     }
-    if (provider === "codex" && !upstream.codexAccountId.trim()) {
+    if (providers.includes("codex") && !upstream.codexAccountId.trim()) {
       return { valid: false, message: m.error_upstream_codex_account_required({ id }) };
     }
-    if (provider === "antigravity" && !upstream.antigravityAccountId.trim()) {
+    if (providers.includes("antigravity") && !upstream.antigravityAccountId.trim()) {
       return { valid: false, message: m.error_upstream_antigravity_account_required({ id }) };
     }
-    if (
-      provider !== "kiro" &&
-      provider !== "codex" &&
-      provider !== "antigravity" &&
-      !upstream.baseUrl.trim()
-    ) {
+
+    const canOmitBaseUrl =
+      providers.length === 1 &&
+      (providers[0] === "kiro" || providers[0] === "codex" || providers[0] === "antigravity");
+    if (!canOmitBaseUrl && !upstream.baseUrl.trim()) {
       return { valid: false, message: m.error_upstream_base_url_required({ id }) };
     }
+
+    const convertFromMapProviders = Object.keys(upstream.convertFromMap);
+    for (const provider of convertFromMapProviders) {
+      if (!providers.includes(provider)) {
+        return { valid: false, message: m.error_upstream_provider_required({ id }) };
+      }
+    }
+
     const upstreamProxyUrl = upstream.proxyUrl.trim();
     if (upstreamProxyUrl) {
       if (upstreamProxyUrl === APP_PROXY_URL_PLACEHOLDER) {
@@ -351,6 +370,56 @@ function normalizeTrayTokenRate(value: TrayTokenRateConfig) {
     return { ...value, format: DEFAULT_TRAY_TOKEN_RATE.format };
   }
   return value;
+}
+
+function normalizeProviders(values: readonly string[]) {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    output.push(trimmed);
+  }
+  return output;
+}
+
+function normalizeConvertFromMap(
+  map: Record<string, InboundApiFormat[]>,
+  providers: readonly string[],
+) {
+  if (!Object.keys(map).length) {
+    return undefined;
+  }
+  const providerSet = new Set(providers);
+  const outputEntries: Array<[string, InboundApiFormat[]]> = [];
+  for (const [provider, formats] of Object.entries(map)) {
+    if (!providerSet.has(provider)) {
+      continue;
+    }
+    const unique: InboundApiFormat[] = [];
+    const seen = new Set<InboundApiFormat>();
+    for (const format of formats) {
+      if (seen.has(format)) {
+        continue;
+      }
+      seen.add(format);
+      unique.push(format);
+    }
+    if (!unique.length) {
+      continue;
+    }
+    outputEntries.push([provider, unique]);
+  }
+  if (!outputEntries.length) {
+    return undefined;
+  }
+  return Object.fromEntries(outputEntries);
 }
 
 function validateModelMappings(mappings: ModelMappingForm[], upstreamId: string) {

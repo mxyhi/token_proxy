@@ -79,57 +79,6 @@ pub(crate) fn build_payload_from_responses(
     })
 }
 
-pub(crate) fn build_payload_from_chat(
-    request: &Value,
-    model_id: &str,
-    profile_arn: Option<&str>,
-    origin: &str,
-    is_agentic: bool,
-    is_chat_only: bool,
-    headers: &HeaderMap,
-) -> Result<BuildPayloadResult, String> {
-    let object = request
-        .as_object()
-        .ok_or_else(|| "Request body must be a JSON object.".to_string())?;
-    let messages = object
-        .get("messages")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "Chat request must include messages.".to_string())?;
-    let messages = messages.clone();
-
-    let system_prompt = prepare_system_prompt(object, &messages, headers, is_agentic);
-    let (history, current_user, current_tool_results) =
-        process_messages(&messages, model_id, origin);
-    let current_message = build_current_message(
-        &history,
-        current_user,
-        current_tool_results,
-        model_id,
-        origin,
-        &system_prompt,
-        object,
-        is_chat_only,
-    );
-
-    let payload = KiroPayload {
-        conversation_state: KiroConversationState {
-            chat_trigger_type: "MANUAL".to_string(),
-            conversation_id: random_uuid(),
-            current_message,
-            history,
-        },
-        profile_arn: profile_arn.map(|value| value.to_string()),
-        inference_config: build_inference_config(object),
-    };
-
-    let payload_bytes = serde_json::to_vec(&payload)
-        .map_err(|err| format!("Failed to serialize request payload: {err}"))?;
-
-    Ok(BuildPayloadResult {
-        payload: payload_bytes,
-    })
-}
-
 fn prepare_system_prompt(
     object: &Map<String, Value>,
     messages: &[Value],

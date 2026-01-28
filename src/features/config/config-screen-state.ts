@@ -226,9 +226,11 @@ export function useConfigDerived(
   const providerOptions = useMemo(() => {
     const providers = new Set<string>();
     for (const upstream of form.upstreams) {
-      const provider = upstream.provider.trim();
-      if (provider) {
-        providers.add(provider);
+      for (const provider of upstream.providers) {
+        const trimmed = provider.trim();
+        if (trimmed) {
+          providers.add(trimmed);
+        }
       }
     }
     return Array.from(providers);

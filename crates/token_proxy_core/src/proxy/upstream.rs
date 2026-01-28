@@ -35,10 +35,11 @@ use utils::{
 use crate::proxy::redact::redact_query_param_value;
 
 use super::{
-    config::{ProviderUpstreams, UpstreamRuntime},
+    config::{InboundApiFormat, ProviderUpstreams, UpstreamRuntime},
     gemini,
     http,
     http::RequestAuth,
+    inbound::detect_inbound_api_format,
     openai_compat::FormatTransform,
     request_detail::RequestDetailSnapshot,
     request_body::ReplayableBody,
@@ -66,6 +67,7 @@ pub(super) async fn forward_upstream_request(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> ForwardUpstreamResult {
+    let inbound_format = detect_inbound_api_format(inbound_path);
     let upstreams = match resolve_provider_upstreams(
         &state,
         provider,
@@ -86,6 +88,7 @@ pub(super) async fn forward_upstream_request(
         &state,
         method,
         provider,
+        inbound_format,
         inbound_path,
         upstream_path_with_query,
         headers,
@@ -106,7 +109,7 @@ pub(super) async fn forward_upstream_request(
     let should_fallback = summary.last_retry_response.is_some()
         || summary.last_timeout_error.is_some()
         || summary.last_retry_error.is_some()
-        || (summary.attempted == 0 && summary.missing_auth);
+        || summary.attempted == 0;
     let response = finalize_forward_response(
         &state,
         provider,
@@ -280,6 +283,7 @@ async fn run_upstream_groups(
     state: &ProxyState,
     method: Method,
     provider: &str,
+    inbound_format: Option<InboundApiFormat>,
     inbound_path: &str,
     upstream_path_with_query: &str,
     headers: &HeaderMap,
@@ -296,12 +300,22 @@ async fn run_upstream_groups(
         if group.items.is_empty() {
             continue;
         }
+        if let Some(inbound_format) = inbound_format {
+            if group
+                .items
+                .iter()
+                .all(|item| !item.supports_inbound(inbound_format))
+            {
+                continue;
+            }
+        }
         let result = try_group_upstreams(
             state,
             method.clone(),
             provider,
             group_index,
             &group.items,
+            inbound_format,
             inbound_path,
             upstream_path_with_query,
             headers,
@@ -365,6 +379,7 @@ async fn try_group_upstreams(
     provider: &str,
     group_index: usize,
     items: &[UpstreamRuntime],
+    inbound_format: Option<InboundApiFormat>,
     inbound_path: &str,
     upstream_path_with_query: &str,
     headers: &HeaderMap,
@@ -378,6 +393,11 @@ async fn try_group_upstreams(
     let start = resolve_group_start(state, provider, group_index, items.len());
     for item_index in build_group_order(items.len(), start) {
         let upstream = &items[item_index];
+        if let Some(inbound_format) = inbound_format {
+            if !upstream.supports_inbound(inbound_format) {
+                continue;
+            }
+        }
         let outcome = attempt::attempt_upstream(
             state,
             method.clone(),

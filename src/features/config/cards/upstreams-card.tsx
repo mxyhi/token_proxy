@@ -62,15 +62,16 @@ function createCopiedUpstreamId(sourceId: string, upstreams: readonly UpstreamFo
 }
 
 /**
- * 基于 provider 自动生成唯一 ID
- * 例如：openai-1, openai-2, kiro-1 等
+ * 基于 providers 自动生成唯一 ID
+ * - 单 provider：openai-1, openai-2
+ * - 多 provider：仍以第一个 provider 作为前缀（避免 id 频繁变化）
  */
 function createAutoUpstreamId(
-  provider: string,
+  providers: readonly string[],
   upstreams: readonly UpstreamForm[],
   editingIndex?: number,
 ) {
-  const base = provider.trim() || "upstream";
+  const base = providers[0]?.trim() || "upstream";
   const taken = new Set(
     upstreams
       .filter((_, index) => index !== editingIndex)
@@ -84,6 +85,71 @@ function createAutoUpstreamId(
     suffix += 1;
   }
   return `${base}-${suffix}`;
+}
+
+function normalizeProviders(values: readonly string[]) {
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    output.push(trimmed);
+  }
+  return output;
+}
+
+function providersEqual(left: readonly string[], right: readonly string[]) {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function coerceProviderSelection(next: readonly string[]) {
+  const normalized = normalizeProviders(next);
+  const special = normalized.find((provider) =>
+    provider === "kiro" || provider === "codex" || provider === "antigravity",
+  );
+  if (!special) {
+    return normalized;
+  }
+  return [special];
+}
+
+function hasProvider(upstream: UpstreamForm, provider: string) {
+  return upstream.providers.some((value) => value.trim() === provider);
+}
+
+function pruneConvertFromMap(
+  map: UpstreamForm["convertFromMap"],
+  providers: readonly string[],
+) {
+  if (!Object.keys(map).length) {
+    return map;
+  }
+  const providerSet = new Set(providers);
+  const output: UpstreamForm["convertFromMap"] = {};
+  for (const [provider, formats] of Object.entries(map)) {
+    if (!providerSet.has(provider)) {
+      continue;
+    }
+    if (!formats.length) {
+      continue;
+    }
+    output[provider] = formats;
+  }
+  return output;
 }
 
 /**
@@ -107,7 +173,7 @@ function findIdleKiroAccount(
     upstreams
       .filter((upstream, index) => {
         if (index === editingIndex) return false;
-        return upstream.provider.trim() === "kiro" && upstream.kiroAccountId.trim();
+        return hasProvider(upstream, "kiro") && upstream.kiroAccountId.trim();
       })
       .map((upstream) => upstream.kiroAccountId.trim()),
   );
@@ -135,7 +201,7 @@ function findIdleCodexAccount(
     upstreams
       .filter((upstream, index) => {
         if (index === editingIndex) return false;
-        return upstream.provider.trim() === "codex" && upstream.codexAccountId.trim();
+        return hasProvider(upstream, "codex") && upstream.codexAccountId.trim();
       })
       .map((upstream) => upstream.codexAccountId.trim()),
   );
@@ -162,7 +228,7 @@ function findIdleAntigravityAccount(
       .filter((upstream, index) => {
         if (index === editingIndex) return false;
         return (
-          upstream.provider.trim() === "antigravity" &&
+          hasProvider(upstream, "antigravity") &&
           upstream.antigravityAccountId.trim()
         );
       })
@@ -253,36 +319,38 @@ export function UpstreamsCard({
         if (!prev.open) return prev;
 
         const editingIndex = prev.mode === "edit" ? prev.index : undefined;
-        const currentProvider = prev.draft.provider.trim();
-        const newProvider = patch.provider?.trim();
+        const currentProviders = normalizeProviders(prev.draft.providers);
+        const nextProviders =
+          patch.providers === undefined
+            ? currentProviders
+            : coerceProviderSelection(patch.providers);
+        const providersChanged =
+          patch.providers !== undefined &&
+          !providersEqual(nextProviders, currentProviders);
+        const currentPrimary = currentProviders[0] ?? "";
+        const nextPrimary = nextProviders[0] ?? "";
 
         // 如果 provider 变化，自动生成新 ID 并处理账户绑定
-        if (newProvider !== undefined && newProvider !== currentProvider) {
+        if (providersChanged) {
           let kiroAccountId = prev.draft.kiroAccountId;
           let codexAccountId = prev.draft.codexAccountId;
           let antigravityAccountId = prev.draft.antigravityAccountId;
-          let autoId: string;
           // openai-response 专属开关：切换到其它 provider 时清零，避免把无效字段写进配置。
           let filterPromptCacheRetention = prev.draft.filterPromptCacheRetention;
           let filterSafetyIdentifier = prev.draft.filterSafetyIdentifier;
+          let convertFromMap = patch.convertFromMap ?? prev.draft.convertFromMap;
 
-          if (newProvider === "kiro") {
+          if (nextPrimary === "kiro") {
             const idleAccount = findIdleKiroAccount(kiroAccounts, upstreams, editingIndex);
             kiroAccountId = idleAccount?.account_id ?? "";
             codexAccountId = "";
             antigravityAccountId = "";
-            autoId = kiroAccountId
-              ? stripJsonSuffix(kiroAccountId)
-              : createAutoUpstreamId(newProvider, upstreams, editingIndex);
-          } else if (newProvider === "codex") {
+          } else if (nextPrimary === "codex") {
             const idleAccount = findIdleCodexAccount(codexAccounts, upstreams, editingIndex);
             codexAccountId = idleAccount?.account_id ?? "";
             kiroAccountId = "";
             antigravityAccountId = "";
-            autoId = codexAccountId
-              ? stripJsonSuffix(codexAccountId)
-              : createAutoUpstreamId(newProvider, upstreams, editingIndex);
-          } else if (newProvider === "antigravity") {
+          } else if (nextPrimary === "antigravity") {
             const idleAccount = findIdleAntigravityAccount(
               antigravityAccounts,
               upstreams,
@@ -291,23 +359,19 @@ export function UpstreamsCard({
             antigravityAccountId = idleAccount?.account_id ?? "";
             kiroAccountId = "";
             codexAccountId = "";
-            autoId = antigravityAccountId
-              ? stripJsonSuffix(antigravityAccountId)
-              : createAutoUpstreamId(newProvider, upstreams, editingIndex);
           } else {
-            autoId = createAutoUpstreamId(newProvider, upstreams, editingIndex);
-            if (currentProvider === "kiro") {
+            if (currentProviders.includes("kiro")) {
               kiroAccountId = "";
             }
-            if (currentProvider === "codex") {
+            if (currentProviders.includes("codex")) {
               codexAccountId = "";
             }
-            if (currentProvider === "antigravity") {
+            if (currentProviders.includes("antigravity")) {
               antigravityAccountId = "";
             }
           }
 
-          if (newProvider !== "openai-response") {
+          if (!nextProviders.includes("openai-response")) {
             filterPromptCacheRetention = false;
             filterSafetyIdentifier = false;
           }
@@ -318,24 +382,41 @@ export function UpstreamsCard({
             filterSafetyIdentifier = patch.filterSafetyIdentifier;
           }
 
+          convertFromMap = pruneConvertFromMap(convertFromMap, nextProviders);
+
+          const shouldAutoId = nextPrimary !== currentPrimary && !!nextPrimary;
+          const autoId = shouldAutoId
+            ? createAutoUpstreamId(nextProviders, upstreams, editingIndex)
+            : prev.draft.id;
+          const id =
+            nextPrimary === "kiro" && kiroAccountId
+              ? stripJsonSuffix(kiroAccountId)
+              : nextPrimary === "codex" && codexAccountId
+                ? stripJsonSuffix(codexAccountId)
+                : nextPrimary === "antigravity" && antigravityAccountId
+                  ? stripJsonSuffix(antigravityAccountId)
+                  : autoId;
+
           return {
             ...prev,
             draft: {
               ...prev.draft,
               ...patch,
-              id: autoId,
+              providers: nextProviders,
+              id,
               kiroAccountId,
               codexAccountId,
               antigravityAccountId,
               filterPromptCacheRetention,
               filterSafetyIdentifier,
+              convertFromMap,
             },
           };
         }
 
         // 如果是 kiro provider 且 kiroAccountId 变化，同步更新 ID（去掉 .json）
         if (
-          prev.draft.provider.trim() === "kiro" &&
+          hasProvider(prev.draft, "kiro") &&
           patch.kiroAccountId !== undefined &&
           patch.kiroAccountId !== prev.draft.kiroAccountId
         ) {
@@ -346,7 +427,7 @@ export function UpstreamsCard({
           };
         }
         if (
-          prev.draft.provider.trim() === "codex" &&
+          hasProvider(prev.draft, "codex") &&
           patch.codexAccountId !== undefined &&
           patch.codexAccountId !== prev.draft.codexAccountId
         ) {
@@ -357,7 +438,7 @@ export function UpstreamsCard({
           };
         }
         if (
-          prev.draft.provider.trim() === "antigravity" &&
+          hasProvider(prev.draft, "antigravity") &&
           patch.antigravityAccountId !== undefined &&
           patch.antigravityAccountId !== prev.draft.antigravityAccountId
         ) {

@@ -9,7 +9,6 @@ fn config_with_local(key: &str) -> ProxyConfig {
         local_api_key: Some(key.to_string()),
         log_level: LogLevel::Silent,
         max_request_body_bytes: 1024,
-        enable_api_format_conversion: false,
         upstream_strategy: crate::proxy::config::UpstreamStrategy::PriorityFillFirst,
         upstreams: HashMap::new(),
         kiro_preferred_endpoint: None,

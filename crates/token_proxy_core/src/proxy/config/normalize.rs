@@ -1,9 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    model_mapping::compile_model_mappings, HeaderOverride, ProviderUpstreams, UpstreamConfig,
-    UpstreamGroup, UpstreamOverrides, UpstreamRuntime,
+    model_mapping::compile_model_mappings, HeaderOverride, InboundApiFormat, ProviderUpstreams,
+    UpstreamConfig, UpstreamGroup, UpstreamOverrides, UpstreamRuntime,
 };
+use super::types::InboundApiFormatMask;
 use axum::http::header::{HeaderName, HeaderValue};
 
 const APP_PROXY_URL_PLACEHOLDER: &str = "$app_proxy_url";
@@ -23,9 +24,7 @@ pub(super) fn normalize_upstreams(
     validate_upstream_ids(upstreams)?;
     let mut normalized = Vec::with_capacity(upstreams.len());
     for upstream in upstreams {
-        if let Some(entry) = normalize_single_upstream(upstream, app_proxy_url)? {
-            normalized.push(entry);
-        }
+        normalized.extend(normalize_single_upstream(upstream, app_proxy_url)?);
     }
     Ok(normalized)
 }
@@ -80,34 +79,14 @@ fn validate_upstream_ids(upstreams: &[UpstreamConfig]) -> Result<(), String> {
 fn normalize_single_upstream(
     upstream: &UpstreamConfig,
     app_proxy_url: Option<&str>,
-) -> Result<Option<NormalizedUpstream>, String> {
+) -> Result<Vec<NormalizedUpstream>, String> {
     if !upstream.enabled {
-        return Ok(None);
+        return Ok(Vec::new());
     }
-    let provider = upstream.provider.trim();
-    if provider.is_empty() {
-        return Err(format!(
-            "Upstream {} provider cannot be empty.",
-            upstream.id
-        ));
-    }
-    let base_url = upstream.base_url.trim();
-    let base_url = if base_url.is_empty() {
-        if provider == "codex" {
-            DEFAULT_CODEX_BASE_URL.to_string()
-        } else if provider == "antigravity" {
-            DEFAULT_ANTIGRAVITY_BASE_URL.to_string()
-        } else if provider == "kiro" {
-            String::new()
-        } else {
-            return Err(format!(
-                "Upstream {} base_url cannot be empty.",
-                upstream.id
-            ));
-        }
-    } else {
-        base_url.to_string()
-    };
+
+    let providers = normalize_providers(upstream)?;
+    validate_convert_from_map(upstream, &providers)?;
+
     let api_key = upstream
         .api_key
         .as_ref()
@@ -132,24 +111,6 @@ fn normalize_single_upstream(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
-    if provider == "kiro" && kiro_account_id.is_none() {
-        return Err(format!(
-            "Upstream {} requires a Kiro account binding.",
-            upstream.id
-        ));
-    }
-    if provider == "codex" && codex_account_id.is_none() {
-        return Err(format!(
-            "Upstream {} requires a Codex account binding.",
-            upstream.id
-        ));
-    }
-    if provider == "antigravity" && antigravity_account_id.is_none() {
-        return Err(format!(
-            "Upstream {} requires an Antigravity account binding.",
-            upstream.id
-        ));
-    }
     let proxy_url = normalize_upstream_proxy_url(
         upstream.proxy_url.as_deref(),
         app_proxy_url,
@@ -157,25 +118,184 @@ fn normalize_single_upstream(
     )?;
     let model_mappings = compile_model_mappings(&upstream.id, &upstream.model_mappings)?;
     let header_overrides = normalize_header_overrides(upstream.overrides.as_ref())?;
-    let runtime = UpstreamRuntime {
-        id: upstream.id.trim().to_string(),
-        base_url,
-        api_key,
-        filter_prompt_cache_retention: upstream.filter_prompt_cache_retention,
-        filter_safety_identifier: upstream.filter_safety_identifier,
-        kiro_account_id,
-        codex_account_id,
-        antigravity_account_id,
-        kiro_preferred_endpoint: upstream.preferred_endpoint.clone(),
-        proxy_url,
-        priority: upstream.priority.unwrap_or(0),
-        model_mappings,
-        header_overrides,
-    };
-    Ok(Some(NormalizedUpstream {
-        provider: provider.to_string(),
-        runtime,
-    }))
+
+    let mut output = Vec::with_capacity(providers.len());
+    for provider in providers {
+        let base_url = resolve_base_url(&upstream.id, upstream.base_url.as_str(), &provider)?;
+        validate_provider_account_binding(
+            &upstream.id,
+            &provider,
+            kiro_account_id.as_deref(),
+            codex_account_id.as_deref(),
+            antigravity_account_id.as_deref(),
+        )?;
+
+        let mut allowed_inbound_formats = native_inbound_formats_for_provider(&provider);
+        if let Some(extra) = upstream.convert_from_map.get(provider.as_str()) {
+            allowed_inbound_formats.extend(extra.iter().copied());
+        }
+
+        let runtime = UpstreamRuntime {
+            id: upstream.id.trim().to_string(),
+            base_url,
+            api_key: api_key.clone(),
+            filter_prompt_cache_retention: upstream.filter_prompt_cache_retention,
+            filter_safety_identifier: upstream.filter_safety_identifier,
+            kiro_account_id: kiro_account_id.clone(),
+            codex_account_id: codex_account_id.clone(),
+            antigravity_account_id: antigravity_account_id.clone(),
+            kiro_preferred_endpoint: upstream.preferred_endpoint.clone(),
+            proxy_url: proxy_url.clone(),
+            priority: upstream.priority.unwrap_or(0),
+            model_mappings: model_mappings.clone(),
+            header_overrides: header_overrides.clone(),
+            allowed_inbound_formats,
+        };
+        output.push(NormalizedUpstream { provider, runtime });
+    }
+
+    Ok(output)
+}
+
+fn normalize_providers(upstream: &UpstreamConfig) -> Result<Vec<String>, String> {
+    if upstream.providers.is_empty() {
+        return Err(format!("Upstream {} providers cannot be empty.", upstream.id));
+    }
+
+    let mut providers = Vec::with_capacity(upstream.providers.len());
+    let mut seen = HashSet::new();
+    for provider in &upstream.providers {
+        let trimmed = provider.trim();
+        if trimmed.is_empty() {
+            return Err(format!(
+                "Upstream {} providers cannot include empty values.",
+                upstream.id
+            ));
+        }
+        let normalized = trimmed.to_string();
+        if !seen.insert(normalized.clone()) {
+            return Err(format!(
+                "Upstream {} providers contains duplicate: {trimmed}.",
+                upstream.id
+            ));
+        }
+        providers.push(normalized);
+    }
+
+    validate_provider_mix(&upstream.id, &providers)?;
+    Ok(providers)
+}
+
+fn validate_provider_mix(upstream_id: &str, providers: &[String]) -> Result<(), String> {
+    let specials = providers
+        .iter()
+        .filter(|provider| matches!(provider.as_str(), "kiro" | "codex" | "antigravity"))
+        .collect::<Vec<_>>();
+    if specials.is_empty() {
+        return Ok(());
+    }
+    if providers.len() > 1 {
+        return Err(format!(
+            "Upstream {upstream_id} providers cannot mix {} with other providers.",
+            specials
+                .iter()
+                .map(|value| value.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    Ok(())
+}
+
+fn validate_convert_from_map(upstream: &UpstreamConfig, providers: &[String]) -> Result<(), String> {
+    if upstream.convert_from_map.is_empty() {
+        return Ok(());
+    }
+    let provider_set: HashSet<&str> = providers.iter().map(|value| value.as_str()).collect();
+    for provider in upstream.convert_from_map.keys() {
+        let trimmed = provider.trim();
+        if trimmed.is_empty() {
+            return Err(format!(
+                "Upstream {} convert_from_map cannot include empty provider keys.",
+                upstream.id
+            ));
+        }
+        if !provider_set.contains(trimmed) {
+            return Err(format!(
+                "Upstream {} convert_from_map provider is not in providers[]: {provider}.",
+                upstream.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn resolve_base_url(
+    upstream_id: &str,
+    base_url: &str,
+    provider: &str,
+) -> Result<String, String> {
+    let base_url = base_url.trim();
+    if !base_url.is_empty() {
+        return Ok(base_url.to_string());
+    }
+
+    if provider == "codex" {
+        return Ok(DEFAULT_CODEX_BASE_URL.to_string());
+    }
+    if provider == "antigravity" {
+        return Ok(DEFAULT_ANTIGRAVITY_BASE_URL.to_string());
+    }
+    if provider == "kiro" {
+        return Ok(String::new());
+    }
+
+    Err(format!("Upstream {upstream_id} base_url cannot be empty."))
+}
+
+fn validate_provider_account_binding(
+    upstream_id: &str,
+    provider: &str,
+    kiro_account_id: Option<&str>,
+    codex_account_id: Option<&str>,
+    antigravity_account_id: Option<&str>,
+) -> Result<(), String> {
+    if provider == "kiro" && kiro_account_id.is_none() {
+        return Err(format!(
+            "Upstream {upstream_id} requires a Kiro account binding."
+        ));
+    }
+    if provider == "codex" && codex_account_id.is_none() {
+        return Err(format!(
+            "Upstream {upstream_id} requires a Codex account binding."
+        ));
+    }
+    if provider == "antigravity" && antigravity_account_id.is_none() {
+        return Err(format!(
+            "Upstream {upstream_id} requires an Antigravity account binding."
+        ));
+    }
+    Ok(())
+}
+
+fn native_inbound_formats_for_provider(provider: &str) -> InboundApiFormatMask {
+    let mut mask = InboundApiFormatMask::default();
+    match provider {
+        "openai" => mask.insert(InboundApiFormat::OpenaiChat),
+        "openai-response" => mask.insert(InboundApiFormat::OpenaiResponses),
+        "anthropic" => mask.insert(InboundApiFormat::AnthropicMessages),
+        "gemini" => mask.insert(InboundApiFormat::Gemini),
+        // Kiro 仅作为 Anthropic `/v1/messages` 的同协议 provider；
+        // OpenAI endpoints（/v1/chat/completions、/v1/responses）若要走 Kiro，需要显式通过
+        // `convert_from_map.kiro` 授权（避免“意外命中 Kiro”）。
+        "kiro" => mask.insert(InboundApiFormat::AnthropicMessages),
+        // Codex 的“native”更接近 OpenAI Responses；Chat 通常需要显式允许转换。
+        "codex" => mask.insert(InboundApiFormat::OpenaiResponses),
+        // Antigravity 原生处理 Gemini 路径；其它格式需显式允许转换后再走 Gemini 兼容层。
+        "antigravity" => mask.insert(InboundApiFormat::Gemini),
+        _ => {}
+    }
+    mask
 }
 
 fn normalize_header_overrides(

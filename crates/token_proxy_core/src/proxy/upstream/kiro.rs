@@ -13,7 +13,7 @@ use super::kiro_http::{
 };
 use crate::proxy::http;
 use crate::proxy::kiro::{
-    build_payload_from_chat, build_payload_from_claude, build_payload_from_responses,
+    build_payload_from_claude, build_payload_from_responses,
     determine_agentic_mode, map_model_to_kiro, select_endpoints, BuildPayloadResult,
     KiroEndpointConfig,
 };
@@ -80,7 +80,6 @@ struct KiroContext<'a> {
 
 #[derive(Clone, Copy, Debug)]
 enum KiroSourceFormat {
-    OpenAIChat,
     Responses,
     Anthropic,
 }
@@ -223,15 +222,6 @@ async fn build_endpoint_payload(
     endpoint: &KiroEndpointConfig,
 ) -> Result<BuildPayloadResult, AttemptOutcome> {
     let payload = match context.source_format {
-        KiroSourceFormat::OpenAIChat => build_payload_from_chat(
-            &context.request_value,
-            &context.model_id,
-            context.profile_arn.as_deref(),
-            endpoint.origin,
-            context.is_agentic,
-            context.is_chat_only,
-            context.headers,
-        ),
         KiroSourceFormat::Anthropic => {
             build_payload_from_anthropic(context, endpoint.origin).await
         }
@@ -506,7 +496,6 @@ fn resolve_model(meta: &RequestMeta) -> (String, bool, bool) {
 
 fn resolve_source_format(transform: FormatTransform) -> KiroSourceFormat {
     match transform {
-        FormatTransform::KiroToChat => KiroSourceFormat::OpenAIChat,
         FormatTransform::KiroToAnthropic => KiroSourceFormat::Anthropic,
         _ => KiroSourceFormat::Responses,
     }

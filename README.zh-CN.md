@@ -9,7 +9,7 @@
 ---
 
 ## 你能得到什么
-- 多提供商：`openai`、`openai-response`、`anthropic`、`gemini`、`kiro`
+- 多提供商：`openai`、`openai-response`、`anthropic`、`gemini`、`kiro`、`codex`、`antigravity`
 - 内置路由，支持可选的 API 格式互转（OpenAI Chat ⇄ Responses；Anthropic Messages ↔ OpenAI；Gemini ↔ OpenAI/Anthropic，含 SSE）
 - 上游优先级 + 两种策略（填满优先级组 / 轮询）
 - 模型别名映射（精确 / 前缀* / 通配*），响应会回写原始别名
@@ -79,22 +79,22 @@ cargo run -p token_proxy_cli -- --config ./config.jsonc config path
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 表示回落到默认；保护入站体积 |
 | `tray_token_rate.enabled` | `true` | macOS 托盘实时速率；其他平台无害 |
 | `tray_token_rate.format` | `split` | `combined`(总数) / `split`(↑入 ↓出) / `both`(总数 | ↑入 ↓出) |
-| `enable_api_format_conversion` | `true` | 允许 OpenAI/Anthropic/Gemini 自动 fallback（含请求/响应体转换与 SSE 流式转换） |
 | `upstream_strategy` | `priority_fill_first` | `priority_fill_first` 默认先填满高优先级；`priority_round_robin` 在同组内轮询 |
 
 ### 上游条目（`upstreams[]`）
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `id` | 必填 | 唯一 |
-| `provider` | 必填 | `openai` / `openai-response` / `anthropic` / `gemini` / `kiro` |
-| `base_url` | 必填 | 完整基址，重复路径段会去重（`kiro` 可为空） |
+| `providers` | 必填 | 一个上游可同时服务多个 provider。特殊 provider（`kiro/codex/antigravity`）不可与其它 provider 混用。 |
+| `base_url` | 必填 | 完整基址，重复路径段会去重（`providers=["kiro"]` / `["codex"]` / `["antigravity"]` 可为空） |
 | `api_key` | `null` | 该 provider 的密钥；优先于请求头 |
-| `kiro_account_id` | `null` | `provider=kiro` 时必填 |
+| `kiro_account_id` | `null` | `providers=["kiro"]` 时必填 |
 | `preferred_endpoint` | `null` | `kiro` 专用：`ide` 或 `cli` |
 | `proxy_url` | `null` | 每个上游独立代理，支持 `http/https/socks5/socks5h`；默认**不走系统代理**；支持 `$app_proxy_url` |
 | `priority` | `0` | 越大越先尝试；同组按列表顺序或轮询 |
 | `enabled` | `true` | 可临时禁用上游 |
 | `model_mappings` | `{}` | 精确 / `前缀*` / `*`；优先级：精确 > 最长前缀 > 通配；响应回写原始模型别名 |
+| `convert_from_map` | `{}` | 显式声明允许从哪些入站格式转换后使用该 provider。例：`{ "openai-response": ["openai_chat", "anthropic_messages"] }` |
 | `overrides.header` | `{}` | 设置/删除 header（null 表示删除）；hop-by-hop/Host/Content-Length 永远忽略 |
 
 ## 路由与格式转换
@@ -102,10 +102,10 @@ cargo run -p token_proxy_cli -- --config ./config.jsonc config path
 - Anthropic：`/v1/messages`（含子路径）与 `/v1/complete` → `anthropic`（Kiro 同格式）
 - OpenAI：`/v1/chat/completions` → `openai`；`/v1/responses` → `openai-response`
 - 其他路径：按已配置 provider 的最高优先级选择；优先级相同则按 `openai` > `openai-response` > `anthropic` 打破平局
-- 若首选 provider 缺失且 `enable_api_format_conversion=true`，将自动在已支持的格式之间转换请求与响应（含 SSE 流式）
+- 跨格式 fallback/转换由 `upstreams[].convert_from_map` 控制（不再有全局开关）；若某个 provider 在该入站格式下没有任何可用 upstream，则不会被选中。
 - `/v1/chat/completions` 缺少 `openai`：可 fallback 到 `openai-response` / `anthropic` / `gemini`（按优先级选择，平级优先 `openai-response`）
 - `/v1/messages`：在 `anthropic` 与 `kiro` 间按优先级选择；平级按 upstream id 排序。若命中 provider 返回“可重试错误”，且另一个 native provider 已配置，则会自动 fallback（Anthropic ↔ Kiro）
-- 当 `/v1/messages` 缺少 `anthropic` 且 `kiro` 也不存在，且 `enable_api_format_conversion=true` 时：可 fallback 到 `openai-response` / `openai` / `gemini`（按优先级选择，平级优先 `openai-response`）
+- 当 `/v1/messages` 缺少 `anthropic` 且 `kiro` 也不存在时：若目标 provider 在 `convert_from_map` 中允许 `anthropic_messages`，则可 fallback 到 `openai-response` / `openai` / `gemini`（按优先级选择，平级优先 `openai-response`）
 - `/v1/responses` 缺少 `openai-response`：可 fallback 到 `openai` / `anthropic` / `gemini`（按优先级选择，平级优先 `openai`）
 - `/v1beta/models/*:generateContent` 缺少 `gemini`：可 fallback 到 `openai-response` / `openai` / `anthropic`（按优先级选择，平级优先 `openai-response`）
 

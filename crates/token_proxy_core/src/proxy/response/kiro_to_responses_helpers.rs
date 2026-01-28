@@ -1,16 +1,7 @@
 use serde_json::{json, Map, Value};
 
-use super::super::compat_reason;
-use super::super::kiro::{KiroToolUse, KiroUsage};
+use super::super::kiro::KiroUsage;
 use super::super::token_estimator;
-
-pub(super) struct FunctionCallOutput {
-    pub(super) id: String,
-    pub(super) output_index: u64,
-    pub(super) call_id: String,
-    pub(super) name: String,
-    pub(super) arguments: String,
-}
 
 pub(super) fn usage_from_kiro(usage: &KiroUsage) -> Option<super::super::log::TokenUsage> {
     if usage.input_tokens.is_none()
@@ -94,89 +85,6 @@ pub(super) fn apply_usage_fallback(
             usage.total_tokens = Some(input.saturating_add(output));
         }
     }
-}
-
-pub(super) fn build_response_object(
-    content: String,
-    reasoning: String,
-    tool_uses: Vec<KiroToolUse>,
-    usage: KiroUsage,
-    stop_reason: Option<&str>,
-    model: Option<&str>,
-    response_id: String,
-    created_at: i64,
-) -> Value {
-    let (status, incomplete_reason) =
-        compat_reason::responses_status_from_chat_finish_reason(map_stop_reason(stop_reason));
-    let status = status.unwrap_or("completed");
-    let incomplete_details = incomplete_reason
-        .map(|reason| json!({ "reason": reason }))
-        .unwrap_or(Value::Null);
-
-    let usage_value = usage_json_from_kiro(&usage);
-    let usage_json = usage_value.unwrap_or(Value::Null);
-    let parallel_tool_calls = tool_uses.len() > 1;
-
-    let mut output = Vec::new();
-    if !content.trim().is_empty() || !reasoning.trim().is_empty() || tool_uses.is_empty() {
-        let mut parts = Vec::new();
-        if !reasoning.trim().is_empty() {
-            parts.push(json!({ "type": "reasoning_text", "text": reasoning }));
-        }
-        parts.push(json!({
-            "type": "output_text",
-            "text": content,
-            "annotations": []
-        }));
-        output.push(json!({
-            "type": "message",
-            "id": "msg_0",
-            "status": "completed",
-            "role": "assistant",
-            "content": parts
-        }));
-    }
-    for (index, tool_use) in tool_uses.iter().enumerate() {
-        let arguments = serde_json::to_string(&tool_use.input).unwrap_or_default();
-        output.push(json!({
-            "id": format!("fc_{index}"),
-            "type": "function_call",
-            "status": "completed",
-            "arguments": arguments,
-            "call_id": tool_use.tool_use_id,
-            "name": tool_use.name
-        }));
-    }
-
-    json!({
-        "id": response_id,
-        "object": "response",
-        "created_at": created_at,
-        "status": status,
-        "error": null,
-        "incomplete_details": incomplete_details,
-        "model": model.unwrap_or("unknown"),
-        "parallel_tool_calls": parallel_tool_calls,
-        "output": output,
-        "usage": usage_json
-    })
-}
-
-pub(super) fn collect_tool_uses(function_calls: &[Option<FunctionCallOutput>]) -> Vec<KiroToolUse> {
-    let mut output = Vec::new();
-    for call in function_calls {
-        let Some(call) = call else {
-            continue;
-        };
-        let input =
-            serde_json::from_str::<Map<String, Value>>(&call.arguments).unwrap_or_default();
-        output.push(KiroToolUse {
-            tool_use_id: call.call_id.clone(),
-            name: call.name.clone(),
-            input,
-        });
-    }
-    output
 }
 
 pub(super) fn detect_event_type(event: &Map<String, Value>) -> &str {
@@ -300,18 +208,6 @@ pub(super) fn update_usage(event: &Map<String, Value>, usage: &mut KiroUsage) {
         if let Some(tokens) = metering.get("totalTokens").and_then(Value::as_u64) {
             usage.total_tokens = Some(tokens);
         }
-    }
-}
-
-fn map_stop_reason(stop_reason: Option<&str>) -> Option<&'static str> {
-    match stop_reason {
-        Some("max_tokens") => Some("length"),
-        Some("content_filtered") => Some("content_filter"),
-        Some("tool_use") => Some("tool_calls"),
-        Some("stop_sequence") | Some("end_turn") => Some("stop"),
-        Some(other) if other.is_empty() => None,
-        Some(_) => Some("stop"),
-        None => None,
     }
 }
 

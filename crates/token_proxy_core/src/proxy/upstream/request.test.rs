@@ -16,6 +16,7 @@ async fn filters_prompt_cache_retention_for_openai_responses_upstream() {
         priority: 0,
         model_mappings: None,
         header_overrides: None,
+        allowed_inbound_formats: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
         br#"{"model":"gpt-4o","prompt_cache_retention":"24h","input":"hi"}"#,
@@ -61,6 +62,7 @@ async fn filter_prompt_cache_retention_is_noop_when_disabled() {
         priority: 0,
         model_mappings: None,
         header_overrides: None,
+        allowed_inbound_formats: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
         br#"{"model":"gpt-4o","prompt_cache_retention":"24h","input":"hi"}"#,
@@ -97,6 +99,7 @@ async fn filters_safety_identifier_for_openai_responses_upstream() {
         priority: 0,
         model_mappings: None,
         header_overrides: None,
+        allowed_inbound_formats: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
         br#"{"model":"gpt-4o","safety_identifier":"sid_1","input":"hi"}"#,
@@ -143,6 +146,7 @@ async fn filter_safety_identifier_is_noop_when_disabled() {
         priority: 0,
         model_mappings: None,
         header_overrides: None,
+        allowed_inbound_formats: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
         br#"{"model":"gpt-4o","safety_identifier":"sid_1","input":"hi"}"#,

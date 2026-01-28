@@ -70,6 +70,7 @@ fn test_upstream_url() {
         priority: 0,
         model_mappings: None,
         header_overrides: None,
+        allowed_inbound_formats: Default::default(),
     };
     assert_eq!(
         upstream.upstream_url("/v1/chat/completions"),
@@ -91,6 +92,7 @@ fn test_upstream_url() {
         priority: 0,
         model_mappings: None,
         header_overrides: None,
+        allowed_inbound_formats: Default::default(),
     };
     assert_eq!(
         upstream_responses.upstream_url("/v1/responses"),
@@ -112,6 +114,7 @@ fn test_upstream_url() {
         priority: 0,
         model_mappings: None,
         header_overrides: None,
+        allowed_inbound_formats: Default::default(),
     };
     assert_eq!(
         upstream_no_path.upstream_url("/v1/chat/completions"),
@@ -137,6 +140,7 @@ fn test_upstream_url() {
         priority: 0,
         model_mappings: None,
         header_overrides: None,
+        allowed_inbound_formats: Default::default(),
     };
     // openai: /v1/chat/completions
     assert_eq!(

@@ -162,7 +162,8 @@ function renderAccountCell(
   codexAccounts: CodexAccountMap,
   antigravityAccounts: AntigravityAccountMap,
 ) {
-  const provider = upstream.provider.trim();
+  const provider =
+    upstream.providers.map((value) => value.trim()).filter(Boolean)[0] ?? "";
   if (provider === "kiro") {
     const accountId = upstream.kiroAccountId.trim();
     if (!accountId) {
@@ -228,11 +229,15 @@ function renderUpstreamCell(
   codexAccounts: CodexAccountMap,
   antigravityAccounts: AntigravityAccountMap,
 ) {
+  const providerLabel = upstream.providers
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join(", ");
   switch (columnId) {
     case "id":
       return renderTextCell(upstream.id, "openai-default");
     case "provider":
-      return renderTextCell(upstream.provider, "openai");
+      return renderTextCell(providerLabel, "openai");
     case "account":
       return renderAccountCell(upstream, kiroAccounts, codexAccounts, antigravityAccounts);
     case "baseUrl":

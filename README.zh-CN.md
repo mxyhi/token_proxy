@@ -62,6 +62,26 @@ cargo run -p token_proxy_cli -- config init
 cargo run -p token_proxy_cli -- --config ./config.jsonc config path
 ```
 
+## 前端测试
+```bash
+# watch 模式
+pnpm test
+
+# 单次运行（CI 友好）
+pnpm test:run
+
+# 覆盖率（可选）
+pnpm test:coverage
+
+# TypeScript 类型检查
+pnpm exec tsc --noEmit
+```
+
+说明：
+- 测试文件约定：`src/**/*.test.{ts,tsx}`。
+- 全局测试初始化（Tauri mocks + jsdom polyfills）：`src/test/setup.ts`。
+- Vitest 配置：`vitest.config.ts`。
+
 ## 配置参考
 - 文件：`config.jsonc`（支持注释与尾随逗号）
 - 位置：

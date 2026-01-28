@@ -62,6 +62,26 @@ cargo run -p token_proxy_cli -- config init
 cargo run -p token_proxy_cli -- --config ./config.jsonc config path
 ```
 
+## Frontend tests
+```bash
+# watch mode
+pnpm test
+
+# run once (CI-friendly)
+pnpm test:run
+
+# coverage (optional)
+pnpm test:coverage
+
+# TypeScript typecheck
+pnpm exec tsc --noEmit
+```
+
+Notes:
+- Test files live in `src/**/*.test.{ts,tsx}`.
+- Global test setup (Tauri mocks + jsdom polyfills) is in `src/test/setup.ts`.
+- Vitest config is in `vitest.config.ts`.
+
 ## Configuration reference
 - File: `config.jsonc` (comments + trailing commas allowed)
 - Location:

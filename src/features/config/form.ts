@@ -9,6 +9,7 @@ import {
   type UpstreamForm,
   TRAY_TOKEN_RATE_FORMATS,
 } from "@/features/config/types";
+import { createNativeInboundFormatSet, removeInboundFormatsInSet } from "@/features/config/inbound-formats";
 import { m } from "@/paraglide/messages.js";
 
 const DEFAULT_TRAY_TOKEN_RATE: TrayTokenRateConfig = {
@@ -81,7 +82,7 @@ export const EMPTY_FORM: ConfigForm = {
 export function createEmptyUpstream(): UpstreamForm {
   return {
     id: "",
-    providers: [],
+    providers: ["openai"],
     baseUrl: "",
     apiKey: "",
     filterPromptCacheRetention: false,
@@ -397,14 +398,19 @@ function normalizeConvertFromMap(
     return undefined;
   }
   const providerSet = new Set(providers);
+  // 若某个入站格式已经被该 upstream 的某个 provider 原生支持，则无需（也不应）再通过 convert_from_map
+  // 把它授权给其它 provider，否则只会造成冗余与误导。
+  const nativeFormatsInUpstream = createNativeInboundFormatSet(providers);
   const outputEntries: Array<[string, InboundApiFormat[]]> = [];
   for (const [provider, formats] of Object.entries(map)) {
     if (!providerSet.has(provider)) {
       continue;
     }
+    // UI 会隐藏该 upstream 已原生支持的入站格式；这里也做一次清理，避免历史冗余配置被保存回去。
+    const filtered = removeInboundFormatsInSet(formats, nativeFormatsInUpstream);
     const unique: InboundApiFormat[] = [];
     const seen = new Set<InboundApiFormat>();
-    for (const format of formats) {
+    for (const format of filtered) {
       if (seen.has(format)) {
         continue;
       }

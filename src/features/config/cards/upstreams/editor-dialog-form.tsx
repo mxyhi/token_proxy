@@ -549,11 +549,6 @@ export function UpstreamEditorFields({
         antigravityAccountsError={antigravityAccountsError}
         onRefreshAntigravityAccounts={onRefreshAntigravityAccounts}
       />
-      <ConvertFromMapEditor
-        providers={draft.providers}
-        value={draft.convertFromMap}
-        onChange={(convertFromMap) => onChangeDraft({ convertFromMap })}
-      />
       {isKiro || isCodex || isAntigravity ? null : (
         <UpstreamAuthFields
           draft={draft}
@@ -563,6 +558,12 @@ export function UpstreamEditorFields({
         />
       )}
       <UpstreamOrderFields draft={draft} onChangeDraft={onChangeDraft} />
+      <ConvertFromMapEditor
+        key={draft.providers.join("|")}
+        providers={draft.providers}
+        value={draft.convertFromMap}
+        onChange={(convertFromMap) => onChangeDraft({ convertFromMap })}
+      />
       <UpstreamModelMappingFields draft={draft} onChangeDraft={onChangeDraft} />
       <UpstreamHeaderOverrideFields draft={draft} onChangeDraft={onChangeDraft} />
       <UpstreamOpenAIResponsesFields draft={draft} onChangeDraft={onChangeDraft} />

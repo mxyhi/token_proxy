@@ -19,6 +19,7 @@ import type {
   UpstreamEditorState,
 } from "@/features/config/cards/upstreams/types";
 import { createEmptyUpstream } from "@/features/config/form";
+import { createNativeInboundFormatSet, removeInboundFormatsInSet } from "@/features/config/inbound-formats";
 import { useCodexAccounts } from "@/features/codex/use-codex-accounts";
 import type { CodexAccountSummary } from "@/features/codex/types";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
@@ -139,15 +140,17 @@ function pruneConvertFromMap(
     return map;
   }
   const providerSet = new Set(providers);
+  const nativeFormatsInUpstream = createNativeInboundFormatSet(providers);
   const output: UpstreamForm["convertFromMap"] = {};
   for (const [provider, formats] of Object.entries(map)) {
     if (!providerSet.has(provider)) {
       continue;
     }
-    if (!formats.length) {
+    const filtered = removeInboundFormatsInSet(formats, nativeFormatsInUpstream);
+    if (!filtered.length) {
       continue;
     }
-    output[provider] = formats;
+    output[provider] = filtered;
   }
   return output;
 }
@@ -244,8 +247,11 @@ function findIdleAntigravityAccount(
 }
 
 function cloneUpstreamDraft(upstream: UpstreamForm): UpstreamForm {
+  const providers = normalizeProviders(upstream.providers);
   return {
     ...upstream,
+    // provider 必选：编辑/复制时也保证至少有一个 provider，避免 UI 出现“看起来有默认值但实际为空”的不同步体验
+    providers: providers.length ? providers : ["openai"],
     modelMappings: upstream.modelMappings.map((mapping) => ({ ...mapping })),
     overrides: {
       header: upstream.overrides.header.map((entry) => ({ ...entry })),
@@ -457,8 +463,12 @@ export function UpstreamsCard({
     [upstreams, kiroAccounts, codexAccounts, antigravityAccounts],
   );
 
-  const openCreateDialog = () =>
-    setEditor({ open: true, mode: "create", draft: createEmptyUpstream() });
+  const openCreateDialog = () => {
+    const draft = createEmptyUpstream();
+    const nextProviders = normalizeProviders(draft.providers);
+    const id = createAutoUpstreamId(nextProviders, upstreams);
+    setEditor({ open: true, mode: "create", draft: { ...draft, id } });
+  };
 
   const openEditDialog = (index: number) => {
     const upstream = upstreams[index];

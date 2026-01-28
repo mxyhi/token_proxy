@@ -58,7 +58,9 @@ function toggleProvider(
 ) {
   const normalized = normalizeProviders(current);
   if (!checked) {
-    return normalized.filter((value) => value !== provider);
+    const next = normalized.filter((value) => value !== provider);
+    // provider 必选：禁止清空最后一个选项（否则会导致后续字段“不同步/消失”）
+    return next.length ? next : normalized;
   }
 
   if (isSpecialProvider(provider)) {
@@ -75,7 +77,6 @@ export function ProviderMultiSelect({
   onChange,
 }: ProviderMultiSelectProps) {
   const selected = orderProviders(normalizeProviders(value), providerOptions);
-  const specialSelected = selected.find(isSpecialProvider);
   const label = selected.length ? selected.join(", ") : "openai";
 
   return (
@@ -94,15 +95,10 @@ export function ProviderMultiSelect({
       <DropdownMenuContent align="start" className="w-[var(--radix-dropdown-menu-trigger-width)]">
         {providerOptions.map((option) => {
           const checked = selected.includes(option);
-          const disabled =
-            specialSelected !== undefined &&
-            !checked &&
-            option !== specialSelected;
           return (
             <DropdownMenuCheckboxItem
               key={option}
               checked={checked}
-              disabled={disabled}
               onCheckedChange={(nextChecked) =>
                 onChange(toggleProvider(selected, providerOptions, option, nextChecked === true))
               }
@@ -115,4 +111,3 @@ export function ProviderMultiSelect({
     </DropdownMenu>
   );
 }
-

@@ -57,11 +57,13 @@ impl ReplayableBody {
 
             let (path, mut file) = create_temp_file().await?;
             if let Err(err) = file.write_all(&buffer).await {
+                drop(file);
                 cleanup_temp_file(&path);
                 return Err(err);
             }
             buffer.clear();
             if let Err(err) = file.write_all(&chunk).await {
+                drop(file);
                 cleanup_temp_file(&path);
                 return Err(err);
             }
@@ -70,6 +72,7 @@ impl ReplayableBody {
 
         if let Some((path, mut file)) = temp {
             if let Err(err) = file.flush().await {
+                drop(file);
                 cleanup_temp_file(&path);
                 return Err(err);
             }
@@ -154,6 +157,15 @@ fn next_temp_path() -> PathBuf {
 }
 
 fn cleanup_temp_file(path: &PathBuf) {
+    // Prefer background cleanup to avoid blocking Tokio runtime threads on filesystem I/O.
+    // Fallback to synchronous removal when no runtime is available (best-effort).
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        let path = path.clone();
+        handle.spawn(async move {
+            let _ = tokio::fs::remove_file(&path).await;
+        });
+        return;
+    }
     let _ = std::fs::remove_file(path);
 }
 

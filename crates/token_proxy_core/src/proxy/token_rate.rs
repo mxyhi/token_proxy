@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use tokio::{
@@ -358,12 +358,13 @@ impl RequestWindow {
 impl RequestTokenTracker {
     pub(crate) fn disabled() -> Self {
         // `generation=None` makes `can_record()` return false, so this tracker is a no-op.
-        // We still need a TokenRateTracker instance to satisfy the struct layout.
-        let tracker = TokenRateTracker::new();
         Self {
             id: None,
             window: None,
-            tracker: tracker.as_ref().clone(),
+            // Keep a zero-cost (per call) tracker placeholder, avoiding `TokenRateTracker::new()`.
+            // This is used in composed stream transforms where we need a token tracker but
+            // do not want to pay for allocating a full tracker (watch channel + cleanup task).
+            tracker: disabled_tracker(),
             model: None,
             generation: None,
         }
@@ -425,4 +426,26 @@ impl Drop for RequestTokenTracker {
 
 pub(crate) fn estimate_text_tokens(model: Option<&str>, text: &str) -> u64 {
     super::token_estimator::estimate_text_tokens(model, text)
+}
+
+fn disabled_tracker() -> TokenRateTracker {
+    static DISABLED: OnceLock<TokenRateTracker> = OnceLock::new();
+    DISABLED
+        .get_or_init(|| {
+            let (activity_tx, _activity_rx) = watch::channel(0u64);
+            TokenRateTracker {
+                inner: Arc::new(TrackerInner {
+                    next_id: AtomicU64::new(1),
+                    active: AtomicUsize::new(0),
+                    enabled: AtomicBool::new(false),
+                    generation: AtomicU64::new(1),
+                    // Mark cleanup as started to ensure we never spawn background tasks for a noop tracker.
+                    cleanup_started: AtomicBool::new(true),
+                    last_cleanup: Mutex::new(Instant::now()),
+                    requests: RwLock::new(HashMap::new()),
+                }),
+                activity_tx,
+            }
+        })
+        .clone()
 }

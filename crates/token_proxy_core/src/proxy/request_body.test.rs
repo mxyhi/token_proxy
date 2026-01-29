@@ -1,5 +1,6 @@
 use super::*;
 use axum::body::Body;
+use std::time::Duration;
 
 fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
     tokio::runtime::Runtime::new()
@@ -48,9 +49,12 @@ fn replayable_body_large_spools_to_temp_file_and_cleans_up() {
         assert_eq!(bytes.as_ref(), input.as_slice());
 
         drop(body);
-        assert!(
-            std::fs::metadata(&path).is_err(),
-            "temp file should be removed on drop: {path:?}"
-        );
+        for _ in 0..50 {
+            if std::fs::metadata(&path).is_err() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("temp file should be removed on drop: {path:?}");
     });
 }

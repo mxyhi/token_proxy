@@ -186,12 +186,6 @@ export function LogsPanel() {
     };
   }, []);
 
-  useEffect(() => {
-    if (status === "idle") {
-      void loadCaptureState();
-    }
-  }, [status, snapshot, loadCaptureState]);
-
   const handleToggleCapture = useCallback(async (nextValue: boolean) => {
     setCaptureLoading(true);
     try {

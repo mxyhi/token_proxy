@@ -9,7 +9,12 @@
 - 前端: React 19 + TypeScript + Vite + Tailwind CSS v4 + shadcn/ui(pnpm dlx shadcn@latest add xxx)
 - 后端: Rust (Edition 2021) + Tokio + Axum
 - 桌面框架: Tauri 2
-- 代理转发/转换参考: [QuantumNous/new-api](https://github.com/QuantumNous/new-api)
+
+## 参考项目
+
+- 代理转发/转换参考[new-api](.reference/new-api)
+- kiro、codex、Antigravity等2api参考[CLIProxyAPIPlus](.reference/CLIProxyAPIPlus)
+- CLIProxyAPIPlus的可视化app参考[quotio](.reference/quotio)
 
 ---
 

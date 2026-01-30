@@ -91,22 +91,18 @@ fn convert_enum_values_to_strings(schema: &mut Value) {
         let Some(Value::Array(values)) = get_value_mut(schema, &path) else {
             continue;
         };
-        let mut needs_conversion = false;
-        for item in values.iter() {
-            if !item.is_string() {
-                needs_conversion = true;
-                break;
-            }
-        }
-        if !needs_conversion {
-            continue;
-        }
         let next = values
             .iter()
             .map(value_to_string)
             .map(Value::String)
             .collect::<Vec<_>>();
         *values = next;
+        let Some(parent_path) = parent_path(&path) else {
+            continue;
+        };
+        if let Some(parent) = get_object_mut(schema, &parent_path) {
+            parent.insert("type".to_string(), Value::String("string".to_string()));
+        }
     }
 }
 

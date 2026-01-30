@@ -122,7 +122,9 @@ function modelColumn(): ColumnDef<DashboardRequestItem> {
     header: m.dashboard_table_model(),
     cell: ({ row }) => {
       const primary = row.original.model?.trim() ? row.original.model : CELL_PLACEHOLDER;
-      const mapped = row.original.mappedModel?.trim() ? row.original.mappedModel : null;
+      const rawMapped = row.original.mappedModel?.trim() ? row.original.mappedModel : null;
+      // 只有当 mappedModel 存在且与 model 不同时才显示映射
+      const mapped = rawMapped && rawMapped !== row.original.model ? rawMapped : null;
       const tooltipText = mapped ? `${primary}\n${mapped}` : primary;
 
       return (

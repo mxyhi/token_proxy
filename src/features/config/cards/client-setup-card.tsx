@@ -1,13 +1,11 @@
 import type { ReactNode } from "react";
 
-import { m } from "@/paraglide/messages.js";
+import type { AgentToolId } from "@/features/config/AppView";
 
 import {
-  ClientSetupOverviewCard,
   PlaintextWarning,
-  SummaryItem,
   ToolDetailsFallback,
-  ToolSetupDialog,
+  ToolSetupPanel,
 } from "./client-setup-ui";
 import {
   useClientSetupPreview,
@@ -25,13 +23,11 @@ import {
 type ClientSetupCardProps = {
   savedAt: string;
   isDirty: boolean;
+  selectedTool: AgentToolId;
 };
 
-type ToolListItem = {
+type ToolPanelItem = {
   id: string;
-  title: string;
-  description: string;
-  summary: ReactNode;
   content: ReactNode;
   action: ActionState;
   canApply: boolean;
@@ -60,17 +56,9 @@ function buildClaudeTool({
   isWorking,
   action,
   onApply,
-}: ToolBuildBaseArgs & ToolBuildActionArgs) {
+}: ToolBuildBaseArgs & ToolBuildActionArgs): ToolPanelItem {
   return {
     id: "claude",
-    title: m.client_setup_claude_title(),
-    description: m.client_setup_claude_desc(),
-    summary: (
-      <SummaryItem
-        label={m.client_setup_target_file_label()}
-        value={setup?.claude_settings_path ?? "—"}
-      />
-    ),
     content: setup ? (
       <ClaudeSetupDetails setup={setup} />
     ) : (
@@ -80,7 +68,7 @@ function buildClaudeTool({
     canApply: Boolean(setup) && canApply,
     isWorking,
     onApply,
-  } satisfies ToolListItem;
+  };
 }
 
 function buildCodexTool({
@@ -91,17 +79,9 @@ function buildCodexTool({
   isWorking,
   action,
   onApply,
-}: ToolBuildBaseArgs & ToolBuildActionArgs) {
+}: ToolBuildBaseArgs & ToolBuildActionArgs): ToolPanelItem {
   return {
     id: "codex",
-    title: m.client_setup_codex_title(),
-    description: m.client_setup_codex_desc(),
-    summary: (
-      <SummaryItem
-        label={m.client_setup_target_file_label()}
-        value={setup ? `${setup.codex_config_path} (+1)` : "—"}
-      />
-    ),
     content: setup ? (
       <CodexSetupDetails setup={setup} />
     ) : (
@@ -111,7 +91,7 @@ function buildCodexTool({
     canApply: Boolean(setup) && canApply,
     isWorking,
     onApply,
-  } satisfies ToolListItem;
+  };
 }
 
 type OpenCodeToolArgs = ToolBuildBaseArgs & ToolBuildActionArgs & {
@@ -124,27 +104,12 @@ function buildOpenCodeTool({
   previewState,
   previewMessage,
   canApplyOpenCode,
-  openCodeModelCount,
   isWorking,
   action,
   onApply,
-}: OpenCodeToolArgs) {
+}: OpenCodeToolArgs): ToolPanelItem {
   return {
     id: "opencode",
-    title: m.client_setup_opencode_title(),
-    description: m.client_setup_opencode_desc(),
-    summary: (
-      <div className="space-y-1">
-        <SummaryItem
-          label={m.client_setup_target_file_label()}
-          value={setup ? `${setup.opencode_config_path} (+1)` : "—"}
-        />
-        <SummaryItem
-          label={m.client_setup_opencode_models_label()}
-          value={setup ? String(openCodeModelCount) : "—"}
-        />
-      </div>
-    ),
     content: setup ? (
       <OpenCodeSetupDetails setup={setup} />
     ) : (
@@ -154,31 +119,10 @@ function buildOpenCodeTool({
     canApply: Boolean(setup) && canApplyOpenCode,
     isWorking,
     onApply,
-  } satisfies ToolListItem;
+  };
 }
 
-function ToolCards({ tools }: { tools: readonly ToolListItem[] }) {
-  return (
-    <>
-      {tools.map((tool) => (
-        <ToolSetupDialog
-          key={tool.id}
-          title={tool.title}
-          description={tool.description}
-          summary={tool.summary}
-          action={tool.action}
-          canApply={tool.canApply}
-          isWorking={tool.isWorking}
-          onApply={tool.onApply}
-        >
-          {tool.content}
-        </ToolSetupDialog>
-      ))}
-    </>
-  );
-}
-
-export function ClientSetupCard({ savedAt, isDirty }: ClientSetupCardProps) {
+export function ClientSetupCard({ savedAt, isDirty, selectedTool }: ClientSetupCardProps) {
   const canApply = !isDirty;
   const { previewState, previewMessage, setup, loadPreview } = useClientSetupPreview(savedAt);
 
@@ -203,29 +147,31 @@ export function ClientSetupCard({ savedAt, isDirty }: ClientSetupCardProps) {
     isWorking,
   };
 
-  const tools: ToolListItem[] = [
-    buildClaudeTool({ ...baseArgs, action: claude.action, onApply: claude.apply }),
-    buildCodexTool({ ...baseArgs, action: codex.action, onApply: codex.apply }),
-    buildOpenCodeTool({
+  // 根据 selectedTool 构建对应的工具面板
+  const toolBuilders: Record<AgentToolId, () => ToolPanelItem> = {
+    claude: () => buildClaudeTool({ ...baseArgs, action: claude.action, onApply: claude.apply }),
+    codex: () => buildCodexTool({ ...baseArgs, action: codex.action, onApply: codex.apply }),
+    opencode: () => buildOpenCodeTool({
       ...baseArgs,
       action: opencode.action,
       onApply: opencode.apply,
       openCodeModelCount,
       canApplyOpenCode,
     }),
-  ];
+  };
+
+  const selectedToolItem = toolBuilders[selectedTool]();
 
   return (
     <>
-      <ClientSetupOverviewCard
-        previewState={previewState}
-        previewMessage={previewMessage}
-        setup={setup}
-        isDirty={isDirty}
-        isWorking={isWorking}
-        onRefresh={loadPreview}
-      />
-      <ToolCards tools={tools} />
+      <ToolSetupPanel
+        action={selectedToolItem.action}
+        canApply={selectedToolItem.canApply}
+        isWorking={selectedToolItem.isWorking}
+        onApply={selectedToolItem.onApply}
+      >
+        {selectedToolItem.content}
+      </ToolSetupPanel>
       <PlaintextWarning />
     </>
   );

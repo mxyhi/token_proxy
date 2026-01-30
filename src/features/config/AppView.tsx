@@ -1,9 +1,16 @@
-import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
-import { useMemo, type CSSProperties } from "react";
+import { AlertCircle, Loader2, Plus, RefreshCw } from "lucide-react";
+import { useCallback, useMemo, useState, type CSSProperties } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,7 +26,6 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import {
-  ClientSetupCard,
   ConfigFileCard,
   AutoStartCard,
   ProjectLinksCard,
@@ -41,10 +47,14 @@ import type {
   ProxyServiceRequestState,
   ProxyServiceStatus,
 } from "@/features/config/types";
+import { AgentsPanel } from "@/features/agents";
 import { DashboardPanel } from "@/features/dashboard/DashboardPanel";
 import { LogsPanel } from "@/features/logs/LogsPanel";
 import { ProvidersPanel } from "@/features/providers/ProvidersPanel";
 import { m } from "@/paraglide/messages.js";
+
+// Agent 工具类型（用于 agents 页面工具筛选与创建）
+export type AgentToolId = "claude" | "codex" | "opencode";
 
 type AppViewProps = {
   activeSectionId: ConfigSectionId;
@@ -93,6 +103,10 @@ type ConfigToolbarProps = {
   isDirty: boolean;
   onReload: () => void;
   onSave: () => void;
+  // agents 页面专用
+  selectedTool?: AgentToolId;
+  onToolChange?: (tool: AgentToolId) => void;
+  onAddAgent?: () => void;
 };
 
 function ConfigToolbar({
@@ -102,24 +116,42 @@ function ConfigToolbar({
   isDirty,
   onReload,
   onSave,
+  selectedTool,
+  onToolChange,
+  onAddAgent,
 }: ConfigToolbarProps) {
   const isLoading = status === "loading";
   const isSaving = status === "saving";
   const canReload = !isLoading && !isSaving;
+  const isAgentsSection = section.id === "agents";
 
   return (
     <div
       data-slot="config-toolbar"
       className="sticky top-0 z-20 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/60 bg-background/70 px-4 py-3"
     >
-      <div className="min-w-0">
-        <p className="truncate text-sm font-medium text-foreground">
-          {section.label()}
-        </p>
-        <p className="truncate text-xs text-muted-foreground">
-          {section.description()}
-        </p>
-      </div>
+      {/* agents 页面显示工具选择器，其他页面显示标题 */}
+      {isAgentsSection && selectedTool && onToolChange ? (
+        <Select value={selectedTool} onValueChange={(v) => onToolChange(v as AgentToolId)}>
+          <SelectTrigger size="sm" className="w-[140px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="claude">Claude Code</SelectItem>
+            <SelectItem value="opencode">OpenCode</SelectItem>
+            <SelectItem value="codex">Codex</SelectItem>
+          </SelectContent>
+        </Select>
+      ) : (
+        <div className="min-w-0">
+          <p className="truncate text-sm font-medium text-foreground">
+            {section.label()}
+          </p>
+          <p className="truncate text-xs text-muted-foreground">
+            {section.description()}
+          </p>
+        </div>
+      )}
       <div className="flex items-center gap-2">
         {isDirty ? (
           <AlertDialog>
@@ -162,13 +194,21 @@ function ConfigToolbar({
             <span className="sr-only">{m.common_refresh()}</span>
           </Button>
         )}
-        <Button type="button" onClick={onSave} disabled={!canSave}>
-          {isSaving ? (
-            <Loader2 className="animate-spin" aria-hidden="true" />
-          ) : (
-            m.common_save()
-          )}
-        </Button>
+        {/* agents 页面显示添加按钮，其他页面显示保存按钮 */}
+        {isAgentsSection && onAddAgent ? (
+          <Button type="button" size="icon" onClick={onAddAgent}>
+            <Plus aria-hidden="true" />
+            <span className="sr-only">{m.agents_add()}</span>
+          </Button>
+        ) : (
+          <Button type="button" onClick={onSave} disabled={!canSave}>
+            {isSaving ? (
+              <Loader2 className="animate-spin" aria-hidden="true" />
+            ) : (
+              m.common_save()
+            )}
+          </Button>
+        )}
       </div>
     </div>
   );
@@ -198,11 +238,16 @@ type ConfigSectionContentProps = Omit<AppViewProps, "activeSectionId"> & {
   proxyService: ProxyServiceViewProps;
 };
 
-type ConfigSectionBodyProps = ConfigSectionContentProps;
+type ConfigSectionBodyProps = ConfigSectionContentProps & {
+  selectedTool: AgentToolId;
+  agentEditorTrigger: number;
+};
 
 function ConfigSectionBody({
   activeSectionId,
   proxyService,
+  selectedTool,
+  agentEditorTrigger,
   ...props
 }: ConfigSectionBodyProps) {
   switch (activeSectionId) {
@@ -259,7 +304,7 @@ function ConfigSectionBody({
     case "agents":
       return (
         <div className="flex flex-col gap-4">
-          <ClientSetupCard savedAt={props.savedAt} isDirty={props.isDirty} />
+          <AgentsPanel selectedTool={selectedTool} addTrigger={agentEditorTrigger} />
         </div>
       );
     default:
@@ -272,6 +317,14 @@ function ConfigSectionContent({
   proxyService,
   ...props
 }: ConfigSectionContentProps) {
+  // agents 页面的工具选择状态
+  const [selectedTool, setSelectedTool] = useState<AgentToolId>("claude");
+  // agents 页面的添加对话框触发器
+  const [agentEditorTrigger, setAgentEditorTrigger] = useState(0);
+  const handleAddAgent = useCallback(() => {
+    setAgentEditorTrigger((prev) => prev + 1);
+  }, []);
+
   if (activeSectionId === "dashboard") {
     return <DashboardPanel />;
   }
@@ -291,12 +344,17 @@ function ConfigSectionContent({
         isDirty={props.isDirty}
         onReload={props.onReload}
         onSave={props.onSave}
+        selectedTool={selectedTool}
+        onToolChange={setSelectedTool}
+        onAddAgent={handleAddAgent}
       />
       <StatusAlert statusMessage={props.statusMessage} />
       <ConfigSectionBody
         {...props}
         activeSectionId={activeSectionId}
         proxyService={proxyService}
+        selectedTool={selectedTool}
+        agentEditorTrigger={agentEditorTrigger}
       />
     </div>
   );

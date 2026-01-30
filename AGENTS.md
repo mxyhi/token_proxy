@@ -13,7 +13,7 @@
 ## 参考项目
 
 - 代理转发/转换参考[new-api](.reference/new-api)
-- kiro、codex、Antigravity等2api参考[CLIProxyAPIPlus](.reference/CLIProxyAPIPlus)
+- kiro、codex、antigravity等2api参考[CLIProxyAPIPlus](.reference/CLIProxyAPIPlus)
 - CLIProxyAPIPlus的可视化app参考[quotio](.reference/quotio)
 
 ---

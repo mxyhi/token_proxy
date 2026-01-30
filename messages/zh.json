@@ -455,5 +455,19 @@
   "agents_tool_codex": "Codex CLI",
   "agents_tool_codex_desc": "OpenAI 的 Codex CLI 工具",
   "agents_tool_opencode": "OpenCode",
-  "agents_tool_opencode_desc": "开源 AI 编程助手"
+  "agents_tool_opencode_desc": "开源 AI 编程助手",
+  "agents_editor_connection": "连接配置",
+  "agents_editor_api_key": "API Key",
+  "agents_editor_api_key_placeholder": "sk-...",
+  "agents_editor_base_url": "Base URL",
+  "agents_editor_base_url_placeholder": "https://api.example.com",
+  "agents_editor_model_config": "模型配置",
+  "agents_editor_claude_model": "默认模型",
+  "agents_editor_claude_haiku": "Haiku 模型",
+  "agents_editor_claude_sonnet": "Sonnet 模型",
+  "agents_editor_claude_opus": "Opus 模型",
+  "agents_editor_codex_model": "模型",
+  "agents_editor_codex_reasoning": "推理强度",
+  "agents_editor_opencode_provider": "Provider",
+  "agents_editor_opencode_model": "模型"
 }

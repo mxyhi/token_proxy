@@ -455,5 +455,19 @@
   "agents_tool_codex": "Codex CLI",
   "agents_tool_codex_desc": "OpenAI's Codex CLI tool",
   "agents_tool_opencode": "OpenCode",
-  "agents_tool_opencode_desc": "Open source AI coding assistant"
+  "agents_tool_opencode_desc": "Open source AI coding assistant",
+  "agents_editor_connection": "Connection",
+  "agents_editor_api_key": "API Key",
+  "agents_editor_api_key_placeholder": "sk-...",
+  "agents_editor_base_url": "Base URL",
+  "agents_editor_base_url_placeholder": "https://api.example.com",
+  "agents_editor_model_config": "Model Configuration",
+  "agents_editor_claude_model": "Default Model",
+  "agents_editor_claude_haiku": "Haiku Model",
+  "agents_editor_claude_sonnet": "Sonnet Model",
+  "agents_editor_claude_opus": "Opus Model",
+  "agents_editor_codex_model": "Model",
+  "agents_editor_codex_reasoning": "Reasoning Effort",
+  "agents_editor_opencode_provider": "Provider",
+  "agents_editor_opencode_model": "Model"
 }

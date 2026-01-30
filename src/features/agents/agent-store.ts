@@ -1,6 +1,13 @@
 import { useCallback, useMemo, useState } from "react";
 
-import type { AgentConfig, AgentConfigForm, AgentToolType } from "./types";
+import type {
+  AgentConfig,
+  AgentConfigForm,
+  AgentSettingsMap,
+  AgentToolType,
+  ClaudeSettings,
+  CodexSettings,
+} from "./types";
 
 /**
  * 生成唯一 ID
@@ -10,14 +17,45 @@ function generateId() {
 }
 
 /**
+ * 各工具类型的默认 Base URL
+ */
+const DEFAULT_BASE_URLS: Record<AgentToolType, string> = {
+  claude: "https://api.anthropic.com",
+  codex: "https://api.openai.com/v1",
+  opencode: "https://api.openai.com/v1",
+};
+
+/**
+ * 创建默认的 Agent Settings（导出供外部使用）
+ */
+export function createDefaultSettings<T extends AgentToolType>(type: T): AgentSettingsMap[T] {
+  const base = { apiKey: "", baseUrl: DEFAULT_BASE_URLS[type] };
+
+  switch (type) {
+    case "claude":
+      return { ...base } as AgentSettingsMap[T];
+    case "codex":
+      return { ...base, reasoningEffort: "medium" } as AgentSettingsMap[T];
+    case "opencode":
+      return { ...base, provider: "openai" } as AgentSettingsMap[T];
+    default:
+      return base as AgentSettingsMap[T];
+  }
+}
+
+/**
  * 创建新的 Agent 配置
  */
-function createAgentConfig(form: AgentConfigForm, sortIndex: number): AgentConfig {
+function createAgentConfig<T extends AgentToolType>(
+  form: AgentConfigForm<T>,
+  sortIndex: number
+): AgentConfig<T> {
   const now = new Date().toISOString();
   return {
     id: generateId(),
     name: form.name,
     type: form.type,
+    settings: form.settings,
     isActive: false,
     sortIndex,
     createdAt: now,
@@ -31,6 +69,10 @@ const INITIAL_AGENTS: AgentConfig[] = [
     id: "agent_default_claude",
     name: "Claude Code (Default)",
     type: "claude",
+    settings: {
+      apiKey: "",
+      baseUrl: "https://api.anthropic.com",
+    } as ClaudeSettings,
     isActive: true,
     sortIndex: 0,
     createdAt: "2025-01-01T00:00:00.000Z",
@@ -40,6 +82,11 @@ const INITIAL_AGENTS: AgentConfig[] = [
     id: "agent_default_codex",
     name: "Codex CLI",
     type: "codex",
+    settings: {
+      apiKey: "",
+      baseUrl: "https://api.openai.com/v1",
+      reasoningEffort: "medium",
+    } as CodexSettings,
     isActive: false,
     sortIndex: 1,
     createdAt: "2025-01-01T00:00:00.000Z",
@@ -92,12 +139,18 @@ export function useAgentStore() {
     });
   }, []);
 
-  // 更新 agent
+  // 更新 agent（包括 settings）
   const updateAgent = useCallback((id: string, form: AgentConfigForm) => {
     setAgents((prev) =>
       prev.map((agent) =>
         agent.id === id
-          ? { ...agent, name: form.name, type: form.type, updatedAt: new Date().toISOString() }
+          ? {
+              ...agent,
+              name: form.name,
+              type: form.type,
+              settings: form.settings,
+              updatedAt: new Date().toISOString(),
+            }
           : agent
       )
     );

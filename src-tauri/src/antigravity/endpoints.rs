@@ -4,7 +4,8 @@ pub(crate) const BASE_URL_DAILY: &str = "https://daily-cloudcode-pa.googleapis.c
 pub(crate) const BASE_URL_SANDBOX: &str = "https://daily-cloudcode-pa.sandbox.googleapis.com";
 pub(crate) const BASE_URL_PROD: &str = "https://cloudcode-pa.googleapis.com";
 
-pub(crate) const BASE_URLS: [&str; 3] = [BASE_URL_SANDBOX, BASE_URL_DAILY, BASE_URL_PROD];
+// Align with CLIProxyAPIPlus: prefer daily, then sandbox. Prod is intentionally excluded.
+pub(crate) const BASE_URLS: [&str; 2] = [BASE_URL_DAILY, BASE_URL_SANDBOX];
 
 const ANTIGRAVITY_VERSION: &str = "1.104.0";
 

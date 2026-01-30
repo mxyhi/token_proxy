@@ -1,5 +1,7 @@
 use serde_json::{json, Map, Value};
 
+use super::message::extract_text_from_part;
+
 pub(super) fn responses_input_to_chat_messages(items: &[Value]) -> Result<Vec<Value>, String> {
     let mut messages = Vec::with_capacity(items.len());
     for item in items {
@@ -94,8 +96,8 @@ fn responses_message_content_to_chat_content(value: &Value) -> Option<Value> {
                 let part_type = part.get("type").and_then(Value::as_str);
                 match part_type {
                     Some("input_text") | Some("text") | Some("output_text") => {
-                        if let Some(text) = part.get("text").and_then(Value::as_str) {
-                            combined.push_str(text);
+                        if let Some(text) = extract_text_from_part(part) {
+                            combined.push_str(&text);
                             output_parts.push(json!({ "type": "text", "text": text }));
                         }
                     }

@@ -108,7 +108,7 @@ async fn prepare_kiro_context<'a>(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> Result<KiroContext<'a>, AttemptOutcome> {
-    let mapped_meta = super::build_mapped_meta(meta, upstream);
+    let mapped_meta = super::build_mapped_meta(meta, upstream, "kiro");
     let request_value = read_request_json(state, body).await?;
     let account_id = resolve_account_id(upstream)?;
     let record = load_account_record(state, &account_id).await?;

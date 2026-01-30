@@ -491,8 +491,51 @@ fn claude_content_to_blocks(content: Option<&Value>) -> Vec<Value> {
     };
     match content {
         Value::String(text) => vec![json!({ "type": "text", "text": text })],
-        Value::Array(items) => items.clone(),
+        Value::Array(items) => items
+            .iter()
+            .cloned()
+            .map(|mut item| {
+                normalize_text_block_in_place(&mut item);
+                item
+            })
+            .collect(),
         _ => Vec::new(),
+    }
+}
+
+fn normalize_text_block_in_place(block: &mut Value) {
+    let Some(object) = block.as_object_mut() else {
+        return;
+    };
+    let block_type = object.get("type").and_then(Value::as_str).unwrap_or("");
+    if block_type != "text" {
+        return;
+    }
+    let text_value = object.get("text");
+    let new_text = text_value.and_then(extract_text_value);
+    if let Some(new_text) = new_text {
+        object.insert("text".to_string(), Value::String(new_text));
+        return;
+    }
+    // If text exists but is not convertible, coerce to empty string to satisfy schema.
+    if text_value.is_some() {
+        object.insert("text".to_string(), Value::String(String::new()));
+    }
+}
+
+fn extract_text_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.to_string()),
+        Value::Object(object) => {
+            if let Some(text) = object.get("text") {
+                return extract_text_value(text);
+            }
+            if let Some(text) = object.get("value") {
+                return extract_text_value(text);
+            }
+            None
+        }
+        _ => None,
     }
 }
 

@@ -1,4 +1,24 @@
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+
+fn extract_text_value(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) => Some(text.to_string()),
+        Value::Object(object) => {
+            if let Some(text) = object.get("text") {
+                return extract_text_value(text);
+            }
+            if let Some(text) = object.get("value") {
+                return extract_text_value(text);
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn extract_text_from_part(part: &Map<String, Value>) -> Option<String> {
+    part.get("text").and_then(extract_text_value)
+}
 
 pub(super) fn extract_text_from_chat_content(content: Option<&Value>) -> Option<String> {
     let Some(content) = content else {
@@ -16,8 +36,8 @@ pub(super) fn extract_text_from_chat_content(content: Option<&Value>) -> Option<
                 if !matches!(part_type, "text" | "input_text") {
                     continue;
                 }
-                if let Some(text) = part.get("text").and_then(Value::as_str) {
-                    combined.push_str(text);
+                if let Some(text) = extract_text_from_part(part) {
+                    combined.push_str(&text);
                 }
             }
             if combined.trim().is_empty() {
@@ -49,7 +69,7 @@ pub(super) fn chat_content_to_responses_message_parts(
                 let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
                 match part_type {
                     "text" | "input_text" => {
-                        if let Some(text) = part.get("text").and_then(Value::as_str) {
+                        if let Some(text) = extract_text_from_part(part) {
                             out.push(json!({ "type": text_part_type, "text": text }));
                         }
                     }

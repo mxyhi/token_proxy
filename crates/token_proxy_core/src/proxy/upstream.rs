@@ -432,7 +432,7 @@ async fn prepare_upstream_request(
     meta: &RequestMeta,
     request_auth: &RequestAuth,
 ) -> Result<PreparedUpstreamRequest, AttemptOutcome> {
-    let mapped_meta = build_mapped_meta(meta, upstream);
+    let mapped_meta = build_mapped_meta(meta, upstream, provider);
     let upstream_path_with_query =
         resolve_upstream_path_with_query(provider, upstream_path_with_query, &mapped_meta);
     let upstream_url = upstream.upstream_url(&upstream_path_with_query);
@@ -679,7 +679,7 @@ async fn resolve_antigravity_upstream(
     })
 }
 
-fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestMeta {
+fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime, provider: &str) -> RequestMeta {
     let mapped_model = meta
         .original_model
         .as_deref()
@@ -688,6 +688,13 @@ fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestM
         mapped_model,
         meta.reasoning_effort.clone(),
     );
+    let mapped_model = mapped_model.map(|model| {
+        if provider == "antigravity" {
+            super::antigravity_compat::map_antigravity_model(&model)
+        } else {
+            model
+        }
+    });
     RequestMeta {
         stream: meta.stream,
         original_model: meta.original_model.clone(),

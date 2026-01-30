@@ -344,7 +344,12 @@ async fn send_antigravity_with_fallback(
         .await
         {
             Ok(response) => {
-                if super::utils::is_retryable_status(response.status()) && idx + 1 < urls.len() {
+                let status = response.status();
+                // Align with CLIProxyAPIPlus: Antigravity endpoints may return 404 on one base URL
+                // while succeeding on another; try fallbacks on 404 as well.
+                if (super::utils::is_retryable_status(status) || status == StatusCode::NOT_FOUND)
+                    && idx + 1 < urls.len()
+                {
                     let _ = response.bytes().await;
                     continue;
                 }

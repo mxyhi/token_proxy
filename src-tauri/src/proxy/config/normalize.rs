@@ -8,7 +8,7 @@ use axum::http::header::{HeaderName, HeaderValue};
 
 const APP_PROXY_URL_PLACEHOLDER: &str = "$app_proxy_url";
 const DEFAULT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-const DEFAULT_ANTIGRAVITY_BASE_URL: &str = "https://cloudcode-pa.googleapis.com";
+const DEFAULT_ANTIGRAVITY_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
 
 #[derive(Clone)]
 pub(super) struct NormalizedUpstream {

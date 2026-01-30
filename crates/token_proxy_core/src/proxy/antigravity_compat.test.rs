@@ -22,6 +22,42 @@ fn returns_default_on_empty_model() {
 }
 
 #[test]
+fn strips_gemini_prefix_for_claude_aliases() {
+    assert_eq!(
+        map_antigravity_model("gemini-claude-opus-4-5-thinking"),
+        "claude-opus-4-5-thinking"
+    );
+}
+
+#[test]
+fn maps_claude_opus_date_model_to_stable_thinking_model() {
+    assert_eq!(
+        map_antigravity_model("claude-opus-4-5-20251101"),
+        "claude-opus-4-5-thinking"
+    );
+    assert_eq!(
+        map_antigravity_model("claude-opus-4-5-20251101-thinking"),
+        "claude-opus-4-5-thinking"
+    );
+}
+
+#[test]
+fn maps_claude_sonnet_date_model_to_stable_thinking_model() {
+    assert_eq!(
+        map_antigravity_model("claude-sonnet-4-5-20250929"),
+        "claude-sonnet-4-5-thinking"
+    );
+}
+
+#[test]
+fn maps_claude_haiku_date_model_to_gemini_fallback() {
+    assert_eq!(
+        map_antigravity_model("claude-haiku-4-5-20251001"),
+        "gemini-2.5-flash"
+    );
+}
+
+#[test]
 fn injects_antigravity_system_instruction_for_claude() {
     let request = json!({
         "model": "claude-3-5-sonnet-20241022",

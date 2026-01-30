@@ -140,32 +140,27 @@ impl TrayState {
                 .clone()
         };
         if !config.enabled {
-            tracing::debug!("tray update_token_rate_title disabled -> clear");
             self.clear_title();
             return;
         }
         // 启用后始终显示速率；无 token 时展示并发请求数。
         let snapshot = self.inner.token_rate.snapshot().await;
         let title = format_rate_title(snapshot, config.format);
-        tracing::debug!(title = %title, "tray update_token_rate_title set");
         self.set_title(Some(title));
     }
 
     #[cfg(target_os = "macos")]
     fn set_title(&self, title: Option<String>) {
-        tracing::debug!(title = ?title, "tray set_title called");
         let mut last_title = self
             .inner
             .last_title
             .write()
             .expect("tray title lock poisoned");
         if *last_title == title {
-            tracing::debug!(title = ?title, "tray set_title skipped (unchanged)");
             return;
         }
         let _ = self.inner.tray.set_title(title.as_deref());
         *last_title = title;
-        tracing::debug!(title = ?*last_title, "tray set_title applied");
     }
 
     #[cfg(target_os = "macos")]

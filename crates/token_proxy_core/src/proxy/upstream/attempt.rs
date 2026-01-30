@@ -16,8 +16,11 @@ use crate::proxy::http;
 use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_detail::RequestDetailSnapshot;
 use crate::proxy::request_body::ReplayableBody;
+use crate::proxy::server_helpers::log_debug_headers_body;
 use crate::proxy::{config::UpstreamRuntime, ProxyState, RequestMeta};
 use crate::proxy::{UPSTREAM_NO_DATA_TIMEOUT};
+
+const DEBUG_UPSTREAM_LOG_LIMIT_BYTES: usize = usize::MAX;
 
 pub(super) async fn attempt_upstream(
     state: &ProxyState,
@@ -317,6 +320,13 @@ async fn send_antigravity_with_fallback(
 ) -> Result<reqwest::Response, AttemptOutcome> {
     let urls = antigravity_fallback_urls(&upstream.base_url, upstream_path_with_query);
     let request_headers = antigravity_request_headers(request_headers, meta, antigravity);
+    log_debug_headers_body(
+        "upstream.request",
+        Some(&request_headers),
+        Some(body),
+        DEBUG_UPSTREAM_LOG_LIMIT_BYTES,
+    )
+    .await;
     let mut last_transport: Option<reqwest::Error> = None;
     let mut saw_timeout = false;
     for (idx, url) in urls.iter().enumerate() {
@@ -454,6 +464,13 @@ async fn send_upstream_request_once(
     request_detail: Option<&RequestDetailSnapshot>,
     start_time: Instant,
 ) -> Result<reqwest::Response, AttemptOutcome> {
+    log_debug_headers_body(
+        "upstream.request",
+        Some(request_headers),
+        Some(body),
+        DEBUG_UPSTREAM_LOG_LIMIT_BYTES,
+    )
+    .await;
     let client = state
         .http_clients
         .client_for_proxy_url(upstream.proxy_url.as_deref())
@@ -569,6 +586,13 @@ async fn send_codex_attempt(
     start_time: Instant,
     attempt: &CodexSendAttempt,
 ) -> Result<reqwest::Response, CodexAttemptError> {
+    log_debug_headers_body(
+        "upstream.request",
+        Some(request_headers),
+        Some(body),
+        DEBUG_UPSTREAM_LOG_LIMIT_BYTES,
+    )
+    .await;
     let client = build_codex_client(attempt.proxy_url.as_deref(), attempt.http1_only).map_err(|message| {
         CodexAttemptError::Fatal(AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message)))
     })?;

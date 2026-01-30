@@ -5,6 +5,7 @@ use axum::{
 use serde_json::{Map, Value};
 
 use super::{
+    antigravity_compat,
     gemini,
     http_client::ProxyHttpClients,
     openai_compat::{
@@ -18,10 +19,11 @@ use super::{
 
 const ANTHROPIC_MESSAGES_PREFIX: &str = "/v1/messages";
 const ANTHROPIC_COMPLETE_PATH: &str = "/v1/complete";
+const PROVIDER_ANTIGRAVITY: &str = "antigravity";
 const REQUEST_META_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 // Format conversion needs the full JSON body; allow up to the default max_request_body_bytes (20 MiB).
 const REQUEST_TRANSFORM_LIMIT_BYTES: usize = 20 * 1024 * 1024;
-const DEBUG_BODY_LOG_LIMIT_BYTES: usize = 64 * 1024;
+const DEBUG_BODY_LOG_LIMIT_BYTES: usize = usize::MAX;
 const OPENAI_REASONING_MODEL_SUFFIX_PREFIX: &str = "-reasoning-";
 
 #[derive(Debug)]
@@ -162,49 +164,62 @@ fn ensure_stream_options_include_usage(object: &mut Map<String, Value>) -> bool 
 }
 
 pub(crate) async fn log_debug_request(headers: &HeaderMap, body: &ReplayableBody) {
-    let header_snapshot: Vec<(String, String)> = headers
-        .iter()
-        .map(|(name, value)| {
-            let redacted = if is_sensitive_header(name.as_str()) {
-                "***".to_string()
-            } else {
-                value.to_str().unwrap_or("").to_string()
-            };
-            (name.to_string(), redacted)
-        })
-        .collect();
+    log_debug_headers_body(
+        "inbound.request",
+        Some(headers),
+        Some(body),
+        DEBUG_BODY_LOG_LIMIT_BYTES,
+    )
+    .await;
+}
 
-    let body_text = match body.read_bytes_if_small(DEBUG_BODY_LOG_LIMIT_BYTES).await {
-        Ok(Some(bytes)) => {
-            let text = String::from_utf8_lossy(&bytes);
-            Some(text.into_owned())
+pub(crate) async fn log_debug_headers_body(
+    stage: &str,
+    headers: Option<&HeaderMap>,
+    body: Option<&ReplayableBody>,
+    max_body_bytes: usize,
+) {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return;
+    }
+
+    let header_snapshot = headers
+        .map(snapshot_headers_raw)
+        .unwrap_or_default();
+    let body_text = if let Some(body) = body {
+        match body.read_bytes_if_small(max_body_bytes).await {
+            Ok(Some(bytes)) => Some(String::from_utf8_lossy(&bytes).into_owned()),
+            Ok(None) => Some(format!("[body omitted: larger than {max_body_bytes} bytes]")),
+            Err(err) => Some(format!("[body read failed: {err}]")),
         }
-        Ok(None) => None,
-        Err(err) => {
-            tracing::debug!(error = %err, "debug body read failed");
-            None
-        }
+    } else {
+        None
     };
 
     match body_text {
         Some(text) => {
-            tracing::debug!(headers = ?header_snapshot, body = %text, "incoming request debug dump");
+            tracing::debug!(stage, headers = ?header_snapshot, body = %text, "debug dump");
         }
         None => {
-            tracing::debug!(headers = ?header_snapshot, "incoming request body omitted (too large)");
+            tracing::debug!(stage, headers = ?header_snapshot, "debug dump (no body)");
         }
     }
 }
 
-fn is_sensitive_header(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        "authorization" | "proxy-authorization" | "x-api-key"
-    )
+fn snapshot_headers_raw(headers: &HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            let value = value.to_str().unwrap_or("<binary>").to_string();
+            (name.to_string(), value)
+        })
+        .collect()
 }
 
 pub(crate) async fn maybe_transform_request_body(
     http_clients: &ProxyHttpClients,
+    provider: &str,
+    path: &str,
     transform: FormatTransform,
     model_hint: Option<&str>,
     body: ReplayableBody,
@@ -228,11 +243,39 @@ pub(crate) async fn maybe_transform_request_body(
             "Request body is too large to transform.",
         ));
     };
+    let inbound_body = ReplayableBody::from_bytes(bytes.clone());
+    log_debug_headers_body(
+        "transform.input",
+        None,
+        Some(&inbound_body),
+        DEBUG_BODY_LOG_LIMIT_BYTES,
+    )
+    .await;
 
-    let outbound_bytes = transform_request_body(transform, &bytes, http_clients, model_hint)
-        .await
-        .map_err(|message| RequestError::new(StatusCode::BAD_REQUEST, message))?;
-    Ok(ReplayableBody::from_bytes(outbound_bytes))
+    let outbound_bytes = if should_use_antigravity_claude(provider, path, transform) {
+        antigravity_compat::claude_request_to_antigravity(&bytes, model_hint)
+            .map_err(|message| RequestError::new(StatusCode::BAD_REQUEST, message))?
+    } else {
+        transform_request_body(transform, &bytes, http_clients, model_hint)
+            .await
+            .map_err(|message| RequestError::new(StatusCode::BAD_REQUEST, message))?
+    };
+    let outbound_body = ReplayableBody::from_bytes(outbound_bytes);
+    log_debug_headers_body(
+        "transform.output",
+        None,
+        Some(&outbound_body),
+        DEBUG_BODY_LOG_LIMIT_BYTES,
+    )
+    .await;
+    Ok(outbound_body)
+}
+
+fn should_use_antigravity_claude(provider: &str, path: &str, transform: FormatTransform) -> bool {
+    // Align Antigravity with CLIProxyAPIPlus for Claude /v1/messages.
+    provider == PROVIDER_ANTIGRAVITY
+        && path == ANTHROPIC_MESSAGES_PREFIX
+        && transform == FormatTransform::AnthropicToGemini
 }
 
 pub(crate) async fn maybe_force_openai_stream_options_include_usage(
@@ -277,7 +320,15 @@ pub(crate) async fn maybe_force_openai_stream_options_include_usage(
                 format!("Failed to serialize request: {err}"),
             )
         })?;
-    Ok(ReplayableBody::from_bytes(outbound_bytes))
+    let outbound_body = ReplayableBody::from_bytes(outbound_bytes);
+    log_debug_headers_body(
+        "stream_options.output",
+        None,
+        Some(&outbound_body),
+        DEBUG_BODY_LOG_LIMIT_BYTES,
+    )
+    .await;
+    Ok(outbound_body)
 }
 
 pub(crate) async fn maybe_rewrite_openai_reasoning_effort_from_model_suffix(

@@ -8,6 +8,11 @@ use crate::oauth_util::generate_state;
 use crate::proxy::antigravity_schema::clean_json_schema_for_antigravity;
 use crate::proxy::sse::SseEventParser;
 
+mod signature_cache;
+mod claude;
+
+pub(crate) use claude::claude_request_to_antigravity;
+
 const DEFAULT_MODEL: &str = "gemini-1.5-flash";
 const THOUGHT_SIGNATURE_SENTINEL: &str = "skip_thought_signature_validator";
 const PAYLOAD_USER_AGENT: &str = "antigravity";

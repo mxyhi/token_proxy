@@ -16,6 +16,7 @@ use super::super::super::{
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     openai_compat::FormatTransform,
     redact::redact_query_param_value,
+    server_helpers::log_debug_headers_body,
     token_rate::RequestTokenTracker,
     UPSTREAM_NO_DATA_TIMEOUT,
 };
@@ -25,6 +26,7 @@ type UpstreamBytesStream = futures_util::stream::BoxStream<
     Result<Bytes, upstream_stream::UpstreamStreamError<reqwest::Error>>,
 >;
 type ResponseStream = futures_util::stream::BoxStream<'static, Result<Bytes, std::io::Error>>;
+const DEBUG_BODY_LOG_LIMIT_BYTES: usize = usize::MAX;
 
 pub(super) async fn build_stream_response(
     status: StatusCode,
@@ -43,11 +45,19 @@ pub(super) async fn build_stream_response(
             Ok(stream) => stream,
             Err(response) => return response,
         };
+    log_debug_headers_body(
+        "upstream.response.headers",
+        Some(&headers),
+        None,
+        DEBUG_BODY_LOG_LIMIT_BYTES,
+    )
+    .await;
     let upstream = if context.provider == PROVIDER_ANTIGRAVITY {
         antigravity_compat::stream_antigravity_to_gemini(upstream).boxed()
     } else {
         upstream
     };
+    let upstream = log_upstream_stream_if_debug(upstream);
 
     let stream = stream_for_transform(
         response_transform,
@@ -58,6 +68,14 @@ pub(super) async fn build_stream_response(
         estimated_input_tokens,
         model_override,
     );
+    log_debug_headers_body(
+        "outbound.response.headers",
+        Some(&headers),
+        None,
+        DEBUG_BODY_LOG_LIMIT_BYTES,
+    )
+    .await;
+    let stream = log_response_stream_if_debug(stream);
     let body = Body::from_stream(stream);
     http::build_response(status, headers, body)
 }
@@ -448,6 +466,50 @@ fn stream_error_response(
     let entry = build_log_entry(context, empty_usage, Some(message.clone()));
     log.clone().write_detached(entry);
     http::error_response(status, message)
+}
+
+fn log_upstream_stream_if_debug(upstream: UpstreamBytesStream) -> UpstreamBytesStream {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return upstream;
+    }
+    upstream
+        .map(|item| {
+            if let Ok(chunk) = &item {
+                let text = String::from_utf8_lossy(chunk);
+                tracing::debug!(
+                    stage = "upstream.response.chunk",
+                    bytes = chunk.len(),
+                    body = %text,
+                    "debug dump"
+                );
+            } else if let Err(err) = &item {
+                tracing::debug!(stage = "upstream.response.chunk.error", error = %err, "debug dump");
+            }
+            item
+        })
+        .boxed()
+}
+
+fn log_response_stream_if_debug(stream: ResponseStream) -> ResponseStream {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return stream;
+    }
+    stream
+        .map(|item| {
+            if let Ok(chunk) = &item {
+                let text = String::from_utf8_lossy(chunk);
+                tracing::debug!(
+                    stage = "outbound.response.chunk",
+                    bytes = chunk.len(),
+                    body = %text,
+                    "debug dump"
+                );
+            } else if let Err(err) = &item {
+                tracing::debug!(stage = "outbound.response.chunk.error", error = %err, "debug dump");
+            }
+            item
+        })
+        .boxed()
 }
 
 fn stream_with_optional_model_override<E>(

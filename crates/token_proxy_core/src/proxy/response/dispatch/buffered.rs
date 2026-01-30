@@ -15,11 +15,15 @@ use super::super::super::{
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     model,
     openai_compat::{transform_response_body, FormatTransform},
+    request_body::ReplayableBody,
     redact::redact_query_param_value,
+    server_helpers::log_debug_headers_body,
     token_rate::RequestTokenTracker,
     usage::extract_usage_from_response,
     UPSTREAM_NO_DATA_TIMEOUT,
 };
+
+const DEBUG_BODY_LOG_LIMIT_BYTES: usize = usize::MAX;
 
 pub(super) async fn build_buffered_response(
     status: StatusCode,
@@ -33,10 +37,18 @@ pub(super) async fn build_buffered_response(
     estimated_input_tokens: Option<u64>,
 ) -> Response {
     let mut context = context;
+    let response_headers = upstream_res.headers().clone();
     let bytes = match read_upstream_bytes(upstream_res, &mut context, &log).await {
         Ok(bytes) => bytes,
         Err(response) => return response,
     };
+    log_debug_headers_body(
+        "upstream.response.raw",
+        Some(&response_headers),
+        Some(&ReplayableBody::from_bytes(bytes.clone())),
+        DEBUG_BODY_LOG_LIMIT_BYTES,
+    )
+    .await;
     let bytes = if context.provider == PROVIDER_ANTIGRAVITY {
         match antigravity_compat::unwrap_response(&bytes) {
             Ok(unwrapped) => unwrapped,
@@ -47,6 +59,15 @@ pub(super) async fn build_buffered_response(
     } else {
         bytes
     };
+    if context.provider == PROVIDER_ANTIGRAVITY {
+        log_debug_headers_body(
+            "upstream.response.unwrapped",
+            Some(&response_headers),
+            Some(&ReplayableBody::from_bytes(bytes.clone())),
+            DEBUG_BODY_LOG_LIMIT_BYTES,
+        )
+        .await;
+    }
     let mut usage = extract_usage_from_response(&bytes);
     let response_error = response_error_for_status(status, &bytes);
     let request_body = context.request_body.clone();
@@ -74,6 +95,13 @@ pub(super) async fn build_buffered_response(
     log.clone().write_detached(entry);
 
     let output = maybe_override_response_model(output, model_override);
+    log_debug_headers_body(
+        "outbound.response",
+        Some(&headers),
+        Some(&ReplayableBody::from_bytes(output.clone())),
+        DEBUG_BODY_LOG_LIMIT_BYTES,
+    )
+    .await;
     let provider_for_tokens = provider_for_tokens(response_transform, context.provider.as_str());
     token_count::apply_output_tokens_from_response(&request_tracker, provider_for_tokens, &output).await;
 

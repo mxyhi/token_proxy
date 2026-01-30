@@ -327,7 +327,8 @@ function UpstreamRowActions({
 
 type UpstreamsTableRowProps = {
   upstream: UpstreamForm;
-  index: number;
+  upstreamIndex: number;
+  displayIndex: number;
   columns: readonly UpstreamColumnDefinition[];
   showApiKeys: boolean;
   kiroAccounts: KiroAccountMap;
@@ -342,7 +343,8 @@ type UpstreamsTableRowProps = {
 
 function UpstreamsTableRow({
   upstream,
-  index,
+  upstreamIndex,
+  displayIndex,
   columns,
   showApiKeys,
   kiroAccounts,
@@ -354,7 +356,7 @@ function UpstreamsTableRow({
   onToggleEnabled,
   onDelete,
 }: UpstreamsTableRowProps) {
-  const rowLabel = getUpstreamLabel(index);
+  const rowLabel = getUpstreamLabel(displayIndex);
   return (
     <tr className="border-b border-border/40 last:border-b-0">
       {columns.map((column) => (
@@ -378,10 +380,10 @@ function UpstreamsTableRow({
         rowLabel={rowLabel}
         enabled={upstream.enabled}
         disableDelete={disableDelete}
-        onEdit={() => onEdit(index)}
-        onCopy={() => onCopy(index)}
-        onToggleEnabled={() => onToggleEnabled(index)}
-        onDelete={() => onDelete(index)}
+        onEdit={() => onEdit(upstreamIndex)}
+        onCopy={() => onCopy(upstreamIndex)}
+        onToggleEnabled={() => onToggleEnabled(upstreamIndex)}
+        onDelete={() => onDelete(upstreamIndex)}
       />
     </tr>
   );
@@ -401,6 +403,37 @@ export type UpstreamsTableProps = {
   onDelete: (index: number) => void;
 };
 
+type SortedUpstreamEntry = {
+  upstream: UpstreamForm;
+  upstreamIndex: number;
+  priority: number;
+};
+
+function parsePriorityValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  const number = Number.parseInt(trimmed, 10);
+  return Number.isFinite(number) ? number : 0;
+}
+
+function sortUpstreamsByPriority(upstreams: UpstreamForm[]) {
+  // Display order follows priority descending; ties keep original list order.
+  const entries = upstreams.map((upstream, upstreamIndex): SortedUpstreamEntry => ({
+    upstream,
+    upstreamIndex,
+    priority: parsePriorityValue(upstream.priority),
+  }));
+  entries.sort((left, right) => {
+    if (left.priority !== right.priority) {
+      return right.priority - left.priority;
+    }
+    return left.upstreamIndex - right.upstreamIndex;
+  });
+  return entries;
+}
+
 export function UpstreamsTable({
   upstreams,
   columns,
@@ -414,16 +447,18 @@ export function UpstreamsTable({
   onToggleEnabled,
   onDelete,
 }: UpstreamsTableProps) {
+  const sortedUpstreams = sortUpstreamsByPriority(upstreams);
   return (
     <div className="overflow-x-auto rounded-md border border-border/60 bg-background/60">
       <table className="w-full border-collapse text-sm">
         <UpstreamsTableHeader columns={columns} />
         <tbody>
-          {upstreams.map((upstream, index) => (
+          {sortedUpstreams.map((entry, displayIndex) => (
             <UpstreamsTableRow
-              key={index}
-              upstream={upstream}
-              index={index}
+              key={entry.upstreamIndex}
+              upstream={entry.upstream}
+              upstreamIndex={entry.upstreamIndex}
+              displayIndex={displayIndex}
               columns={columns}
               showApiKeys={showApiKeys}
               kiroAccounts={kiroAccounts}

@@ -580,19 +580,54 @@ async fn build_outbound_body_or_respond(
     body: ReplayableBody,
     request_start: Instant,
 ) -> Result<ReplayableBody, Response> {
-    let body = match maybe_transform_request_body(
+    let body = transform_body_or_respond(
         http_clients,
+        log,
+        request_detail.clone(),
+        path,
+        plan,
+        meta,
+        body,
+        request_start,
+    )
+    .await?;
+    apply_openai_stream_options_or_respond(
+        log,
+        request_detail,
+        path,
+        plan,
+        meta,
+        body,
+        request_start,
+    )
+    .await
+}
+
+async fn transform_body_or_respond(
+    http_clients: &super::http_client::ProxyHttpClients,
+    log: &Arc<LogWriter>,
+    request_detail: Option<RequestDetailSnapshot>,
+    path: &str,
+    plan: &DispatchPlan,
+    meta: &RequestMeta,
+    body: ReplayableBody,
+    request_start: Instant,
+) -> Result<ReplayableBody, Response> {
+    match maybe_transform_request_body(
+        http_clients,
+        plan.provider,
+        path,
         plan.request_transform,
         meta.original_model.as_deref(),
         body,
     )
     .await
     {
-        Ok(body) => body,
+        Ok(body) => Ok(body),
         Err(err) => {
             log_request_error(
                 log,
-                request_detail.clone(),
+                request_detail,
                 path,
                 plan.provider,
                 LOCAL_UPSTREAM_ID,
@@ -600,10 +635,20 @@ async fn build_outbound_body_or_respond(
                 err.message.clone(),
                 request_start,
             );
-            return Err(http::error_response(err.status, err.message));
+            Err(http::error_response(err.status, err.message))
         }
-    };
+    }
+}
 
+async fn apply_openai_stream_options_or_respond(
+    log: &Arc<LogWriter>,
+    request_detail: Option<RequestDetailSnapshot>,
+    path: &str,
+    plan: &DispatchPlan,
+    meta: &RequestMeta,
+    body: ReplayableBody,
+    request_start: Instant,
+) -> Result<ReplayableBody, Response> {
     match maybe_force_openai_stream_options_include_usage(
         plan.provider,
         plan.outbound_path.unwrap_or(path),

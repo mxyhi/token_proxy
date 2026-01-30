@@ -176,7 +176,10 @@ fn update_usage(snapshot: &mut UsageSnapshot, data: &str) {
     if updated.usage_json.is_some() {
         snapshot.usage_json = updated.usage_json;
         snapshot.usage = updated.usage;
-        snapshot.cached_tokens = updated.cached_tokens;
+        if updated.cached_tokens.is_some() {
+            // Preserve earlier cache stats when later events omit cache fields.
+            snapshot.cached_tokens = updated.cached_tokens;
+        }
     }
 }
 

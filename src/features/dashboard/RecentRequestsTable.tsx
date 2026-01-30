@@ -157,7 +157,13 @@ function tokensColumn(): ColumnDef<DashboardRequestItem> {
       const totalText =
         row.original.totalTokens === null ? CELL_PLACEHOLDER : formatInteger(row.original.totalTokens);
       const cachedText = row.original.cachedTokens ? formatInteger(row.original.cachedTokens) : null;
-      const tooltipText = cachedText ? `${totalText}\n${cachedText}` : totalText;
+      const totalLabel = m.dashboard_chart_total_tokens();
+      const cachedLabel = m.dashboard_chart_cached_tokens();
+      const tooltipParts = [
+        totalText === CELL_PLACEHOLDER ? null : `${totalLabel} ${totalText}`,
+        cachedText ? `${cachedLabel} ${cachedText}` : null,
+      ].filter((part): part is string => Boolean(part));
+      const tooltipText = tooltipParts.length > 0 ? tooltipParts.join("\n") : CELL_PLACEHOLDER;
 
       return (
         <CellTooltip content={tooltipText} disabled={totalText === CELL_PLACEHOLDER && !cachedText}>
@@ -165,7 +171,7 @@ function tokensColumn(): ColumnDef<DashboardRequestItem> {
             <span className="block w-full truncate text-right">{totalText}</span>
             {cachedText ? (
               <span className="block w-full truncate text-xs font-normal text-muted-foreground text-right">
-                {cachedText}
+                {cachedLabel} {cachedText}
               </span>
             ) : null}
           </div>

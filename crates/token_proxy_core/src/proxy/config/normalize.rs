@@ -47,16 +47,18 @@ pub(super) fn build_provider_upstreams(
     Ok(output)
 }
 
-fn group_upstreams_by_priority(mut upstreams: Vec<UpstreamRuntime>) -> Vec<UpstreamGroup> {
-    upstreams.sort_by(|left, right| right.priority.cmp(&left.priority));
-    let mut groups: Vec<UpstreamGroup> = Vec::new();
+fn group_upstreams_by_priority(upstreams: Vec<UpstreamRuntime>) -> Vec<UpstreamGroup> {
+    // Keep same-priority order stable by preserving config insertion order.
+    let mut grouped: HashMap<i32, Vec<UpstreamRuntime>> = HashMap::new();
     for upstream in upstreams {
-        match groups.last_mut() {
-            Some(group) if group.priority == upstream.priority => group.items.push(upstream),
-            _ => groups.push(UpstreamGroup {
-                priority: upstream.priority,
-                items: vec![upstream],
-            }),
+        grouped.entry(upstream.priority).or_default().push(upstream);
+    }
+    let mut priorities: Vec<i32> = grouped.keys().copied().collect();
+    priorities.sort_by(|left, right| right.cmp(left));
+    let mut groups = Vec::with_capacity(priorities.len());
+    for priority in priorities {
+        if let Some(items) = grouped.remove(&priority) {
+            groups.push(UpstreamGroup { priority, items });
         }
     }
     groups

@@ -375,7 +375,7 @@
   "dashboard_hint_success_rate": "Success rate {rate}",
   "dashboard_hint_error_rate": "Error rate {rate}",
   "dashboard_tokens_hint_no_cache": "Input {input} · Output {output}",
-  "dashboard_tokens_hint_with_cache": "Input {input} (cached {cached}) · Output {output}",
+  "dashboard_tokens_hint_with_cache": "Input {input} · Output {output} · Cached {cached}",
   "dashboard_latency_hint": "Time to first byte (avg.)",
   "dashboard_providers_title": "Providers",
   "dashboard_providers_desc": "Sorted by tokens (Top 10)",

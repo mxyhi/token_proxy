@@ -20,6 +20,7 @@ use super::super::{
     RequestMeta,
 };
 use super::super::http::RequestAuth;
+use crate::proxy::server_helpers::log_debug_headers_body;
 
 const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -28,6 +29,7 @@ const GEMINI_API_KEY_HEADER: HeaderName = HeaderName::from_static("x-goog-api-ke
 const OPENAI_RESPONSES_PATH: &str = "/v1/responses";
 // Keep in sync with server_helpers request transform limit (20 MiB).
 const REQUEST_FILTER_LIMIT_BYTES: usize = 20 * 1024 * 1024;
+const DEBUG_UPSTREAM_LOG_LIMIT_BYTES: usize = usize::MAX;
 
 pub(super) fn split_path_query(path_with_query: &str) -> (&str, Option<&str>) {
     match path_with_query.split_once('?') {
@@ -228,6 +230,14 @@ async fn build_antigravity_body(
     .map_err(|message| {
         AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
     })?;
+    let wrapped_body = ReplayableBody::from_bytes(wrapped.clone());
+    log_debug_headers_body(
+        "antigravity.wrapped",
+        None,
+        Some(&wrapped_body),
+        DEBUG_UPSTREAM_LOG_LIMIT_BYTES,
+    )
+    .await;
     Ok(reqwest::Body::from(wrapped))
 }
 

@@ -2,13 +2,26 @@ import type { ReactNode } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogBody,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { m } from "@/paraglide/messages.js";
 
-import type { ActionState, RequestState } from "./client-setup-state";
+import type { ActionState, ClientSetupInfo, RequestState } from "./client-setup-state";
 
-// 内联展示工具配置的 props
-type ToolSetupPanelProps = {
+type ToolSetupDialogProps = {
+  title: string;
+  description: string;
+  summary: ReactNode;
   action: ActionState;
   canApply: boolean;
   isWorking: boolean;
@@ -93,43 +106,105 @@ export function CodeBlock({ lines }: { lines: readonly string[] }) {
   );
 }
 
-/** 内联展示工具配置面板（无弹窗） */
-export function ToolSetupPanel({
+type ToolSetupCardProps = Pick<ToolSetupDialogProps, "title" | "description" | "summary" | "action">;
+
+function ToolSetupCard({ title, description, summary, action }: ToolSetupCardProps) {
+  return (
+    <Card data-slot="client-setup-tool-card">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle>{title}</CardTitle>
+            <CardDescription>{description}</CardDescription>
+          </div>
+          {shouldShowBadge(action.state) ? (
+            <Badge variant={toBadgeVariant(action.state)}>{toBadgeLabel(action.state)}</Badge>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {summary}
+        <DialogTrigger asChild>
+          <Button type="button" variant="outline" size="sm">
+            {m.common_show()}
+          </Button>
+        </DialogTrigger>
+      </CardContent>
+    </Card>
+  );
+}
+
+type ToolSetupModalProps = Omit<ToolSetupDialogProps, "summary">;
+
+function ToolSetupModal({
+  title,
+  description,
   action,
   canApply,
   isWorking,
   onApply,
   children,
-}: ToolSetupPanelProps) {
+}: ToolSetupModalProps) {
   return (
-    <Card data-slot="client-setup-tool-panel">
-      <CardContent className="space-y-4 pt-6">
-        {/* 详细配置内容 */}
+    <DialogContent className="max-w-2xl">
+      <DialogHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>{description}</DialogDescription>
+          </div>
+          {shouldShowBadge(action.state) ? (
+            <Badge variant={toBadgeVariant(action.state)}>{toBadgeLabel(action.state)}</Badge>
+          ) : null}
+        </div>
+      </DialogHeader>
+
+      <DialogBody className="space-y-4">
         {children}
 
-        {/* 操作状态消息 */}
         {action.message ? (
           <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
             {action.message}
           </div>
         ) : null}
 
-        {/* 备份提示 */}
         <p className="text-xs text-muted-foreground">{m.client_setup_backup_hint()}</p>
+      </DialogBody>
 
-        {/* 底部操作栏 */}
-        <div className="flex items-center justify-between gap-3 pt-2">
-          <div className="flex items-center gap-2">
-            {shouldShowBadge(action.state) ? (
-              <Badge variant={toBadgeVariant(action.state)}>{toBadgeLabel(action.state)}</Badge>
-            ) : null}
-          </div>
-          <Button type="button" onClick={onApply} disabled={!canApply || isWorking}>
-            {m.client_setup_apply()}
+      <DialogFooter>
+        <DialogClose asChild>
+          <Button type="button" variant="outline">
+            {m.common_close()}
           </Button>
-        </div>
-      </CardContent>
-    </Card>
+        </DialogClose>
+        <Button type="button" onClick={onApply} disabled={!canApply || isWorking}>
+          {m.client_setup_apply()}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  );
+}
+
+export function ToolSetupDialog(props: ToolSetupDialogProps) {
+  return (
+    <Dialog>
+      <ToolSetupCard
+        title={props.title}
+        description={props.description}
+        summary={props.summary}
+        action={props.action}
+      />
+      <ToolSetupModal
+        title={props.title}
+        description={props.description}
+        action={props.action}
+        canApply={props.canApply}
+        isWorking={props.isWorking}
+        onApply={props.onApply}
+      >
+        {props.children}
+      </ToolSetupModal>
+    </Dialog>
   );
 }
 
@@ -173,5 +248,65 @@ export function PlaintextWarning() {
     >
       {m.client_setup_plaintext_warning()}
     </div>
+  );
+}
+
+type ClientSetupOverviewCardProps = {
+  previewState: RequestState;
+  previewMessage: string;
+  setup: ClientSetupInfo | null;
+  isDirty: boolean;
+  isWorking: boolean;
+  onRefresh: () => void;
+};
+
+export function ClientSetupOverviewCard({
+  previewState,
+  previewMessage,
+  setup,
+  isDirty,
+  isWorking,
+  onRefresh,
+}: ClientSetupOverviewCardProps) {
+  return (
+    <Card data-slot="client-setup-overview-card">
+      <CardHeader>
+        <CardTitle>{m.client_setup_title()}</CardTitle>
+        <CardDescription>{m.client_setup_desc()}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {shouldShowBadge(previewState) ? (
+            <Badge variant={toBadgeVariant(previewState)}>{toBadgeLabel(previewState)}</Badge>
+          ) : null}
+          <Button type="button" variant="outline" size="sm" onClick={onRefresh} disabled={isWorking}>
+            {m.common_refresh()}
+          </Button>
+        </div>
+
+        {previewMessage ? (
+          <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
+            {previewMessage}
+          </div>
+        ) : null}
+
+        {isDirty ? (
+          <div className="rounded-md border border-border/60 bg-background/60 p-3 text-xs text-muted-foreground">
+            {m.client_setup_dirty_notice()}
+          </div>
+        ) : null}
+
+        {setup ? (
+          <div className="rounded-md border border-border/60 bg-background/60 p-3">
+            <p className="text-xs uppercase tracking-[0.2em] text-muted-foreground">
+              {m.client_setup_proxy_base_url_label()}
+            </p>
+            <p className="mt-1 font-mono text-xs text-foreground/80">
+              {setup.proxy_http_base_url}
+            </p>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
   );
 }

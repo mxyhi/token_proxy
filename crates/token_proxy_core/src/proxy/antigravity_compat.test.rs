@@ -30,31 +30,67 @@ fn strips_gemini_prefix_for_claude_aliases() {
 }
 
 #[test]
-fn maps_claude_opus_date_model_to_stable_thinking_model() {
+fn keeps_claude_opus_date_model_unchanged() {
     assert_eq!(
         map_antigravity_model("claude-opus-4-5-20251101"),
-        "claude-opus-4-5-thinking"
+        "claude-opus-4-5-20251101"
     );
     assert_eq!(
         map_antigravity_model("claude-opus-4-5-20251101-thinking"),
-        "claude-opus-4-5-thinking"
+        "claude-opus-4-5-20251101-thinking"
     );
 }
 
 #[test]
-fn maps_claude_sonnet_date_model_to_stable_thinking_model() {
+fn keeps_claude_sonnet_date_model_unchanged() {
     assert_eq!(
         map_antigravity_model("claude-sonnet-4-5-20250929"),
-        "claude-sonnet-4-5-thinking"
+        "claude-sonnet-4-5-20250929"
     );
 }
 
 #[test]
-fn maps_claude_haiku_date_model_to_gemini_fallback() {
+fn keeps_claude_haiku_date_model_unchanged() {
     assert_eq!(
         map_antigravity_model("claude-haiku-4-5-20251001"),
-        "gemini-2.5-flash"
+        "claude-haiku-4-5-20251001"
     );
+}
+
+#[test]
+fn maps_legacy_antigravity_aliases_to_canonical_ids() {
+    assert_eq!(
+        map_antigravity_model("gemini-2.5-computer-use-preview-10-2025"),
+        "rev19-uic3-1p"
+    );
+    assert_eq!(
+        map_antigravity_model("gemini-3-pro-image-preview"),
+        "gemini-3-pro-image"
+    );
+    assert_eq!(
+        map_antigravity_model("gemini-3-pro-preview"),
+        "gemini-3-pro-high"
+    );
+    assert_eq!(
+        map_antigravity_model("gemini-3-flash-preview"),
+        "gemini-3-flash"
+    );
+}
+
+#[test]
+fn model_hint_overrides_body_model_in_wrap_request() {
+    let request = json!({
+        "model": "claude-haiku-4-5-20251001",
+        "contents": [
+            { "role": "user", "parts": [{ "text": "hello" }] }
+        ]
+    });
+    let bytes = Bytes::from(request.to_string());
+    let wrapped =
+        wrap_gemini_request(&bytes, Some("gemini-2.5-flash"), None, "ua").expect("wrap ok");
+    let value: serde_json::Value = serde_json::from_slice(&wrapped).expect("wrapped json");
+    assert_eq!(value["model"].as_str(), Some("gemini-2.5-flash"));
+    assert!(value["request"].get("systemInstruction").is_none());
 }
 
 #[test]

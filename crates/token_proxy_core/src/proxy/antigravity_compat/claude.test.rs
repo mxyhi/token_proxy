@@ -83,3 +83,19 @@ fn unsigned_thinking_is_removed() {
     assert_eq!(parts.len(), 1);
     assert_eq!(parts[0]["text"], "Answer");
 }
+
+#[test]
+fn model_hint_overrides_request_model() {
+    let input = Bytes::from(
+        r#"{
+        "model": "claude-haiku-4-5-20251001",
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+        ]
+    }"#,
+    );
+    let output = parse_output(
+        claude_request_to_antigravity(&input, Some("gemini-2.5-flash")).expect("convert"),
+    );
+    assert_eq!(output["model"], "gemini-2.5-flash");
+}

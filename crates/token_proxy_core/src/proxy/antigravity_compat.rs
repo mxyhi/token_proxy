@@ -182,6 +182,14 @@ where
 }
 
 fn extract_model(request: &mut Map<String, Value>, model_hint: Option<&str>) -> String {
+    // Align with CLIProxyAPIPlus model-mapping behavior:
+    // - If upstream/model-mapping produced a model_hint, it MUST override whatever the client put
+    //   in the request body (e.g. Claude Code may send a Claude model that Antigravity doesn't have).
+    // - Always remove request["model"] so the inner request stays Gemini-shaped.
+    let hint = model_hint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
     let from_body = request
         .get("model")
         .and_then(Value::as_str)
@@ -189,12 +197,7 @@ fn extract_model(request: &mut Map<String, Value>, model_hint: Option<&str>) -> 
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
     request.remove("model");
-    let hint = model_hint
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
-    from_body
-        .or(hint)
+    hint.or(from_body)
         .unwrap_or_else(|| DEFAULT_MODEL.to_string())
 }
 
@@ -203,17 +206,21 @@ pub(crate) fn map_antigravity_model(model: &str) -> String {
     if trimmed.is_empty() {
         return DEFAULT_MODEL.to_string();
     }
-    // Align with CLIProxyAPIPlus conventions:
-    // - Some clients expose Claude models behind a "gemini-" prefix (e.g. gemini-claude-opus-4-5-thinking)
-    //   while Antigravity upstream uses the stable Claude name without the prefix.
-    if trimmed.starts_with("gemini-claude-") {
-        return trimmed.trim_start_matches("gemini-").to_string();
+    // Strict alignment with CLIProxyAPIPlus:
+    // - Do NOT remap date-suffixed model IDs. Let Antigravity upstream validate/support them.
+    // - Only normalize legacy/alias model IDs that CLIProxy migrates for antigravity.
+    // - Keep "gemini-claude-*" aliases compatible by stripping the "gemini-" prefix.
+    match trimmed {
+        // Legacy Antigravity aliases used by older configs/clients.
+        "gemini-2.5-computer-use-preview-10-2025" => return "rev19-uic3-1p".to_string(),
+        "gemini-3-pro-image-preview" => return "gemini-3-pro-image".to_string(),
+        "gemini-3-pro-preview" => return "gemini-3-pro-high".to_string(),
+        "gemini-3-flash-preview" => return "gemini-3-flash".to_string(),
+        _ => {}
     }
 
-    // Claude Code / Amp CLI may request date-suffixed Claude models (e.g. claude-opus-4-5-20251101).
-    // Antigravity does not expose date-suffixed IDs; map them to the stable Antigravity model names.
-    if let Some(mapped) = map_claude_date_model_to_antigravity(trimmed) {
-        return mapped;
+    if trimmed.starts_with("gemini-claude-") {
+        return trimmed.trim_start_matches("gemini-").to_string();
     }
 
     trimmed.to_string()
@@ -223,39 +230,6 @@ pub(crate) fn map_antigravity_model(model: &str) -> String {
 #[cfg(test)]
 #[path = "antigravity_compat.test.rs"]
 mod tests;
-
-fn map_claude_date_model_to_antigravity(model: &str) -> Option<String> {
-    if !model.starts_with("claude-") {
-        return None;
-    }
-
-    // Allow optional "-thinking" suffix (some clients encode "thinking" in the model ID).
-    let (base, _has_thinking_suffix) = match model.strip_suffix("-thinking") {
-        Some(value) => (value, true),
-        None => (model, false),
-    };
-
-    // Detect the trailing date segment in `...-YYYYMMDD`.
-    let (without_date, date_suffix) = base.rsplit_once('-')?;
-    if date_suffix.len() != 8 || !date_suffix.chars().all(|ch| ch.is_ascii_digit()) {
-        return None;
-    }
-
-    // Known Claude 4.5 model families: map to the Antigravity stable names.
-    // NOTE: Antigravity appears to expose Sonnet/Opus (and their thinking variants) but not Haiku.
-    if without_date.starts_with("claude-opus-4-5") {
-        return Some("claude-opus-4-5-thinking".to_string());
-    }
-    if without_date.starts_with("claude-sonnet-4-5") {
-        return Some("claude-sonnet-4-5-thinking".to_string());
-    }
-    if without_date.starts_with("claude-haiku-4-5") {
-        // Follow CLIProxyAPIPlus example mapping: route Haiku to a close Gemini alternative.
-        return Some("gemini-2.5-flash".to_string());
-    }
-
-    None
-}
 
 fn normalize_system_instruction(request: &mut Map<String, Value>) {
     if let Some(value) = request.remove("system_instruction") {

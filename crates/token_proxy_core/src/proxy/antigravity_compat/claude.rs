@@ -52,19 +52,19 @@ fn parse_request_object(body: &Bytes) -> Result<Map<String, Value>, String> {
 }
 
 fn resolve_model_name(object: &Map<String, Value>, model_hint: Option<&str>) -> String {
-    object
+    // Model mapping must override client-provided model when routing Claude Code -> Antigravity.
+    // This matches CLIProxyAPIPlus behavior where the translator receives the mapped model name.
+    let hint = model_hint
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    let from_body = object
         .get("model")
         .and_then(Value::as_str)
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .or_else(|| {
-            model_hint
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(|value| value.to_string())
-        })
-        .unwrap_or_default()
+        .map(|value| value.to_string());
+    hint.or(from_body).unwrap_or_default()
 }
 
 fn build_system_instruction(object: &Map<String, Value>, should_hint: bool) -> Option<Value> {

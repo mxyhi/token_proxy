@@ -293,8 +293,15 @@ fn native_inbound_formats_for_provider(provider: &str) -> InboundApiFormatMask {
         "kiro" => mask.insert(InboundApiFormat::AnthropicMessages),
         // Codex 的“native”更接近 OpenAI Responses；Chat 通常需要显式允许转换。
         "codex" => mask.insert(InboundApiFormat::OpenaiResponses),
-        // Antigravity 原生处理 Gemini 路径；其它格式需显式允许转换后再走 Gemini 兼容层。
-        "antigravity" => mask.insert(InboundApiFormat::Gemini),
+        // Align with CLIProxyAPIPlus:
+        // - Antigravity natively supports Gemini routes.
+        // - It also supports Claude Code /v1/messages (Anthropic format) out-of-the-box via
+        //   Anthropic->Gemini request conversion + Antigravity wrapping. Do not gate this behind
+        //   convert_from_map, otherwise users must "enable conversion" manually.
+        "antigravity" => {
+            mask.insert(InboundApiFormat::Gemini);
+            mask.insert(InboundApiFormat::AnthropicMessages);
+        }
         _ => {}
     }
     mask

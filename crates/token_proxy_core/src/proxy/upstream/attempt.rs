@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use axum::http::{
-    header::{ACCEPT, ACCEPT_ENCODING, CONTENT_TYPE, USER_AGENT},
+    header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE, USER_AGENT},
     HeaderMap, HeaderValue, Method, StatusCode,
 };
 use reqwest::{Client, Proxy};
@@ -767,7 +767,13 @@ fn antigravity_request_headers(
     meta: &RequestMeta,
     antigravity: Option<&super::AntigravityRequestInfo>,
 ) -> HeaderMap {
-    let mut headers = base.clone();
+    // Align with CLIProxyAPIPlus: only forward essential headers to Antigravity.
+    // Do NOT pass through inbound headers (e.g. anthropic-beta/x-stainless), as they can
+    // trigger upstream validation errors.
+    let mut headers = HeaderMap::new();
+    if let Some(value) = base.get(AUTHORIZATION).cloned() {
+        headers.insert(AUTHORIZATION, value);
+    }
     let user_agent = antigravity
         .map(|info| info.user_agent.clone())
         .unwrap_or_else(antigravity_endpoints::default_user_agent);

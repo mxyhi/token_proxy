@@ -20,7 +20,7 @@ use super::super::{
     RequestMeta,
 };
 use super::super::http::RequestAuth;
-use crate::proxy::server_helpers::log_debug_headers_body;
+use crate::proxy::server_helpers::{log_debug_headers_body, truncate_for_log};
 
 const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -30,6 +30,7 @@ const OPENAI_RESPONSES_PATH: &str = "/v1/responses";
 // Keep in sync with server_helpers request transform limit (20 MiB).
 const REQUEST_FILTER_LIMIT_BYTES: usize = 20 * 1024 * 1024;
 const DEBUG_UPSTREAM_LOG_LIMIT_BYTES: usize = usize::MAX;
+const ANTIGRAVITY_WRAPPED_LOG_LIMIT_BYTES: usize = 8 * 1024;
 
 pub(super) fn split_path_query(path_with_query: &str) -> (&str, Option<&str>) {
     match path_with_query.split_once('?') {
@@ -238,7 +239,18 @@ async fn build_antigravity_body(
         DEBUG_UPSTREAM_LOG_LIMIT_BYTES,
     )
     .await;
+    log_antigravity_wrapped_body(&wrapped);
     Ok(reqwest::Body::from(wrapped))
+}
+
+fn log_antigravity_wrapped_body(bytes: &[u8]) {
+    if !tracing::enabled!(tracing::Level::WARN) {
+        return;
+    }
+    let body_text = String::from_utf8_lossy(bytes);
+    let truncated = truncate_for_log(&body_text, ANTIGRAVITY_WRAPPED_LOG_LIMIT_BYTES);
+    // 仅在 antigravity 请求阶段记录，便于复现上游校验错误。
+    tracing::warn!(body = %truncated, "antigravity wrapped request payload");
 }
 
 async fn maybe_rewrite_request_body_model(

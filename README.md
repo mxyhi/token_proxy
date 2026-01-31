@@ -125,7 +125,9 @@ Notes:
 - Cross-format fallback/conversion is controlled by `upstreams[].convert_from_map` (no global switch). If a provider has no eligible upstream for the inbound format, it won't be selected.
 - If `openai` is missing for `/v1/chat/completions`: fallback can be `openai-response`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai-response`).
 - For `/v1/messages`: choose between `anthropic` and `kiro` by priority; tie-break uses upstream id. If the chosen provider returns a retryable error, the proxy will fall back to the other native provider (Anthropic ↔ Kiro) when configured.
-- If neither `anthropic` nor `kiro` exists for `/v1/messages`: fallback can be `openai-response`, `openai`, or `gemini` when the target provider is allowed for `anthropic_messages` via `convert_from_map`.
+- If neither `anthropic` nor `kiro` exists for `/v1/messages`:
+  - `antigravity` is supported by default (no `convert_from_map` needed; aligned with CLIProxyAPIPlus Antigravity/Claude Code behavior).
+  - Other providers can be selected only when allowed for `anthropic_messages` via `convert_from_map` (e.g. `openai-response`, `openai`, `gemini`).
 - If `openai-response` is missing for `/v1/responses`: fallback can be `openai`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai`).
 - If `gemini` is missing for `/v1beta/models/*:generateContent`: fallback can be `openai-response`, `openai`, or `anthropic` (priority-based; tie-break prefers `openai-response`).
 

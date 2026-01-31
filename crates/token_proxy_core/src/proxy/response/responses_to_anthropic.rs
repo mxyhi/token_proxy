@@ -284,6 +284,11 @@ where
                 "delta": { "type": "input_json_delta", "partial_json": delta }
             }),
         ));
+        // Claude Code 会把 input_json_delta 的 partial_json 逐段拼接成最终 JSON。
+        // 若我们在 arguments.done 再发送一次完整 arguments，会导致拼接重复并变成非法 JSON（最终 tool input 变成 {}）。
+        if let Some(state) = self.tool_uses.get_mut(item_id) {
+            state.sent_input = true;
+        }
     }
 
     fn handle_function_call_arguments_done(&mut self, value: &Value) {

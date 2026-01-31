@@ -30,7 +30,9 @@ const PROVIDER_NATIVE_INBOUND_FORMATS: Readonly<
   gemini: ["gemini"],
   kiro: ["anthropic_messages"],
   codex: ["openai_responses"],
-  antigravity: ["gemini"],
+  // Align with backend `native_inbound_formats_for_provider()`:
+  // Antigravity supports Gemini routes + Claude Code (/v1/messages) out-of-the-box.
+  antigravity: ["gemini", "anthropic_messages"],
 };
 
 export function getProviderNativeInboundFormats(provider: string) {

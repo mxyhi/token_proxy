@@ -41,6 +41,32 @@ fn parse_sse_json(bytes: &Bytes) -> Option<Value> {
     Some(serde_json::from_str::<Value>(data).expect("parse SSE JSON"))
 }
 
+fn parse_anthropic_sse(bytes: &Bytes) -> Option<(String, Value)> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut event_type: Option<&str> = None;
+    let mut data_line: Option<&str> = None;
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("event: ") {
+            event_type = Some(value.trim());
+        }
+        if let Some(value) = line.strip_prefix("data: ") {
+            data_line = Some(value.trim());
+        }
+    }
+    let Some(event_type) = event_type else {
+        return None;
+    };
+    let Some(data_line) = data_line else {
+        return None;
+    };
+    let data = serde_json::from_str::<Value>(data_line).expect("parse anthropic SSE JSON");
+    Some((event_type.to_string(), data))
+}
+
+// Split the test suite to keep each file below the project's line limit.
+#[path = "response.test.part2.rs"]
+mod part2;
+
 async fn setup_responses_stream() -> (Arc<LogWriter>, LogContext, SqlitePool) {
     let sqlite_pool = create_test_sqlite_pool().await;
     let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
@@ -282,7 +308,7 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
             )),
             // Chat usage format.
             Ok(Bytes::from(
-                "data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n",
+                "data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3,\"completion_tokens_details\":{\"reasoning_tokens\":9}}}\n\n",
             )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
@@ -354,6 +380,10 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
         assert_eq!(completed["response"]["usage"]["input_tokens"], json!(1));
         assert_eq!(completed["response"]["usage"]["output_tokens"], json!(2));
         assert_eq!(completed["response"]["usage"]["total_tokens"], json!(3));
+        assert_eq!(
+            completed["response"]["usage"]["output_tokens_details"]["reasoning_tokens"],
+            json!(9)
+        );
 
         assert_eq!(String::from_utf8_lossy(&chunks[9]), "data: [DONE]\n\n");
 
@@ -394,7 +424,7 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
             )),
             // Chat usage format.
             Ok(Bytes::from(
-                "data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3}}\n\n",
+                "data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3,\"completion_tokens_details\":{\"reasoning_tokens\":4}}}\n\n",
             )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
@@ -464,6 +494,10 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
         assert_eq!(completed["response"]["usage"]["input_tokens"], json!(1));
         assert_eq!(completed["response"]["usage"]["output_tokens"], json!(2));
         assert_eq!(completed["response"]["usage"]["total_tokens"], json!(3));
+        assert_eq!(
+            completed["response"]["usage"]["output_tokens_details"]["reasoning_tokens"],
+            json!(4)
+        );
 
         assert_eq!(String::from_utf8_lossy(&chunks[7]), "data: [DONE]\n\n");
 

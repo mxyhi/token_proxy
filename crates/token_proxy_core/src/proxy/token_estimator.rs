@@ -1,4 +1,4 @@
-use std::sync::OnceLock;
+use std::{collections::HashSet, sync::OnceLock};
 
 use tiktoken_rs::{cl100k_base, o200k_base, CoreBPE};
 
@@ -207,7 +207,20 @@ fn is_cjk(ch: char) -> bool {
     let code = ch as u32;
     matches!(
         code,
-        0x3400..=0x4DBF
+        // Japanese kana (Hiragana + Katakana).
+        // new-api 口径：0x3040-0x30FF
+        0x3040..=0x30FF
+            // Korean (Hangul syllables).
+            // new-api 口径：0xAC00-0xD7A3
+            | 0xAC00..=0xD7A3
+            // CJK radicals (unicode.Han includes 0x2E80-0x2FDF, but does NOT include 0x2FF0-0x2FFF).
+            | 0x2E80..=0x2FDF
+            // Special Han-script characters in CJK Symbols and Punctuation.
+            // Verified via Go `unicode.Is(unicode.Han, r)`.
+            | 0x3005
+            | 0x3007
+            | 0x303B
+            | 0x3400..=0x4DBF
             | 0x4E00..=0x9FFF
             | 0xF900..=0xFAFF
             | 0x20000..=0x2A6DF
@@ -215,6 +228,8 @@ fn is_cjk(ch: char) -> bool {
             | 0x2B740..=0x2B81F
             | 0x2B820..=0x2CEAF
             | 0x2CEB0..=0x2EBEF
+            // CJK Compatibility Ideographs Supplement.
+            | 0x2F800..=0x2FA1F
             | 0x30000..=0x3134F
     )
 }
@@ -238,19 +253,27 @@ fn is_emoji(ch: char) -> bool {
 
 fn is_math_symbol(ch: char) -> bool {
     let code = ch as u32;
-    matches!(
-        code,
-        0x2200..=0x22FF | 0x27C0..=0x27EF | 0x2980..=0x29FF | 0x2A00..=0x2AFF
-            | 0x2190..=0x21FF | 0x2B00..=0x2BFF
-    ) || matches!(ch, '+' | '-' | '*' | '/' | '=' | '^' | '%')
+    // Mirror new-api:
+    // - explicit symbol list (covers degrees, primes, super/sub-scripts, etc.)
+    // - Mathematical Operators (U+2200–U+22FF)
+    // - Supplemental Mathematical Operators (U+2A00–U+2AFF)
+    // - Mathematical Alphanumeric Symbols (U+1D400–U+1D7FF)
+    matches!(code, 0x2200..=0x22FF | 0x2A00..=0x2AFF | 0x1D400..=0x1D7FF)
+        || math_symbol_set().contains(&ch)
 }
 
 fn is_url_delim(ch: char) -> bool {
-    matches!(
-        ch,
-        ':' | '/' | '?' | '#' | '[' | ']' | '!' | '$' | '&' | '\''
-            | '(' | ')' | '*' | '+' | ',' | ';' | '='
-    )
+    // Mirror new-api: "/:?&=;#%"
+    matches!(ch, '/' | ':' | '?' | '&' | '=' | ';' | '#' | '%')
+}
+
+fn math_symbol_set() -> &'static HashSet<char> {
+    static SYMBOLS: OnceLock<HashSet<char>> = OnceLock::new();
+    SYMBOLS.get_or_init(|| {
+        // Keep this list identical to `.reference/new-api/service/token_estimator.go` to avoid drift.
+        const MATH_SYMBOLS: &str = "∑∫∂√∞≤≥≠≈±×÷∈∉∋∌⊂⊃⊆⊇∪∩∧∨¬∀∃∄∅∆∇∝∟∠∡∢°′″‴⁺⁻⁼⁽⁾ⁿ₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎²³¹⁴⁵⁶⁷⁸⁹⁰";
+        MATH_SYMBOLS.chars().collect()
+    })
 }
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。

@@ -4,12 +4,12 @@ use serde_json::{json, Map, Value};
 use std::collections::VecDeque;
 use sha2::{Digest, Sha256};
 
-use crate::oauth_util::generate_state;
-use crate::proxy::antigravity_schema::clean_json_schema_for_antigravity;
+use crate::proxy::antigravity_schema::{clean_json_schema_for_antigravity, clean_json_schema_for_gemini};
 use crate::proxy::sse::SseEventParser;
 
 mod signature_cache;
 mod claude;
+mod gemini_fixups;
 
 pub(crate) use claude::claude_request_to_antigravity;
 
@@ -32,22 +32,28 @@ pub(crate) fn wrap_gemini_request(
 
     let model = map_antigravity_model(&extract_model(&mut request, model_hint));
     let model_lower = model.to_lowercase();
-    let should_clean_tool_schema =
+    let use_antigravity_schema_cleaner =
         model_lower.contains("claude") || model_lower.contains("gemini-3-pro-high");
+    // Align with CLIProxyAPIPlus: fix CLI tool response grouping and normalize roles
+    // before applying Antigravity-specific wrappers and schema transforms.
+    gemini_fixups::fix_cli_tool_response(&mut request);
+    gemini_fixups::normalize_contents_roles(&mut request);
     normalize_system_instruction(&mut request);
-    normalize_tool_schema(&mut request, should_clean_tool_schema);
+    normalize_tool_schema(&mut request, use_antigravity_schema_cleaner);
     ensure_system_instruction(&mut request, &model);
     remove_safety_settings(&mut request);
     ensure_tool_thought_signature(&mut request);
+    ensure_thinking_signature_for_gemini(&mut request, &model_lower);
     ensure_session_id(&mut request);
+    ensure_tool_config_mode(&mut request, &model_lower);
     trim_generation_config(&mut request, &model);
 
     let project = project_id
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string())
-        .unwrap_or_else(|| generate_project_id().unwrap_or_default());
-    let request_id = generate_agent_id("agent").unwrap_or_else(|_| "agent-unknown".to_string());
+        .unwrap_or_else(generate_project_id);
+    let request_id = generate_request_id();
 
     let mut root = Map::new();
     root.insert("project".to_string(), Value::String(project));
@@ -284,9 +290,11 @@ fn ensure_system_instruction(request: &mut Map<String, Value>, model: &str) {
 }
 
 fn normalize_tool_schema(request: &mut Map<String, Value>, enabled: bool) {
-    if !enabled {
-        return;
-    }
+    // Align with CLIProxyAPIPlus:
+    // - Always rename `parametersJsonSchema` -> `parameters` for Antigravity upstream.
+    // - Use different schema cleaners based on model family:
+    //   - Claude / gemini-3-pro-high: Antigravity cleaner (+ placeholders)
+    //   - Others: Gemini cleaner (no placeholders)
     let Some(tools) = request.get_mut("tools").and_then(Value::as_array_mut) else {
         return;
     };
@@ -309,7 +317,11 @@ fn normalize_tool_schema(request: &mut Map<String, Value>, enabled: bool) {
                     params.remove("$schema");
                 }
                 if let Some(params) = decl.get_mut("parameters") {
-                    clean_json_schema_for_antigravity(params);
+                    if enabled {
+                        clean_json_schema_for_antigravity(params);
+                    } else {
+                        clean_json_schema_for_gemini(params);
+                    }
                 }
             }
         }
@@ -328,7 +340,11 @@ fn normalize_tool_schema(request: &mut Map<String, Value>, enabled: bool) {
                     params.remove("$schema");
                 }
                 if let Some(params) = decl.get_mut("parameters") {
-                    clean_json_schema_for_antigravity(params);
+                    if enabled {
+                        clean_json_schema_for_antigravity(params);
+                    } else {
+                        clean_json_schema_for_gemini(params);
+                    }
                 }
             }
         }
@@ -354,29 +370,65 @@ fn ensure_tool_thought_signature(request: &mut Map<String, Value>) {
             let Some(obj) = part.as_object_mut() else {
                 continue;
             };
-            if !(obj.contains_key("functionCall") || obj.contains_key("functionResponse")) {
+            // Align with CLIProxyAPIPlus: only functionCall requires thoughtSignature sentinels.
+            if !obj.contains_key("functionCall") {
                 continue;
             }
-            obj.entry("thoughtSignature".to_string())
-                .or_insert_with(|| Value::String(THOUGHT_SIGNATURE_SENTINEL.to_string()));
+            let set_sentinel = match obj.get("thoughtSignature").and_then(Value::as_str) {
+                Some(value) if value.len() >= 50 => false,
+                _ => true,
+            };
+            if set_sentinel {
+                obj.insert(
+                    "thoughtSignature".to_string(),
+                    Value::String(THOUGHT_SIGNATURE_SENTINEL.to_string()),
+                );
+            }
+        }
+    }
+}
+
+fn ensure_thinking_signature_for_gemini(request: &mut Map<String, Value>, model_lower: &str) {
+    // Align with CLIProxyAPIPlus gemini->antigravity behavior:
+    // Gemini (non-Claude) models may produce thinking blocks without signatures; mark them
+    // with the skip-sentinel so upstream bypasses signature validation.
+    if model_lower.contains("claude") {
+        return;
+    }
+    let Some(contents) = request.get_mut("contents").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for content in contents {
+        if content.get("role").and_then(Value::as_str) != Some("model") {
+            continue;
+        }
+        let Some(parts) = content.get_mut("parts").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for part in parts {
+            let Some(obj) = part.as_object_mut() else {
+                continue;
+            };
+            if obj.get("thought").and_then(Value::as_bool) != Some(true) {
+                continue;
+            }
+            // Align with CLIProxyAPIPlus: always force skip sentinel on Gemini thinking blocks.
+            obj.insert(
+                "thoughtSignature".to_string(),
+                Value::String(THOUGHT_SIGNATURE_SENTINEL.to_string()),
+            );
         }
     }
 }
 
 fn ensure_session_id(request: &mut Map<String, Value>) {
-    let session_present = request
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .map(|value| !value.trim().is_empty())
-        .unwrap_or(false);
-    if session_present {
-        return;
-    }
+    // Align with CLIProxyAPIPlus: always overwrite sessionId with a stable dash-decimal id
+    // (some clients send UUID-like values which Antigravity rejects).
     if let Some(session_id) = stable_session_id_from_contents(request) {
         request.insert("sessionId".to_string(), Value::String(session_id));
         return;
     }
-    let session_id = generate_agent_id("sess").unwrap_or_else(|_| "sess-unknown".to_string());
+    let session_id = generate_session_id();
     request.insert("sessionId".to_string(), Value::String(session_id));
 }
 
@@ -390,12 +442,12 @@ fn stable_session_id_from_contents(request: &Map<String, Value>) -> Option<Strin
         let parts = content.get("parts").and_then(Value::as_array)?;
         let first = parts.first()?;
         let text = first.get("text").and_then(Value::as_str)?;
-        let trimmed = text.trim();
-        if trimmed.is_empty() {
+        // Align with CLIProxyAPIPlus: hash raw text (do not trim), only skip when empty string.
+        if text.is_empty() {
             continue;
         }
         let mut hasher = Sha256::new();
-        hasher.update(trimmed.as_bytes());
+        hasher.update(text.as_bytes());
         let hash = hasher.finalize();
         let mut bytes = [0_u8; 8];
         bytes.copy_from_slice(&hash[..8]);
@@ -415,12 +467,50 @@ fn trim_generation_config(request: &mut Map<String, Value>, model: &str) {
     gen.remove("maxOutputTokens");
 }
 
-fn generate_agent_id(prefix: &str) -> Result<String, String> {
-    let state = generate_state(prefix)?;
-    Ok(state)
+fn ensure_tool_config_mode(request: &mut Map<String, Value>, model_lower: &str) {
+    // CLIProxyAPIPlus forces VALIDATED mode for Claude in Antigravity.
+    if !model_lower.contains("claude") {
+        return;
+    }
+    let tool_config = request
+        .entry("toolConfig".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(tool_config) = tool_config.as_object_mut() else {
+        return;
+    };
+    let calling = tool_config
+        .entry("functionCallingConfig".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(calling) = calling.as_object_mut() else {
+        return;
+    };
+    calling.insert(
+        "mode".to_string(),
+        Value::String("VALIDATED".to_string()),
+    );
 }
 
-fn generate_project_id() -> Result<String, String> {
-    let state = generate_state("project")?;
-    Ok(state)
+fn generate_request_id() -> String {
+    // Align with CLIProxyAPIPlus: "agent-" + UUID.
+    format!("agent-{}", crate::proxy::kiro::utils::random_uuid())
+}
+
+fn generate_session_id() -> String {
+    // Align with CLIProxyAPIPlus: "-" + random 63-bit-ish decimal (legacy behavior).
+    let n = rand::random::<u64>() % 9_000_000_000_000_000_000u64;
+    format!("-{n}")
+}
+
+fn generate_project_id() -> String {
+    // Align with CLIProxyAPIPlus generateProjectID():
+    // adjectives/nouns + "-" + first 5 chars of uuid.
+    const ADJECTIVES: [&str; 5] = ["useful", "bright", "swift", "calm", "bold"];
+    const NOUNS: [&str; 5] = ["fuze", "wave", "spark", "flow", "core"];
+
+    let adj = ADJECTIVES[(rand::random::<u64>() as usize) % ADJECTIVES.len()];
+    let noun = NOUNS[(rand::random::<u64>() as usize) % NOUNS.len()];
+    let uuid = crate::proxy::kiro::utils::random_uuid();
+    let random_part = uuid.replace('-', "");
+    let random_part = random_part.chars().take(5).collect::<String>().to_ascii_lowercase();
+    format!("{adj}-{noun}-{random_part}")
 }

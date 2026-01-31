@@ -1,6 +1,9 @@
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
+mod ops;
+use ops::*;
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum PathSegment {
     Key(String),
@@ -23,6 +26,14 @@ const UNSUPPORTED_CONSTRAINTS: [&str; 10] = [
 ];
 
 pub(crate) fn clean_json_schema_for_antigravity(schema: &mut Value) {
+    clean_json_schema(schema, true);
+}
+
+pub(crate) fn clean_json_schema_for_gemini(schema: &mut Value) {
+    clean_json_schema(schema, false);
+}
+
+fn clean_json_schema(schema: &mut Value, add_placeholder: bool) {
     convert_refs_to_hints(schema);
     convert_const_to_enum(schema);
     convert_enum_values_to_strings(schema);
@@ -35,8 +46,16 @@ pub(crate) fn clean_json_schema_for_antigravity(schema: &mut Value) {
     flatten_type_arrays(schema);
 
     remove_unsupported_keywords(schema);
+    if !add_placeholder {
+        // Gemini schema cleanup: remove nullable/title and placeholder-only fields.
+        remove_keywords(schema, &["nullable", "title"]);
+        remove_placeholder_fields(schema);
+    }
     cleanup_required_fields(schema);
-    add_empty_schema_placeholder(schema);
+    // Antigravity/Claude VALIDATED-mode: object schemas cannot be empty; inject placeholders.
+    if add_placeholder {
+        add_empty_schema_placeholder(schema);
+    }
 }
 
 fn convert_refs_to_hints(schema: &mut Value) {
@@ -62,6 +81,114 @@ fn convert_refs_to_hints(schema: &mut Value) {
         replacement.insert("type".to_string(), Value::String("object".to_string()));
         replacement.insert("description".to_string(), Value::String(hint));
         let _ = set_value_at_path(schema, &parent_path, Value::Object(replacement));
+    }
+}
+
+fn remove_keywords(schema: &mut Value, keywords: &[&str]) {
+    for key in keywords {
+        let mut paths = collect_paths(schema, key);
+        sort_by_depth(&mut paths);
+        for path in paths {
+            let Some(parent_path) = parent_path(&path) else {
+                continue;
+            };
+            if is_property_definition(&parent_path) {
+                continue;
+            }
+            let _ = delete_at_path(schema, &path);
+        }
+    }
+}
+
+fn remove_placeholder_fields(schema: &mut Value) {
+    remove_placeholder_property(schema, "_", None);
+    remove_placeholder_reason(schema);
+}
+
+fn remove_placeholder_property(schema: &mut Value, key: &str, required_key: Option<&str>) {
+    let mut paths = collect_paths(schema, key);
+    sort_by_depth(&mut paths);
+    for path in paths {
+        if !ends_with_properties_key(&path, key) {
+            continue;
+        }
+        let _ = delete_at_path(schema, &path);
+        let Some(parent_path) = trim_properties_key_suffix(&path, key) else {
+            continue;
+        };
+        remove_required_entry(schema, &parent_path, required_key.unwrap_or(key));
+    }
+}
+
+fn remove_placeholder_reason(schema: &mut Value) {
+    let mut paths = collect_paths(schema, "reason");
+    sort_by_depth(&mut paths);
+    for path in paths {
+        if !ends_with_properties_key(&path, "reason") {
+            continue;
+        }
+        let Some(parent_path) = trim_properties_key_suffix(&path, "reason") else {
+            continue;
+        };
+        // Only remove when it's the only property and matches our placeholder description.
+        let props_path = join_path(&parent_path, "properties");
+        let Some(Value::Object(props)) = get_value(schema, &props_path) else {
+            continue;
+        };
+        if props.len() != 1 {
+            continue;
+        }
+        let desc_path = join_path(&path, "description");
+        let desc = get_value(schema, &desc_path)
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if desc != "Brief explanation of why you are calling this tool" {
+            continue;
+        }
+        let _ = delete_at_path(schema, &path);
+        remove_required_entry(schema, &parent_path, "reason");
+    }
+}
+
+fn ends_with_properties_key(path: &Path, key: &str) -> bool {
+    if path.len() < 2 {
+        return false;
+    }
+    matches!(path.get(path.len() - 2), Some(PathSegment::Key(k)) if k == "properties")
+        && matches!(path.last(), Some(PathSegment::Key(k)) if k == key)
+}
+
+fn trim_properties_key_suffix(path: &Path, key: &str) -> Option<Path> {
+    if !ends_with_properties_key(path, key) {
+        return None;
+    }
+    let mut parent = path.clone();
+    parent.pop(); // key
+    parent.pop(); // properties
+    Some(parent)
+}
+
+fn join_path(parent: &Path, key: &str) -> Path {
+    let mut next = parent.clone();
+    next.push(PathSegment::Key(key.to_string()));
+    next
+}
+
+fn remove_required_entry(schema: &mut Value, parent_path: &Path, key: &str) {
+    let req_path = join_path(parent_path, "required");
+    let Some(Value::Array(required)) = get_value_mut(schema, &req_path) else {
+        return;
+    };
+    let next = required
+        .iter()
+        .filter_map(|item| item.as_str())
+        .filter(|item| *item != key)
+        .map(|item| Value::String(item.to_string()))
+        .collect::<Vec<_>>();
+    if next.is_empty() {
+        let _ = delete_at_path(schema, &req_path);
+    } else {
+        *required = next;
     }
 }
 
@@ -445,327 +572,4 @@ fn cleanup_required_fields(schema: &mut Value) {
             let _ = set_value_at_path(schema, &path, Value::Array(valid));
         }
     }
-}
-
-fn add_empty_schema_placeholder(schema: &mut Value) {
-    let mut paths = collect_paths(schema, "type");
-    sort_by_depth(&mut paths);
-    for path in paths {
-        let Some(Value::String(value)) = get_value(schema, &path) else {
-            continue;
-        };
-        if value != "object" {
-            continue;
-        }
-        let parent_path = match parent_path(&path) {
-            Some(parent) => parent,
-            None => continue,
-        };
-        apply_schema_placeholder(schema, &parent_path);
-    }
-}
-
-fn apply_schema_placeholder(schema: &mut Value, parent_path: &Path) {
-    let Some(parent) = get_object_mut(schema, parent_path) else {
-        return;
-    };
-    let props = parent.get("properties");
-    let req = parent.get("required");
-    let has_required = req
-        .and_then(Value::as_array)
-        .map(|items| !items.is_empty())
-        .unwrap_or(false);
-    let needs_placeholder = match props {
-        None => true,
-        Some(Value::Object(map)) => map.is_empty(),
-        _ => false,
-    };
-    if needs_placeholder {
-        add_reason_placeholder(parent);
-        return;
-    }
-    if !has_required {
-        if parent_path.is_empty() {
-            return;
-        }
-        add_required_placeholder(parent);
-    }
-}
-
-fn add_reason_placeholder(parent: &mut Map<String, Value>) {
-    let props = parent
-        .entry("properties".to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(props) = props.as_object_mut() else {
-        return;
-    };
-    let reason = props
-        .entry("reason".to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    if let Some(reason) = reason.as_object_mut() {
-        reason.insert("type".to_string(), Value::String("string".to_string()));
-        reason.insert(
-            "description".to_string(),
-            Value::String("Brief explanation of why you are calling this tool".to_string()),
-        );
-    }
-    parent.insert(
-        "required".to_string(),
-        Value::Array(vec![Value::String("reason".to_string())]),
-    );
-}
-
-fn add_required_placeholder(parent: &mut Map<String, Value>) {
-    let props = parent
-        .entry("properties".to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(props) = props.as_object_mut() else {
-        return;
-    };
-    if !props.contains_key("_") {
-        let mut placeholder = Map::new();
-        placeholder.insert("type".to_string(), Value::String("boolean".to_string()));
-        props.insert("_".to_string(), Value::Object(placeholder));
-    }
-    parent.insert(
-        "required".to_string(),
-        Value::Array(vec![Value::String("_".to_string())]),
-    );
-}
-
-fn collect_paths(schema: &Value, field: &str) -> Vec<Path> {
-    let mut paths = Vec::new();
-    let mut current = Vec::new();
-    walk(schema, field, &mut current, &mut paths);
-    paths
-}
-
-fn walk(value: &Value, field: &str, path: &mut Path, out: &mut Vec<Path>) {
-    match value {
-        Value::Object(map) => {
-            for (key, val) in map {
-                path.push(PathSegment::Key(key.clone()));
-                if key == field {
-                    out.push(path.clone());
-                }
-                walk(val, field, path, out);
-                path.pop();
-            }
-        }
-        Value::Array(items) => {
-            for (idx, item) in items.iter().enumerate() {
-                path.push(PathSegment::Index(idx));
-                walk(item, field, path, out);
-                path.pop();
-            }
-        }
-        _ => {}
-    }
-}
-
-fn sort_by_depth(paths: &mut Vec<Path>) {
-    paths.sort_by(|a, b| b.len().cmp(&a.len()));
-}
-
-fn parent_path(path: &Path) -> Option<Path> {
-    if path.is_empty() {
-        return None;
-    }
-    let mut parent = path.clone();
-    parent.pop();
-    Some(parent)
-}
-
-fn get_value<'a>(root: &'a Value, path: &[PathSegment]) -> Option<&'a Value> {
-    let mut current = root;
-    for segment in path {
-        match segment {
-            PathSegment::Key(key) => {
-                current = current.get(key)?;
-            }
-            PathSegment::Index(index) => {
-                current = current.get(*index)?;
-            }
-        }
-    }
-    Some(current)
-}
-
-fn get_value_mut<'a>(root: &'a mut Value, path: &[PathSegment]) -> Option<&'a mut Value> {
-    let mut current = root;
-    for segment in path {
-        match segment {
-            PathSegment::Key(key) => {
-                current = current.get_mut(key)?;
-            }
-            PathSegment::Index(index) => {
-                current = current.get_mut(*index)?;
-            }
-        }
-    }
-    Some(current)
-}
-
-fn set_value_at_path(root: &mut Value, path: &[PathSegment], value: Value) -> bool {
-    if path.is_empty() {
-        *root = value;
-        return true;
-    }
-    let (parent, last) = match split_parent(path) {
-        Some(split) => split,
-        None => return false,
-    };
-    let Some(parent) = get_value_mut(root, parent) else {
-        return false;
-    };
-    match last {
-        PathSegment::Key(key) => {
-            let Some(obj) = parent.as_object_mut() else {
-                return false;
-            };
-            obj.insert(key.clone(), value);
-            true
-        }
-        PathSegment::Index(index) => {
-            let Some(arr) = parent.as_array_mut() else {
-                return false;
-            };
-            if *index >= arr.len() {
-                return false;
-            }
-            arr[*index] = value;
-            true
-        }
-    }
-}
-
-fn delete_at_path(root: &mut Value, path: &[PathSegment]) -> bool {
-    let (parent, last) = match split_parent(path) {
-        Some(split) => split,
-        None => return false,
-    };
-    let Some(parent) = get_value_mut(root, parent) else {
-        return false;
-    };
-    match last {
-        PathSegment::Key(key) => {
-            let Some(obj) = parent.as_object_mut() else {
-                return false;
-            };
-            obj.remove(key).is_some()
-        }
-        PathSegment::Index(index) => {
-            let Some(arr) = parent.as_array_mut() else {
-                return false;
-            };
-            if *index >= arr.len() {
-                return false;
-            }
-            arr.remove(*index);
-            true
-        }
-    }
-}
-
-fn split_parent(path: &[PathSegment]) -> Option<(&[PathSegment], &PathSegment)> {
-    let len = path.len();
-    if len == 0 {
-        return None;
-    }
-    Some((&path[..len - 1], &path[len - 1]))
-}
-
-fn get_object_mut<'a>(root: &'a mut Value, path: &[PathSegment]) -> Option<&'a mut Map<String, Value>> {
-    get_value_mut(root, path)?.as_object_mut()
-}
-
-fn append_hint(root: &mut Value, path: &[PathSegment], hint: &str) {
-    let Some(obj) = get_object_mut(root, path) else {
-        return;
-    };
-    let existing = obj
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let next = if existing.is_empty() {
-        hint.to_string()
-    } else {
-        format!("{existing} ({hint})")
-    };
-    obj.insert("description".to_string(), Value::String(next));
-}
-
-fn append_hint_raw(schema: &mut Value, hint: &str) {
-    let Some(obj) = schema.as_object_mut() else {
-        return;
-    };
-    let existing = obj
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let next = if existing.is_empty() {
-        hint.to_string()
-    } else {
-        format!("{existing} ({hint})")
-    };
-    obj.insert("description".to_string(), Value::String(next));
-}
-
-fn merge_description(schema: &mut Value, parent_desc: &str) {
-    let Some(obj) = schema.as_object_mut() else {
-        return;
-    };
-    let child_desc = obj
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if child_desc.is_empty() {
-        obj.insert("description".to_string(), Value::String(parent_desc.to_string()));
-        return;
-    }
-    if child_desc == parent_desc {
-        return;
-    }
-    obj.insert(
-        "description".to_string(),
-        Value::String(format!("{parent_desc} ({child_desc})")),
-    );
-}
-
-fn is_property_definition(path: &[PathSegment]) -> bool {
-    match path.last() {
-        Some(PathSegment::Key(key)) if key == "properties" => true,
-        _ => path.len() == 1 && matches!(path[0], PathSegment::Key(ref key) if key == "properties"),
-    }
-}
-
-fn get_description(root: &Value, path: &[PathSegment]) -> Option<String> {
-    let obj = get_value(root, path)?.as_object()?;
-    let desc = obj.get("description")?.as_str()?.trim().to_string();
-    Some(desc)
-}
-
-fn value_to_string(value: &Value) -> String {
-    match value {
-        Value::String(value) => value.clone(),
-        Value::Number(value) => value.to_string(),
-        Value::Bool(value) => value.to_string(),
-        Value::Null => "null".to_string(),
-        other => other.to_string(),
-    }
-}
-
-fn property_field_from_type_path(path: &[PathSegment]) -> Option<(Path, String)> {
-    if path.len() < 3 {
-        return None;
-    }
-    let len = path.len();
-    if !matches!(path.get(len - 3), Some(PathSegment::Key(key)) if key == "properties") {
-        return None;
-    }
-    let field = match path.get(len - 2) {
-        Some(PathSegment::Key(key)) => key.clone(),
-        _ => return None,
-    };
-    Some((path[..len - 3].to_vec(), field))
 }

@@ -8,8 +8,10 @@ use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 use format::{snapshot_to_output_item, usage_to_value, OutputItemSnapshot};
+use state_types::{FunctionCallOutput, MessageOutput};
 
 mod format;
+mod state_types;
 
 pub(super) fn stream_chat_to_responses<E>(
     upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
@@ -25,20 +27,6 @@ where
 {
     let state = ChatToResponsesState::new(upstream, context, log, token_tracker);
     futures_util::stream::try_unfold(state, |state| async move { state.step().await })
-}
-
-struct MessageOutput {
-    id: String,
-    output_index: u64,
-    text: String,
-}
-
-struct FunctionCallOutput {
-    id: String,
-    output_index: u64,
-    call_id: String,
-    name: String,
-    arguments: String,
 }
 
 struct ChatToResponsesState<S> {
@@ -408,7 +396,14 @@ where
         self.sent_done = true;
 
         let completed_at = (super::now_ms() / 1000) as i64;
-        let usage = self.collector.finish().usage.map(usage_to_value);
+        let usage_snapshot = self.collector.finish();
+        // Prefer upstream `usage` JSON to preserve breakdown fields (e.g. reasoning tokens).
+        // Fallback to the normalized TokenUsage counters when upstream did not provide usage.
+        let usage = usage_snapshot
+            .usage_json
+            .as_ref()
+            .and_then(super::super::openai_compat::map_usage_chat_to_responses)
+            .or_else(|| usage_snapshot.usage.map(usage_to_value));
 
         let mut snapshots = Vec::new();
         if let Some(message) = &self.message {

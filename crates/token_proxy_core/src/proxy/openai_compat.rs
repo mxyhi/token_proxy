@@ -15,6 +15,7 @@ mod input;
 mod message;
 mod tools;
 mod usage;
+pub(crate) use usage::map_usage_chat_to_responses;
 
 pub(crate) const CHAT_PATH: &str = "/v1/chat/completions";
 pub(crate) const RESPONSES_PATH: &str = "/v1/responses";

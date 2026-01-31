@@ -206,6 +206,15 @@ pub(crate) async fn log_debug_headers_body(
     }
 }
 
+pub(crate) fn truncate_for_log(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut out = value.chars().take(max_bytes).collect::<String>();
+    let _ = out.push_str("...[truncated]");
+    out
+}
+
 fn snapshot_headers_raw(headers: &HeaderMap) -> Vec<(String, String)> {
     headers
         .iter()

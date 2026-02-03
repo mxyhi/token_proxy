@@ -392,19 +392,7 @@ export function LogsPanel() {
     setDetailOpen(true);
   }, []);
 
-  const loadDetail = useCallback(async (itemId: number) => {
-    setDetailStatus("loading");
-    setDetailMessage("");
-    try {
-      const data = await readRequestLogDetail(itemId);
-      setDetail(data);
-      setDetailStatus("idle");
-    } catch (error) {
-      setDetailMessage(parseError(error));
-      setDetailStatus("error");
-    }
-  }, []);
-
+  // 加载详情，使用 active 标志防止过期响应覆盖当前选择
   useEffect(() => {
     if (!detailOpen) {
       setDetail(null);
@@ -412,10 +400,35 @@ export function LogsPanel() {
       setDetailMessage("");
       return;
     }
-    if (selectedId !== null) {
-      void loadDetail(selectedId);
+    if (selectedId === null) {
+      return;
     }
-  }, [detailOpen, selectedId, loadDetail]);
+
+    let active = true;
+
+    const load = async () => {
+      setDetailStatus("loading");
+      setDetailMessage("");
+      try {
+        const data = await readRequestLogDetail(selectedId);
+        if (active) {
+          setDetail(data);
+          setDetailStatus("idle");
+        }
+      } catch (error) {
+        if (active) {
+          setDetailMessage(parseError(error));
+          setDetailStatus("error");
+        }
+      }
+    };
+
+    void load();
+
+    return () => {
+      active = false;
+    };
+  }, [detailOpen, selectedId]);
 
   return (
     <div className="flex flex-col gap-4">

@@ -120,6 +120,14 @@ CREATE TABLE IF NOT EXISTS request_logs (
     .await
     .map_err(|err| format!("Failed to create idx_request_logs_provider_ts_ms: {err}"))?;
 
+    // 复合索引：优化中位数延迟查询（按时间范围过滤后按延迟排序）
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_request_logs_ts_latency ON request_logs(ts_ms, latency_ms);",
+    )
+    .execute(pool)
+    .await
+    .map_err(|err| format!("Failed to create idx_request_logs_ts_latency: {err}"))?;
+
     Ok(())
 }
 

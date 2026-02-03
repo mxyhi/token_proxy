@@ -7,7 +7,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { formatInteger } from "@/features/dashboard/format";
+import { formatCompact, formatInteger } from "@/features/dashboard/format";
 import type { DashboardSummary } from "@/features/dashboard/types";
 import { m } from "@/paraglide/messages.js";
 
@@ -33,16 +33,11 @@ export function SectionCards({ summary }: SectionCardsProps) {
   const successRate = totalRequests > 0 ? successRequests / totalRequests : 0;
   const errorRate = totalRequests > 0 ? errorRequests / totalRequests : 0;
 
-  const tokensHint = cachedTokens
-    ? m.dashboard_tokens_hint_with_cache({
-        input: formatInteger(inputTokens),
-        cached: formatInteger(cachedTokens),
-        output: formatInteger(outputTokens),
-      })
-    : m.dashboard_tokens_hint_no_cache({
-        input: formatInteger(inputTokens),
-        output: formatInteger(outputTokens),
-      });
+  // 缓存信息已在 Badge 中显示，footer 只展示输入/输出
+  const tokensHint = m.dashboard_tokens_hint_no_cache({
+    input: formatCompact(inputTokens),
+    output: formatCompact(outputTokens),
+  });
 
   return (
     <div className="*:data-[slot=card]:from-primary/5 *:data-[slot=card]:to-card dark:*:data-[slot=card]:bg-card grid grid-cols-1 gap-4 px-4 *:data-[slot=card]:bg-gradient-to-t *:data-[slot=card]:shadow-xs lg:px-6 @xl/main:grid-cols-2 @5xl/main:grid-cols-4">
@@ -50,7 +45,7 @@ export function SectionCards({ summary }: SectionCardsProps) {
         <CardHeader>
           <CardDescription>{m.dashboard_stat_requests()}</CardDescription>
           <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-            {formatInteger(totalRequests)}
+            {formatCompact(totalRequests)}
           </CardTitle>
           <CardAction>
             <Badge variant="outline">
@@ -71,7 +66,7 @@ export function SectionCards({ summary }: SectionCardsProps) {
         <CardHeader>
           <CardDescription>{m.dashboard_stat_errors()}</CardDescription>
           <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-            {formatInteger(errorRequests)}
+            {formatCompact(errorRequests)}
           </CardTitle>
           <CardAction>
             <Badge variant="outline">{PERCENT_FORMAT.format(errorRate)}</Badge>
@@ -90,12 +85,12 @@ export function SectionCards({ summary }: SectionCardsProps) {
         <CardHeader>
           <CardDescription>{m.dashboard_stat_total_tokens()}</CardDescription>
           <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-            {formatInteger(totalTokens)}
+            {formatCompact(totalTokens)}
           </CardTitle>
           {cachedTokens ? (
             <CardAction>
               <Badge variant="outline">
-                {m.dashboard_cached({ count: formatInteger(cachedTokens) })}
+                {m.dashboard_cached({ count: formatCompact(cachedTokens) })}
               </Badge>
             </CardAction>
           ) : null}

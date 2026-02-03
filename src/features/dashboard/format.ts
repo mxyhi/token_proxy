@@ -25,3 +25,13 @@ export function formatDashboardTimestamp(tsMs: number, formatter: Intl.DateTimeF
 export function formatInteger(value: number) {
   return Math.round(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
+
+// 紧凑格式，用于空间有限的场景（如 985856 → 986K, 1500000 → 1.5M）
+const COMPACT_FORMAT = new Intl.NumberFormat("en-US", {
+  notation: "compact",
+  maximumFractionDigits: 1,
+});
+
+export function formatCompact(value: number) {
+  return COMPACT_FORMAT.format(value);
+}

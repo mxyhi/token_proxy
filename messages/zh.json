@@ -410,6 +410,7 @@
   "logs_detail_stream_yes": "是",
   "logs_detail_stream_no": "否",
   "logs_detail_upstream_request_id": "上游请求 ID",
+  "logs_detail_model_mapped": "模型 (映射)",
   "logs_detail_usage_json": "用量详情 (JSON)",
   "logs_detail_headers": "请求头",
   "logs_detail_body": "请求体",

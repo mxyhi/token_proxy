@@ -155,7 +155,7 @@ function formatDetailAsText(detail: RequestLogDetail, formatter: Intl.DateTimeFo
   lines.push(`${m.dashboard_table_provider()}: ${detail.upstreamId} · ${detail.provider}`);
   lines.push(`${m.dashboard_table_model()}: ${detail.model?.trim() || DETAIL_PLACEHOLDER}`);
   if (hasMappedModel) {
-    lines.push(`${m.dashboard_table_model()} (mapped): ${detail.mappedModel}`);
+    lines.push(`${m.logs_detail_model_mapped()}: ${detail.mappedModel}`);
   }
   lines.push(`${m.dashboard_table_status()}: ${detail.status}`);
   lines.push(`${m.logs_detail_stream()}: ${detail.stream ? m.logs_detail_stream_yes() : m.logs_detail_stream_no()}`);
@@ -211,12 +211,21 @@ function RequestDetailSheet({
   const handleCopy = useCallback(async () => {
     if (!detail) return;
     const text = formatDetailAsText(detail, formatter);
-    await navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+    } catch {
+      // 复制失败时静默处理（Tauri/非安全上下文可能不支持）
+    }
   }, [detail, formatter]);
 
-  // 重置复制状态当 sheet 关闭时
+  // 重置复制状态当 sheet 关闭时，并清理 timeout
+  useEffect(() => {
+    if (!copied) return;
+    const timer = setTimeout(() => setCopied(false), 2000);
+    return () => clearTimeout(timer);
+  }, [copied]);
+
   useEffect(() => {
     if (!open) setCopied(false);
   }, [open]);

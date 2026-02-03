@@ -162,79 +162,51 @@ WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2);
     })
 }
 
-/// 计算中位数延迟（SQLite 无内置 MEDIAN，使用 LIMIT/OFFSET 方式）
+/// 计算中位数延迟（SQLite 无内置 MEDIAN，使用单条子查询避免并发写入时的 count/offset 错位）
 async fn query_median_latency(
     pool: &sqlx::SqlitePool,
     from_ts_ms: Option<i64>,
     to_ts_ms: Option<i64>,
 ) -> Result<u64, String> {
-    // 先获取总数
-    let count_row = sqlx::query(
+    // 单条 SQL 完成中位数计算：
+    // - 使用 CTE 保证 count 和数据在同一快照内
+    // - 奇数个取中间值，偶数个取中间两个值的整数除法平均
+    let row = sqlx::query(
         r#"
-SELECT COUNT(*) AS cnt
-FROM request_logs
-WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2);
+WITH filtered AS (
+    SELECT latency_ms
+    FROM request_logs
+    WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2)
+),
+cnt AS (
+    SELECT COUNT(*) AS n FROM filtered
+),
+ordered AS (
+    SELECT latency_ms, ROW_NUMBER() OVER (ORDER BY latency_ms) AS rn
+    FROM filtered
+)
+SELECT COALESCE(
+    CASE
+        WHEN (SELECT n FROM cnt) = 0 THEN 0
+        WHEN (SELECT n FROM cnt) % 2 = 1 THEN
+            (SELECT latency_ms FROM ordered WHERE rn = ((SELECT n FROM cnt) + 1) / 2)
+        ELSE
+            (SELECT (o1.latency_ms + o2.latency_ms) / 2
+             FROM ordered o1, ordered o2
+             WHERE o1.rn = (SELECT n FROM cnt) / 2 AND o2.rn = (SELECT n FROM cnt) / 2 + 1)
+    END,
+    0
+) AS median_latency;
 "#,
     )
     .bind(from_ts_ms)
     .bind(to_ts_ms)
     .fetch_one(pool)
     .await
-    .map_err(|err| format!("Failed to count for median: {err}"))?;
+    .map_err(|err| format!("Failed to query median latency: {err}"))?;
 
-    let count: i64 = count_row.try_get("cnt").unwrap_or(0);
-    if count == 0 {
-        return Ok(0);
-    }
-
-    // 计算中位数位置（0-indexed）
-    let offset = (count - 1) / 2;
-
-    // 奇数个取中间值，偶数个取中间两个的平均
-    if count % 2 == 1 {
-        let row = sqlx::query(
-            r#"
-SELECT latency_ms
-FROM request_logs
-WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2)
-ORDER BY latency_ms
-LIMIT 1 OFFSET ?3;
-"#,
-        )
-        .bind(from_ts_ms)
-        .bind(to_ts_ms)
-        .bind(offset)
-        .fetch_one(pool)
-        .await
-        .map_err(|err| format!("Failed to query median latency: {err}"))?;
-
-        Ok(i64_to_u64(row.try_get("latency_ms").unwrap_or(0)))
-    } else {
-        // 偶数个：取中间两个值的平均
-        let rows = sqlx::query(
-            r#"
-SELECT latency_ms
-FROM request_logs
-WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2)
-ORDER BY latency_ms
-LIMIT 2 OFFSET ?3;
-"#,
-        )
-        .bind(from_ts_ms)
-        .bind(to_ts_ms)
-        .bind(offset)
-        .fetch_all(pool)
-        .await
-        .map_err(|err| format!("Failed to query median latency: {err}"))?;
-
-        if rows.len() < 2 {
-            return Ok(0);
-        }
-
-        let v1: i64 = rows[0].try_get("latency_ms").unwrap_or(0);
-        let v2: i64 = rows[1].try_get("latency_ms").unwrap_or(0);
-        Ok(i64_to_u64((v1 + v2) / 2))
-    }
+    let median: i64 = row.try_get("median_latency").unwrap_or(0);
+    Ok(i64_to_u64(median))
 }
 
 async fn query_providers(

@@ -157,7 +157,11 @@ function tokensColumn(): ColumnDef<DashboardRequestItem> {
       const totalText =
         row.original.totalTokens === null ? CELL_PLACEHOLDER : formatInteger(row.original.totalTokens);
       const cachedText = row.original.cachedTokens ? formatInteger(row.original.cachedTokens) : null;
-      const tooltipParts = [totalText, cachedText].filter((part): part is string => Boolean(part));
+      // 过滤占位符，避免 tooltip 出现 "— / 123" 这种不清晰文案
+      const tooltipParts = [
+        row.original.totalTokens !== null ? totalText : null,
+        cachedText,
+      ].filter((part): part is string => Boolean(part));
       const tooltipText = tooltipParts.length > 0 ? tooltipParts.join(" / ") : CELL_PLACEHOLDER;
 
       return (

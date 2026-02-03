@@ -680,10 +680,11 @@ async fn resolve_antigravity_upstream(
 }
 
 fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime, provider: &str) -> RequestMeta {
+    // 只有当实际发生映射时才设置 mapped_model，避免与 original_model 重复
     let mapped_model = meta
         .original_model
         .as_deref()
-        .map(|original| upstream.map_model(original).unwrap_or_else(|| original.to_string()));
+        .and_then(|original| upstream.map_model(original));
     let (mapped_model, reasoning_effort) = normalize_mapped_model_reasoning_suffix(
         mapped_model,
         meta.reasoning_effort.clone(),

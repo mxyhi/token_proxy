@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Check, Copy } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sheet,
@@ -18,11 +20,17 @@ import {
   useDashboardSnapshot,
 } from "@/features/dashboard/snapshot";
 import {
+  createDashboardTimeFormatter,
+  formatDashboardTimestamp,
+  formatInteger,
+} from "@/features/dashboard/format";
+import {
   readRequestDetailCapture,
   readRequestLogDetail,
   setRequestDetailCapture,
 } from "@/features/logs/api";
 import type { RequestLogDetail } from "@/features/logs/types";
+import { useI18n } from "@/lib/i18n";
 import { parseError } from "@/lib/error";
 import { m } from "@/paraglide/messages.js";
 
@@ -34,6 +42,83 @@ type DetailStatus = "idle" | "loading" | "error";
 type RequestDetailCaptureEvent = {
   enabled: boolean;
 };
+
+type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+
+function statusToVariant(status: number): BadgeVariant {
+  if (status >= 200 && status < 300) return "default";
+  if (status >= 400) return "destructive";
+  if (status >= 300) return "secondary";
+  return "outline";
+}
+
+type DetailFieldProps = {
+  label: string;
+  value: string | null | undefined;
+};
+
+function DetailField({ label, value }: DetailFieldProps) {
+  return (
+    <div className="flex items-baseline justify-between gap-2 py-1">
+      <span className="text-xs text-muted-foreground shrink-0">{label}</span>
+      <span className="text-sm text-foreground truncate text-right">
+        {value?.trim() || DETAIL_PLACEHOLDER}
+      </span>
+    </div>
+  );
+}
+
+type BasicInfoSectionProps = {
+  detail: RequestLogDetail;
+  formatter: Intl.DateTimeFormat;
+};
+
+// 基础信息区域：展示表格中的字段
+function BasicInfoSection({ detail, formatter }: BasicInfoSectionProps) {
+  const timestamp = formatDashboardTimestamp(detail.tsMs, formatter);
+  const streamText = detail.stream ? m.logs_detail_stream_yes() : m.logs_detail_stream_no();
+  // 只有当 mappedModel 与 model 不同时才展示（相同说明没有实际映射）
+  const hasMappedModel =
+    detail.mappedModel?.trim() &&
+    detail.model?.trim() &&
+    detail.mappedModel.trim() !== detail.model.trim();
+
+  return (
+    <div className="space-y-2">
+      <p className="text-sm font-medium text-foreground">{m.logs_detail_basic_info()}</p>
+      <div className="rounded-lg border border-border/60 bg-muted/20 p-3 space-y-1">
+        <DetailField label="ID" value={String(detail.id)} />
+        <DetailField label={m.dashboard_table_time()} value={timestamp} />
+        <DetailField label={m.dashboard_table_path()} value={detail.path} />
+        <DetailField label={m.dashboard_table_provider()} value={`${detail.upstreamId} · ${detail.provider}`} />
+        {/* Model 展示逻辑与表格一致：主模型在上，映射模型在下 */}
+        <div className="flex items-baseline justify-between gap-2 py-1">
+          <span className="text-xs text-muted-foreground shrink-0">{m.dashboard_table_model()}</span>
+          <div className="flex flex-col items-end min-w-0">
+            <span className="text-sm text-foreground truncate">
+              {detail.model?.trim() || DETAIL_PLACEHOLDER}
+            </span>
+            {hasMappedModel ? (
+              <span className="text-xs text-muted-foreground truncate">
+                {detail.mappedModel}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2 py-1">
+          <span className="text-xs text-muted-foreground shrink-0">{m.dashboard_table_status()}</span>
+          <Badge variant={statusToVariant(detail.status)}>{detail.status}</Badge>
+        </div>
+        <DetailField label={m.logs_detail_stream()} value={streamText} />
+        <DetailField
+          label={m.dashboard_table_latency_ms()}
+          value={formatInteger(detail.latencyMs)}
+        />
+        <DetailField label={m.logs_detail_upstream_request_id()} value={detail.upstreamRequestId} />
+      </div>
+    </div>
+  );
+}
 
 type DetailSectionProps = {
   title: string;
@@ -56,12 +141,61 @@ function DetailSection({ title, value }: DetailSectionProps) {
   );
 }
 
+// 将详情格式化为可复制的文本
+function formatDetailAsText(detail: RequestLogDetail, formatter: Intl.DateTimeFormat): string {
+  const lines: string[] = [];
+  const hasMappedModel =
+    detail.mappedModel?.trim() &&
+    detail.model?.trim() &&
+    detail.mappedModel.trim() !== detail.model.trim();
+
+  lines.push(`ID: ${detail.id}`);
+  lines.push(`${m.dashboard_table_time()}: ${formatDashboardTimestamp(detail.tsMs, formatter)}`);
+  lines.push(`${m.dashboard_table_path()}: ${detail.path}`);
+  lines.push(`${m.dashboard_table_provider()}: ${detail.upstreamId} · ${detail.provider}`);
+  lines.push(`${m.dashboard_table_model()}: ${detail.model?.trim() || DETAIL_PLACEHOLDER}`);
+  if (hasMappedModel) {
+    lines.push(`${m.dashboard_table_model()} (mapped): ${detail.mappedModel}`);
+  }
+  lines.push(`${m.dashboard_table_status()}: ${detail.status}`);
+  lines.push(`${m.logs_detail_stream()}: ${detail.stream ? m.logs_detail_stream_yes() : m.logs_detail_stream_no()}`);
+  lines.push(`${m.dashboard_table_latency_ms()}: ${formatInteger(detail.latencyMs)}`);
+  lines.push(`${m.logs_detail_upstream_request_id()}: ${detail.upstreamRequestId?.trim() || DETAIL_PLACEHOLDER}`);
+
+  if (detail.usageJson?.trim()) {
+    lines.push("");
+    lines.push(`--- ${m.logs_detail_usage_json()} ---`);
+    lines.push(detail.usageJson);
+  }
+
+  if (detail.requestHeaders?.trim()) {
+    lines.push("");
+    lines.push(`--- ${m.logs_detail_headers()} ---`);
+    lines.push(detail.requestHeaders);
+  }
+
+  if (detail.requestBody?.trim()) {
+    lines.push("");
+    lines.push(`--- ${m.logs_detail_body()} ---`);
+    lines.push(detail.requestBody);
+  }
+
+  if (detail.responseError?.trim()) {
+    lines.push("");
+    lines.push(`--- ${m.logs_detail_response()} ---`);
+    lines.push(detail.responseError);
+  }
+
+  return lines.join("\n");
+}
+
 type RequestDetailSheetProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   status: DetailStatus;
   statusMessage: string;
   detail: RequestLogDetail | null;
+  formatter: Intl.DateTimeFormat;
 };
 
 function RequestDetailSheet({
@@ -70,12 +204,47 @@ function RequestDetailSheet({
   status,
   statusMessage,
   detail,
+  formatter,
 }: RequestDetailSheetProps) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    if (!detail) return;
+    const text = formatDetailAsText(detail, formatter);
+    await navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [detail, formatter]);
+
+  // 重置复制状态当 sheet 关闭时
+  useEffect(() => {
+    if (!open) setCopied(false);
+  }, [open]);
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="sm:max-w-xl">
+      <SheetContent className="sm:max-w-2xl">
         <SheetHeader>
-          <SheetTitle>{m.logs_detail_title()}</SheetTitle>
+          <div className="flex items-center gap-2">
+            <SheetTitle>{m.logs_detail_title()}</SheetTitle>
+            {status === "idle" && detail ? (
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={handleCopy}
+                className="size-7"
+              >
+                {copied ? (
+                  <Check className="size-3.5" aria-hidden="true" />
+                ) : (
+                  <Copy className="size-3.5" aria-hidden="true" />
+                )}
+                <span className="sr-only">
+                  {copied ? m.logs_detail_copied() : m.logs_detail_copy()}
+                </span>
+              </Button>
+            ) : null}
+          </div>
           <SheetDescription>{m.logs_detail_desc()}</SheetDescription>
         </SheetHeader>
         <ScrollArea className="flex-1">
@@ -92,19 +261,24 @@ function RequestDetailSheet({
                 </div>
               </Alert>
             ) : null}
-            {status === "idle" ? (
+            {status === "idle" && detail ? (
               <div className="space-y-4">
+                <BasicInfoSection detail={detail} formatter={formatter} />
+                <DetailSection
+                  title={m.logs_detail_usage_json()}
+                  value={detail.usageJson}
+                />
                 <DetailSection
                   title={m.logs_detail_headers()}
-                  value={detail?.requestHeaders ?? null}
+                  value={detail.requestHeaders}
                 />
                 <DetailSection
                   title={m.logs_detail_body()}
-                  value={detail?.requestBody ?? null}
+                  value={detail.requestBody}
                 />
                 <DetailSection
                   title={m.logs_detail_response()}
-                  value={detail?.responseError ?? null}
+                  value={detail.responseError}
                 />
               </div>
             ) : null}
@@ -127,6 +301,9 @@ export function LogsPanel() {
     onPrevPage,
     onNextPage,
   } = useDashboardSnapshot();
+
+  const { locale } = useI18n();
+  const formatter = createDashboardTimeFormatter(locale);
 
   const [captureEnabled, setCaptureEnabled] = useState(false);
   const [captureLoading, setCaptureLoading] = useState(false);
@@ -271,6 +448,7 @@ export function LogsPanel() {
         status={detailStatus}
         statusMessage={detailMessage}
         detail={detail}
+        formatter={formatter}
       />
     </div>
   );

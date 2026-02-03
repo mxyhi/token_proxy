@@ -105,13 +105,12 @@ export function SectionCards({ summary }: SectionCardsProps) {
         <CardHeader>
           <CardDescription>{m.dashboard_stat_latency_ms()}</CardDescription>
           <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-            {formatInteger(medianLatencyMs)}
+            {formatInteger(avgLatencyMs)}
           </CardTitle>
         </CardHeader>
         <CardFooter className="flex-col items-start gap-1.5 text-sm">
           <div className="line-clamp-1 font-medium">
             {m.dashboard_latency_hint({
-              avg: formatInteger(avgLatencyMs),
               median: formatInteger(medianLatencyMs),
             })}
           </div>

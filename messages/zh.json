@@ -377,7 +377,7 @@
   "dashboard_hint_error_rate": "错误率 {rate}",
   "dashboard_tokens_hint_no_cache": "输入 {input} · 输出 {output}",
   "dashboard_tokens_hint_with_cache": "输入 {input} · 输出 {output} · 缓存 {cached}",
-  "dashboard_latency_hint": "均值 {avg} · 中位数 {median}",
+  "dashboard_latency_hint": "中位数 {median}",
   "dashboard_providers_title": "Providers",
   "dashboard_providers_desc": "按 Tokens 排序（Top 10）",
   "dashboard_no_data": "暂无数据",

@@ -376,7 +376,7 @@
   "dashboard_hint_error_rate": "Error rate {rate}",
   "dashboard_tokens_hint_no_cache": "Input {input} · Output {output}",
   "dashboard_tokens_hint_with_cache": "Input {input} · Output {output} · Cached {cached}",
-  "dashboard_latency_hint": "Avg {avg} · Median {median}",
+  "dashboard_latency_hint": "Median {median}",
   "dashboard_providers_title": "Providers",
   "dashboard_providers_desc": "Sorted by tokens (Top 10)",
   "dashboard_no_data": "No data",

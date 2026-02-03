@@ -60,6 +60,11 @@ vi.mock("@tauri-apps/plugin-updater", () => ({
   check: vi.fn<() => Promise<unknown>>().mockResolvedValue(null),
 }));
 
+vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({
+  writeText: vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined),
+  readText: vi.fn<() => Promise<string>>().mockResolvedValue(""),
+}));
+
 // ------------------------------
 // jsdom polyfills
 // ------------------------------

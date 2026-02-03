@@ -22,6 +22,7 @@ pub struct DashboardSummary {
     pub output_tokens: u64,
     pub cached_tokens: u64,
     pub avg_latency_ms: u64,
+    pub median_latency_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -145,6 +146,9 @@ WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2);
         latency_sum_ms / total_requests
     };
 
+    // 中位数查询：使用 LIMIT/OFFSET 取中间值
+    let median_latency_ms = query_median_latency(pool, from_ts_ms, to_ts_ms).await?;
+
     Ok(DashboardSummary {
         total_requests,
         success_requests,
@@ -154,7 +158,83 @@ WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2);
         output_tokens,
         cached_tokens,
         avg_latency_ms,
+        median_latency_ms,
     })
+}
+
+/// 计算中位数延迟（SQLite 无内置 MEDIAN，使用 LIMIT/OFFSET 方式）
+async fn query_median_latency(
+    pool: &sqlx::SqlitePool,
+    from_ts_ms: Option<i64>,
+    to_ts_ms: Option<i64>,
+) -> Result<u64, String> {
+    // 先获取总数
+    let count_row = sqlx::query(
+        r#"
+SELECT COUNT(*) AS cnt
+FROM request_logs
+WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2);
+"#,
+    )
+    .bind(from_ts_ms)
+    .bind(to_ts_ms)
+    .fetch_one(pool)
+    .await
+    .map_err(|err| format!("Failed to count for median: {err}"))?;
+
+    let count: i64 = count_row.try_get("cnt").unwrap_or(0);
+    if count == 0 {
+        return Ok(0);
+    }
+
+    // 计算中位数位置（0-indexed）
+    let offset = (count - 1) / 2;
+
+    // 奇数个取中间值，偶数个取中间两个的平均
+    if count % 2 == 1 {
+        let row = sqlx::query(
+            r#"
+SELECT latency_ms
+FROM request_logs
+WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2)
+ORDER BY latency_ms
+LIMIT 1 OFFSET ?3;
+"#,
+        )
+        .bind(from_ts_ms)
+        .bind(to_ts_ms)
+        .bind(offset)
+        .fetch_one(pool)
+        .await
+        .map_err(|err| format!("Failed to query median latency: {err}"))?;
+
+        Ok(i64_to_u64(row.try_get("latency_ms").unwrap_or(0)))
+    } else {
+        // 偶数个：取中间两个值的平均
+        let rows = sqlx::query(
+            r#"
+SELECT latency_ms
+FROM request_logs
+WHERE (?1 IS NULL OR ts_ms >= ?1) AND (?2 IS NULL OR ts_ms <= ?2)
+ORDER BY latency_ms
+LIMIT 2 OFFSET ?3;
+"#,
+        )
+        .bind(from_ts_ms)
+        .bind(to_ts_ms)
+        .bind(offset)
+        .fetch_all(pool)
+        .await
+        .map_err(|err| format!("Failed to query median latency: {err}"))?;
+
+        if rows.len() < 2 {
+            return Ok(0);
+        }
+
+        let v1: i64 = rows[0].try_get("latency_ms").unwrap_or(0);
+        let v2: i64 = rows[1].try_get("latency_ms").unwrap_or(0);
+        Ok(i64_to_u64((v1 + v2) / 2))
+    }
 }
 
 async fn query_providers(

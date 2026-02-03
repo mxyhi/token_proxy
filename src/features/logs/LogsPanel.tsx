@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { AlertCircle, Check, Copy } from "lucide-react";
+import { toast } from "sonner";
 
 import { DataTable } from "@/components/data-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -212,10 +214,11 @@ function RequestDetailSheet({
     if (!detail) return;
     const text = formatDetailAsText(detail, formatter);
     try {
-      await navigator.clipboard.writeText(text);
+      await writeText(text);
       setCopied(true);
+      toast.success(m.logs_detail_copied());
     } catch {
-      // 复制失败时静默处理（Tauri/非安全上下文可能不支持）
+      toast.error(m.logs_detail_copy_failed());
     }
   }, [detail, formatter]);
 

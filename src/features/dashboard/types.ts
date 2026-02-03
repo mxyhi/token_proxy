@@ -12,6 +12,7 @@ export type DashboardSummary = {
   outputTokens: number;
   cachedTokens: number;
   avgLatencyMs: number;
+  medianLatencyMs: number;
 };
 
 export type DashboardProviderStat = {

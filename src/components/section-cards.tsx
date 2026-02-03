@@ -29,6 +29,7 @@ export function SectionCards({ summary }: SectionCardsProps) {
   const outputTokens = summary?.outputTokens ?? 0;
   const cachedTokens = summary?.cachedTokens ?? 0;
   const avgLatencyMs = summary?.avgLatencyMs ?? 0;
+  const medianLatencyMs = summary?.medianLatencyMs ?? 0;
 
   const successRate = totalRequests > 0 ? successRequests / totalRequests : 0;
   const errorRate = totalRequests > 0 ? errorRequests / totalRequests : 0;
@@ -104,12 +105,15 @@ export function SectionCards({ summary }: SectionCardsProps) {
         <CardHeader>
           <CardDescription>{m.dashboard_stat_latency_ms()}</CardDescription>
           <CardTitle className="text-2xl font-semibold tabular-nums @[250px]/card:text-3xl">
-            {formatInteger(avgLatencyMs)}
+            {formatInteger(medianLatencyMs)}
           </CardTitle>
         </CardHeader>
         <CardFooter className="flex-col items-start gap-1.5 text-sm">
           <div className="line-clamp-1 font-medium">
-            {m.dashboard_latency_hint()}
+            {m.dashboard_latency_hint({
+              avg: formatInteger(avgLatencyMs),
+              median: formatInteger(medianLatencyMs),
+            })}
           </div>
         </CardFooter>
       </Card>

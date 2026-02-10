@@ -93,7 +93,8 @@ export function createEmptyUpstream(): UpstreamForm {
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "",
-    enabled: true,
+    // 新增上游默认作为草稿，避免用户尚未填完必填项时被“无法保存”阻塞。
+    enabled: false,
     modelMappings: [],
     convertFromMap: {},
     overrides: { header: [] },

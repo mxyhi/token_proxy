@@ -38,6 +38,14 @@ describe("config/form", () => {
     expect(validate({ ...EMPTY_FORM, upstreams: [upstream] }).valid).toBe(true);
   });
 
+  it("creates new upstream as disabled draft", () => {
+    const upstream = createEmptyUpstream();
+    upstream.id = "openai-1";
+
+    expect(upstream.enabled).toBe(false);
+    expect(validate({ ...EMPTY_FORM, upstreams: [upstream] }).valid).toBe(true);
+  });
+
   it("extracts and merges unknown config keys as extras", () => {
     const payload = toPayload(EMPTY_FORM);
     const configWithExtras = { ...payload, foo: 1, bar: { nested: true } };
@@ -82,4 +90,3 @@ describe("config/form", () => {
     expect(payload.upstreams[0]?.convert_from_map).toBeUndefined();
   });
 });
-

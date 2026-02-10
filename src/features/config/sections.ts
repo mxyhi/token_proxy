@@ -115,3 +115,15 @@ export function findSection(sectionId: ConfigSectionId) {
 export function getSectionRoute(sectionId: ConfigSectionId) {
   return getSection(sectionId).route;
 }
+
+export function getSectionIdFromPathname(pathname: string) {
+  const normalizedPathname = pathname.replace(/\/+$/, "") || "/";
+  if (normalizedPathname === "/config") {
+    return DEFAULT_CONFIG_SECTION;
+  }
+  if (!normalizedPathname.startsWith("/config/")) {
+    return DEFAULT_CONFIG_SECTION;
+  }
+  const section = normalizedPathname.slice("/config/".length);
+  return toConfigSectionId(section) ?? DEFAULT_CONFIG_SECTION;
+}

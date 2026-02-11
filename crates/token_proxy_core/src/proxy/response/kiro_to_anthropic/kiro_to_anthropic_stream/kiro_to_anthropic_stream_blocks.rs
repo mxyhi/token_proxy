@@ -303,27 +303,6 @@ where
         self.sent_message_stop = true;
     }
 
-    pub(super) fn log_usage_once(&mut self) {
-        if self.logged {
-            return;
-        }
-        self.logged = true;
-        apply_usage_fallback(
-            &mut self.usage,
-            Some(&self.model),
-            self.estimated_input_tokens,
-            &self.content,
-            &self.reasoning,
-        );
-        let usage_snapshot = UsageSnapshot {
-            usage: usage_from_kiro(&self.usage),
-            cached_tokens: None,
-            usage_json: usage_json_from_kiro(&self.usage),
-        };
-        let entry = build_log_entry(&self.context, usage_snapshot, None);
-        self.log.clone().write_detached(entry);
-    }
-
     pub(super) fn maybe_emit_usage_ping(&mut self) {
         let len = self.raw_content.len();
         let should_send = len.saturating_sub(self.last_ping_len) >= USAGE_UPDATE_CHAR_THRESHOLD
@@ -353,5 +332,32 @@ where
 
         self.last_ping_len = len;
         self.last_ping_time = Instant::now();
+    }
+}
+
+impl<S> KiroToAnthropicState<S> {
+    pub(super) fn write_log_once(&mut self, response_error: Option<String>) {
+        if self.logged {
+            return;
+        }
+        self.logged = true;
+        apply_usage_fallback(
+            &mut self.usage,
+            Some(&self.model),
+            self.estimated_input_tokens,
+            &self.content,
+            &self.reasoning,
+        );
+        let usage_snapshot = UsageSnapshot {
+            usage: usage_from_kiro(&self.usage),
+            cached_tokens: None,
+            usage_json: usage_json_from_kiro(&self.usage),
+        };
+        let entry = build_log_entry(&self.context, usage_snapshot, response_error);
+        self.log.clone().write_detached(entry);
+    }
+
+    pub(super) fn log_usage_once(&mut self) {
+        self.write_log_once(None);
     }
 }

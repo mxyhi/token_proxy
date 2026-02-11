@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use std::{collections::VecDeque, sync::Arc};
 
 use crate::proxy::log::{build_log_entry, LogContext, LogWriter};
+use crate::proxy::response::STREAM_DROPPED_ERROR;
 use crate::proxy::sse::SseEventParser;
 use crate::proxy::token_rate::RequestTokenTracker;
 use crate::proxy::usage::SseUsageCollector;
@@ -75,6 +76,40 @@ struct ChatToGeminiState<S> {
     logged: bool,
     upstream_ended: bool,
     tool_calls: Vec<Option<ToolCallState>>,
+}
+
+impl<S> GeminiToChatState<S> {
+    fn write_log_once(&mut self, response_error: Option<String>) {
+        if self.logged {
+            return;
+        }
+        self.logged = true;
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.log.clone().write_detached(entry);
+    }
+}
+
+impl<S> Drop for GeminiToChatState<S> {
+    fn drop(&mut self) {
+        self.write_log_once(Some(STREAM_DROPPED_ERROR.to_string()));
+    }
+}
+
+impl<S> ChatToGeminiState<S> {
+    fn write_log_once(&mut self, response_error: Option<String>) {
+        if self.logged {
+            return;
+        }
+        self.logged = true;
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.log.clone().write_detached(entry);
+    }
+}
+
+impl<S> Drop for ChatToGeminiState<S> {
+    fn drop(&mut self) {
+        self.write_log_once(Some(STREAM_DROPPED_ERROR.to_string()));
+    }
 }
 
 impl<S, E> GeminiToChatState<S>
@@ -284,12 +319,7 @@ where
     }
 
     fn log_usage_once(&mut self) {
-        if self.logged {
-            return;
-        }
-        self.logged = true;
-        let entry = build_log_entry(&self.context, self.collector.finish(), None);
-        self.log.clone().write_detached(entry);
+        self.write_log_once(None);
     }
 }
 
@@ -479,12 +509,7 @@ where
     }
 
     fn log_usage_once(&mut self) {
-        if self.logged {
-            return;
-        }
-        self.logged = true;
-        let entry = build_log_entry(&self.context, self.collector.finish(), None);
-        self.log.clone().write_detached(entry);
+        self.write_log_once(None);
     }
 }
 

@@ -13,6 +13,8 @@ use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 
+pub(crate) const STREAM_DROPPED_ERROR: &str = "stream dropped before completion";
+
 pub(super) fn stream_with_logging<E>(
     upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
@@ -22,62 +24,109 @@ pub(super) fn stream_with_logging<E>(
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    let collector = SseUsageCollector::new();
-    let parser = SseEventParser::new();
-    try_unfold(
-        (upstream, collector, parser, log, context, token_tracker),
-        |(mut upstream, mut collector, mut parser, log, mut context, token_tracker)| async move {
-            match upstream.next().await {
-                Some(Ok(chunk)) => {
-                    if context.ttfb_ms.is_none() {
-                        context.ttfb_ms = Some(context.start.elapsed().as_millis());
-                    }
-                    collector.push_chunk(&chunk);
-                    let provider = context.provider.as_str();
-                    let mut texts = Vec::new();
-                    parser.push_chunk(&chunk, |data| {
-                        if let Some(text) = extract_stream_text(provider, &data) {
-                            texts.push(text);
-                        }
-                    });
-                    for text in texts {
-                        token_tracker.add_output_text(&text).await;
-                    }
-                    Ok(Some((chunk, (upstream, collector, parser, log, context, token_tracker))))
+    let state = LoggingStreamState::new(upstream, context, log, token_tracker);
+    try_unfold(state, |state| async move { state.step().await })
+}
+
+struct LoggingStreamState<S> {
+    upstream: S,
+    collector: SseUsageCollector,
+    parser: SseEventParser,
+    log: Arc<LogWriter>,
+    context: LogContext,
+    token_tracker: RequestTokenTracker,
+    logged: bool,
+}
+
+impl<S> LoggingStreamState<S> {
+    fn write_log_once(&mut self, response_error: Option<String>) {
+        if self.logged {
+            return;
+        }
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.log.clone().write_detached(entry);
+        self.logged = true;
+    }
+}
+
+impl<S> Drop for LoggingStreamState<S> {
+    fn drop(&mut self) {
+        // 流被客户端提前取消时不会再进入 `None/Err` 分支，这里兜底保证日志至少落一行。
+        self.write_log_once(Some(STREAM_DROPPED_ERROR.to_string()));
+    }
+}
+
+impl<S, E> LoggingStreamState<S>
+where
+    S: futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    fn new(
+        upstream: S,
+        context: LogContext,
+        log: Arc<LogWriter>,
+        token_tracker: RequestTokenTracker,
+    ) -> Self {
+        Self {
+            upstream,
+            collector: SseUsageCollector::new(),
+            parser: SseEventParser::new(),
+            log,
+            context,
+            token_tracker,
+            logged: false,
+        }
+    }
+
+    async fn step(mut self) -> Result<Option<(Bytes, Self)>, std::io::Error> {
+        match self.upstream.next().await {
+            Some(Ok(chunk)) => {
+                if self.context.ttfb_ms.is_none() {
+                    self.context.ttfb_ms = Some(self.context.start.elapsed().as_millis());
                 }
-                Some(Err(err)) => {
-                    let provider = context.provider.as_str();
-                    let mut texts = Vec::new();
-                    parser.finish(|data| {
-                        if let Some(text) = extract_stream_text(provider, &data) {
-                            texts.push(text);
-                        }
-                    });
-                    for text in texts {
-                        token_tracker.add_output_text(&text).await;
+                self.collector.push_chunk(&chunk);
+                let provider = self.context.provider.as_str();
+                let mut texts = Vec::new();
+                self.parser.push_chunk(&chunk, |data| {
+                    if let Some(text) = extract_stream_text(provider, &data) {
+                        texts.push(text);
                     }
-                    let entry = build_log_entry(&context, collector.finish(), None);
-                    log.clone().write_detached(entry);
-                    Err(std::io::Error::new(std::io::ErrorKind::Other, err))
+                });
+                for text in texts {
+                    self.token_tracker.add_output_text(&text).await;
                 }
-                None => {
-                    let provider = context.provider.as_str();
-                    let mut texts = Vec::new();
-                    parser.finish(|data| {
-                        if let Some(text) = extract_stream_text(provider, &data) {
-                            texts.push(text);
-                        }
-                    });
-                    for text in texts {
-                        token_tracker.add_output_text(&text).await;
-                    }
-                    let entry = build_log_entry(&context, collector.finish(), None);
-                    log.clone().write_detached(entry);
-                    Ok(None)
-                }
+                Ok(Some((chunk, self)))
             }
-        },
-    )
+            Some(Err(err)) => {
+                let provider = self.context.provider.as_str();
+                let mut texts = Vec::new();
+                self.parser.finish(|data| {
+                    if let Some(text) = extract_stream_text(provider, &data) {
+                        texts.push(text);
+                    }
+                });
+                for text in texts {
+                    self.token_tracker.add_output_text(&text).await;
+                }
+                self.write_log_once(None);
+                Err(std::io::Error::new(std::io::ErrorKind::Other, err))
+            }
+            None => {
+                let provider = self.context.provider.as_str();
+                let mut texts = Vec::new();
+                self.parser.finish(|data| {
+                    if let Some(text) = extract_stream_text(provider, &data) {
+                        texts.push(text);
+                    }
+                });
+                for text in texts {
+                    self.token_tracker.add_output_text(&text).await;
+                }
+                self.write_log_once(None);
+                Ok(None)
+            }
+        }
+    }
 }
 
 pub(super) fn stream_with_logging_and_model_override<E>(
@@ -105,6 +154,24 @@ struct ModelOverrideStreamState<S> {
     model_override: String,
     upstream_ended: bool,
     logged: bool,
+}
+
+impl<S> ModelOverrideStreamState<S> {
+    fn write_log_once(&mut self, response_error: Option<String>) {
+        if self.logged {
+            return;
+        }
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.log.clone().write_detached(entry);
+        self.logged = true;
+    }
+}
+
+impl<S> Drop for ModelOverrideStreamState<S> {
+    fn drop(&mut self) {
+        // 和基础流一致：提前 drop 也必须落日志，避免“请求发生但无日志行”。
+        self.write_log_once(Some(STREAM_DROPPED_ERROR.to_string()));
+    }
 }
 
 impl<S, E> ModelOverrideStreamState<S>
@@ -139,7 +206,7 @@ where
                 return Ok(Some((next, self)));
             }
             if self.upstream_ended {
-                self.log_usage_once();
+                self.write_log_once(None);
                 return Ok(None);
             }
 
@@ -163,7 +230,7 @@ where
                     }
                 }
                 Some(Err(err)) => {
-                    self.log_usage_once();
+                    self.write_log_once(None);
                     return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
                 }
                 None => {
@@ -190,14 +257,6 @@ where
         self.out.push_back(Bytes::from(format!("data: {output}\n\n")));
     }
 
-    fn log_usage_once(&mut self) {
-        if self.logged {
-            return;
-        }
-        let entry = build_log_entry(&self.context, self.collector.finish(), None);
-        self.log.clone().write_detached(entry);
-        self.logged = true;
-    }
 }
 
 fn rewrite_sse_data(data: &str, model_override: &str) -> String {

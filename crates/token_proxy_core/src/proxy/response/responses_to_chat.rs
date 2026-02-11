@@ -12,6 +12,7 @@ use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
+use super::streaming::STREAM_DROPPED_ERROR;
 
 pub(super) fn stream_responses_to_chat<E>(
     upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
@@ -60,6 +61,24 @@ struct ToolCallState {
     arguments: String,
     sent_initial: bool,
     sent_arguments: bool,
+}
+
+impl<S> ResponsesToChatState<S> {
+    fn write_log_once(&mut self, response_error: Option<String>) {
+        if self.logged {
+            return;
+        }
+        self.logged = true;
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.log.clone().write_detached(entry);
+    }
+}
+
+impl<S> Drop for ResponsesToChatState<S> {
+    fn drop(&mut self) {
+        // 兼容客户端提前断流：状态机未走到完成分支时也要落一条日志。
+        self.write_log_once(Some(STREAM_DROPPED_ERROR.to_string()));
+    }
 }
 
 impl<S, E> ResponsesToChatState<S>
@@ -530,12 +549,7 @@ where
     }
 
     fn log_usage_once(&mut self) {
-        if self.logged {
-            return;
-        }
-        self.logged = true;
-        let entry = build_log_entry(&self.context, self.collector.finish(), None);
-        self.log.clone().write_detached(entry);
+        self.write_log_once(None);
     }
 
     fn finish_reason(&self) -> &'static str {

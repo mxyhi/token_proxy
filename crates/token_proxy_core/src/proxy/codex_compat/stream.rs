@@ -7,6 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::extract_tool_name_map_from_request_body;
 use super::super::log::{build_log_entry, LogContext, LogWriter};
+use super::super::response::STREAM_DROPPED_ERROR;
 use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
@@ -44,6 +45,23 @@ struct CodexToChatState<S> {
     logged: bool,
     upstream_ended: bool,
     tool_name_map: HashMap<String, String>,
+}
+
+impl<S> CodexToChatState<S> {
+    fn write_log_once(&mut self, response_error: Option<String>) {
+        if self.logged {
+            return;
+        }
+        self.logged = true;
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.log.clone().write_detached(entry);
+    }
+}
+
+impl<S> Drop for CodexToChatState<S> {
+    fn drop(&mut self) {
+        self.write_log_once(Some(STREAM_DROPPED_ERROR.to_string()));
+    }
 }
 
 impl<S, E> CodexToChatState<S>
@@ -260,12 +278,7 @@ where
     }
 
     fn log_usage_once(&mut self) {
-        if self.logged {
-            return;
-        }
-        self.logged = true;
-        let entry = build_log_entry(&self.context, self.collector.finish(), None);
-        self.log.clone().write_detached(entry);
+        self.write_log_once(None);
     }
 }
 
@@ -297,6 +310,23 @@ struct CodexToResponsesState<S> {
     logged: bool,
     upstream_ended: bool,
     tool_name_map: HashMap<String, String>,
+}
+
+impl<S> CodexToResponsesState<S> {
+    fn write_log_once(&mut self, response_error: Option<String>) {
+        if self.logged {
+            return;
+        }
+        self.logged = true;
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.log.clone().write_detached(entry);
+    }
+}
+
+impl<S> Drop for CodexToResponsesState<S> {
+    fn drop(&mut self) {
+        self.write_log_once(Some(STREAM_DROPPED_ERROR.to_string()));
+    }
 }
 
 impl<S, E> CodexToResponsesState<S>
@@ -401,12 +431,7 @@ where
     }
 
     fn log_usage_once(&mut self) {
-        if self.logged {
-            return;
-        }
-        self.logged = true;
-        let entry = build_log_entry(&self.context, self.collector.finish(), None);
-        self.log.clone().write_detached(entry);
+        self.write_log_once(None);
     }
 }
 

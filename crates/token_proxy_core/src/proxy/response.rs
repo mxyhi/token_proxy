@@ -194,6 +194,8 @@ mod token_count;
 mod upstream_read;
 mod upstream_stream;
 
+pub(crate) use streaming::STREAM_DROPPED_ERROR;
+
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。
 #[cfg(test)]
 #[path = "response.test.rs"]

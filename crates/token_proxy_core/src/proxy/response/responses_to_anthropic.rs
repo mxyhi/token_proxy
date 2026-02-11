@@ -11,6 +11,7 @@ use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
+use super::streaming::STREAM_DROPPED_ERROR;
 
 pub(super) fn stream_responses_to_anthropic<E>(
     upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
@@ -63,6 +64,24 @@ struct ResponsesToAnthropicState<S> {
     saw_tool_use: bool,
     stop_reason_override: Option<&'static str>,
     saw_reasoning_delta: bool,
+}
+
+impl<S> ResponsesToAnthropicState<S> {
+    fn write_log_once(&mut self, response_error: Option<String>) {
+        if self.logged {
+            return;
+        }
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.log.clone().write_detached(entry);
+        self.logged = true;
+    }
+}
+
+impl<S> Drop for ResponsesToAnthropicState<S> {
+    fn drop(&mut self) {
+        // 若下游中途取消，Drop 仍会触发，保证请求日志不丢。
+        self.write_log_once(Some(STREAM_DROPPED_ERROR.to_string()));
+    }
 }
 
 impl<S, E> ResponsesToAnthropicState<S>
@@ -671,12 +690,7 @@ where
     }
 
     fn log_usage_once(&mut self) {
-        if self.logged {
-            return;
-        }
-        let entry = build_log_entry(&self.context, self.collector.finish(), None);
-        self.log.clone().write_detached(entry);
-        self.logged = true;
+        self.write_log_once(None);
     }
 }
 

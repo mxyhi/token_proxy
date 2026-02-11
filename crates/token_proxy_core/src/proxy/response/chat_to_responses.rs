@@ -7,6 +7,7 @@ use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
+use super::streaming::STREAM_DROPPED_ERROR;
 use format::{snapshot_to_output_item, usage_to_value, OutputItemSnapshot};
 use state_types::{FunctionCallOutput, MessageOutput};
 
@@ -48,6 +49,24 @@ struct ChatToResponsesState<S> {
     sent_done: bool,
     logged: bool,
     upstream_ended: bool,
+}
+
+impl<S> ChatToResponsesState<S> {
+    fn write_log_once(&mut self, response_error: Option<String>) {
+        if self.logged {
+            return;
+        }
+        self.logged = true;
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.log.clone().write_detached(entry);
+    }
+}
+
+impl<S> Drop for ChatToResponsesState<S> {
+    fn drop(&mut self) {
+        // 对齐 new-api 的兜底语义：流提前释放也应保留请求日志。
+        self.write_log_once(Some(STREAM_DROPPED_ERROR.to_string()));
+    }
 }
 
 impl<S, E> ChatToResponsesState<S>
@@ -572,12 +591,7 @@ where
     }
 
     fn log_usage_once(&mut self) {
-        if self.logged {
-            return;
-        }
-        self.logged = true;
-        let entry = build_log_entry(&self.context, self.collector.finish(), None);
-        self.log.clone().write_detached(entry);
+        self.write_log_once(None);
     }
 
     fn next_sequence_number(&mut self) -> u64 {

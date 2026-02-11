@@ -131,6 +131,74 @@ async fn read_first_usage_tokens(
     }
 }
 
+async fn wait_for_log_rows(pool: &SqlitePool, expected_min: i64) -> i64 {
+    let deadline = TokioInstant::now() + Duration::from_secs(2);
+    loop {
+        let row = sqlx::query("SELECT COUNT(*) AS count FROM request_logs")
+            .fetch_one(pool)
+            .await
+            .expect("count request_logs");
+        let count = row.try_get::<i64, _>("count").expect("count column");
+        if count >= expected_min {
+            return count;
+        }
+        if TokioInstant::now() >= deadline {
+            return count;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[test]
+fn stream_with_logging_persists_log_when_client_drops_stream_early() {
+    run_async(async {
+        let sqlite_pool = create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
+        let context = LogContext {
+            path: "/v1/responses".to_string(),
+            provider: "openai-response".to_string(),
+            upstream_id: "unit-test".to_string(),
+            model: Some("unit-model".to_string()),
+            mapped_model: Some("unit-model".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+        let token_tracker = super::super::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        {
+            let stream =
+                super::streaming::stream_with_logging(upstream, context, log.clone(), token_tracker);
+            futures_util::pin_mut!(stream);
+            let first = stream
+                .next()
+                .await
+                .expect("first stream item")
+                .expect("stream ok");
+            assert!(!first.is_empty());
+        }
+        let count = wait_for_log_rows(&sqlite_pool, 1).await;
+        assert!(
+            count >= 1,
+            "stream dropped early should still persist request log row, got {count}"
+        );
+    });
+}
+
 #[test]
 fn stream_responses_to_chat_emits_role_delta_and_done_and_logs_usage() {
     run_async(async {

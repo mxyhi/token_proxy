@@ -123,3 +123,53 @@ fn stream_gemini_to_anthropic_emits_single_input_json_delta_for_tool_calls() {
         assert!(input_json_deltas[0].contains("\"subagent_type\""));
     });
 }
+
+#[test]
+fn stream_responses_to_chat_persists_log_when_client_drops_stream_early() {
+    super::run_async(async {
+        let sqlite_pool = super::create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
+        let context = LogContext {
+            path: "/v1/responses".to_string(),
+            provider: "openai-response".to_string(),
+            upstream_id: "unit-test".to_string(),
+            model: Some("unit-model".to_string()),
+            mapped_model: Some("unit-model".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\" world\"}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        {
+            let stream =
+                super::super::responses_to_chat::stream_responses_to_chat(upstream, context, log, token_tracker);
+            futures_util::pin_mut!(stream);
+            let first = stream
+                .next()
+                .await
+                .expect("first stream item")
+                .expect("stream ok");
+            assert!(!first.is_empty());
+        }
+        let count = super::wait_for_log_rows(&sqlite_pool, 1).await;
+        assert!(
+            count >= 1,
+            "responses_to_chat stream dropped early should still persist request log row, got {count}"
+        );
+    });
+}

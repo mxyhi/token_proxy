@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::proxy::kiro::{EventStreamDecoder, KiroUsage};
 use crate::proxy::log::{LogContext, LogWriter};
+use crate::proxy::response::STREAM_DROPPED_ERROR;
 use crate::proxy::token_rate::RequestTokenTracker;
 
 pub(super) const USAGE_UPDATE_CHAR_THRESHOLD: usize = 5000;
@@ -83,6 +84,12 @@ struct KiroToAnthropicState<S> {
     last_ping_len: usize,
     last_ping_time: Instant,
     last_reported_output_tokens: u64,
+}
+
+impl<S> Drop for KiroToAnthropicState<S> {
+    fn drop(&mut self) {
+        self.write_log_once(Some(STREAM_DROPPED_ERROR.to_string()));
+    }
 }
 
 impl<S, E> KiroToAnthropicState<S>

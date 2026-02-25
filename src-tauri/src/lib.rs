@@ -86,11 +86,17 @@ pub(crate) fn show_or_create_main_window(app: &tauri::AppHandle) {
 pub(crate) fn hide_main_window(app: &tauri::AppHandle) {
     set_main_window_visibility(app, false);
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        let _ = window.hide();
         if let Err(err) = window.destroy() {
             tracing::warn!(error = %err, "destroy window failed");
         }
     }
-    sync_main_window_menu_item(app);
+
+    if let Some(tray_state) = app.try_state::<tray::TrayState>() {
+        tray_state.mark_main_window_hidden();
+    } else {
+        sync_main_window_menu_item(app);
+    }
 }
 
 pub(crate) fn toggle_main_window(app: &tauri::AppHandle) {

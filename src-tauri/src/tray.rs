@@ -133,10 +133,21 @@ impl TrayState {
     }
 
     pub(crate) fn sync_main_window_menu_item(&self, app: &AppHandle) {
-        let visible = app
-            .get_webview_window(crate::MAIN_WINDOW_LABEL)
-            .and_then(|window| window.is_visible().ok())
-            .unwrap_or(false);
+        let visible = resolve_main_window_menu_visible(
+            app.get_webview_window(crate::MAIN_WINDOW_LABEL)
+                .and_then(|window| window.is_visible().ok()),
+            false,
+        );
+        self.set_main_window_menu_item_visibility(visible);
+    }
+
+    pub(crate) fn mark_main_window_hidden(&self) {
+        // Hide action should always flip menu text to "show", even if visibility query lags.
+        let visible = resolve_main_window_menu_visible(None, true);
+        self.set_main_window_menu_item_visibility(visible);
+    }
+
+    fn set_main_window_menu_item_visibility(&self, visible: bool) {
         let _ = self
             .inner
             .show_item
@@ -450,6 +461,13 @@ fn compact_error(err: &str) -> String {
     output
 }
 
+fn resolve_main_window_menu_visible(probed_visible: Option<bool>, force_hidden: bool) -> bool {
+    if force_hidden {
+        return false;
+    }
+    probed_visible.unwrap_or(false)
+}
+
 fn main_window_menu_text(visible: bool) -> &'static str {
     if visible {
         HIDE_MAIN_WINDOW_TEXT
@@ -473,5 +491,17 @@ mod tests {
     fn main_window_menu_text_reflects_visibility() {
         assert_eq!(super::main_window_menu_text(false), "显示主窗口");
         assert_eq!(super::main_window_menu_text(true), "隐藏主窗口");
+    }
+
+    #[test]
+    fn forced_hidden_state_overrides_visibility_probe() {
+        assert!(!super::resolve_main_window_menu_visible(Some(true), true));
+        assert!(!super::resolve_main_window_menu_visible(None, true));
+    }
+
+    #[test]
+    fn visibility_probe_fallbacks_to_hidden_when_window_missing() {
+        assert!(!super::resolve_main_window_menu_visible(None, false));
+        assert!(super::resolve_main_window_menu_visible(Some(true), false));
     }
 }

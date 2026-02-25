@@ -86,10 +86,9 @@ pub(crate) fn show_or_create_main_window(app: &tauri::AppHandle) {
 pub(crate) fn hide_main_window(app: &tauri::AppHandle) {
     set_main_window_visibility(app, false);
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        // Keep the window instance and only hide it; destroying here can race
+        // with tray reopen and cause the first "show" click to no-op.
         let _ = window.hide();
-        if let Err(err) = window.destroy() {
-            tracing::warn!(error = %err, "destroy window failed");
-        }
     }
 
     if let Some(tray_state) = app.try_state::<tray::TrayState>() {
@@ -749,7 +748,7 @@ pub fn run() {
                 {
                     return;
                 }
-                // 关闭即销毁 WebView，后台核心继续运行。
+                // 主窗口关闭时最小化到托盘，后台核心继续运行。
                 api.prevent_close();
                 if window.label() == MAIN_WINDOW_LABEL {
                     hide_main_window(window.app_handle());

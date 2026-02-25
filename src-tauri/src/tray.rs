@@ -1,15 +1,14 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
 #[cfg(target_os = "macos")]
 use std::time::Duration;
+use std::time::Instant;
 
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{TrayIcon, TrayIconBuilder};
 use tauri::{AppHandle, Manager};
 
-use crate::show_or_create_main_window;
 use crate::proxy::config::{TrayTokenRateConfig, TrayTokenRateFormat};
 use crate::proxy::service::{ProxyServiceHandle, ProxyServiceState, ProxyServiceStatus};
 #[cfg(target_os = "macos")]
@@ -26,6 +25,8 @@ const MENU_STOP: &str = "tray_stop_proxy";
 const MENU_RESTART: &str = "tray_restart_proxy";
 const MENU_STATUS: &str = "tray_status";
 const MENU_QUIT: &str = "tray_quit";
+const SHOW_MAIN_WINDOW_TEXT: &str = "显示主窗口";
+const HIDE_MAIN_WINDOW_TEXT: &str = "隐藏主窗口";
 
 #[derive(Clone)]
 pub(crate) struct TrayState {
@@ -34,6 +35,7 @@ pub(crate) struct TrayState {
 
 struct TrayStateInner {
     tray: AppTrayIcon,
+    show_item: AppMenuItem,
     start_item: AppMenuItem,
     stop_item: AppMenuItem,
     restart_item: AppMenuItem,
@@ -130,6 +132,17 @@ impl TrayState {
         let _ = self.inner.status_item.set_enabled(false);
     }
 
+    pub(crate) fn sync_main_window_menu_item(&self, app: &AppHandle) {
+        let visible = app
+            .get_webview_window(crate::MAIN_WINDOW_LABEL)
+            .and_then(|window| window.is_visible().ok())
+            .unwrap_or(false);
+        let _ = self
+            .inner
+            .show_item
+            .set_text(main_window_menu_text(visible));
+    }
+
     #[cfg(target_os = "macos")]
     async fn update_token_rate_title(&self) {
         let config = {
@@ -174,14 +187,15 @@ impl TrayState {
         if !self.is_token_rate_enabled() {
             return;
         }
-        let current = self
-            .inner
-            .token_rate_loop_active
-            .load(Ordering::SeqCst);
+        let current = self.inner.token_rate_loop_active.load(Ordering::SeqCst);
         if current != 0 {
             return;
         }
-        let loop_id = self.inner.token_rate_loop_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        let loop_id = self
+            .inner
+            .token_rate_loop_counter
+            .fetch_add(1, Ordering::SeqCst)
+            + 1;
         if self
             .inner
             .token_rate_loop_active
@@ -211,18 +225,12 @@ impl TrayState {
         if self.should_quit() {
             return false;
         }
-        self.inner
-            .token_rate_loop_active
-            .load(Ordering::SeqCst)
-            == loop_id
+        self.inner.token_rate_loop_active.load(Ordering::SeqCst) == loop_id
     }
 
     #[cfg(target_os = "macos")]
     fn finish_token_rate_loop(&self, loop_id: u64) {
-        let active = self
-            .inner
-            .token_rate_loop_active
-            .load(Ordering::SeqCst);
+        let active = self.inner.token_rate_loop_active.load(Ordering::SeqCst);
         if active == loop_id {
             self.inner.token_rate_loop_active.store(0, Ordering::SeqCst);
         }
@@ -233,7 +241,13 @@ pub(crate) fn init_tray(
     app: &AppHandle,
     proxy_service: ProxyServiceHandle,
 ) -> Result<TrayState, Box<dyn std::error::Error>> {
-    let show_item = MenuItem::with_id(app, MENU_SHOW, "显示主窗口", true, None::<&str>)?;
+    let show_item = MenuItem::with_id(
+        app,
+        MENU_SHOW,
+        main_window_menu_text(false),
+        true,
+        None::<&str>,
+    )?;
     let start_item = MenuItem::with_id(app, MENU_START, "启动代理", true, None::<&str>)?;
     let stop_item = MenuItem::with_id(app, MENU_STOP, "停止代理", false, None::<&str>)?;
     let restart_item = MenuItem::with_id(app, MENU_RESTART, "重启代理", false, None::<&str>)?;
@@ -267,6 +281,7 @@ pub(crate) fn init_tray(
     let tray_state = TrayState {
         inner: Arc::new(TrayStateInner {
             tray,
+            show_item: show_item.clone(),
             start_item: start_item.clone(),
             stop_item: stop_item.clone(),
             restart_item: restart_item.clone(),
@@ -286,15 +301,17 @@ pub(crate) fn init_tray(
         let id = event.id().as_ref();
         match id {
             MENU_SHOW => {
-                show_or_create_main_window(app);
+                crate::toggle_main_window(app);
             }
             MENU_START => {
                 let app = app.clone();
                 let tray_state = tray_state_for_menu.clone();
                 let proxy_service = proxy_for_menu.clone();
                 tauri::async_runtime::spawn(async move {
-                    let proxy_context =
-                        app.state::<crate::proxy::service::ProxyContext>().inner().clone();
+                    let proxy_context = app
+                        .state::<crate::proxy::service::ProxyContext>()
+                        .inner()
+                        .clone();
                     match proxy_service.start(&proxy_context).await {
                         Ok(status) => tray_state.apply_status(&status),
                         Err(err) => tray_state.apply_error("启动失败", &err),
@@ -316,8 +333,10 @@ pub(crate) fn init_tray(
                 let tray_state = tray_state_for_menu.clone();
                 let proxy_service = proxy_for_menu.clone();
                 tauri::async_runtime::spawn(async move {
-                    let proxy_context =
-                        app.state::<crate::proxy::service::ProxyContext>().inner().clone();
+                    let proxy_context = app
+                        .state::<crate::proxy::service::ProxyContext>()
+                        .inner()
+                        .clone();
                     match proxy_service.restart(&proxy_context).await {
                         Ok(status) => tray_state.apply_status(&status),
                         Err(err) => tray_state.apply_error("重启失败", &err),
@@ -334,6 +353,7 @@ pub(crate) fn init_tray(
 
     #[cfg(target_os = "macos")]
     tray_state.ensure_token_rate_loop();
+    tray_state.sync_main_window_menu_item(app);
 
     Ok(tray_state)
 }
@@ -378,11 +398,19 @@ fn format_rate_title(snapshot: TokenRateSnapshot, format: TrayTokenRateFormat) -
     let has_output = snapshot.output > 0;
     let has_tokens = has_input || has_output;
     // ↑ 显示 input（有 input 时）或连接数（无 input 时）
-    let input_display = if has_input { snapshot.input } else { snapshot.connections };
+    let input_display = if has_input {
+        snapshot.input
+    } else {
+        snapshot.connections
+    };
     // ↓ 始终显示 output
     let output_display = snapshot.output;
     // total 显示总 token 数（有 token 时）或连接数（无 token 时）
-    let total_display = if has_tokens { snapshot.total } else { snapshot.connections };
+    let total_display = if has_tokens {
+        snapshot.total
+    } else {
+        snapshot.connections
+    };
     match format {
         TrayTokenRateFormat::Combined => format!("{total_display}"),
         TrayTokenRateFormat::Split => format!("↑{input_display} ↓{output_display}"),
@@ -422,6 +450,14 @@ fn compact_error(err: &str) -> String {
     output
 }
 
+fn main_window_menu_text(visible: bool) -> &'static str {
+    if visible {
+        HIDE_MAIN_WINDOW_TEXT
+    } else {
+        SHOW_MAIN_WINDOW_TEXT
+    }
+}
+
 fn load_tray_icon() -> Result<Image<'static>, Box<dyn std::error::Error>> {
     let bytes: &[u8] = if cfg!(debug_assertions) {
         &include_bytes!("../icons/icon-state.dev.png")[..]
@@ -429,4 +465,13 @@ fn load_tray_icon() -> Result<Image<'static>, Box<dyn std::error::Error>> {
         &include_bytes!("../icons/icon-state.png")[..]
     };
     Ok(Image::from_bytes(bytes)?)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn main_window_menu_text_reflects_visibility() {
+        assert_eq!(super::main_window_menu_text(false), "显示主窗口");
+        assert_eq!(super::main_window_menu_text(true), "隐藏主窗口");
+    }
 }

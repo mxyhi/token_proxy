@@ -1,9 +1,9 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+mod antigravity;
 mod app_proxy;
 mod client_config;
-mod jsonc;
-mod antigravity;
 mod codex;
+mod jsonc;
 mod kiro;
 mod logging;
 mod proxy;
@@ -57,6 +57,7 @@ pub(crate) fn show_or_create_main_window(app: &tauri::AppHandle) {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        sync_main_window_menu_item(app);
         return;
     }
 
@@ -78,7 +79,36 @@ pub(crate) fn show_or_create_main_window(app: &tauri::AppHandle) {
             return;
         }
         set_main_window_visibility(&app_handle, true);
+        sync_main_window_menu_item(&app_handle);
     });
+}
+
+pub(crate) fn hide_main_window(app: &tauri::AppHandle) {
+    set_main_window_visibility(app, false);
+    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+        if let Err(err) = window.destroy() {
+            tracing::warn!(error = %err, "destroy window failed");
+        }
+    }
+    sync_main_window_menu_item(app);
+}
+
+pub(crate) fn toggle_main_window(app: &tauri::AppHandle) {
+    let visible = app
+        .get_webview_window(MAIN_WINDOW_LABEL)
+        .and_then(|window| window.is_visible().ok())
+        .unwrap_or(false);
+    if visible {
+        hide_main_window(app);
+    } else {
+        show_or_create_main_window(app);
+    }
+}
+
+fn sync_main_window_menu_item(app: &tauri::AppHandle) {
+    if let Some(tray_state) = app.try_state::<tray::TrayState>() {
+        tray_state.sync_main_window_menu_item(app);
+    }
 }
 
 fn is_autostart_launch() -> bool {
@@ -92,7 +122,9 @@ async fn read_proxy_config(app: tauri::AppHandle) -> Result<proxy::config::Confi
 }
 
 #[tauri::command]
-async fn preview_client_setup(app: tauri::AppHandle) -> Result<client_config::ClientSetupInfo, String> {
+async fn preview_client_setup(
+    app: tauri::AppHandle,
+) -> Result<client_config::ClientSetupInfo, String> {
     client_config::preview(app).await
 }
 
@@ -104,7 +136,9 @@ async fn write_claude_code_settings(
 }
 
 #[tauri::command]
-async fn write_codex_config(app: tauri::AppHandle) -> Result<client_config::ClientConfigWriteResult, String> {
+async fn write_codex_config(
+    app: tauri::AppHandle,
+) -> Result<client_config::ClientConfigWriteResult, String> {
     client_config::write_codex_config(app).await
 }
 
@@ -134,14 +168,19 @@ async fn write_proxy_config(
         "write_proxy_config apply_config done"
     );
     let log_level = config.log_level;
-    let app_proxy_url = proxy::config::app_proxy_url_from_config(&config).ok().flatten();
+    let app_proxy_url = proxy::config::app_proxy_url_from_config(&config)
+        .ok()
+        .flatten();
     let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
     if let Err(err) = proxy::config::write_config(paths.inner().as_ref(), config).await {
         tracing::error!(error = %err, "write_proxy_config save failed");
         tray_state.apply_error("保存失败", &err);
         return Err(err);
     }
-    tracing::debug!(elapsed_ms = start.elapsed().as_millis(), "write_proxy_config saved");
+    tracing::debug!(
+        elapsed_ms = start.elapsed().as_millis(),
+        "write_proxy_config saved"
+    );
     let reload_start = Instant::now();
     logging_state.apply_level(log_level);
     app_proxy::set(&app_proxy_state, app_proxy_url).await;
@@ -167,7 +206,6 @@ async fn write_proxy_config(
         }
     }
 }
-
 
 #[tauri::command]
 async fn read_dashboard_snapshot(
@@ -226,9 +264,7 @@ async fn kiro_import_ide(
     if trimmed.is_empty() {
         return Err("Directory is required.".to_string());
     }
-    kiro_store
-        .import_ide_tokens(PathBuf::from(trimmed))
-        .await
+    kiro_store.import_ide_tokens(PathBuf::from(trimmed)).await
 }
 
 #[tauri::command]
@@ -240,9 +276,7 @@ async fn kiro_import_kam(
     if trimmed.is_empty() {
         return Err("File path is required.".to_string());
     }
-    kiro_store
-        .import_kam_export(PathBuf::from(trimmed))
-        .await
+    kiro_store.import_kam_export(PathBuf::from(trimmed)).await
 }
 
 #[tauri::command]
@@ -687,6 +721,7 @@ pub fn run() {
                 if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
                     let _ = window.hide();
                 }
+                sync_main_window_menu_item(&app_handle);
             } else {
                 show_or_create_main_window(&app_handle);
             }
@@ -696,17 +731,23 @@ pub fn run() {
             tauri::WindowEvent::Focused(true) => {
                 if window.label() == MAIN_WINDOW_LABEL {
                     set_main_window_visibility(window.app_handle(), true);
+                    sync_main_window_menu_item(window.app_handle());
                 }
             }
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let tray_state = window.app_handle().try_state::<tray::TrayState>();
-                if tray_state.as_ref().map(|state| state.should_quit()).unwrap_or(false) {
+                if tray_state
+                    .as_ref()
+                    .map(|state| state.should_quit())
+                    .unwrap_or(false)
+                {
                     return;
                 }
                 // 关闭即销毁 WebView，后台核心继续运行。
                 api.prevent_close();
                 if window.label() == MAIN_WINDOW_LABEL {
-                    set_main_window_visibility(window.app_handle(), false);
+                    hide_main_window(window.app_handle());
+                    return;
                 }
                 if let Err(err) = window.destroy() {
                     tracing::warn!(error = %err, "destroy window failed");
@@ -763,14 +804,21 @@ pub fn run() {
     app.run(|app_handle, event| match event {
         tauri::RunEvent::ExitRequested { api, .. } => {
             let tray_state = app_handle.try_state::<tray::TrayState>();
-            if tray_state.as_ref().map(|state| state.should_quit()).unwrap_or(false) {
+            if tray_state
+                .as_ref()
+                .map(|state| state.should_quit())
+                .unwrap_or(false)
+            {
                 return;
             }
             // 仅关闭窗口时阻止退出，允许托盘“退出”彻底结束进程。
             api.prevent_exit();
         }
         #[cfg(target_os = "macos")]
-        tauri::RunEvent::Reopen { has_visible_windows, .. } => {
+        tauri::RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } => {
             // 点击 Dock 重新打开时，恢复主窗口。
             if !has_visible_windows {
                 show_or_create_main_window(app_handle);

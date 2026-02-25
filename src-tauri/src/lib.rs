@@ -71,14 +71,17 @@ pub(crate) fn show_or_create_main_window(app: &tauri::AppHandle) {
     std::thread::spawn(move || {
         let result =
             tauri::WebviewWindowBuilder::from_config(&app_handle, &config).and_then(|builder| {
-                builder.build()?;
+                let window = builder.build()?;
+                set_main_window_visibility(&app_handle, true);
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
                 Ok(())
             });
         if let Err(err) = result {
             tracing::warn!(error = %err, "create main window failed");
             return;
         }
-        set_main_window_visibility(&app_handle, true);
         sync_main_window_menu_item(&app_handle);
     });
 }

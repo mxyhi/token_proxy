@@ -154,6 +154,7 @@ Notes:
 
 ## Dashboard
 - In-app **Dashboard** page visualizes totals, per-provider stats, time series, and recent requests (page size 50, offset supported).
+- The Logs panel supports a 30-second request-detail capture window: when enabled it stores request headers/bodies during that window, always keeps error responses for failed requests, and turns off automatically afterward.
 
 ## One-click CLI setup
 - Claude Code: writes `~/.claude/settings.json` `env` (`ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN` when local key is set).

@@ -21,10 +21,7 @@ type LogLevel = logging::LogLevel;
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 const REQUEST_DETAIL_CAPTURE_EVENT: &str = "request-detail-capture-changed";
 
-#[derive(Clone, serde::Serialize)]
-struct RequestDetailCaptureEvent {
-    enabled: bool,
-}
+type RequestDetailCaptureEvent = proxy::request_detail::RequestDetailCaptureState;
 
 // 主窗口显示/销毁时同步 Dock/任务栏展示状态。
 pub(crate) fn set_main_window_visibility(app: &tauri::AppHandle, visible: bool) {
@@ -240,21 +237,20 @@ async fn read_request_log_detail(
 #[tauri::command]
 fn read_request_detail_capture(
     capture_state: tauri::State<'_, Arc<proxy::request_detail::RequestDetailCapture>>,
-) -> bool {
-    capture_state.is_armed()
+) -> proxy::request_detail::RequestDetailCaptureState {
+    capture_state.snapshot()
 }
 
 #[tauri::command]
 fn set_request_detail_capture(
     capture_state: tauri::State<'_, Arc<proxy::request_detail::RequestDetailCapture>>,
     enabled: bool,
-) -> bool {
+) -> proxy::request_detail::RequestDetailCaptureState {
     if enabled {
-        capture_state.arm();
+        capture_state.arm()
     } else {
-        capture_state.disarm();
+        capture_state.disarm()
     }
-    capture_state.is_armed()
 }
 
 #[tauri::command]
@@ -626,10 +622,10 @@ pub fn run() {
             let token_rate = proxy::token_rate::TokenRateTracker::new();
             app.manage(token_rate.clone());
             let app_handle_for_request_detail = app.handle().clone();
-            let on_request_detail_change = Arc::new(move |enabled: bool| {
+            let on_request_detail_change = Arc::new(move |state: RequestDetailCaptureEvent| {
                 let _ = app_handle_for_request_detail.emit(
                     REQUEST_DETAIL_CAPTURE_EVENT,
-                    RequestDetailCaptureEvent { enabled },
+                    state,
                 );
             });
             let request_detail = Arc::new(proxy::request_detail::RequestDetailCapture::new(Some(

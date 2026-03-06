@@ -31,19 +31,25 @@ import {
   readRequestLogDetail,
   setRequestDetailCapture,
 } from "@/features/logs/api";
-import type { RequestLogDetail } from "@/features/logs/types";
+import type {
+  RequestDetailCaptureState,
+  RequestLogDetail,
+} from "@/features/logs/types";
 import { useI18n } from "@/lib/i18n";
 import { parseError } from "@/lib/error";
 import { m } from "@/paraglide/messages.js";
 
 const DETAIL_PLACEHOLDER = "—";
 const REQUEST_DETAIL_CAPTURE_EVENT = "request-detail-capture-changed";
+const CAPTURE_COUNTDOWN_TICK_MS = 1_000;
+const IDLE_CAPTURE_STATE: RequestDetailCaptureState = {
+  enabled: false,
+  expiresAtMs: null,
+};
 
 type DetailStatus = "idle" | "loading" | "error";
 
-type RequestDetailCaptureEvent = {
-  enabled: boolean;
-};
+type RequestDetailCaptureEvent = RequestDetailCaptureState;
 
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 
@@ -52,6 +58,27 @@ function statusToVariant(status: number): BadgeVariant {
   if (status >= 400) return "destructive";
   if (status >= 300) return "secondary";
   return "outline";
+}
+
+function isCaptureWindowActive(state: RequestDetailCaptureState, nowMs: number) {
+  if (!state.enabled) {
+    return false;
+  }
+  if (state.expiresAtMs === null) {
+    return true;
+  }
+  return state.expiresAtMs > nowMs;
+}
+
+function getCaptureRemainingSeconds(state: RequestDetailCaptureState, nowMs: number) {
+  if (!state.enabled || state.expiresAtMs === null) {
+    return null;
+  }
+  const remainingMs = state.expiresAtMs - nowMs;
+  if (remainingMs <= 0) {
+    return null;
+  }
+  return Math.max(1, Math.ceil(remainingMs / CAPTURE_COUNTDOWN_TICK_MS));
 }
 
 type DetailFieldProps = {
@@ -317,8 +344,9 @@ export function LogsPanel() {
   const { locale } = useI18n();
   const formatter = createDashboardTimeFormatter(locale);
 
-  const [captureEnabled, setCaptureEnabled] = useState(false);
+  const [captureState, setCaptureState] = useState<RequestDetailCaptureState>(IDLE_CAPTURE_STATE);
   const [captureLoading, setCaptureLoading] = useState(false);
+  const [captureNowMs, setCaptureNowMs] = useState(() => Date.now());
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailStatus, setDetailStatus] = useState<DetailStatus>("idle");
   const [detailMessage, setDetailMessage] = useState("");
@@ -326,15 +354,25 @@ export function LogsPanel() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
   const isLoading = status === "loading";
+  const captureEnabled = isCaptureWindowActive(captureState, captureNowMs);
+  const captureRemainingSeconds = getCaptureRemainingSeconds(captureState, captureNowMs);
+  const captureStatusText = captureRemainingSeconds
+    ? m.logs_capture_status_countdown({ seconds: captureRemainingSeconds })
+    : "";
+
+  const updateCaptureState = useCallback((nextState: RequestDetailCaptureState) => {
+    setCaptureState(nextState);
+    setCaptureNowMs(Date.now());
+  }, []);
 
   const loadCaptureState = useCallback(async () => {
     try {
-      const enabled = await readRequestDetailCapture();
-      setCaptureEnabled(enabled);
+      const nextState = await readRequestDetailCapture();
+      updateCaptureState(nextState);
     } catch {
       // ignore
     }
-  }, []);
+  }, [updateCaptureState]);
 
   useEffect(() => {
     void loadCaptureState();
@@ -352,7 +390,7 @@ export function LogsPanel() {
             if (!active) {
               return;
             }
-            setCaptureEnabled(event.payload.enabled);
+            updateCaptureState(event.payload);
           }
         );
         if (!active) {
@@ -373,19 +411,45 @@ export function LogsPanel() {
         unlisten();
       }
     };
-  }, []);
+  }, [updateCaptureState]);
+
+  useEffect(() => {
+    if (!captureEnabled) {
+      return;
+    }
+    setCaptureNowMs(Date.now());
+    const timerId = window.setInterval(() => {
+      setCaptureNowMs(Date.now());
+    }, CAPTURE_COUNTDOWN_TICK_MS);
+    return () => {
+      window.clearInterval(timerId);
+    };
+  }, [captureEnabled, captureState.expiresAtMs]);
+
+  useEffect(() => {
+    if (!captureState.enabled || captureState.expiresAtMs === null) {
+      return;
+    }
+    const timeoutMs = Math.max(captureState.expiresAtMs - Date.now(), 0) + 50;
+    const timeoutId = window.setTimeout(() => {
+      void loadCaptureState();
+    }, timeoutMs);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [captureState.enabled, captureState.expiresAtMs, loadCaptureState]);
 
   const handleToggleCapture = useCallback(async (nextValue: boolean) => {
     setCaptureLoading(true);
     try {
-      const enabled = await setRequestDetailCapture(nextValue);
-      setCaptureEnabled(enabled);
+      const nextState = await setRequestDetailCapture(nextValue);
+      updateCaptureState(nextState);
     } catch {
       // ignore
     } finally {
       setCaptureLoading(false);
     }
-  }, []);
+  }, [updateCaptureState]);
 
   const handleSelectItem = useCallback((itemId: number) => {
     setSelectedId(itemId);
@@ -450,6 +514,7 @@ export function LogsPanel() {
         capture={{
           enabled: captureEnabled,
           loading: captureLoading,
+          statusText: captureStatusText,
           onToggle: handleToggleCapture,
         }}
       />

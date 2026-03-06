@@ -154,6 +154,7 @@ pnpm exec tsc --noEmit
 
 ## Dashboard
 - 应用内 **Dashboard** 展示总览、按 provider 统计、时间序列、最近请求（分页 50，支持 offset）
+- Logs 面板支持“记录 30 秒内请求详情”：开启后会在 30 秒窗口内记录请求 header/body，失败请求的错误响应始终保留，到时自动关闭
 
 ## 一键写 CLI 配置
 - Claude Code：写入 `~/.claude/settings.json` 的 `env`（`ANTHROPIC_BASE_URL`，若有本地密钥则写 `ANTHROPIC_AUTH_TOKEN`）

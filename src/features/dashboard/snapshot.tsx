@@ -124,6 +124,7 @@ type DashboardFiltersProps = {
   capture?: {
     enabled: boolean
     loading: boolean
+    statusText?: string
     onToggle: (enabled: boolean) => void
   }
 }
@@ -191,6 +192,11 @@ export function DashboardFilters({
                   disabled={capture.loading}
                   onCheckedChange={capture.onToggle}
                 />
+                {capture.statusText ? (
+                  <span className="text-xs text-muted-foreground tabular-nums">
+                    {capture.statusText}
+                  </span>
+                ) : null}
               </div>
             ) : null}
             <Button type="button" variant="outline" size="icon" onClick={onRefresh} disabled={loading}>

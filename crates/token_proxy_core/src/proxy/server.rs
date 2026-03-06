@@ -470,7 +470,7 @@ async fn ensure_local_auth_or_respond(
     log: &Arc<LogWriter>,
     headers: &HeaderMap,
     body: Body,
-    capture_next: bool,
+    capture_request_detail_enabled: bool,
     path: &str,
     query: Option<&str>,
     request_start: Instant,
@@ -478,7 +478,7 @@ async fn ensure_local_auth_or_respond(
 ) -> Result<Body, Response> {
     if let Err(message) = http::ensure_local_auth(config, headers, path, query) {
         tracing::warn!("local auth failed");
-        let detail = if capture_next {
+        let detail = if capture_request_detail_enabled {
             Some(capture_detail_from_body(headers, body, max_body_bytes).await)
         } else {
             None
@@ -503,7 +503,7 @@ async fn resolve_plan_or_respond(
     log: &Arc<LogWriter>,
     headers: &HeaderMap,
     body: Body,
-    capture_next: bool,
+    capture_request_detail_enabled: bool,
     path: &str,
     request_start: Instant,
     max_body_bytes: usize,
@@ -515,7 +515,7 @@ async fn resolve_plan_or_respond(
         }
         Err(message) => {
             tracing::warn!("no dispatch plan found");
-            let detail = if capture_next {
+            let detail = if capture_request_detail_enabled {
                 Some(capture_detail_from_body(headers, body, max_body_bytes).await)
             } else {
                 None
@@ -539,7 +539,7 @@ async fn read_body_or_respond(
     log: &Arc<LogWriter>,
     headers: &HeaderMap,
     body: Body,
-    capture_next: bool,
+    capture_request_detail_enabled: bool,
     path: &str,
     request_start: Instant,
 ) -> Result<ReplayableBody, Response> {
@@ -547,7 +547,7 @@ async fn read_body_or_respond(
         Ok(body) => Ok(body),
         Err(err) => {
             let message = format!("Failed to read request body: {err}");
-            let detail = if capture_next {
+            let detail = if capture_request_detail_enabled {
                 Some(RequestDetailSnapshot {
                     request_headers: serialize_request_headers(headers),
                     request_body: Some(message.clone()),
@@ -713,7 +713,7 @@ async fn prepare_inbound_request(
     path: String,
     query: Option<String>,
     body: Body,
-    capture_next: bool,
+    capture_request_detail_enabled: bool,
     request_start: Instant,
     is_debug_log: bool,
 ) -> Result<InboundRequest, Response> {
@@ -722,7 +722,7 @@ async fn prepare_inbound_request(
         &state.log,
         headers,
         body,
-        capture_next,
+        capture_request_detail_enabled,
         &path,
         query.as_deref(),
         request_start,
@@ -734,19 +734,26 @@ async fn prepare_inbound_request(
         &state.log,
         headers,
         body,
-        capture_next,
+        capture_request_detail_enabled,
         &path,
         request_start,
         state.config.max_request_body_bytes,
     )
     .await?;
-    let body = read_body_or_respond(&state.log, headers, body, capture_next, &path, request_start)
-        .await?;
+    let body = read_body_or_respond(
+        &state.log,
+        headers,
+        body,
+        capture_request_detail_enabled,
+        &path,
+        request_start,
+    )
+    .await?;
     if is_debug_log {
         log_debug_request(headers, &body).await;
     }
     let meta = parse_request_meta_best_effort(&path, &body).await;
-    let request_detail = if capture_next {
+    let request_detail = if capture_request_detail_enabled {
         Some(
             capture_request_detail(headers, &body, state.config.max_request_body_bytes).await,
         )
@@ -831,7 +838,7 @@ async fn proxy_request(
     // 只在此处短暂持有读锁，避免影响并发请求性能。
     let state = { state.read().await.clone() };
     let request_start = Instant::now();
-    let capture_next = state.request_detail.take();
+    let capture_request_detail_enabled = state.request_detail.should_capture();
     let is_debug_log = cfg!(debug_assertions)
         && matches!(state.config.log_level, LogLevel::Debug | LogLevel::Trace);
     let (path, _) = extract_request_path(&uri);
@@ -845,7 +852,7 @@ async fn proxy_request(
         path,
         query,
         body,
-        capture_next,
+        capture_request_detail_enabled,
         request_start,
         is_debug_log,
     )

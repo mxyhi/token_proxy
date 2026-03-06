@@ -1,13 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 
-import type { RequestLogDetail } from "@/features/logs/types";
+import type {
+  RequestDetailCaptureState,
+  RequestLogDetail,
+} from "@/features/logs/types";
 
 export async function readRequestDetailCapture() {
-  return await invoke<boolean>("read_request_detail_capture");
+  return await invoke<RequestDetailCaptureState>("read_request_detail_capture");
 }
 
 export async function setRequestDetailCapture(enabled: boolean) {
-  return await invoke<boolean>("set_request_detail_capture", { enabled });
+  return await invoke<RequestDetailCaptureState>("set_request_detail_capture", { enabled });
 }
 
 export async function readRequestLogDetail(id: number) {

@@ -1,3 +1,8 @@
+export type RequestDetailCaptureState = {
+  enabled: boolean;
+  expiresAtMs: number | null;
+};
+
 /// 请求日志详情，包含表格展示的基础字段和详情面板的扩展字段
 export type RequestLogDetail = {
   id: number;

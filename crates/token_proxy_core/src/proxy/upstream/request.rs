@@ -19,7 +19,7 @@ use super::{
     utils::{ensure_query_param, extract_query_param},
     AttemptOutcome,
 };
-use crate::proxy::server_helpers::{log_debug_headers_body, truncate_for_log};
+use crate::proxy::server_helpers::{is_anthropic_path, log_debug_headers_body, truncate_for_log};
 
 const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -40,12 +40,14 @@ pub(super) fn split_path_query(path_with_query: &str) -> (&str, Option<&str>) {
 
 pub(super) fn build_request_headers(
     provider: &str,
+    inbound_path: &str,
     headers: &HeaderMap,
     auth: http::UpstreamAuthHeader,
     extra_headers: Option<&HeaderMap>,
     header_overrides: Option<&[HeaderOverride]>,
 ) -> HeaderMap {
     let mut request_headers = http::build_upstream_headers(headers, auth);
+    sanitize_anthropic_fallback_headers(provider, inbound_path, &mut request_headers);
     if provider == "anthropic" && !request_headers.contains_key(ANTHROPIC_VERSION_HEADER) {
         // Anthropic 官方 API 需要 `anthropic-version`；缺省时补一个稳定默认值，允许客户端覆盖。
         request_headers.insert(
@@ -65,6 +67,29 @@ pub(super) fn build_request_headers(
         apply_header_overrides(&mut request_headers, overrides);
     }
     request_headers
+}
+
+fn sanitize_anthropic_fallback_headers(
+    provider: &str,
+    inbound_path: &str,
+    request_headers: &mut HeaderMap,
+) {
+    if !is_anthropic_path(inbound_path) || provider == "anthropic" {
+        return;
+    }
+    // `anthropic-version` / `anthropic-beta` 只对 Anthropic 原生协议有意义。
+    // 当 Claude/Anthropic 请求 fallback 到其他 provider 时，继续透传这些头
+    // 只会把协议专属元信息泄漏到不相关上游。
+    request_headers.remove(ANTHROPIC_VERSION_HEADER);
+    request_headers.remove("anthropic-beta");
+    let stainless_headers: Vec<HeaderName> = request_headers
+        .keys()
+        .filter(|name| name.as_str().starts_with("x-stainless-"))
+        .cloned()
+        .collect();
+    for name in stainless_headers {
+        request_headers.remove(name);
+    }
 }
 
 pub(super) fn apply_header_overrides(

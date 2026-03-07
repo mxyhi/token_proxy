@@ -108,15 +108,23 @@ fn parse_bearer_header(headers: &HeaderMap) -> Result<Option<String>, String> {
     let Ok(value) = header.to_str() else {
         return Err("Local access key is invalid.".to_string());
     };
-    let value = value.trim();
-    let Some(token) = value.strip_prefix("Bearer ") else {
+    let Some(token) = extract_bearer_token(value) else {
         return Err("Local access key is invalid.".to_string());
     };
+    Ok(Some(token.to_string()))
+}
+
+fn extract_bearer_token(value: &str) -> Option<&str> {
+    let value = value.trim();
+    let (scheme, token) = value.split_once(' ')?;
+    if !scheme.eq_ignore_ascii_case("Bearer") {
+        return None;
+    }
     let token = token.trim();
     if token.is_empty() {
-        return Err("Local access key is invalid.".to_string());
+        return None;
     }
-    Ok(Some(token.to_string()))
+    Some(token)
 }
 
 fn parse_query_key(query: Option<&str>) -> Result<Option<String>, String> {
@@ -222,11 +230,18 @@ pub(crate) fn resolve_upstream_auth(
                     })?
                 }
                 None => {
-                    let Some(value) = request_auth.anthropic_api_key.clone() else {
+                    let Some(value) = request_auth.anthropic_api_key.clone().or_else(|| {
+                        request_auth
+                            .authorization_fallback
+                            .as_ref()
+                            .and_then(|value| value.to_str().ok())
+                            .and_then(extract_bearer_token)
+                            .and_then(|value| HeaderValue::from_str(value).ok())
+                    }) else {
                         tracing::warn!("no API key for Anthropic");
                         return Ok(None);
                     };
-                    tracing::debug!("using request_auth.anthropic_api_key for Anthropic");
+                    tracing::debug!("using request auth fallback for Anthropic");
                     value
                 }
             };

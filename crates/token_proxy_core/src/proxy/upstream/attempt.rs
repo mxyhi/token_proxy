@@ -199,6 +199,7 @@ async fn attempt_send(
         state,
         provider,
         upstream,
+        inbound_path,
         upstream_path_with_query,
         headers,
         meta,
@@ -837,6 +838,7 @@ fn handle_upstream_timeout(
         message,
         response: None,
         is_timeout: true,
+        should_cooldown: true,
     }
 }
 
@@ -872,6 +874,7 @@ fn map_upstream_error(
             message,
             response: None,
             is_timeout: err.is_timeout(),
+            should_cooldown: true,
         };
     }
     let error_message = format!("Upstream request failed: {message}");

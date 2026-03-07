@@ -29,6 +29,7 @@ mod sse;
 mod token_estimator;
 pub mod token_rate;
 mod upstream;
+mod upstream_selector;
 mod usage;
 
 use std::{
@@ -53,6 +54,7 @@ struct ProxyState {
     http_clients: http_client::ProxyHttpClients,
     log: Arc<log::LogWriter>,
     cursors: HashMap<String, Vec<AtomicUsize>>,
+    upstream_selector: upstream_selector::UpstreamSelectorRuntime,
     request_detail: Arc<request_detail::RequestDetailCapture>,
     token_rate: Arc<token_rate::TokenRateTracker>,
     kiro_accounts: Arc<KiroAccountStore>,

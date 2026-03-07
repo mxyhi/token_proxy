@@ -58,12 +58,6 @@ pub(super) fn resolve_group_start(
     }
 }
 
-pub(super) fn build_group_order(group_len: usize, start: usize) -> Vec<usize> {
-    (0..group_len)
-        .map(|offset| (start + offset) % group_len)
-        .collect()
-}
-
 pub(super) fn is_retryable_error(err: &reqwest::Error) -> bool {
     err.is_timeout() || err.is_connect()
 }

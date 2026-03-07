@@ -3,7 +3,7 @@ use super::*;
 use axum::{
     body::{to_bytes, Body},
     extract::State,
-    http::{Method, StatusCode, Uri},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::IntoResponse,
     routing::any,
     Router,
@@ -268,6 +268,7 @@ async fn build_test_state_handle(config: ProxyConfig, data_dir: PathBuf) -> Prox
         http_clients: super::super::http_client::ProxyHttpClients::new().expect("http clients"),
         log: Arc::new(super::super::log::LogWriter::new(None)),
         cursors,
+        upstream_selector: super::super::upstream_selector::UpstreamSelectorRuntime::new(),
         request_detail: Arc::new(super::super::request_detail::RequestDetailCapture::new(
             None,
         )),
@@ -377,6 +378,30 @@ async fn assert_responses_retry_fallback_status(status: StatusCode) {
     );
 }
 
+async fn send_responses_request(state: ProxyStateHandle) -> (StatusCode, Value) {
+    let response = proxy_request(
+        State(state),
+        Method::POST,
+        Uri::from_static(RESPONSES_PATH),
+        axum::http::HeaderMap::new(),
+        Body::from(
+            json!({
+                "model": "gpt-5",
+                "input": "hi"
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("proxy response bytes");
+    let json = serde_json::from_slice(&body).expect("proxy response json");
+    (status, json)
+}
+
 #[test]
 fn responses_request_falls_back_from_400_to_codex() {
     run_async(assert_responses_retry_fallback_status(
@@ -389,6 +414,174 @@ fn responses_request_falls_back_from_403_to_codex() {
     run_async(assert_responses_retry_fallback_status(
         StatusCode::FORBIDDEN,
     ));
+}
+
+#[test]
+fn responses_request_skips_recently_failed_same_provider_upstream() {
+    run_async(async {
+        let primary = spawn_mock_upstream(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({
+                "error": { "message": "primary unavailable" }
+            }),
+        )
+        .await;
+        let secondary = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_from_secondary",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from secondary" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+        )
+        .await;
+
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-primary",
+                primary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-secondary",
+                secondary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        config.upstream_strategy = UpstreamStrategy::PriorityFillFirst;
+
+        let data_dir = next_test_data_dir("responses_same_provider_cooldown");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+
+        let (first_status, first_json) = send_responses_request(state.clone()).await;
+        let (second_status, second_json) = send_responses_request(state).await;
+
+        let primary_requests = primary.requests();
+        let secondary_requests = secondary.requests();
+
+        primary.abort();
+        secondary.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(first_status, StatusCode::OK);
+        assert_eq!(second_status, StatusCode::OK);
+        assert_eq!(
+            first_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from secondary")
+        );
+        assert_eq!(
+            second_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from secondary")
+        );
+        assert_eq!(
+            primary_requests.len(),
+            1,
+            "primary upstream should be cooled down after the first retryable failure"
+        );
+        assert_eq!(secondary_requests.len(), 2);
+    });
+}
+
+#[test]
+fn responses_request_does_not_cooldown_same_provider_upstream_after_400() {
+    run_async(async {
+        let primary = spawn_mock_upstream(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "error": { "message": "primary bad request" }
+            }),
+        )
+        .await;
+        let secondary = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_from_secondary",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from secondary" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+        )
+        .await;
+
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-primary",
+                primary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-secondary",
+                secondary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        config.upstream_strategy = UpstreamStrategy::PriorityFillFirst;
+
+        let data_dir = next_test_data_dir("responses_same_provider_no_cooldown_400");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+
+        let (first_status, first_json) = send_responses_request(state.clone()).await;
+        let (second_status, second_json) = send_responses_request(state).await;
+
+        let primary_requests = primary.requests();
+        let secondary_requests = secondary.requests();
+
+        primary.abort();
+        secondary.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(first_status, StatusCode::OK);
+        assert_eq!(second_status, StatusCode::OK);
+        assert_eq!(
+            first_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from secondary")
+        );
+        assert_eq!(
+            second_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from secondary")
+        );
+        assert_eq!(
+            primary_requests.len(),
+            2,
+            "400 should stay retryable for same-request fallback, but must not cool down the upstream"
+        );
+        assert_eq!(secondary_requests.len(), 2);
+    });
 }
 
 #[test]
@@ -579,6 +772,46 @@ fn anthropic_messages_fallbacks_to_kiro_without_conversion() {
 }
 
 #[test]
+fn anthropic_beta_query_is_not_forwarded_to_responses_fallback() {
+    let config = config_with_providers(&[(PROVIDER_RESPONSES, FORMATS_ALL)]);
+    let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should fallback");
+    let outbound = resolve_outbound_path(
+        "/v1/messages",
+        &plan,
+        &RequestMeta {
+            stream: false,
+            original_model: None,
+            mapped_model: None,
+            reasoning_effort: None,
+            estimated_input_tokens: None,
+        },
+    );
+    let uri = Uri::from_static("/v1/messages?beta=true");
+    let outbound_with_query = build_outbound_path_with_query(&outbound, &uri);
+    assert_eq!(outbound_with_query, RESPONSES_PATH);
+}
+
+#[test]
+fn anthropic_beta_query_is_preserved_for_native_anthropic() {
+    let config = config_with_providers(&[(PROVIDER_ANTHROPIC, FORMATS_MESSAGES)]);
+    let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should dispatch");
+    let outbound = resolve_outbound_path(
+        "/v1/messages",
+        &plan,
+        &RequestMeta {
+            stream: false,
+            original_model: None,
+            mapped_model: None,
+            reasoning_effort: None,
+            estimated_input_tokens: None,
+        },
+    );
+    let uri = Uri::from_static("/v1/messages?beta=true");
+    let outbound_with_query = build_outbound_path_with_query(&outbound, &uri);
+    assert_eq!(outbound_with_query, "/v1/messages?beta=true");
+}
+
+#[test]
 fn anthropic_messages_allows_antigravity_without_conversion() {
     let config = config_with_providers(&[(PROVIDER_ANTIGRAVITY, FORMATS_ALL)]);
     let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should fallback");
@@ -698,4 +931,195 @@ fn gemini_route_dispatches_to_gemini() {
     assert_eq!(plan.provider, PROVIDER_GEMINI);
     assert_eq!(plan.request_transform, FormatTransform::None);
     assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn openai_models_route_prefers_openai_compatible_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/models").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn openai_model_detail_route_prefers_openai_compatible_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_RESPONSES, 0, "responses", FORMATS_RESPONSES),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/models/gpt-5").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_RESPONSES);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn gemini_models_index_route_dispatches_to_gemini() {
+    let config = config_with_providers(&[(PROVIDER_GEMINI, FORMATS_GEMINI)]);
+    let plan = resolve_dispatch_plan(&config, "/v1beta/models").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_GEMINI);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn gemini_model_detail_route_dispatches_to_gemini() {
+    let config = config_with_providers(&[(PROVIDER_GEMINI, FORMATS_GEMINI)]);
+    let plan =
+        resolve_dispatch_plan(&config, "/v1beta/models/gemini-1.5-flash").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_GEMINI);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn openai_models_route_with_anthropic_headers_dispatches_to_anthropic() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+        (PROVIDER_ANTHROPIC, 0, "anthropic", FORMATS_MESSAGES),
+    ]);
+    let mut headers = HeaderMap::new();
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    headers.insert("x-api-key", HeaderValue::from_static("anthropic-key"));
+    let plan = resolve_dispatch_plan_with_request(&config, "/v1/models", &headers, None)
+        .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_ANTHROPIC);
+}
+
+#[test]
+fn openai_models_route_with_anthropic_authorization_dispatches_to_anthropic() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+        (PROVIDER_ANTHROPIC, 0, "anthropic", FORMATS_MESSAGES),
+    ]);
+    let mut headers = HeaderMap::new();
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    headers.insert(
+        axum::http::header::AUTHORIZATION,
+        HeaderValue::from_static("Bearer anthropic-key"),
+    );
+    let plan = resolve_dispatch_plan_with_request(&config, "/v1/models", &headers, None)
+        .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_ANTHROPIC);
+}
+
+#[test]
+fn openai_models_route_with_explicit_anthropic_api_key_dispatches_to_anthropic() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+        (PROVIDER_ANTHROPIC, 0, "anthropic", FORMATS_MESSAGES),
+    ]);
+    let mut headers = HeaderMap::new();
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    headers.insert(
+        "x-anthropic-api-key",
+        HeaderValue::from_static("anthropic-key"),
+    );
+    let plan = resolve_dispatch_plan_with_request(&config, "/v1/models", &headers, None)
+        .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_ANTHROPIC);
+}
+
+#[test]
+fn openai_models_route_with_gemini_query_dispatches_to_gemini_and_rewrites_path() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+        (PROVIDER_GEMINI, 0, "gemini", FORMATS_GEMINI),
+    ]);
+    let headers = HeaderMap::new();
+    let plan =
+        resolve_dispatch_plan_with_request(&config, "/v1/models", &headers, Some("key=test"))
+            .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_GEMINI);
+    let outbound = resolve_outbound_path(
+        "/v1/models",
+        &plan,
+        &RequestMeta {
+            stream: false,
+            original_model: None,
+            mapped_model: None,
+            reasoning_effort: None,
+            estimated_input_tokens: None,
+        },
+    );
+    assert_eq!(outbound, "/v1beta/models");
+}
+
+#[test]
+fn openai_model_detail_route_with_gemini_header_rewrites_to_gemini_model_detail() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+        (PROVIDER_GEMINI, 0, "gemini", FORMATS_GEMINI),
+    ]);
+    let mut headers = HeaderMap::new();
+    headers.insert("x-goog-api-key", HeaderValue::from_static("gemini-key"));
+    let plan =
+        resolve_dispatch_plan_with_request(&config, "/v1/models/gemini-1.5-flash", &headers, None)
+            .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_GEMINI);
+    let outbound = resolve_outbound_path(
+        "/v1/models/gemini-1.5-flash",
+        &plan,
+        &RequestMeta {
+            stream: false,
+            original_model: None,
+            mapped_model: None,
+            reasoning_effort: None,
+            estimated_input_tokens: None,
+        },
+    );
+    assert_eq!(outbound, "/v1beta/models/gemini-1.5-flash");
+}
+
+#[test]
+fn openai_compatible_models_index_route_prefers_openai_provider_and_rewrites_path() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_RESPONSES, 0, "responses", FORMATS_RESPONSES),
+    ]);
+    let headers = HeaderMap::new();
+    let plan = resolve_dispatch_plan_with_request(&config, "/v1beta/openai/models", &headers, None)
+        .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_RESPONSES);
+    let outbound = resolve_outbound_path(
+        "/v1beta/openai/models",
+        &plan,
+        &RequestMeta {
+            stream: false,
+            original_model: None,
+            mapped_model: None,
+            reasoning_effort: None,
+            estimated_input_tokens: None,
+        },
+    );
+    assert_eq!(outbound, "/v1/models");
+}
+
+#[test]
+fn openai_compatible_model_detail_route_rewrites_to_openai_models_detail() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let headers = HeaderMap::new();
+    let plan =
+        resolve_dispatch_plan_with_request(&config, "/v1beta/openai/models/gpt-5", &headers, None)
+            .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+    let outbound = resolve_outbound_path(
+        "/v1beta/openai/models/gpt-5",
+        &plan,
+        &RequestMeta {
+            stream: false,
+            original_model: None,
+            mapped_model: None,
+            reasoning_effort: None,
+            estimated_input_tokens: None,
+        },
+    );
+    assert_eq!(outbound, "/v1/models/gpt-5");
 }

@@ -22,7 +22,7 @@ mod request;
 mod result;
 mod utils;
 
-use utils::{build_group_order, resolve_group_start};
+use utils::resolve_group_start;
 
 #[cfg(test)]
 use crate::proxy::redact::redact_query_param_value;
@@ -165,6 +165,7 @@ enum AttemptOutcome {
         message: String,
         response: Option<Response>,
         is_timeout: bool,
+        should_cooldown: bool,
     },
     Fatal(Response),
     SkippedAuth,
@@ -180,6 +181,7 @@ fn apply_attempt_outcome(result: &mut GroupAttemptResult, outcome: AttemptOutcom
             message,
             response,
             is_timeout,
+            should_cooldown: _,
         } => {
             if is_timeout {
                 result.last_timeout_error = Some(message.clone());
@@ -376,7 +378,13 @@ async fn try_group_upstreams(
 ) -> GroupAttemptResult {
     let mut result = GroupAttemptResult::new();
     let start = resolve_group_start(state, provider, group_index, items.len());
-    for item_index in build_group_order(items.len(), start) {
+    let order = state.upstream_selector.order_group(
+        state.config.upstream_strategy.clone(),
+        provider,
+        items,
+        start,
+    );
+    for item_index in order {
         let upstream = &items[item_index];
         if let Some(inbound_format) = inbound_format {
             if !upstream.supports_inbound(inbound_format) {
@@ -398,6 +406,22 @@ async fn try_group_upstreams(
             request_detail.clone(),
         )
         .await;
+        match &outcome {
+            AttemptOutcome::Success(_) => {
+                state
+                    .upstream_selector
+                    .clear_cooldown(provider, upstream.id.as_str());
+            }
+            AttemptOutcome::Retryable {
+                should_cooldown: true,
+                ..
+            } => {
+                state
+                    .upstream_selector
+                    .mark_retryable_failure(provider, upstream.id.as_str());
+            }
+            _ => {}
+        }
         if !matches!(outcome, AttemptOutcome::SkippedAuth) {
             result.attempted += 1;
         }
@@ -412,6 +436,7 @@ async fn prepare_upstream_request(
     state: &ProxyState,
     provider: &str,
     upstream: &UpstreamRuntime,
+    inbound_path: &str,
     upstream_path_with_query: &str,
     headers: &HeaderMap,
     meta: &RequestMeta,
@@ -438,6 +463,7 @@ async fn prepare_upstream_request(
     } = resolved;
     let request_headers = request::build_request_headers(
         provider,
+        inbound_path,
         headers,
         auth,
         extra_headers.as_ref(),

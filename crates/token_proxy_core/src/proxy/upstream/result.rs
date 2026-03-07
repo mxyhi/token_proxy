@@ -27,6 +27,7 @@ pub(super) async fn handle_upstream_result(
 ) -> AttemptOutcome {
     match upstream_res {
         Ok(res) if is_retryable_status(res.status()) => {
+            let status = res.status();
             let response = build_proxy_response_buffered(
                 meta,
                 provider,
@@ -44,6 +45,9 @@ pub(super) async fn handle_upstream_result(
                 message: format!("Upstream responded with {}", response.status()),
                 response: Some(response),
                 is_timeout: false,
+                should_cooldown: status == StatusCode::FORBIDDEN
+                    || status == StatusCode::TOO_MANY_REQUESTS
+                    || status.is_server_error(),
             }
         }
         Ok(res) => {
@@ -84,6 +88,7 @@ pub(super) async fn handle_upstream_result(
                 message,
                 response: None,
                 is_timeout: err.is_timeout(),
+                should_cooldown: true,
             }
         }
         Err(err) => {

@@ -1,4 +1,5 @@
 use super::*;
+use axum::http::header::AUTHORIZATION;
 
 #[tokio::test]
 async fn filters_prompt_cache_retention_for_openai_responses_upstream() {
@@ -165,4 +166,128 @@ async fn filter_safety_identifier_is_noop_when_disabled() {
     };
 
     assert!(rewritten.is_none());
+}
+
+#[test]
+fn anthropic_specific_headers_are_removed_for_responses_fallback() {
+    let mut headers = HeaderMap::new();
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    headers.insert(
+        "anthropic-beta",
+        HeaderValue::from_static("interleaved-thinking-2025-05-14"),
+    );
+    headers.insert("x-custom", HeaderValue::from_static("keep"));
+
+    let built = build_request_headers(
+        "openai-response",
+        "/v1/messages",
+        &headers,
+        http::UpstreamAuthHeader {
+            name: AUTHORIZATION,
+            value: HeaderValue::from_static("Bearer upstream"),
+        },
+        None,
+        None,
+    );
+
+    assert!(!built.contains_key("anthropic-version"));
+    assert!(!built.contains_key("anthropic-beta"));
+    assert_eq!(
+        built.get("x-custom").and_then(|v| v.to_str().ok()),
+        Some("keep")
+    );
+}
+
+#[test]
+fn anthropic_specific_headers_are_preserved_for_native_anthropic() {
+    let mut headers = HeaderMap::new();
+    headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    headers.insert(
+        "anthropic-beta",
+        HeaderValue::from_static("interleaved-thinking-2025-05-14"),
+    );
+
+    let built = build_request_headers(
+        "anthropic",
+        "/v1/messages",
+        &headers,
+        http::UpstreamAuthHeader {
+            name: HeaderName::from_static("x-api-key"),
+            value: HeaderValue::from_static("anthropic-upstream"),
+        },
+        None,
+        None,
+    );
+
+    assert_eq!(
+        built.get("anthropic-version").and_then(|v| v.to_str().ok()),
+        Some("2023-06-01")
+    );
+    assert_eq!(
+        built.get("anthropic-beta").and_then(|v| v.to_str().ok()),
+        Some("interleaved-thinking-2025-05-14")
+    );
+}
+
+#[test]
+fn anthropic_stainless_headers_are_removed_for_responses_fallback() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-stainless-lang", HeaderValue::from_static("js"));
+    headers.insert(
+        "x-stainless-package-version",
+        HeaderValue::from_static("1.2.3"),
+    );
+    headers.insert("x-custom", HeaderValue::from_static("keep"));
+
+    let built = build_request_headers(
+        "openai-response",
+        "/v1/messages",
+        &headers,
+        http::UpstreamAuthHeader {
+            name: AUTHORIZATION,
+            value: HeaderValue::from_static("Bearer upstream"),
+        },
+        None,
+        None,
+    );
+
+    assert!(!built.contains_key("x-stainless-lang"));
+    assert!(!built.contains_key("x-stainless-package-version"));
+    assert_eq!(
+        built.get("x-custom").and_then(|v| v.to_str().ok()),
+        Some("keep")
+    );
+}
+
+#[test]
+fn anthropic_stainless_headers_are_preserved_for_native_anthropic() {
+    let mut headers = HeaderMap::new();
+    headers.insert("x-stainless-lang", HeaderValue::from_static("js"));
+    headers.insert(
+        "x-stainless-package-version",
+        HeaderValue::from_static("1.2.3"),
+    );
+
+    let built = build_request_headers(
+        "anthropic",
+        "/v1/messages",
+        &headers,
+        http::UpstreamAuthHeader {
+            name: HeaderName::from_static("x-api-key"),
+            value: HeaderValue::from_static("anthropic-upstream"),
+        },
+        None,
+        None,
+    );
+
+    assert_eq!(
+        built.get("x-stainless-lang").and_then(|v| v.to_str().ok()),
+        Some("js")
+    );
+    assert_eq!(
+        built
+            .get("x-stainless-package-version")
+            .and_then(|v| v.to_str().ok()),
+        Some("1.2.3")
+    );
 }

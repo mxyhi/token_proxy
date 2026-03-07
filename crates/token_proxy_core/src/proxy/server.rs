@@ -6,6 +6,7 @@ use axum::{
 };
 use std::{sync::Arc, time::Instant};
 use tokio::sync::RwLock;
+use url::form_urlencoded;
 
 use super::{
     config::{InboundApiFormat, ProxyConfig},
@@ -287,6 +288,109 @@ fn resolve_formatless_plan(config: &ProxyConfig) -> Result<DispatchPlan, String>
     Ok(base_plan(provider))
 }
 
+fn is_openai_models_path(path: &str) -> bool {
+    path == "/v1/models" || path.starts_with("/v1/models/")
+}
+
+fn is_openai_compatible_models_path(path: &str) -> bool {
+    path == "/v1beta/openai/models" || path.starts_with("/v1beta/openai/models/")
+}
+
+fn is_anthropic_models_request(headers: &HeaderMap) -> bool {
+    headers.contains_key("anthropic-version")
+        && (headers.contains_key("x-api-key")
+            || headers.contains_key("x-anthropic-api-key")
+            || headers.contains_key(axum::http::header::AUTHORIZATION))
+}
+
+fn is_gemini_models_request(headers: &HeaderMap, query: Option<&str>) -> bool {
+    if headers.contains_key("x-goog-api-key") {
+        return true;
+    }
+    let Some(query) = query else {
+        return false;
+    };
+    form_urlencoded::parse(query.as_bytes()).any(|(key, value)| key == "key" && !value.is_empty())
+}
+
+fn is_gemini_model_catalog_path(path: &str) -> bool {
+    if path == "/v1beta/models" {
+        return true;
+    }
+    let Some(rest) = path.strip_prefix("/v1beta/models/") else {
+        return false;
+    };
+    !rest.is_empty() && !rest.contains(':')
+}
+
+fn resolve_models_plan(
+    config: &ProxyConfig,
+    path: &str,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> Option<Result<DispatchPlan, String>> {
+    if is_openai_compatible_models_path(path) {
+        let provider =
+            choose_provider_by_priority(config, None, &[PROVIDER_CHAT, PROVIDER_RESPONSES])
+                .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+        return Some(provider.map(base_plan));
+    }
+    if is_openai_models_path(path) {
+        if is_anthropic_models_request(headers) {
+            let provider = choose_provider_by_priority(config, None, &[PROVIDER_ANTHROPIC])
+                .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+            return Some(provider.map(base_plan));
+        }
+        if is_gemini_models_request(headers, query) {
+            let provider = choose_provider_by_priority(config, None, &[PROVIDER_GEMINI])
+                .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+            return Some(provider.map(base_plan));
+        }
+        // `/v1/models` 属于 OpenAI-compatible 模型目录路由。
+        // 这里显式只在 OpenAI-compatible provider 中选择，避免被更高优先级的
+        // Anthropic provider 误吞掉。
+        let provider =
+            choose_provider_by_priority(config, None, &[PROVIDER_CHAT, PROVIDER_RESPONSES])
+                .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+        return Some(provider.map(base_plan));
+    }
+    if is_gemini_model_catalog_path(path) {
+        // Gemini 的模型目录路由与 `:generateContent` 主调用路径不同；
+        // 需要在 path 层显式识别，不能继续走 formatless fallback。
+        let provider = choose_provider_by_priority(config, None, &[PROVIDER_GEMINI])
+            .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+        return Some(provider.map(base_plan));
+    }
+    None
+}
+
+fn resolve_dispatch_plan_with_request(
+    config: &ProxyConfig,
+    path: &str,
+    headers: &HeaderMap,
+    query: Option<&str>,
+) -> Result<DispatchPlan, String> {
+    if let Some(plan) = resolve_models_plan(config, path, headers, query) {
+        return plan;
+    }
+    if let Some(plan) = resolve_gemini_plan(config, path) {
+        return plan;
+    }
+    if let Some(plan) = resolve_anthropic_plan(config, path) {
+        return plan;
+    }
+
+    let Some(format) = detect_inbound_api_format(path) else {
+        return resolve_formatless_plan(config);
+    };
+
+    match format {
+        InboundApiFormat::OpenaiChat => resolve_chat_plan(config),
+        InboundApiFormat::OpenaiResponses => resolve_responses_plan(config),
+        _ => resolve_formatless_plan(config),
+    }
+}
+
 fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
     let inbound_format = Some(InboundApiFormat::OpenaiChat);
     if provider_rank_for_inbound(config, PROVIDER_CHAT, inbound_format).is_some() {
@@ -400,28 +504,20 @@ fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> 
     })
 }
 
+#[cfg(test)]
 fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPlan, String> {
-    if let Some(plan) = resolve_gemini_plan(config, path) {
-        return plan;
-    }
-    if let Some(plan) = resolve_anthropic_plan(config, path) {
-        return plan;
-    }
-
-    let Some(format) = detect_inbound_api_format(path) else {
-        return resolve_formatless_plan(config);
-    };
-
-    match format {
-        InboundApiFormat::OpenaiChat => resolve_chat_plan(config),
-        InboundApiFormat::OpenaiResponses => resolve_responses_plan(config),
-        _ => resolve_formatless_plan(config),
-    }
+    resolve_dispatch_plan_with_request(config, path, &HeaderMap::new(), None)
 }
 
 fn resolve_outbound_path(path: &str, plan: &DispatchPlan, meta: &RequestMeta) -> String {
     match (plan.outbound_path, plan.provider) {
         (Some(outbound_path), _) => outbound_path.to_string(),
+        (None, _) if is_openai_compatible_models_path(path) => {
+            path.replacen("/v1beta/openai/models", "/v1/models", 1)
+        }
+        (None, PROVIDER_GEMINI) if is_openai_models_path(path) => {
+            path.replacen("/v1/models", "/v1beta/models", 1)
+        }
         (None, PROVIDER_GEMINI) if plan.request_transform != FormatTransform::None => {
             let model = meta
                 .mapped_model
@@ -661,10 +757,11 @@ async fn resolve_plan_or_respond(
     body: Body,
     capture_request_detail_enabled: bool,
     path: &str,
+    query: Option<&str>,
     request_start: Instant,
     max_body_bytes: usize,
 ) -> Result<(DispatchPlan, Body), Response> {
-    match resolve_dispatch_plan(config, path) {
+    match resolve_dispatch_plan_with_request(config, path, headers, query) {
         Ok(plan) => {
             tracing::debug!(provider = %plan.provider, "dispatch plan resolved");
             Ok((plan, body))
@@ -858,9 +955,35 @@ fn resolve_request_auth_or_respond(
 }
 
 fn build_outbound_path_with_query(outbound_path: &str, uri: &Uri) -> String {
-    uri.query()
-        .map(|query| format!("{outbound_path}?{query}"))
-        .unwrap_or_else(|| outbound_path.to_string())
+    let Some(query) = uri.query() else {
+        return outbound_path.to_string();
+    };
+    let outbound_query = sanitize_outbound_query(uri.path(), outbound_path, query);
+    if outbound_query.is_empty() {
+        return outbound_path.to_string();
+    }
+    format!("{outbound_path}?{outbound_query}")
+}
+
+fn sanitize_outbound_query(inbound_path: &str, outbound_path: &str, query: &str) -> String {
+    if !is_anthropic_path(inbound_path) || is_anthropic_path(outbound_path) {
+        return query.to_string();
+    }
+    // `beta=true` 只对 Anthropic 原生 `/v1/messages*` 有意义；
+    // 当请求 fallback 到 OpenAI/Gemini 兼容 provider 时，继续透传只会把
+    // Anthropic 专属 query 泄漏到不相关上游。
+    let pairs: Vec<(String, String)> = form_urlencoded::parse(query.as_bytes())
+        .filter(|(key, _)| key != "beta")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    if pairs.is_empty() {
+        return String::new();
+    }
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    for (key, value) in pairs {
+        serializer.append_pair(&key, &value);
+    }
+    serializer.finish()
 }
 
 async fn prepare_inbound_request(
@@ -892,6 +1015,7 @@ async fn prepare_inbound_request(
         body,
         capture_request_detail_enabled,
         &path,
+        query.as_deref(),
         request_start,
         state.config.max_request_body_bytes,
     )

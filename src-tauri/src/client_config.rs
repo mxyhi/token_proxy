@@ -381,6 +381,33 @@ fn build_openai_compat_base_url(proxy_http_base_url: &str) -> String {
     format!("{proxy_http_base_url}/v1")
 }
 
+fn build_opencode_model_display_name(model: &str) -> String {
+    let display = model
+        .split('-')
+        .map(str::trim)
+        .filter(|segment| !segment.is_empty())
+        .map(title_case_segment)
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if display.is_empty() {
+        model.to_string()
+    } else {
+        display
+    }
+}
+
+fn title_case_segment(segment: &str) -> String {
+    let mut chars = segment.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+
+    let mut title = first.to_uppercase().collect::<String>();
+    title.push_str(&chars.as_str().to_lowercase());
+    title
+}
+
 fn collect_opencode_models(config: &ProxyConfigFile) -> Vec<String> {
     let mut models = HashSet::new();
     for upstream in &config.upstreams {
@@ -407,7 +434,7 @@ fn build_opencode_provider_config(base_url: &str, models: &[String]) -> serde_js
             model.to_string(),
             serde_json::Value::Object(serde_json::Map::from_iter([(
                 "name".to_string(),
-                serde_json::Value::String(model.to_string()),
+                serde_json::Value::String(build_opencode_model_display_name(model)),
             )])),
         );
     }
@@ -521,6 +548,40 @@ async fn write_text_with_backup(path: &Path, contents: String) -> Result<(), Str
         .await
         .map_err(|err| format!("Failed to write {}: {err}", path.display()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_opencode_provider_config;
+
+    #[test]
+    fn opencode_provider_uses_readable_model_display_names() {
+        let config = build_opencode_provider_config(
+            "http://127.0.0.1:9208/v1",
+            &["claude-sonnet-4-5".to_string(), "gpt-5.2-codex".to_string()],
+        );
+
+        let models = config
+            .get("models")
+            .and_then(serde_json::Value::as_object)
+            .expect("models object");
+
+        let claude_name = models
+            .get("claude-sonnet-4-5")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|value| value.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .expect("claude display name");
+        let gpt_name = models
+            .get("gpt-5.2-codex")
+            .and_then(serde_json::Value::as_object)
+            .and_then(|value| value.get("name"))
+            .and_then(serde_json::Value::as_str)
+            .expect("gpt display name");
+
+        assert_eq!(claude_name, "Claude Sonnet 4 5");
+        assert_eq!(gpt_name, "Gpt 5.2 Codex");
+    }
 }
 
 fn build_backup_path(path: &Path) -> PathBuf {

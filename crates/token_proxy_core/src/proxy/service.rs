@@ -369,6 +369,7 @@ async fn build_proxy_state(
         http_clients,
         log,
         cursors,
+        upstream_selector: super::upstream_selector::UpstreamSelectorRuntime::new(),
         request_detail,
         token_rate,
         kiro_accounts,

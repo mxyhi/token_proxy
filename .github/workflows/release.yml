@@ -194,6 +194,63 @@ jobs:
           prerelease: false
           generateReleaseNotes: false
 
+      # CLI 复用当前 target 矩阵单独构建并上传到同一个 GitHub Release，
+      # 这样桌面端与命令行端共享同一版本号，但不相互耦合打包格式。
+      - name: Build CLI binary
+        run: cargo build -p token_proxy_cli --release --locked --target ${{ matrix.target }}
+
+      - name: Verify CLI binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/token-proxy --help >/dev/null
+
+      - name: Verify CLI binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\target\${{ matrix.target }}\release\token-proxy.exe --help > $null
+
+      - name: Package CLI archive
+        id: cli_asset_unix
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ needs.stable_tag.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p dist/cli
+          asset_name="token-proxy_${VERSION}_${TARGET}.tar.gz"
+          tar -C "target/${TARGET}/release" -czf "dist/cli/${asset_name}" token-proxy
+          echo "asset_path=dist/cli/${asset_name}" >> "$GITHUB_OUTPUT"
+          echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Package CLI archive (Windows)
+        id: cli_asset_windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.stable_tag.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/cli | Out-Null
+          $assetName = "token-proxy_$env:VERSION" + "_$env:TARGET.zip"
+          Compress-Archive -Path "target/$env:TARGET/release/token-proxy.exe" -DestinationPath "dist/cli/$assetName" -Force
+          "asset_path=dist/cli/$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "asset_name=$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Upload CLI archive
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.stable_tag.outputs.tag }}" "${{ steps.cli_asset_unix.outputs.asset_path }}" --clobber
+
+      - name: Upload CLI archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.stable_tag.outputs.tag }}" "${{ steps.cli_asset_windows.outputs.asset_path }}" --clobber
+
       - name: Verify macOS (aarch64) updater assets uploaded
         if: matrix.target == 'aarch64-apple-darwin'
         shell: bash

@@ -49,6 +49,9 @@ curl -X POST \
 - This repo is now a Cargo workspace; the Tauri app still lives in `src-tauri/`.
 - CLI crate: `crates/token_proxy_cli` (binary `token-proxy`).
 - Default config path: `./config.jsonc` (override with `--config`).
+- GitHub Releases also publish packaged CLI archives per target:
+  - Unix: `token-proxy_<version>_<target>.tar.gz`
+  - Windows: `token-proxy_<version>_<target>.zip`
 
 ```bash
 # start proxy

@@ -3,6 +3,7 @@ use futures_util::StreamExt;
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},
+    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -15,8 +16,9 @@ static TEMP_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 // 将入站请求体缓存为“可重放”形式：小体积保留在内存，超过阈值则落盘到临时文件。
 // 这样可以在上游重试/降级时，重复发送同一份请求体（代价是需要先完整读取请求体）。
+#[derive(Clone)]
 pub(crate) struct ReplayableBody {
-    inner: ReplayableBodyInner,
+    inner: Arc<ReplayableBodyInner>,
     len: u64,
 }
 
@@ -29,7 +31,7 @@ impl ReplayableBody {
     pub(crate) fn from_bytes(bytes: Bytes) -> Self {
         Self {
             len: bytes.len() as u64,
-            inner: ReplayableBodyInner::InMemory(bytes),
+            inner: Arc::new(ReplayableBodyInner::InMemory(bytes)),
         }
     }
 
@@ -41,7 +43,10 @@ impl ReplayableBody {
 
         while let Some(next) = stream.next().await {
             let chunk = next.map_err(|err| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("Read request body failed: {err}"))
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Read request body failed: {err}"),
+                )
             })?;
             len = len.saturating_add(chunk.len() as u64);
 
@@ -77,13 +82,13 @@ impl ReplayableBody {
                 return Err(err);
             }
             return Ok(Self {
-                inner: ReplayableBodyInner::TempFile { path },
+                inner: Arc::new(ReplayableBodyInner::TempFile { path }),
                 len,
             });
         }
 
         Ok(Self {
-            inner: ReplayableBodyInner::InMemory(Bytes::from(buffer)),
+            inner: Arc::new(ReplayableBodyInner::InMemory(Bytes::from(buffer))),
             len,
         })
     }
@@ -99,7 +104,7 @@ impl ReplayableBody {
             return Ok(None);
         }
 
-        match &self.inner {
+        match self.inner.as_ref() {
             ReplayableBodyInner::InMemory(bytes) => Ok(Some(bytes.clone())),
             ReplayableBodyInner::TempFile { path } => {
                 let mut file = tokio::fs::File::open(path).await?;
@@ -118,7 +123,7 @@ impl ReplayableBody {
     }
 
     pub(crate) async fn to_reqwest_body(&self) -> Result<reqwest::Body, std::io::Error> {
-        match &self.inner {
+        match self.inner.as_ref() {
             ReplayableBodyInner::InMemory(bytes) => Ok(reqwest::Body::from(bytes.clone())),
             ReplayableBodyInner::TempFile { path } => {
                 let file = tokio::fs::File::open(path).await?;
@@ -130,7 +135,10 @@ impl ReplayableBody {
 
 impl Drop for ReplayableBody {
     fn drop(&mut self) {
-        if let ReplayableBodyInner::TempFile { path } = &self.inner {
+        if Arc::strong_count(&self.inner) != 1 {
+            return;
+        }
+        if let ReplayableBodyInner::TempFile { path } = self.inner.as_ref() {
             cleanup_temp_file(path);
         }
     }
@@ -172,11 +180,11 @@ fn cleanup_temp_file(path: &PathBuf) {
 #[cfg(test)]
 impl ReplayableBody {
     fn is_temp_file(&self) -> bool {
-        matches!(self.inner, ReplayableBodyInner::TempFile { .. })
+        matches!(self.inner.as_ref(), ReplayableBodyInner::TempFile { .. })
     }
 
     fn temp_path(&self) -> Option<PathBuf> {
-        match &self.inner {
+        match self.inner.as_ref() {
             ReplayableBodyInner::TempFile { path } => Some(path.clone()),
             ReplayableBodyInner::InMemory(_) => None,
         }

@@ -4,23 +4,19 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, Uri},
     response::Response,
 };
-use std::{
-    sync::Arc,
-    time::Instant,
-};
+use std::{sync::Arc, time::Instant};
 use tokio::sync::RwLock;
 
 use super::{
     config::{InboundApiFormat, ProxyConfig},
-    gemini,
-    http,
+    gemini, http,
     inbound::detect_inbound_api_format,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     openai_compat::{
         FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES, RESPONSES_PATH,
     },
-    request_detail::{capture_request_detail, serialize_request_headers, RequestDetailSnapshot},
     request_body::ReplayableBody,
+    request_detail::{capture_request_detail, serialize_request_headers, RequestDetailSnapshot},
     server_helpers::{
         extract_request_path, is_anthropic_path, log_debug_request,
         maybe_force_openai_stream_options_include_usage, maybe_transform_request_body,
@@ -58,6 +54,7 @@ struct PreparedRequest {
     plan: DispatchPlan,
     meta: RequestMeta,
     request_detail: Option<RequestDetailSnapshot>,
+    source_body: ReplayableBody,
     outbound_body: ReplayableBody,
     request_auth: http::RequestAuth,
 }
@@ -169,9 +166,11 @@ fn resolve_gemini_plan(config: &ProxyConfig, path: &str) -> Option<Result<Dispat
         return None;
     }
     let inbound_format = Some(InboundApiFormat::Gemini);
-    if let Some(selected) =
-        choose_provider_by_priority(config, inbound_format, &[PROVIDER_GEMINI, PROVIDER_ANTIGRAVITY])
-    {
+    if let Some(selected) = choose_provider_by_priority(
+        config,
+        inbound_format,
+        &[PROVIDER_GEMINI, PROVIDER_ANTIGRAVITY],
+    ) {
         return Some(Ok(base_plan(selected)));
     }
     let fallback = choose_provider_by_priority(
@@ -215,9 +214,11 @@ fn resolve_anthropic_plan(
     let inbound_format = Some(InboundApiFormat::AnthropicMessages);
     if path == "/v1/messages" {
         // Claude Code uses /v1/messages. Prefer native providers (Anthropic/Kiro) by priority.
-        if let Some(selected) =
-            choose_provider_by_priority(config, inbound_format, &[PROVIDER_ANTHROPIC, PROVIDER_KIRO])
-        {
+        if let Some(selected) = choose_provider_by_priority(
+            config,
+            inbound_format,
+            &[PROVIDER_ANTHROPIC, PROVIDER_KIRO],
+        ) {
             return Some(Ok(match selected {
                 PROVIDER_ANTHROPIC => base_plan(PROVIDER_ANTHROPIC),
                 PROVIDER_KIRO => DispatchPlan {
@@ -341,9 +342,11 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
 
 fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
     let inbound_format = Some(InboundApiFormat::OpenaiResponses);
-    if let Some(selected) =
-        choose_provider_by_priority(config, inbound_format, &[PROVIDER_RESPONSES, PROVIDER_CODEX])
-    {
+    if let Some(selected) = choose_provider_by_priority(
+        config,
+        inbound_format,
+        &[PROVIDER_RESPONSES, PROVIDER_CODEX],
+    ) {
         if selected == PROVIDER_RESPONSES {
             return Ok(base_plan(PROVIDER_RESPONSES));
         }
@@ -416,6 +419,158 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
     }
 }
 
+fn resolve_outbound_path(path: &str, plan: &DispatchPlan, meta: &RequestMeta) -> String {
+    match (plan.outbound_path, plan.provider) {
+        (Some(outbound_path), _) => outbound_path.to_string(),
+        (None, PROVIDER_GEMINI) if plan.request_transform != FormatTransform::None => {
+            let model = meta
+                .mapped_model
+                .as_deref()
+                .or(meta.original_model.as_deref())
+                .unwrap_or("gemini-1.5-flash");
+            let suffix = if meta.stream {
+                ":streamGenerateContent"
+            } else {
+                ":generateContent"
+            };
+            format!("{}{}{}", gemini::GEMINI_MODELS_PREFIX, model, suffix)
+        }
+        (None, _) => path.to_string(),
+    }
+}
+
+fn build_retry_fallback_plan(path: &str, provider: &'static str) -> Option<DispatchPlan> {
+    if path == "/v1/messages" {
+        return Some(match provider {
+            PROVIDER_ANTHROPIC => base_plan(PROVIDER_ANTHROPIC),
+            PROVIDER_KIRO => DispatchPlan {
+                provider: PROVIDER_KIRO,
+                outbound_path: Some(RESPONSES_PATH),
+                request_transform: FormatTransform::None,
+                response_transform: FormatTransform::KiroToAnthropic,
+            },
+            _ => return None,
+        });
+    }
+
+    match detect_inbound_api_format(path) {
+        Some(InboundApiFormat::OpenaiChat) => match provider {
+            PROVIDER_RESPONSES => Some(DispatchPlan {
+                provider: PROVIDER_RESPONSES,
+                outbound_path: Some(RESPONSES_PATH),
+                request_transform: FormatTransform::ChatToResponses,
+                response_transform: FormatTransform::ResponsesToChat,
+            }),
+            PROVIDER_CODEX => Some(DispatchPlan {
+                provider: PROVIDER_CODEX,
+                outbound_path: Some(CODEX_RESPONSES_PATH),
+                request_transform: FormatTransform::ChatToCodex,
+                response_transform: FormatTransform::CodexToChat,
+            }),
+            _ => None,
+        },
+        Some(InboundApiFormat::OpenaiResponses) => match provider {
+            PROVIDER_RESPONSES => Some(base_plan(PROVIDER_RESPONSES)),
+            PROVIDER_CODEX => Some(DispatchPlan {
+                provider: PROVIDER_CODEX,
+                outbound_path: Some(CODEX_RESPONSES_PATH),
+                request_transform: FormatTransform::ResponsesToCodex,
+                response_transform: FormatTransform::CodexToResponses,
+            }),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn resolve_retry_fallback_provider(
+    path: &str,
+    primary_provider: &str,
+) -> Option<(&'static str, Option<InboundApiFormat>)> {
+    if path == "/v1/messages" {
+        let fallback = match primary_provider {
+            PROVIDER_ANTHROPIC => PROVIDER_KIRO,
+            PROVIDER_KIRO => PROVIDER_ANTHROPIC,
+            _ => return None,
+        };
+        return Some((fallback, Some(InboundApiFormat::AnthropicMessages)));
+    }
+
+    match (detect_inbound_api_format(path), primary_provider) {
+        (Some(InboundApiFormat::OpenaiChat), PROVIDER_RESPONSES | PROVIDER_CODEX) => Some((
+            if primary_provider == PROVIDER_RESPONSES {
+                PROVIDER_CODEX
+            } else {
+                PROVIDER_RESPONSES
+            },
+            Some(InboundApiFormat::OpenaiChat),
+        )),
+        (Some(InboundApiFormat::OpenaiResponses), PROVIDER_RESPONSES | PROVIDER_CODEX) => Some((
+            if primary_provider == PROVIDER_RESPONSES {
+                PROVIDER_CODEX
+            } else {
+                PROVIDER_RESPONSES
+            },
+            Some(InboundApiFormat::OpenaiResponses),
+        )),
+        _ => None,
+    }
+}
+
+fn resolve_retry_fallback_plan(
+    config: &ProxyConfig,
+    path: &str,
+    primary_provider: &str,
+) -> Option<DispatchPlan> {
+    // 跨 provider fallback 需要重新构建目标 provider 的 dispatch plan：
+    // chat/responses 到 `openai-response` / `codex` 的 request_transform 不同，
+    // 不能复用主请求已经变换过的计划或 payload。
+    let (fallback_provider, inbound_format) =
+        resolve_retry_fallback_provider(path, primary_provider)?;
+    if provider_rank_for_inbound(config, fallback_provider, inbound_format).is_none() {
+        return None;
+    }
+    build_retry_fallback_plan(path, fallback_provider)
+}
+
+async fn forward_retry_fallback_request(
+    state: Arc<ProxyState>,
+    method: Method,
+    uri: &Uri,
+    headers: &HeaderMap,
+    prepared: &PreparedRequest,
+    request_start: Instant,
+    plan: &DispatchPlan,
+) -> Result<super::upstream::ForwardUpstreamResult, Response> {
+    let outbound_path = resolve_outbound_path(&prepared.path, plan, &prepared.meta);
+    let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, uri);
+    let outbound_body = build_outbound_body_or_respond(
+        &state.http_clients,
+        &state.log,
+        prepared.request_detail.clone(),
+        &prepared.path,
+        plan,
+        &prepared.meta,
+        prepared.source_body.clone(),
+        request_start,
+    )
+    .await?;
+    Ok(forward_upstream_request(
+        state,
+        method,
+        plan.provider,
+        &prepared.path,
+        &outbound_path_with_query,
+        headers,
+        &outbound_body,
+        &prepared.meta,
+        &prepared.request_auth,
+        plan.response_transform,
+        prepared.request_detail.clone(),
+    )
+    .await)
+}
+
 async fn capture_detail_from_body(
     headers: &HeaderMap,
     body: Body,
@@ -440,8 +595,9 @@ fn log_request_error(
     response_error: String,
     start: Instant,
 ) {
-    let (request_headers, request_body) =
-        detail.map(|detail| (detail.request_headers, detail.request_body)).unwrap_or((None, None));
+    let (request_headers, request_body) = detail
+        .map(|detail| (detail.request_headers, detail.request_body))
+        .unwrap_or((None, None));
     let context = LogContext {
         path: path.to_string(),
         provider: provider.to_string(),
@@ -754,9 +910,7 @@ async fn prepare_inbound_request(
     }
     let meta = parse_request_meta_best_effort(&path, &body).await;
     let request_detail = if capture_request_detail_enabled {
-        Some(
-            capture_request_detail(headers, &body, state.config.max_request_body_bytes).await,
-        )
+        Some(capture_request_detail(headers, &body, state.config.max_request_body_bytes).await)
     } else {
         None
     };
@@ -776,26 +930,8 @@ async fn finalize_prepared_request(
     inbound: InboundRequest,
     request_start: Instant,
 ) -> Result<PreparedRequest, Response> {
-    // 对于 ChatToGemini 转换，需要根据 model 动态构建 Gemini 路径
-    let outbound_path = match (inbound.plan.outbound_path, inbound.plan.provider) {
-        (Some(path), _) => path.to_string(),
-        (None, PROVIDER_GEMINI) if inbound.plan.request_transform != FormatTransform::None => {
-            // 从 meta 中获取 model，构建 Gemini API 路径
-            let model = inbound
-                .meta
-                .mapped_model
-                .as_deref()
-                .or(inbound.meta.original_model.as_deref())
-                .unwrap_or("gemini-1.5-flash");
-            let suffix = if inbound.meta.stream {
-                ":streamGenerateContent"
-            } else {
-                ":generateContent"
-            };
-            format!("{}{}{}", gemini::GEMINI_MODELS_PREFIX, model, suffix)
-        }
-        (None, _) => inbound.path.clone(),
-    };
+    let source_body = inbound.body.clone();
+    let outbound_path = resolve_outbound_path(&inbound.path, &inbound.plan, &inbound.meta);
     let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, uri);
     let outbound_body = build_outbound_body_or_respond(
         &state.http_clients,
@@ -823,6 +959,7 @@ async fn finalize_prepared_request(
         plan: inbound.plan,
         meta: inbound.meta,
         request_detail: inbound.request_detail,
+        source_body,
         outbound_body,
         request_auth,
     })
@@ -861,12 +998,11 @@ async fn proxy_request(
         Ok(inbound) => inbound,
         Err(response) => return response,
     };
-    let prepared = match finalize_prepared_request(&state, &headers, &uri, inbound, request_start)
-        .await
-    {
-        Ok(prepared) => prepared,
-        Err(response) => return response,
-    };
+    let prepared =
+        match finalize_prepared_request(&state, &headers, &uri, inbound, request_start).await {
+            Ok(prepared) => prepared,
+            Err(response) => return response,
+        };
     let primary = forward_upstream_request(
         state.clone(),
         method.clone(),
@@ -882,50 +1018,36 @@ async fn proxy_request(
     )
     .await;
 
-    // /v1/messages: provider selection happens upfront (Anthropic vs Kiro).
-    // When the selected provider returns a retryable response (e.g. upstream 400/429/5xx), but the
-    // provider itself has no more upstreams to try, we can still fall back to the other native
-    // provider if configured.
-    if prepared.path == "/v1/messages"
-        && primary.should_fallback
-        && matches!(prepared.plan.provider, PROVIDER_ANTHROPIC | PROVIDER_KIRO)
-    {
-        let fallback_provider = match prepared.plan.provider {
-            PROVIDER_ANTHROPIC => Some(PROVIDER_KIRO),
-            PROVIDER_KIRO => Some(PROVIDER_ANTHROPIC),
-            _ => None,
-        };
-        if let Some(fallback_provider) = fallback_provider {
-            if state.config.provider_upstreams(fallback_provider).is_some() {
-                tracing::warn!(
-                    path = %prepared.path,
-                    primary = %prepared.plan.provider,
-                    fallback = %fallback_provider,
-                    "primary provider exhausted, falling back to alternate provider"
-                );
-
-                let (fallback_path, fallback_transform) = if fallback_provider == PROVIDER_KIRO {
-                    (RESPONSES_PATH, FormatTransform::KiroToAnthropic)
-                } else {
-                    (prepared.path.as_str(), FormatTransform::None)
-                };
-                let fallback_path_with_query = build_outbound_path_with_query(fallback_path, &uri);
-                let fallback = forward_upstream_request(
-                    state,
-                    method,
-                    fallback_provider,
-                    &prepared.path,
-                    &fallback_path_with_query,
-                    &headers,
-                    &prepared.outbound_body,
-                    &prepared.meta,
-                    &prepared.request_auth,
-                    fallback_transform,
-                    prepared.request_detail,
-                )
-                .await;
-                if !fallback.should_fallback {
-                    return fallback.response;
+    if primary.should_fallback {
+        if let Some(fallback_plan) =
+            resolve_retry_fallback_plan(&state.config, &prepared.path, prepared.plan.provider)
+        {
+            tracing::warn!(
+                path = %prepared.path,
+                primary = %prepared.plan.provider,
+                fallback = %fallback_plan.provider,
+                "primary provider exhausted, falling back to alternate provider"
+            );
+            match forward_retry_fallback_request(
+                state,
+                method,
+                &uri,
+                &headers,
+                &prepared,
+                request_start,
+                &fallback_plan,
+            )
+            .await
+            {
+                Ok(fallback) if !fallback.should_fallback => return fallback.response,
+                Ok(_) => {}
+                Err(_) => {
+                    tracing::warn!(
+                        path = %prepared.path,
+                        primary = %prepared.plan.provider,
+                        fallback = %fallback_plan.provider,
+                        "alternate provider fallback aborted before dispatch"
+                    );
                 }
             }
         }

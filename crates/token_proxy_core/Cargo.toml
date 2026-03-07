@@ -6,12 +6,13 @@ edition = "2021"
 [dependencies]
 axum = "0.8.8"
 base64 = "0.22"
-futures-util = "0.3.31"
-rand = "0.9"
-reqwest = { version = "0.12", default-features = false, features = [
+futures-util = "0.3.32"
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false, features = [
   "json",
   "stream",
-  "rustls-tls",
+  "form",
+  "rustls",
   "socks",
 ] }
 serde = { version = "1", features = ["derive"] }
@@ -19,10 +20,10 @@ serde_json = "1.0.149"
 serde_urlencoded = "0.7"
 sha2 = "0.10"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }
-sysinfo = "0.33"
+sysinfo = "0.38"
 tiktoken-rs = "0.9.1"
 time = { version = "0.3", features = ["formatting", "parsing"] }
-tokio = { version = "1.49.0", features = [
+tokio = { version = "1.50.0", features = [
   "fs",
   "io-util",
   "net",
@@ -30,8 +31,7 @@ tokio = { version = "1.49.0", features = [
   "sync",
   "time",
 ] }
-toml_edit = "0.23"
+toml_edit = "0.25"
 tracing = { version = "0.1.44", features = ["release_max_level_off"] }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 url = "2.5.8"
-

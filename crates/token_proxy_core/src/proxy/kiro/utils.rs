@@ -1,4 +1,4 @@
-use rand::RngCore;
+use rand::Rng;
 
 pub(crate) fn random_uuid() -> String {
     let mut bytes = [0u8; 16];

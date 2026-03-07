@@ -53,6 +53,11 @@ export default defineConfig(async () => ({
       "@": path.resolve(__dirname, "./src"),
     },
   },
+  build: {
+    // Tauri 桌面包本地分发，且配置页已经按路由懒加载；当前最大 chunk 属于可接受范围。
+    // 将阈值调到接近现状，避免稳定可接受的大包持续污染构建输出。
+    chunkSizeWarningLimit: 900,
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

@@ -1,7 +1,7 @@
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use rand::rngs::OsRng;
-use rand::TryRngCore;
+use rand::rngs::SysRng;
+use rand::TryRng;
 use reqwest::{Client, Proxy};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 
 pub fn generate_state(prefix: &str) -> Result<String, String> {
     let mut bytes = [0u8; 16];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut bytes)
         .map_err(|err| format!("Failed to generate state: {err}"))?;
     Ok(format!("{prefix}-{}", URL_SAFE_NO_PAD.encode(bytes)))
@@ -17,7 +17,7 @@ pub fn generate_state(prefix: &str) -> Result<String, String> {
 
 pub fn generate_pkce() -> Result<(String, String), String> {
     let mut bytes = [0u8; 32];
-    OsRng
+    SysRng
         .try_fill_bytes(&mut bytes)
         .map_err(|err| format!("Failed to generate PKCE: {err}"))?;
     let verifier = URL_SAFE_NO_PAD.encode(bytes);

@@ -156,8 +156,9 @@ function ChartCanvas({ data, timeFormatter }: ChartBodyProps) {
         />
         <ChartTooltip
           cursor={false}
-          content={
+          content={(props) => (
             <ChartTooltipContent
+              {...props}
               labelFormatter={(value, payload) =>
                 formatTick(resolveTooltipTimestamp(payload) ?? value, timeFormatter)
               }
@@ -172,7 +173,7 @@ function ChartCanvas({ data, timeFormatter }: ChartBodyProps) {
               }}
               indicator="dot"
             />
-          }
+          )}
         />
         <ChartLegend content={<ChartLegendContent />} />
         <Line

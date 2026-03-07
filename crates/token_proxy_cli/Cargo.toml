@@ -8,7 +8,7 @@ name = "token-proxy"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4.5.45", features = ["derive"] }
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "signal"] }
+clap = { version = "4.5.60", features = ["derive"] }
+tokio = { version = "1.50.0", features = ["rt-multi-thread", "signal"] }
 token_proxy_core = { path = "../token_proxy_core" }
 

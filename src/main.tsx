@@ -18,7 +18,14 @@ declare module "@tanstack/react-router" {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {import.meta.env.DEV && <Agentation />}
+    {import.meta.env.DEV && (
+      <Agentation
+        endpoint="http://localhost:4747"
+        onSessionCreated={(sessionId) => {
+          console.log("Session started:", sessionId);
+        }}
+      />
+    )}
     <I18nProvider>
       {/* Follow system theme and persist to localStorage; class drives dark styles. */}
       <ThemeProvider

@@ -1,0 +1,62 @@
+name: Wait for GitHub Release
+description: Wait until a GitHub release exists for the given tag
+
+inputs:
+  tag:
+    description: Release tag to wait for
+    required: true
+  attempts:
+    description: Maximum poll attempts before failing
+    required: false
+    default: "24"
+  interval_ms:
+    description: Delay between attempts in milliseconds
+    required: false
+    default: "5000"
+
+runs:
+  using: composite
+  steps:
+    - name: Poll release by tag
+      uses: actions/github-script@v7
+      env:
+        RELEASE_TAG: ${{ inputs.tag }}
+        WAIT_ATTEMPTS: ${{ inputs.attempts }}
+        WAIT_INTERVAL_MS: ${{ inputs.interval_ms }}
+      with:
+        script: |
+          const tag = process.env.RELEASE_TAG;
+          const attempts = Number.parseInt(process.env.WAIT_ATTEMPTS ?? "24", 10);
+          const intervalMs = Number.parseInt(process.env.WAIT_INTERVAL_MS ?? "5000", 10);
+
+          if (!Number.isFinite(attempts) || attempts < 1) {
+            core.setFailed(`Invalid attempts value: ${process.env.WAIT_ATTEMPTS}`);
+            return;
+          }
+
+          if (!Number.isFinite(intervalMs) || intervalMs < 0) {
+            core.setFailed(`Invalid interval_ms value: ${process.env.WAIT_INTERVAL_MS}`);
+            return;
+          }
+
+          // CLI job 会与桌面端 release job 并行执行；这里轮询 release 是否已创建，
+          // 避免 CLI 产物上传时偶发命中“tag 已存在但 release 还未创建”的时间窗。
+          for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+              await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              core.info(`Release ${tag} is ready for CLI asset upload.`);
+              return;
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+              core.info(`Waiting for release ${tag} (attempt ${attempt}/${attempts})`);
+              await new Promise((resolve) => setTimeout(resolve, intervalMs));
+            }
+          }
+
+          core.setFailed(`Release ${tag} was not created in time.`);

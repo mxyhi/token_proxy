@@ -49,6 +49,9 @@ curl -X POST \
 - 现在是 Cargo workspace；Tauri 仍在 `src-tauri/`。
 - CLI crate：`crates/token_proxy_cli`（二进制名 `token-proxy`）。
 - 默认配置路径：`./config.jsonc`（用 `--config` 覆盖）。
+- GitHub Releases 也会按 target 发布 CLI 压缩包：
+  - Unix：`token-proxy_cli_<version>_<target>.tar.gz`
+  - Windows：`token-proxy_cli_<version>_<target>.zip`
 
 ```bash
 # 启动代理

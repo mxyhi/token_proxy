@@ -27,6 +27,7 @@ jobs:
       version: ${{ steps.release_guard.outputs.version }}
       tag: ${{ steps.create_tag.outputs.tag }}
       release_notes: ${{ steps.release_notes.outputs.release_body }}
+      release_matrix: ${{ steps.release_matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -84,6 +85,19 @@ jobs:
             const { data } = await github.rest.repos.generateReleaseNotes(params);
             core.setOutput("release_body", data.body ?? "");
 
+      # Release target 矩阵只在这里维护一份，桌面端与 CLI 共享，
+      # 避免新增/删减平台时出现两处配置漂移。
+      - name: Export release matrix
+        id: release_matrix
+        if: steps.release_guard.outputs.is_release == 'true'
+        shell: bash
+        run: |
+          {
+            echo 'matrix<<EOF'
+            cat .github/release-matrix.json
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
   stable_release:
     name: Release (${{ matrix.platform }} / ${{ matrix.target }})
     needs: stable_tag
@@ -93,23 +107,7 @@ jobs:
       contents: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - platform: macos-latest
-            target: aarch64-apple-darwin
-            node_arch: arm64
-          - platform: macos-15-intel
-            target: x86_64-apple-darwin
-            node_arch: x64
-          - platform: windows-latest
-            target: x86_64-pc-windows-msvc
-            node_arch: x64
-          - platform: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            node_arch: x64
-          - platform: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-            node_arch: arm64
+      matrix: ${{ fromJSON(needs.stable_tag.outputs.release_matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -194,63 +192,8 @@ jobs:
           prerelease: false
           generateReleaseNotes: false
 
-      # CLI 复用当前 target 矩阵单独构建并上传到同一个 GitHub Release，
-      # 这样桌面端与命令行端共享同一版本号，但不相互耦合打包格式。
-      - name: Build CLI binary
-        run: cargo build -p token_proxy_cli --release --locked --target ${{ matrix.target }}
-
-      - name: Verify CLI binary
-        if: runner.os != 'Windows'
-        shell: bash
-        run: ./target/${{ matrix.target }}/release/token-proxy --help >/dev/null
-
-      - name: Verify CLI binary (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: .\target\${{ matrix.target }}\release\token-proxy.exe --help > $null
-
-      - name: Package CLI archive
-        id: cli_asset_unix
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          VERSION: ${{ needs.stable_tag.outputs.version }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          mkdir -p dist/cli
-          asset_name="token-proxy_${VERSION}_${TARGET}.tar.gz"
-          tar -C "target/${TARGET}/release" -czf "dist/cli/${asset_name}" token-proxy
-          echo "asset_path=dist/cli/${asset_name}" >> "$GITHUB_OUTPUT"
-          echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
-
-      - name: Package CLI archive (Windows)
-        id: cli_asset_windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          VERSION: ${{ needs.stable_tag.outputs.version }}
-          TARGET: ${{ matrix.target }}
-        run: |
-          New-Item -ItemType Directory -Force -Path dist/cli | Out-Null
-          $assetName = "token-proxy_$env:VERSION" + "_$env:TARGET.zip"
-          Compress-Archive -Path "target/$env:TARGET/release/token-proxy.exe" -DestinationPath "dist/cli/$assetName" -Force
-          "asset_path=dist/cli/$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          "asset_name=$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      - name: Upload CLI archive
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ needs.stable_tag.outputs.tag }}" "${{ steps.cli_asset_unix.outputs.asset_path }}" --clobber
-
-      - name: Upload CLI archive (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ needs.stable_tag.outputs.tag }}" "${{ steps.cli_asset_windows.outputs.asset_path }}" --clobber
-
+      # macOS 自动更新目前只消费桌面端产物，因此 latest.json 仍只依赖桌面端 release job。
+      # CLI 构建与上传在独立 job 中并行执行，避免被 Tauri 打包串行阻塞。
       - name: Verify macOS (aarch64) updater assets uploaded
         if: matrix.target == 'aarch64-apple-darwin'
         shell: bash
@@ -290,6 +233,97 @@ jobs:
 
           echo "Missing expected macOS (aarch64) updater assets after retries: ${missing[*]}" >&2
           exit 1
+
+  stable_cli_release:
+    name: Release CLI (${{ matrix.platform }} / ${{ matrix.target }})
+    needs: stable_tag
+    if: needs.stable_tag.outputs.tag != ''
+    runs-on: ${{ matrix.platform }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.stable_tag.outputs.release_matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.stable_tag.outputs.tag }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri"
+          cache-on-failure: true
+          shared-key: "rust-${{ runner.os }}-${{ matrix.target }}-v1"
+          add-job-id-key: "false"
+          add-rust-environment-hash-key: "false"
+
+      - name: Build CLI binary
+        run: cargo build -p token_proxy_cli --release --locked --target ${{ matrix.target }}
+
+      - name: Verify CLI binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: ./target/${{ matrix.target }}/release/token-proxy --help >/dev/null
+
+      - name: Verify CLI binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\target\${{ matrix.target }}\release\token-proxy.exe --help > $null
+
+      - name: Package CLI archive
+        id: cli_asset_unix
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          VERSION: ${{ needs.stable_tag.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          mkdir -p dist/cli
+          asset_name="token-proxy_cli_${VERSION}_${TARGET}.tar.gz"
+          tar -C "target/${TARGET}/release" -czf "dist/cli/${asset_name}" token-proxy
+          echo "asset_path=dist/cli/${asset_name}" >> "$GITHUB_OUTPUT"
+          echo "asset_name=${asset_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Package CLI archive (Windows)
+        id: cli_asset_windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VERSION: ${{ needs.stable_tag.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/cli | Out-Null
+          $assetName = "token-proxy_cli_$env:VERSION" + "_$env:TARGET.zip"
+          Compress-Archive -Path "target/$env:TARGET/release/token-proxy.exe" -DestinationPath "dist/cli/$assetName" -Force
+          "asset_path=dist/cli/$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "asset_name=$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # GitHub Release 由桌面端 tauri-action 创建；CLI job 可以并行构建，
+      # 但上传前需要等待 release 已存在，避免并发下偶发找不到 tag。
+      - name: Wait for GitHub Release
+        uses: ./.github/actions/wait-for-release
+        with:
+          tag: ${{ needs.stable_tag.outputs.tag }}
+
+      - name: Upload CLI archive
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.stable_tag.outputs.tag }}" "${{ steps.cli_asset_unix.outputs.asset_path }}" --clobber
+
+      - name: Upload CLI archive (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ needs.stable_tag.outputs.tag }}" "${{ steps.cli_asset_windows.outputs.asset_path }}" --clobber
 
   stable_updater_json:
     name: Generate updater latest.json

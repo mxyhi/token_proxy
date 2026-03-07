@@ -50,8 +50,8 @@ curl -X POST \
 - CLI crate: `crates/token_proxy_cli` (binary `token-proxy`).
 - Default config path: `./config.jsonc` (override with `--config`).
 - GitHub Releases also publish packaged CLI archives per target:
-  - Unix: `token-proxy_<version>_<target>.tar.gz`
-  - Windows: `token-proxy_<version>_<target>.zip`
+  - Unix: `token-proxy_cli_<version>_<target>.tar.gz`
+  - Windows: `token-proxy_cli_<version>_<target>.zip`
 
 ```bash
 # start proxy

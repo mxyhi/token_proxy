@@ -35,7 +35,10 @@ impl KiroOAuthClient {
         self.post_json("/oauth/token", &payload).await
     }
 
-    pub(crate) async fn refresh_token(&self, refresh_token: &str) -> Result<KiroTokenResponse, String> {
+    pub(crate) async fn refresh_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<KiroTokenResponse, String> {
         let payload = RefreshTokenRequest {
             refresh_token: refresh_token.to_string(),
         };

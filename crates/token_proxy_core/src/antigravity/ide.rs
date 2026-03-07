@@ -19,7 +19,8 @@ pub(crate) struct AntigravityIdeConfig {
 }
 
 #[cfg(target_os = "macos")]
-const DEFAULT_PROCESS_NAMES: [&str; 2] = ["com.google.antigravity", "com.todesktop.230313mzl4w4u92"];
+const DEFAULT_PROCESS_NAMES: [&str; 2] =
+    ["com.google.antigravity", "com.todesktop.230313mzl4w4u92"];
 
 #[cfg(not(target_os = "macos"))]
 const DEFAULT_PROCESS_NAMES: [&str; 0] = [];
@@ -100,7 +101,9 @@ pub async fn ide_status(paths: &TokenProxyPaths) -> Result<AntigravityIdeStatus,
     ide_status_with_config(config).await
 }
 
-async fn ide_status_with_config(config: AntigravityIdeConfig) -> Result<AntigravityIdeStatus, String> {
+async fn ide_status_with_config(
+    config: AntigravityIdeConfig,
+) -> Result<AntigravityIdeStatus, String> {
     let database_available = config
         .ide_db_path
         .as_ref()
@@ -186,7 +189,10 @@ async fn resolve_ide_config(paths: &TokenProxyPaths) -> Result<AntigravityIdeCon
             .filter(|value| !value.is_empty())
             .collect()
     } else {
-        DEFAULT_PROCESS_NAMES.iter().map(|value| value.to_string()).collect()
+        DEFAULT_PROCESS_NAMES
+            .iter()
+            .map(|value| value.to_string())
+            .collect()
     };
     Ok(AntigravityIdeConfig {
         ide_db_path,
@@ -239,7 +245,10 @@ async fn ensure_ide_closed(config: &AntigravityIdeConfig) -> Result<(), String> 
         system.refresh_processes(ProcessesToUpdate::All, true);
         for process in system.processes().values() {
             let name = process.name().to_string_lossy().to_lowercase();
-            if targets.iter().any(|target| name.contains(&target.to_lowercase())) {
+            if targets
+                .iter()
+                .any(|target| name.contains(&target.to_lowercase()))
+            {
                 let _ = process.kill();
             }
         }

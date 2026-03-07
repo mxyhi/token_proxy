@@ -13,4 +13,3 @@ pub(super) struct FunctionCallOutput {
     pub(super) name: String,
     pub(super) arguments: String,
 }
-

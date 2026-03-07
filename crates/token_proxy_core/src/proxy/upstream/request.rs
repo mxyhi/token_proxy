@@ -1,25 +1,24 @@
 use axum::{
     body::Bytes,
     http::{
-    header::{HeaderName, HeaderValue, CONTENT_LENGTH, HOST},
-    HeaderMap, StatusCode,
+        header::{HeaderName, HeaderValue, CONTENT_LENGTH, HOST},
+        HeaderMap, StatusCode,
     },
 };
 use serde_json::Value;
 
+use super::super::http::RequestAuth;
+use super::super::{
+    codex_compat,
+    config::{HeaderOverride, UpstreamRuntime},
+    http, model,
+    request_body::ReplayableBody,
+    RequestMeta,
+};
 use super::{
     utils::{ensure_query_param, extract_query_param},
     AttemptOutcome,
 };
-use super::super::{
-    codex_compat,
-    config::{HeaderOverride, UpstreamRuntime},
-    http,
-    model,
-    request_body::ReplayableBody,
-    RequestMeta,
-};
-use super::super::http::RequestAuth;
 use crate::proxy::server_helpers::{log_debug_headers_body, truncate_for_log};
 
 const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
@@ -68,7 +67,10 @@ pub(super) fn build_request_headers(
     request_headers
 }
 
-pub(super) fn apply_header_overrides(request_headers: &mut HeaderMap, overrides: &[HeaderOverride]) {
+pub(super) fn apply_header_overrides(
+    request_headers: &mut HeaderMap,
+    overrides: &[HeaderOverride],
+) {
     for override_item in overrides {
         // 屏蔽 hop-by-hop / Host / Content-Length，无论配置为何。
         if crate::proxy::http::is_hop_header(&override_item.name)
@@ -103,36 +105,41 @@ pub(super) async fn build_upstream_body(
     let mapped_body = maybe_rewrite_request_body_model(body, meta).await?;
     let mapped_source = mapped_body.as_ref().unwrap_or(body);
     let upstream_path = split_path_query(upstream_path_with_query).0;
-    let reasoning_body = match super::super::server_helpers::maybe_rewrite_openai_reasoning_effort_from_model_suffix(
-        provider,
-        upstream_path,
-        meta,
-        mapped_source,
-    )
-    .await
-    {
-        Ok(body) => body,
-        Err(err) => {
-            return Err(AttemptOutcome::Fatal(http::error_response(err.status, err.message)))
-        }
-    };
+    let reasoning_body =
+        match super::super::server_helpers::maybe_rewrite_openai_reasoning_effort_from_model_suffix(
+            provider,
+            upstream_path,
+            meta,
+            mapped_source,
+        )
+        .await
+        {
+            Ok(body) => body,
+            Err(err) => {
+                return Err(AttemptOutcome::Fatal(http::error_response(
+                    err.status,
+                    err.message,
+                )))
+            }
+        };
     let source = reasoning_body
         .as_ref()
         .or(mapped_body.as_ref())
         .unwrap_or(body);
-    let filtered =
-        maybe_filter_openai_responses_request_fields(provider, upstream, upstream_path_with_query, source)
-            .await?;
+    let filtered = maybe_filter_openai_responses_request_fields(
+        provider,
+        upstream,
+        upstream_path_with_query,
+        source,
+    )
+    .await?;
     let final_source = filtered.as_ref().unwrap_or(source);
-    final_source
-        .to_reqwest_body()
-        .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("Failed to read cached request body: {err}"),
-            ))
-        })
+    final_source.to_reqwest_body().await.map_err(|err| {
+        AttemptOutcome::Fatal(http::error_response(
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to read cached request body: {err}"),
+        ))
+    })
 }
 
 async fn maybe_filter_openai_responses_request_fields(
@@ -184,14 +191,12 @@ async fn maybe_filter_openai_responses_request_fields(
         return Ok(None);
     }
 
-    let outbound_bytes = serde_json::to_vec(&value)
-        .map(Bytes::from)
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("Failed to serialize request: {err}"),
-            ))
-        })?;
+    let outbound_bytes = serde_json::to_vec(&value).map(Bytes::from).map_err(|err| {
+        AttemptOutcome::Fatal(http::error_response(
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to serialize request: {err}"),
+        ))
+    })?;
     Ok(Some(ReplayableBody::from_bytes(outbound_bytes)))
 }
 
@@ -221,7 +226,10 @@ async fn build_antigravity_body(
             "Antigravity request body is too large.",
         )));
     };
-    let model = meta.mapped_model.as_deref().or(meta.original_model.as_deref());
+    let model = meta
+        .mapped_model
+        .as_deref()
+        .or(meta.original_model.as_deref());
     let wrapped = super::super::antigravity_compat::wrap_gemini_request(
         &bytes,
         model,

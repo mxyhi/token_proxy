@@ -156,8 +156,12 @@ fn stream_responses_to_chat_persists_log_when_client_drops_stream_early() {
             .register(None, None)
             .await;
         {
-            let stream =
-                super::super::responses_to_chat::stream_responses_to_chat(upstream, context, log, token_tracker);
+            let stream = super::super::responses_to_chat::stream_responses_to_chat(
+                upstream,
+                context,
+                log,
+                token_tracker,
+            );
             futures_util::pin_mut!(stream);
             let first = stream
                 .next()

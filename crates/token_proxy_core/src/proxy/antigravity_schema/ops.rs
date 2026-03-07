@@ -146,7 +146,10 @@ pub(super) fn get_value<'a>(root: &'a Value, path: &[PathSegment]) -> Option<&'a
     Some(current)
 }
 
-pub(super) fn get_value_mut<'a>(root: &'a mut Value, path: &[PathSegment]) -> Option<&'a mut Value> {
+pub(super) fn get_value_mut<'a>(
+    root: &'a mut Value,
+    path: &[PathSegment],
+) -> Option<&'a mut Value> {
     let mut current = root;
     for segment in path {
         match segment {
@@ -241,10 +244,7 @@ pub(super) fn append_hint(root: &mut Value, path: &[PathSegment], hint: &str) {
     let Some(obj) = get_object_mut(root, path) else {
         return;
     };
-    let existing = obj
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let existing = obj.get("description").and_then(Value::as_str).unwrap_or("");
     let next = if existing.is_empty() {
         hint.to_string()
     } else {
@@ -257,10 +257,7 @@ pub(super) fn append_hint_raw(schema: &mut Value, hint: &str) {
     let Some(obj) = schema.as_object_mut() else {
         return;
     };
-    let existing = obj
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let existing = obj.get("description").and_then(Value::as_str).unwrap_or("");
     let next = if existing.is_empty() {
         hint.to_string()
     } else {
@@ -273,12 +270,12 @@ pub(super) fn merge_description(schema: &mut Value, parent_desc: &str) {
     let Some(obj) = schema.as_object_mut() else {
         return;
     };
-    let child_desc = obj
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let child_desc = obj.get("description").and_then(Value::as_str).unwrap_or("");
     if child_desc.is_empty() {
-        obj.insert("description".to_string(), Value::String(parent_desc.to_string()));
+        obj.insert(
+            "description".to_string(),
+            Value::String(parent_desc.to_string()),
+        );
         return;
     }
     if child_desc == parent_desc {
@@ -327,4 +324,3 @@ pub(super) fn property_field_from_type_path(path: &[PathSegment]) -> Option<(Pat
     };
     Some((path[..len - 3].to_vec(), field))
 }
-

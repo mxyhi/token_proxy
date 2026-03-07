@@ -1,8 +1,8 @@
 use axum::body::Bytes;
 use futures_util::StreamExt;
 
-use super::upstream_stream::{self, UpstreamStreamError};
 use super::super::log::LogContext;
+use super::upstream_stream::{self, UpstreamStreamError};
 
 pub(super) async fn read_upstream_bytes_with_ttfb(
     upstream_res: reqwest::Response,

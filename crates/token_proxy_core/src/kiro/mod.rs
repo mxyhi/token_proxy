@@ -11,9 +11,6 @@ pub use login::KiroLoginManager;
 pub use quota::{fetch_quotas, KiroQuotaSummary};
 pub use store::KiroAccountStore;
 pub use types::{
-    KiroAccountSummary,
-    KiroLoginMethod,
-    KiroLoginPollResponse,
-    KiroLoginStartResponse,
+    KiroAccountSummary, KiroLoginMethod, KiroLoginPollResponse, KiroLoginStartResponse,
     KiroTokenRecord,
 };

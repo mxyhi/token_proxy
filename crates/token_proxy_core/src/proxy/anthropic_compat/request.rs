@@ -1,9 +1,9 @@
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 
+use super::super::http_client::ProxyHttpClients;
 use super::media;
 use super::tools;
-use super::super::http_client::ProxyHttpClients;
 
 pub(super) async fn responses_request_to_anthropic(
     body: &Bytes,
@@ -20,7 +20,10 @@ pub(super) async fn responses_request_to_anthropic(
         .and_then(Value::as_str)
         .ok_or_else(|| "Request must include model.".to_string())?;
 
-    let stream = object.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let stream = object
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let max_tokens = object
         .get("max_output_tokens")
@@ -36,9 +39,12 @@ pub(super) async fn responses_request_to_anthropic(
         }
     }
 
-    let input = object.get("input").ok_or_else(|| "Request must include input.".to_string())?;
+    let input = object
+        .get("input")
+        .ok_or_else(|| "Request must include input.".to_string())?;
     let mut messages = Vec::new();
-    responses_input_to_claude_messages(input, &mut system_texts, &mut messages, http_clients).await?;
+    responses_input_to_claude_messages(input, &mut system_texts, &mut messages, http_clients)
+        .await?;
 
     let mut out = Map::new();
     out.insert("model".to_string(), Value::String(model.to_string()));
@@ -57,7 +63,9 @@ pub(super) async fn responses_request_to_anthropic(
         out.insert("top_p".to_string(), top_p.clone());
     }
 
-    if let Some(stop_sequences) = tools::map_openai_stop_to_anthropic_stop_sequences(object.get("stop")) {
+    if let Some(stop_sequences) =
+        tools::map_openai_stop_to_anthropic_stop_sequences(object.get("stop"))
+    {
         out.insert("stop_sequences".to_string(), stop_sequences);
     }
 
@@ -96,7 +104,10 @@ pub(super) async fn anthropic_request_to_responses(
         .and_then(Value::as_str)
         .ok_or_else(|| "Request must include model.".to_string())?;
 
-    let stream = object.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let stream = object
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
     let max_output_tokens = object
         .get("max_tokens")
@@ -142,7 +153,9 @@ pub(super) async fn anthropic_request_to_responses(
         out.insert("top_p".to_string(), top_p.clone());
     }
 
-    if let Some(stop) = tools::map_anthropic_stop_sequences_to_openai_stop(object.get("stop_sequences")) {
+    if let Some(stop) =
+        tools::map_anthropic_stop_sequences_to_openai_stop(object.get("stop_sequences"))
+    {
         out.insert("stop".to_string(), stop);
     }
 
@@ -241,7 +254,10 @@ async fn responses_input_item_to_claude_messages(
                 .and_then(Value::as_str)
                 .unwrap_or("tool_use_proxy");
             let name = object.get("name").and_then(Value::as_str).unwrap_or("");
-            let arguments = object.get("arguments").and_then(Value::as_str).unwrap_or("");
+            let arguments = object
+                .get("arguments")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let input = parse_tool_input_object(arguments);
             let block = json!({
                 "type": "tool_use",
@@ -300,12 +316,16 @@ async fn responses_message_content_to_claude_blocks(
                         }
                     }
                     "input_image" => {
-                        if let Some(block) = media::input_image_part_to_claude_block(part, http_clients).await? {
+                        if let Some(block) =
+                            media::input_image_part_to_claude_block(part, http_clients).await?
+                        {
                             blocks.push(block);
                         }
                     }
                     "input_file" => {
-                        if let Some(block) = media::input_file_part_to_claude_block(part, http_clients).await? {
+                        if let Some(block) =
+                            media::input_file_part_to_claude_block(part, http_clients).await?
+                        {
                             blocks.push(block);
                         }
                     }
@@ -318,11 +338,17 @@ async fn responses_message_content_to_claude_blocks(
     }
 }
 
-fn claude_message_to_responses_input_items(message: &Value, input_items: &mut Vec<Value>) -> Result<(), String> {
+fn claude_message_to_responses_input_items(
+    message: &Value,
+    input_items: &mut Vec<Value>,
+) -> Result<(), String> {
     let Some(message) = message.as_object() else {
         return Ok(());
     };
-    let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+    let role = message
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("user");
     if role == "system" {
         return Ok(());
     }
@@ -378,7 +404,10 @@ fn claude_message_to_responses_input_items(message: &Value, input_items: &mut Ve
         let block_type = block.get("type").and_then(Value::as_str).unwrap_or("");
         match block_type {
             "tool_use" => {
-                let call_id = block.get("id").and_then(Value::as_str).unwrap_or("call_proxy");
+                let call_id = block
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("call_proxy");
                 let name = block.get("name").and_then(Value::as_str).unwrap_or("");
                 let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
                 let arguments = serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string());
@@ -390,13 +419,19 @@ fn claude_message_to_responses_input_items(message: &Value, input_items: &mut Ve
                 }));
             }
             "tool_result" => {
-                let call_id = block.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
+                let call_id = block
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 let output_raw = block.get("content").cloned().unwrap_or_else(|| json!(""));
                 let output_text = match &output_raw {
                     Value::String(text) => text.clone(),
                     other => serde_json::to_string(other).unwrap_or_default(),
                 };
-                let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+                let is_error = block
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let mut item = Map::new();
                 item.insert("type".to_string(), json!("function_call_output"));
                 item.insert("call_id".to_string(), Value::String(call_id.to_string()));
@@ -469,9 +504,16 @@ fn extract_text_from_any_content(value: Option<&Value>) -> Option<String> {
                     combined.push_str(text);
                 }
             }
-            if combined.is_empty() { None } else { Some(combined) }
+            if combined.is_empty() {
+                None
+            } else {
+                Some(combined)
+            }
         }
-        Value::Object(object) => object.get("text").and_then(Value::as_str).map(|t| t.to_string()),
+        Value::Object(object) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|t| t.to_string()),
         _ => None,
     }
 }

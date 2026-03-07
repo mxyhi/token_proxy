@@ -1,14 +1,11 @@
 use serde_json::{json, Map, Value};
 
+use super::super::super::kiro_to_responses_helpers::{
+    detect_event_type, extract_error, update_stop_reason, update_usage,
+};
+use super::super::kiro_to_anthropic_helpers::split_partial_tag;
 use super::KiroToAnthropicState;
 use crate::proxy::kiro::tool_parser::process_tool_use_event;
-use super::super::kiro_to_anthropic_helpers::split_partial_tag;
-use super::super::super::kiro_to_responses_helpers::{
-    detect_event_type,
-    extract_error,
-    update_stop_reason,
-    update_usage,
-};
 
 impl<S, E> KiroToAnthropicState<S>
 where

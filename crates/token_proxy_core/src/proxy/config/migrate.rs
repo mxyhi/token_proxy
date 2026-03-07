@@ -18,9 +18,10 @@ pub(super) fn migrate_config_json(root: &mut Value) -> bool {
         .get("upstreams")
         .and_then(Value::as_array)
         .is_some_and(|items| {
-            items
-                .iter()
-                .any(|item| item.as_object().is_some_and(|obj| obj.contains_key("provider")))
+            items.iter().any(|item| {
+                item.as_object()
+                    .is_some_and(|obj| obj.contains_key("provider"))
+            })
         });
     let is_legacy_config = had_legacy_enable || had_legacy_provider;
 
@@ -60,7 +61,11 @@ fn migrate_single_upstream(upstream: &mut Value, legacy_enable_conversion: bool)
     // provider -> providers[]
     if let Some(provider_value) = obj.remove("provider") {
         changed = true;
-        if let Some(provider) = provider_value.as_str().map(str::trim).filter(|v| !v.is_empty()) {
+        if let Some(provider) = provider_value
+            .as_str()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+        {
             match obj.get_mut("providers") {
                 Some(Value::Array(items)) => {
                     // 若已经是新版（用户手动加了 providers），则把旧 provider 合并进去。
@@ -100,9 +105,7 @@ fn migrate_single_upstream(upstream: &mut Value, legacy_enable_conversion: bool)
         // 但旧逻辑里 `/v1/messages` 在 conversion disabled 时仍允许 antigravity 兜底。
         // 为了迁移后行为一致：当 upstream 配置了 provider=antigravity 时，显式允许从 anthropic_messages 转入。
         if let Some(providers) = read_providers(obj) {
-            let has_antigravity = providers
-                .iter()
-                .any(|provider| provider == "antigravity");
+            let has_antigravity = providers.iter().any(|provider| provider == "antigravity");
             if has_antigravity {
                 changed |= ensure_convert_from_map_contains(
                     obj,

@@ -46,7 +46,10 @@ pub(super) fn extract_text_from_chat_content(content: Option<&Value>) -> Option<
                 Some(combined)
             }
         }
-        Value::Object(object) => object.get("text").and_then(Value::as_str).map(|t| t.to_string()),
+        Value::Object(object) => object
+            .get("text")
+            .and_then(Value::as_str)
+            .map(|t| t.to_string()),
         _ => None,
     }
 }
@@ -88,7 +91,9 @@ pub(super) fn chat_content_to_responses_message_parts(
                     }
                     "input_image" => {
                         if let Some(image_url) = part.get("image_url") {
-                            out.push(json!({ "type": "input_image", "image_url": image_url.clone() }));
+                            out.push(
+                                json!({ "type": "input_image", "image_url": image_url.clone() }),
+                            );
                         }
                     }
                     _ => {}

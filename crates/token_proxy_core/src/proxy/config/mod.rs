@@ -9,20 +9,9 @@ use crate::paths::TokenProxyPaths;
 const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 20 * 1024 * 1024;
 
 pub use types::{
-    ConfigResponse,
-    InboundApiFormat,
-    KiroPreferredEndpoint,
-    ProxyConfig,
-    ProxyConfigFile,
-    ProviderUpstreams,
-    TrayTokenRateConfig,
-    TrayTokenRateFormat,
-    UpstreamConfig,
-    UpstreamOverrides,
-    UpstreamGroup,
-    HeaderOverride,
-    UpstreamRuntime,
-    UpstreamStrategy,
+    ConfigResponse, HeaderOverride, InboundApiFormat, KiroPreferredEndpoint, ProviderUpstreams,
+    ProxyConfig, ProxyConfigFile, TrayTokenRateConfig, TrayTokenRateFormat, UpstreamConfig,
+    UpstreamGroup, UpstreamOverrides, UpstreamRuntime, UpstreamStrategy,
 };
 
 pub async fn read_config(paths: &TokenProxyPaths) -> Result<ConfigResponse, String> {
@@ -100,7 +89,8 @@ fn normalize_app_proxy_url(value: Option<&str>) -> Result<Option<String>, String
     if value.is_empty() {
         return Ok(None);
     }
-    let parsed = url::Url::parse(value).map_err(|_| "app_proxy_url is not a valid URL.".to_string())?;
+    let parsed =
+        url::Url::parse(value).map_err(|_| "app_proxy_url is not a valid URL.".to_string())?;
     match parsed.scheme() {
         "http" | "https" | "socks5" | "socks5h" => Ok(Some(value.to_string())),
         scheme => Err(format!("app_proxy_url scheme is not supported: {scheme}.")),

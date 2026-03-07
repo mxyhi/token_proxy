@@ -22,4 +22,3 @@ pub(crate) fn detect_inbound_api_format(path: &str) -> Option<InboundApiFormat> 
         ApiFormat::Responses => Some(InboundApiFormat::OpenaiResponses),
     }
 }
-

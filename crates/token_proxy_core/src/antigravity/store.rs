@@ -9,9 +9,7 @@ use crate::oauth_util::{expires_at_from_seconds, sanitize_id_part};
 use crate::paths::TokenProxyPaths;
 
 use super::oauth::AntigravityOAuthClient;
-use super::types::{
-    AntigravityAccountSummary, AntigravityAccountStatus, AntigravityTokenRecord,
-};
+use super::types::{AntigravityAccountStatus, AntigravityAccountSummary, AntigravityTokenRecord};
 
 const ANTIGRAVITY_AUTH_DIR_NAME: &str = "antigravity-auth";
 

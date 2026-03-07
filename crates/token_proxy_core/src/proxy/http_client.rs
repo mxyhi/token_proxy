@@ -21,7 +21,9 @@ impl ProxyHttpClients {
     }
 
     pub(crate) fn client_for_proxy_url(&self, proxy_url: Option<&str>) -> Result<Client, String> {
-        let Some(proxy_url) = proxy_url.map(|value| value.trim()).filter(|value| !value.is_empty())
+        let Some(proxy_url) = proxy_url
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
         else {
             return Ok(self.direct.clone());
         };

@@ -6,11 +6,6 @@ use axum::{
 use futures_util::StreamExt;
 use std::sync::Arc;
 
-use super::super::{
-    anthropic_to_responses, chat_to_responses, kiro_to_anthropic,
-    responses_to_anthropic, responses_to_chat, streaming, upstream_stream, PROVIDER_CODEX,
-    PROVIDER_ANTIGRAVITY, PROVIDER_GEMINI, PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES,
-};
 use super::super::super::{
     antigravity_compat, codex_compat, gemini_compat, http,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
@@ -19,6 +14,11 @@ use super::super::super::{
     server_helpers::log_debug_headers_body,
     token_rate::RequestTokenTracker,
     UPSTREAM_NO_DATA_TIMEOUT,
+};
+use super::super::{
+    anthropic_to_responses, chat_to_responses, kiro_to_anthropic, responses_to_anthropic,
+    responses_to_chat, streaming, upstream_stream, PROVIDER_ANTIGRAVITY, PROVIDER_CODEX,
+    PROVIDER_GEMINI, PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES,
 };
 
 type UpstreamBytesStream = futures_util::stream::BoxStream<
@@ -100,13 +100,7 @@ fn stream_for_transform(
             estimated_input_tokens,
         );
     }
-    stream_for_composed_transform(
-        transform,
-        upstream,
-        context,
-        log,
-        request_tracker,
-    )
+    stream_for_composed_transform(transform, upstream, context, log, request_tracker)
 }
 
 fn is_simple_transform(transform: FormatTransform) -> bool {
@@ -177,18 +171,30 @@ fn stream_for_basic_transform(
             model_override,
         ),
         FormatTransform::ResponsesToChat => {
-            responses_to_chat::stream_responses_to_chat(upstream, context, log, request_tracker).boxed()
+            responses_to_chat::stream_responses_to_chat(upstream, context, log, request_tracker)
+                .boxed()
         }
         FormatTransform::ChatToResponses => {
-            chat_to_responses::stream_chat_to_responses(upstream, context, log, request_tracker).boxed()
+            chat_to_responses::stream_chat_to_responses(upstream, context, log, request_tracker)
+                .boxed()
         }
         FormatTransform::ResponsesToAnthropic => {
-            responses_to_anthropic::stream_responses_to_anthropic(upstream, context, log, request_tracker)
-                .boxed()
+            responses_to_anthropic::stream_responses_to_anthropic(
+                upstream,
+                context,
+                log,
+                request_tracker,
+            )
+            .boxed()
         }
         FormatTransform::AnthropicToResponses => {
-            anthropic_to_responses::stream_anthropic_to_responses(upstream, context, log, request_tracker)
-                .boxed()
+            anthropic_to_responses::stream_anthropic_to_responses(
+                upstream,
+                context,
+                log,
+                request_tracker,
+            )
+            .boxed()
         }
         _ => streaming::stream_with_logging(upstream, context, log, request_tracker).boxed(),
     }
@@ -238,12 +244,24 @@ fn stream_for_composed_transform(
     request_tracker: RequestTokenTracker,
 ) -> ResponseStream {
     match transform {
-        FormatTransform::ChatToAnthropic => stream_chat_to_anthropic(upstream, context, log, request_tracker),
-        FormatTransform::AnthropicToChat => stream_anthropic_to_chat(upstream, context, log, request_tracker),
-        FormatTransform::GeminiToAnthropic => stream_gemini_to_anthropic(upstream, context, log, request_tracker),
-        FormatTransform::AnthropicToGemini => stream_anthropic_to_gemini(upstream, context, log, request_tracker),
-        FormatTransform::ResponsesToGemini => stream_responses_to_gemini(upstream, context, log, request_tracker),
-        FormatTransform::GeminiToResponses => stream_gemini_to_responses(upstream, context, log, request_tracker),
+        FormatTransform::ChatToAnthropic => {
+            stream_chat_to_anthropic(upstream, context, log, request_tracker)
+        }
+        FormatTransform::AnthropicToChat => {
+            stream_anthropic_to_chat(upstream, context, log, request_tracker)
+        }
+        FormatTransform::GeminiToAnthropic => {
+            stream_gemini_to_anthropic(upstream, context, log, request_tracker)
+        }
+        FormatTransform::AnthropicToGemini => {
+            stream_anthropic_to_gemini(upstream, context, log, request_tracker)
+        }
+        FormatTransform::ResponsesToGemini => {
+            stream_responses_to_gemini(upstream, context, log, request_tracker)
+        }
+        FormatTransform::GeminiToResponses => {
+            stream_gemini_to_responses(upstream, context, log, request_tracker)
+        }
         _ => streaming::stream_with_logging(upstream, context, log, request_tracker).boxed(),
     }
 }
@@ -287,13 +305,8 @@ fn stream_anthropic_to_chat(
         intermediate_tracker,
     )
     .boxed();
-    responses_to_chat::stream_responses_to_chat(
-        responses_stream,
-        context,
-        log,
-        request_tracker,
-    )
-    .boxed()
+    responses_to_chat::stream_responses_to_chat(responses_stream, context, log, request_tracker)
+        .boxed()
 }
 
 fn stream_gemini_to_anthropic(
@@ -304,13 +317,9 @@ fn stream_gemini_to_anthropic(
 ) -> ResponseStream {
     let first_log = Arc::new(LogWriter::new(None));
     let first_tracker = RequestTokenTracker::disabled();
-    let chat_stream = gemini_compat::stream_gemini_to_chat(
-        upstream,
-        context.clone(),
-        first_log,
-        first_tracker,
-    )
-    .boxed();
+    let chat_stream =
+        gemini_compat::stream_gemini_to_chat(upstream, context.clone(), first_log, first_tracker)
+            .boxed();
     let second_log = Arc::new(LogWriter::new(None));
     let second_tracker = RequestTokenTracker::disabled();
     let responses_stream = chat_to_responses::stream_chat_to_responses(

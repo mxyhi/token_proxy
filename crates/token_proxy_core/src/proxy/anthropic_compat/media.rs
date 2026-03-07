@@ -39,7 +39,9 @@ pub(super) async fn input_file_part_to_claude_block(
     let Some(url) = url else {
         // file_id needs an OpenAI Files API call; keep it explicit instead of guessing.
         if part.get("file_id").and_then(Value::as_str).is_some() {
-            return Err("input_file with file_id is not supported; use file_url or data: URL.".to_string());
+            return Err(
+                "input_file with file_id is not supported; use file_url or data: URL.".to_string(),
+            );
         }
         return Ok(None);
     };
@@ -60,7 +62,10 @@ pub(super) fn claude_image_block_to_input_image_part(block: &Map<String, Value>)
     if source.get("type").and_then(Value::as_str) != Some("base64") {
         return None;
     }
-    let media_type = source.get("media_type").and_then(Value::as_str).unwrap_or("image/png");
+    let media_type = source
+        .get("media_type")
+        .and_then(Value::as_str)
+        .unwrap_or("image/png");
     let data = source.get("data").and_then(Value::as_str)?;
     Some(json!({
         "type": "input_image",
@@ -68,7 +73,9 @@ pub(super) fn claude_image_block_to_input_image_part(block: &Map<String, Value>)
     }))
 }
 
-pub(super) fn claude_document_block_to_input_file_part(block: &Map<String, Value>) -> Option<Value> {
+pub(super) fn claude_document_block_to_input_file_part(
+    block: &Map<String, Value>,
+) -> Option<Value> {
     let source = block.get("source").and_then(Value::as_object)?;
     if source.get("type").and_then(Value::as_str) != Some("base64") {
         return None;
@@ -87,7 +94,10 @@ pub(super) fn claude_document_block_to_input_file_part(block: &Map<String, Value
 fn normalize_url_value(value: &Value) -> Option<String> {
     match value {
         Value::String(url) => Some(url.to_string()),
-        Value::Object(object) => object.get("url").and_then(Value::as_str).map(|url| url.to_string()),
+        Value::Object(object) => object
+            .get("url")
+            .and_then(Value::as_str)
+            .map(|url| url.to_string()),
         _ => None,
     }
 }
@@ -136,7 +146,10 @@ async fn download_url_as_base64(
         .map_err(|err| format!("Failed to download media: {err}"))?;
 
     if !res.status().is_success() {
-        return Err(format!("Media download failed with status: {}", res.status()));
+        return Err(format!(
+            "Media download failed with status: {}",
+            res.status()
+        ));
     }
 
     let header_type = res
@@ -183,4 +196,3 @@ fn sniff_mime_type(bytes: &[u8]) -> String {
     }
     "application/octet-stream".to_string()
 }
-

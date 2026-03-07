@@ -11,10 +11,7 @@ use crate::oauth_util::{expires_at_from_seconds, generate_pkce, generate_state, 
 use super::oauth::CodexOAuthClient;
 use super::store::CodexAccountStore;
 use super::types::{
-    CodexAccountSummary,
-    CodexLoginPollResponse,
-    CodexLoginStartResponse,
-    CodexLoginStatus,
+    CodexAccountSummary, CodexLoginPollResponse, CodexLoginStartResponse, CodexLoginStatus,
     CodexTokenRecord,
 };
 
@@ -52,11 +49,8 @@ impl CodexLoginManager {
         self.insert_session(&state, expires_at).await;
         let (code_verifier, code_challenge) = generate_pkce()?;
         let callback = start_auth_code_callback(state.clone()).await?;
-        let login_url = CodexOAuthClient::build_authorize_url(
-            &callback.redirect_uri,
-            &state,
-            &code_challenge,
-        );
+        let login_url =
+            CodexOAuthClient::build_authorize_url(&callback.redirect_uri, &state, &code_challenge);
         let manager = self.clone();
         let state_for_task = state.clone();
         tokio::spawn(async move {
@@ -152,24 +146,26 @@ async fn start_auth_code_callback(state: String) -> Result<AuthCodeCallback, Str
     let redirect_uri = format!("http://localhost:{CODEX_CALLBACK_PORT}/auth/callback");
     let router = axum::Router::new().route(
         "/auth/callback",
-        axum::routing::get(move |query: axum::extract::Query<HashMap<String, String>>| {
-            let expected_state = state.clone();
-            let tx = tx.clone();
-            async move {
-                let code = query.get("code").cloned();
-                let state = query.get("state").cloned();
-                let error = query.get("error").cloned();
-                let has_error = error.is_some();
-                let state_matches = state.as_deref() == Some(&expected_state);
-                let _ = tx.send(AuthCodeResult { code, state, error }).await;
-                let body = if has_error || !state_matches {
-                    "Login failed. You can close this window."
-                } else {
-                    "Login successful. You can close this window."
-                };
-                axum::response::Html(body)
-            }
-        }),
+        axum::routing::get(
+            move |query: axum::extract::Query<HashMap<String, String>>| {
+                let expected_state = state.clone();
+                let tx = tx.clone();
+                async move {
+                    let code = query.get("code").cloned();
+                    let state = query.get("state").cloned();
+                    let error = query.get("error").cloned();
+                    let has_error = error.is_some();
+                    let state_matches = state.as_deref() == Some(&expected_state);
+                    let _ = tx.send(AuthCodeResult { code, state, error }).await;
+                    let body = if has_error || !state_matches {
+                        "Login failed. You can close this window."
+                    } else {
+                        "Login successful. You can close this window."
+                    };
+                    axum::response::Html(body)
+                }
+            },
+        ),
     );
     tokio::spawn(async move {
         let _ = axum::serve(listener, router)

@@ -15,10 +15,7 @@ use super::super::usage::SseUsageCollector;
 use super::streaming::STREAM_DROPPED_ERROR;
 
 pub(super) fn stream_responses_to_chat<E>(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
-        + Unpin
-        + Send
-        + 'static,
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     token_tracker: RequestTokenTracker,
@@ -323,7 +320,12 @@ where
             if should_emit {
                 state.sent_arguments = true;
             }
-            (state.index, state.call_id.clone(), state.name.clone(), should_emit)
+            (
+                state.index,
+                state.call_id.clone(),
+                state.name.clone(),
+                should_emit,
+            )
         };
         if should_emit {
             let id = tool_call_id(&call_id, item_id);
@@ -401,7 +403,12 @@ where
             if should_emit {
                 state.sent_arguments = true;
             }
-            (state.index, state.call_id.clone(), state.name.clone(), should_emit)
+            (
+                state.index,
+                state.call_id.clone(),
+                state.name.clone(),
+                should_emit,
+            )
         };
         if should_emit {
             let id = tool_call_id(&call_id, item_id);

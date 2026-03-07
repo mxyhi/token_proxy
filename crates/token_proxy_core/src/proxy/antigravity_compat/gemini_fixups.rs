@@ -54,7 +54,8 @@ impl CliToolResponseFixer {
             }
             let merged_parts = self.take_merged_parts(needed);
             if !merged_parts.is_empty() {
-                self.out.push(json!({ "role": "function", "parts": merged_parts }));
+                self.out
+                    .push(json!({ "role": "function", "parts": merged_parts }));
             }
             self.pending_groups.remove(idx);
             break;
@@ -83,7 +84,8 @@ impl CliToolResponseFixer {
             }
             let merged_parts = self.take_merged_parts(needed);
             if !merged_parts.is_empty() {
-                self.out.push(json!({ "role": "function", "parts": merged_parts }));
+                self.out
+                    .push(json!({ "role": "function", "parts": merged_parts }));
             }
         }
         self.out

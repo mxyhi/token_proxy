@@ -23,7 +23,10 @@ fn chat_response_to_gemini_maps_tool_calls_and_text() {
     let output = chat_response_to_gemini(&Bytes::from(serde_json::to_vec(&input).unwrap()), None)
         .expect("convert");
     let value: Value = serde_json::from_slice(&output).expect("json");
-    assert_eq!(value["candidates"][0]["content"]["parts"][0]["text"], json!("hello"));
+    assert_eq!(
+        value["candidates"][0]["content"]["parts"][0]["text"],
+        json!("hello")
+    );
     assert_eq!(
         value["candidates"][0]["content"]["parts"][1]["functionCall"]["name"],
         json!("getFoo")

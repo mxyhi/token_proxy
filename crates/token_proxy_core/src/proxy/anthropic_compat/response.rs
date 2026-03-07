@@ -23,7 +23,10 @@ pub(super) fn responses_response_to_anthropic(
         return Err("Upstream response must be a JSON object.".to_string());
     };
 
-    let id = object.get("id").and_then(Value::as_str).unwrap_or("msg_proxy");
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("msg_proxy");
     let model = object
         .get("model")
         .and_then(Value::as_str)
@@ -87,9 +90,7 @@ pub(super) fn responses_response_to_anthropic(
     if !thinking_text.trim().is_empty() {
         let signature = thinking_signature(&thinking_text);
         let mut block = json!({ "type": "thinking", "thinking": thinking_text });
-        if let (Some(signature), Some(block)) =
-            (signature, block.as_object_mut())
-        {
+        if let (Some(signature), Some(block)) = (signature, block.as_object_mut()) {
             block.insert("signature".to_string(), Value::String(signature));
         }
         content.push(block);
@@ -127,8 +128,14 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
         return Err("Upstream response must be a JSON object.".to_string());
     };
 
-    let id = object.get("id").and_then(Value::as_str).unwrap_or("resp_proxy");
-    let model = object.get("model").and_then(Value::as_str).unwrap_or("unknown");
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_proxy");
+    let model = object
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     let created_at = now_s();
 
     let usage = object
@@ -199,7 +206,11 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
 fn responses_function_call_to_tool_use(item: &Map<String, Value>) -> Option<Value> {
     let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
     let item_id = item.get("id").and_then(Value::as_str).unwrap_or("");
-    let id = if !call_id.is_empty() { call_id } else { item_id };
+    let id = if !call_id.is_empty() {
+        call_id
+    } else {
+        item_id
+    };
     if id.is_empty() {
         return None;
     }
@@ -218,7 +229,10 @@ fn responses_function_call_to_tool_use(item: &Map<String, Value>) -> Option<Valu
 }
 
 fn tool_use_to_responses_function_call(block: &Map<String, Value>) -> Option<Value> {
-    let call_id = block.get("id").and_then(Value::as_str).unwrap_or("call_proxy");
+    let call_id = block
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("call_proxy");
     let name = block.get("name").and_then(Value::as_str).unwrap_or("");
     let input = block.get("input").cloned().unwrap_or_else(|| json!({}));
     let arguments = serde_json::to_string(&input).unwrap_or_else(|_| "{}".to_string());
@@ -259,10 +273,18 @@ fn map_openai_usage_to_anthropic_usage(usage: &Map<String, Value>) -> Value {
 }
 
 fn map_anthropic_usage_to_openai_usage(usage: &Map<String, Value>) -> Value {
-    let input_tokens = usage.get("input_tokens").and_then(Value::as_u64).unwrap_or(0);
-    let output_tokens = usage.get("output_tokens").and_then(Value::as_u64).unwrap_or(0);
+    let input_tokens = usage
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let output_tokens = usage
+        .get("output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let cache_read = usage.get("cache_read_input_tokens").and_then(Value::as_u64);
-    let cache_creation = usage.get("cache_creation_input_tokens").and_then(Value::as_u64);
+    let cache_creation = usage
+        .get("cache_creation_input_tokens")
+        .and_then(Value::as_u64);
     json!({
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,

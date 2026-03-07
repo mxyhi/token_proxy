@@ -19,7 +19,8 @@ const CODEWHISPERER_ENDPOINT: &str = "https://codewhisperer.us-east-1.amazonaws.
 const CODEWHISPERER_CONTENT_TYPE: &str = "application/x-amz-json-1.0";
 const CODEWHISPERER_ACCEPT: &str = "application/json";
 const CW_TARGET_LIST_PROFILES: &str = "AmazonCodeWhispererService.ListProfiles";
-const CW_TARGET_LIST_CUSTOMIZATIONS: &str = "AmazonCodeWhispererService.ListAvailableCustomizations";
+const CW_TARGET_LIST_CUSTOMIZATIONS: &str =
+    "AmazonCodeWhispererService.ListAvailableCustomizations";
 const DEFAULT_SCOPES: [&str; 5] = [
     "codewhisperer:completions",
     "codewhisperer:analysis",
@@ -68,7 +69,10 @@ impl SsoOidcClient {
             client_name: "Kiro IDE".to_string(),
             client_type: "public".to_string(),
             scopes: DEFAULT_SCOPES.iter().map(|s| s.to_string()).collect(),
-            grant_types: vec!["authorization_code".to_string(), "refresh_token".to_string()],
+            grant_types: vec![
+                "authorization_code".to_string(),
+                "refresh_token".to_string(),
+            ],
             redirect_uris: Some(vec![redirect_uri.to_string()]),
             issuer_url: Some(BUILDER_ID_START_URL.to_string()),
         };
@@ -260,11 +264,13 @@ impl SsoOidcClient {
         path: &str,
         payload: &TReq,
     ) -> Result<TRes, String> {
-        self.post_json_result(path, payload).await.map_err(|err| match err {
-            TokenPollError::Pending => "Authorization pending.".to_string(),
-            TokenPollError::SlowDown => "Slow down.".to_string(),
-            TokenPollError::Other(message) => message,
-        })
+        self.post_json_result(path, payload)
+            .await
+            .map_err(|err| match err {
+                TokenPollError::Pending => "Authorization pending.".to_string(),
+                TokenPollError::SlowDown => "Slow down.".to_string(),
+                TokenPollError::Other(message) => message,
+            })
     }
 
     async fn post_json_result<TReq: Serialize, TRes: for<'de> Deserialize<'de>>(
@@ -288,8 +294,9 @@ impl SsoOidcClient {
             .await
             .map_err(|err| TokenPollError::Other(format!("Failed to read OIDC response: {err}")))?;
         if status.is_success() {
-            return serde_json::from_slice(&bytes)
-                .map_err(|err| TokenPollError::Other(format!("Failed to parse OIDC response: {err}")));
+            return serde_json::from_slice(&bytes).map_err(|err| {
+                TokenPollError::Other(format!("Failed to parse OIDC response: {err}"))
+            });
         }
         if status == reqwest::StatusCode::BAD_REQUEST {
             if let Ok(error) = serde_json::from_slice::<OidcError>(&bytes) {
@@ -347,12 +354,7 @@ pub(crate) async fn refresh_idc_token(
         .unwrap_or(DEFAULT_IDC_REGION);
     let client = SsoOidcClient::new(proxy_url)?;
     let response = client
-        .refresh_token_with_region(
-            client_id,
-            client_secret,
-            &record.refresh_token,
-            region,
-        )
+        .refresh_token_with_region(client_id, client_secret, &record.refresh_token, region)
         .await?;
     Ok(KiroTokenRecord {
         access_token: response.access_token,
@@ -487,7 +489,6 @@ pub(crate) enum TokenPollError {
     SlowDown,
     Other(String),
 }
-
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

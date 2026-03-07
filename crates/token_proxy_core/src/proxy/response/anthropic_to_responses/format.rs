@@ -62,4 +62,3 @@ pub(super) fn snapshot_to_output_item(snapshot: &OutputItemSnapshot) -> Value {
         }),
     }
 }
-

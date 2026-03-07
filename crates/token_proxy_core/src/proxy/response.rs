@@ -9,8 +9,8 @@ use super::{
     http,
     log::{LogContext, LogWriter},
     openai_compat::FormatTransform,
-    token_rate::TokenRateTracker,
     request_detail::RequestDetailSnapshot,
+    token_rate::TokenRateTracker,
     RequestMeta,
 };
 
@@ -171,7 +171,10 @@ fn responses_event_sse(event: Value) -> Bytes {
 }
 
 fn anthropic_event_sse(event_type: &str, event: Value) -> Bytes {
-    Bytes::from(format!("event: {event_type}\ndata: {}\n\n", event.to_string()))
+    Bytes::from(format!(
+        "event: {event_type}\ndata: {}\n\n",
+        event.to_string()
+    ))
 }
 
 fn now_ms() -> u64 {
@@ -181,14 +184,14 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-mod chat_to_responses;
 mod anthropic_to_responses;
-mod responses_to_chat;
-mod responses_to_anthropic;
+mod chat_to_responses;
+mod dispatch;
 mod kiro_to_anthropic;
 mod kiro_to_responses;
 mod kiro_to_responses_helpers;
-mod dispatch;
+mod responses_to_anthropic;
+mod responses_to_chat;
 mod streaming;
 mod token_count;
 mod upstream_read;

@@ -98,7 +98,10 @@ async fn open_connection(path: &Path, read_only: bool) -> Result<SqliteConnectio
 }
 
 fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
     let new_name = format!("{file_name}{suffix}");
     path.with_file_name(new_name)
 }

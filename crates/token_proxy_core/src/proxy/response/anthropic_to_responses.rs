@@ -13,10 +13,7 @@ use format::{snapshot_to_output_item, usage_to_value, OutputItemSnapshot};
 mod format;
 
 pub(super) fn stream_anthropic_to_responses<E>(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
-        + Unpin
-        + Send
-        + 'static,
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     token_tracker: RequestTokenTracker,
@@ -311,7 +308,12 @@ where
         });
     }
 
-    fn ensure_function_call_output(&mut self, block_index: usize, call_id: Option<&str>, name: Option<&str>) -> usize {
+    fn ensure_function_call_output(
+        &mut self,
+        block_index: usize,
+        call_id: Option<&str>,
+        name: Option<&str>,
+    ) -> usize {
         // Allocate one function_call per Claude content block index.
         let call_index = self.function_calls.len();
         let output_index = self.next_output_index;
@@ -571,7 +573,11 @@ where
     }
 
     fn parallel_tool_calls(&self) -> bool {
-        self.function_calls.iter().filter(|call| call.is_some()).count() > 1
+        self.function_calls
+            .iter()
+            .filter(|call| call.is_some())
+            .count()
+            > 1
     }
 
     fn log_usage_once(&mut self) {

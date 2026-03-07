@@ -32,13 +32,15 @@ pub(crate) fn chat_message_content_from_responses_parts(parts: &[Value]) -> Valu
             Some("output_image") => {
                 if let Some(image_url) = part.get("image_url") {
                     text_only = false;
-                    output_parts.push(json!({ "type": "image_url", "image_url": image_url.clone() }));
+                    output_parts
+                        .push(json!({ "type": "image_url", "image_url": image_url.clone() }));
                 }
             }
             Some("input_image") => {
                 if let Some(image_url) = part.get("image_url") {
                     text_only = false;
-                    output_parts.push(json!({ "type": "image_url", "image_url": image_url.clone() }));
+                    output_parts
+                        .push(json!({ "type": "image_url", "image_url": image_url.clone() }));
                 }
             }
             Some("input_text") | Some("text") => {
@@ -70,7 +72,8 @@ pub(crate) fn chat_message_non_text_parts_from_responses(parts: &[Value]) -> Vec
         match part_type {
             Some("output_image") | Some("input_image") => {
                 if let Some(image_url) = part.get("image_url") {
-                    output_parts.push(json!({ "type": "image_url", "image_url": image_url.clone() }));
+                    output_parts
+                        .push(json!({ "type": "image_url", "image_url": image_url.clone() }));
                 }
             }
             _ => {}

@@ -104,9 +104,7 @@ async fn collect_responses_to_chat_chunks(
         .await
 }
 
-async fn read_first_usage_tokens(
-    pool: &SqlitePool,
-) -> (Option<i64>, Option<i64>, Option<i64>) {
+async fn read_first_usage_tokens(pool: &SqlitePool) -> (Option<i64>, Option<i64>, Option<i64>) {
     let deadline = TokioInstant::now() + std::time::Duration::from_secs(2);
     loop {
         let row = sqlx::query(
@@ -117,11 +115,15 @@ async fn read_first_usage_tokens(
         .ok()
         .flatten();
         if let Some(row) = row {
-            let input_tokens = row.try_get::<Option<i64>, _>("input_tokens").unwrap_or_default();
+            let input_tokens = row
+                .try_get::<Option<i64>, _>("input_tokens")
+                .unwrap_or_default();
             let output_tokens = row
                 .try_get::<Option<i64>, _>("output_tokens")
                 .unwrap_or_default();
-            let total_tokens = row.try_get::<Option<i64>, _>("total_tokens").unwrap_or_default();
+            let total_tokens = row
+                .try_get::<Option<i64>, _>("total_tokens")
+                .unwrap_or_default();
             return (input_tokens, output_tokens, total_tokens);
         }
         if TokioInstant::now() >= deadline {
@@ -181,8 +183,12 @@ fn stream_with_logging_persists_log_when_client_drops_stream_early() {
             .register(None, None)
             .await;
         {
-            let stream =
-                super::streaming::stream_with_logging(upstream, context, log.clone(), token_tracker);
+            let stream = super::streaming::stream_with_logging(
+                upstream,
+                context,
+                log.clone(),
+                token_tracker,
+            );
             futures_util::pin_mut!(stream);
             let first = stream
                 .next()
@@ -277,7 +283,10 @@ fn stream_responses_to_chat_emits_tool_call_deltas_and_finish_reason() {
         assert_eq!(first["choices"][0]["delta"]["role"], json!("assistant"));
 
         let initial = parse_sse_json(&chunks[1]).expect("json");
-        assert_eq!(initial["choices"][0]["delta"]["tool_calls"][0]["id"], json!("call_foo"));
+        assert_eq!(
+            initial["choices"][0]["delta"]["tool_calls"][0]["id"],
+            json!("call_foo")
+        );
         assert_eq!(
             initial["choices"][0]["delta"]["tool_calls"][0]["function"]["name"],
             json!("getRandomNumber")
@@ -332,7 +341,10 @@ fn stream_responses_to_chat_emits_content_parts_for_non_text() {
         assert_eq!(text_delta["choices"][0]["delta"]["content"], json!("Hello"));
 
         let parts_delta = parse_sse_json(&chunks[2]).expect("json");
-        assert_eq!(parts_delta["choices"][0]["delta"]["content"][0]["type"], json!("image_url"));
+        assert_eq!(
+            parts_delta["choices"][0]["delta"]["content"][0]["type"],
+            json!("image_url")
+        );
         assert_eq!(
             parts_delta["choices"][0]["delta"]["content"][0]["image_url"]["url"],
             json!("https://example.com/a.png")
@@ -356,14 +368,14 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
             upstream_id: "unit-test".to_string(),
             model: Some("unit-model".to_string()),
             mapped_model: Some("unit-model".to_string()),
-        stream: true,
-        status: 200,
-        upstream_request_id: None,
-        request_headers: None,
-        request_body: None,
-        ttfb_ms: None,
-        start: Instant::now(),
-    };
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
 
         let first_event = "data: {\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n";
         let (first_a, first_b) = first_event.split_at(12);
@@ -386,9 +398,9 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
             .await;
         let chunks: Vec<Bytes> =
             stream_chat_to_responses(upstream, context, log.clone(), token_tracker)
-            .map(|item| item.expect("stream item"))
-            .collect()
-            .await;
+                .map(|item| item.expect("stream item"))
+                .collect()
+                .await;
 
         assert_eq!(chunks.len(), 10);
 
@@ -398,13 +410,19 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
         assert!(response_id.starts_with("resp_"));
 
         let output_item_added = parse_sse_json(&chunks[1]).expect("json");
-        assert_eq!(output_item_added["type"], json!("response.output_item.added"));
+        assert_eq!(
+            output_item_added["type"],
+            json!("response.output_item.added")
+        );
         assert_eq!(output_item_added["output_index"], json!(0));
         let item_id = output_item_added["item"]["id"].as_str().expect("item.id");
         assert!(item_id.starts_with("msg_"));
 
         let content_part_added = parse_sse_json(&chunks[2]).expect("json");
-        assert_eq!(content_part_added["type"], json!("response.content_part.added"));
+        assert_eq!(
+            content_part_added["type"],
+            json!("response.content_part.added")
+        );
         assert_eq!(content_part_added["item_id"], json!(item_id));
         assert_eq!(content_part_added["output_index"], json!(0));
         assert_eq!(content_part_added["content_index"], json!(0));
@@ -429,7 +447,10 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
         assert_eq!(output_text_done["text"], json!("Hi!"));
 
         let content_part_done = parse_sse_json(&chunks[6]).expect("json");
-        assert_eq!(content_part_done["type"], json!("response.content_part.done"));
+        assert_eq!(
+            content_part_done["type"],
+            json!("response.content_part.done")
+        );
         assert_eq!(content_part_done["item_id"], json!(item_id));
         assert_eq!(content_part_done["part"]["text"], json!("Hi!"));
 
@@ -437,14 +458,20 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
         assert_eq!(output_item_done["type"], json!("response.output_item.done"));
         assert_eq!(output_item_done["output_index"], json!(0));
         assert_eq!(output_item_done["item"]["id"], json!(item_id));
-        assert_eq!(output_item_done["item"]["content"][0]["type"], json!("output_text"));
+        assert_eq!(
+            output_item_done["item"]["content"][0]["type"],
+            json!("output_text")
+        );
         assert_eq!(output_item_done["item"]["content"][0]["text"], json!("Hi!"));
 
         let completed = parse_sse_json(&chunks[8]).expect("json");
         assert_eq!(completed["type"], json!("response.completed"));
         assert_eq!(completed["response"]["id"], json!(response_id));
         assert_eq!(completed["response"]["output"][0]["id"], json!(item_id));
-        assert_eq!(completed["response"]["output"][0]["content"][0]["text"], json!("Hi!"));
+        assert_eq!(
+            completed["response"]["output"][0]["content"][0]["text"],
+            json!("Hi!")
+        );
         assert_eq!(completed["response"]["usage"]["input_tokens"], json!(1));
         assert_eq!(completed["response"]["usage"]["output_tokens"], json!(2));
         assert_eq!(completed["response"]["usage"]["total_tokens"], json!(3));
@@ -474,14 +501,14 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
             upstream_id: "unit-test".to_string(),
             model: Some("unit-model".to_string()),
             mapped_model: Some("unit-model".to_string()),
-        stream: true,
-        status: 200,
-        upstream_request_id: None,
-        request_headers: None,
-        request_body: None,
-        ttfb_ms: None,
-        start: Instant::now(),
-    };
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
 
         let upstream = futures_util::stream::iter(vec![
             Ok::<Bytes, reqwest::Error>(Bytes::from(
@@ -502,9 +529,9 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
             .await;
         let chunks: Vec<Bytes> =
             stream_chat_to_responses(upstream, context, log.clone(), token_tracker)
-            .map(|item| item.expect("stream item"))
-            .collect()
-            .await;
+                .map(|item| item.expect("stream item"))
+                .collect()
+                .await;
 
         assert_eq!(chunks.len(), 8);
 
@@ -514,7 +541,10 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
         assert!(response_id.starts_with("resp_"));
 
         let output_item_added = parse_sse_json(&chunks[1]).expect("json");
-        assert_eq!(output_item_added["type"], json!("response.output_item.added"));
+        assert_eq!(
+            output_item_added["type"],
+            json!("response.output_item.added")
+        );
         assert_eq!(output_item_added["output_index"], json!(0));
         assert_eq!(output_item_added["item"]["type"], json!("function_call"));
         assert_eq!(output_item_added["item"]["call_id"], json!("call_foo"));
@@ -523,19 +553,28 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
         assert!(item_id.starts_with("fc_"));
 
         let delta_1 = parse_sse_json(&chunks[2]).expect("json");
-        assert_eq!(delta_1["type"], json!("response.function_call_arguments.delta"));
+        assert_eq!(
+            delta_1["type"],
+            json!("response.function_call_arguments.delta")
+        );
         assert_eq!(delta_1["item_id"], json!(item_id));
         assert_eq!(delta_1["output_index"], json!(0));
         assert_eq!(delta_1["delta"], json!("{\"a\":\"0\""));
 
         let delta_2 = parse_sse_json(&chunks[3]).expect("json");
-        assert_eq!(delta_2["type"], json!("response.function_call_arguments.delta"));
+        assert_eq!(
+            delta_2["type"],
+            json!("response.function_call_arguments.delta")
+        );
         assert_eq!(delta_2["item_id"], json!(item_id));
         assert_eq!(delta_2["output_index"], json!(0));
         assert_eq!(delta_2["delta"], json!(",\"b\":\"100\"}"));
 
         let args_done = parse_sse_json(&chunks[4]).expect("json");
-        assert_eq!(args_done["type"], json!("response.function_call_arguments.done"));
+        assert_eq!(
+            args_done["type"],
+            json!("response.function_call_arguments.done")
+        );
         assert_eq!(args_done["item_id"], json!(item_id));
         assert_eq!(args_done["name"], json!("getRandomNumber"));
         assert_eq!(args_done["arguments"], json!("{\"a\":\"0\",\"b\":\"100\"}"));
@@ -547,14 +586,26 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
         assert_eq!(item_done["item"]["type"], json!("function_call"));
         assert_eq!(item_done["item"]["call_id"], json!("call_foo"));
         assert_eq!(item_done["item"]["name"], json!("getRandomNumber"));
-        assert_eq!(item_done["item"]["arguments"], json!("{\"a\":\"0\",\"b\":\"100\"}"));
+        assert_eq!(
+            item_done["item"]["arguments"],
+            json!("{\"a\":\"0\",\"b\":\"100\"}")
+        );
 
         let completed = parse_sse_json(&chunks[6]).expect("json");
         assert_eq!(completed["type"], json!("response.completed"));
         assert_eq!(completed["response"]["id"], json!(response_id));
-        assert_eq!(completed["response"]["output"][0]["type"], json!("function_call"));
-        assert_eq!(completed["response"]["output"][0]["call_id"], json!("call_foo"));
-        assert_eq!(completed["response"]["output"][0]["name"], json!("getRandomNumber"));
+        assert_eq!(
+            completed["response"]["output"][0]["type"],
+            json!("function_call")
+        );
+        assert_eq!(
+            completed["response"]["output"][0]["call_id"],
+            json!("call_foo")
+        );
+        assert_eq!(
+            completed["response"]["output"][0]["name"],
+            json!("getRandomNumber")
+        );
         assert_eq!(
             completed["response"]["output"][0]["arguments"],
             json!("{\"a\":\"0\",\"b\":\"100\"}")

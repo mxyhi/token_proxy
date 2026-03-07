@@ -14,4 +14,3 @@ pub fn new_state() -> AppProxyState {
 pub async fn set(state: &AppProxyState, value: Option<String>) {
     *state.write().await = value;
 }
-

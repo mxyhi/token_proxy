@@ -1,8 +1,8 @@
 use axum::body::Bytes;
 use serde_json::Value;
 
-use super::sse::SseEventParser;
 use super::log::{TokenUsage, UsageSnapshot};
+use super::sse::SseEventParser;
 
 pub(crate) struct SseUsageCollector {
     parser: SseEventParser,
@@ -62,11 +62,17 @@ fn extract_usage_from_event(value: &Value) -> Option<UsageSnapshot> {
         return Some(snapshot_from_usage_value(usage));
     }
 
-    if let Some(usage) = value.get("message").and_then(|message| message.get("usage")) {
+    if let Some(usage) = value
+        .get("message")
+        .and_then(|message| message.get("usage"))
+    {
         return Some(snapshot_from_usage_value(usage));
     }
 
-    if let Some(usage) = value.get("response").and_then(|response| response.get("usage")) {
+    if let Some(usage) = value
+        .get("response")
+        .and_then(|response| response.get("usage"))
+    {
         return Some(snapshot_from_usage_value(usage));
     }
 
@@ -105,9 +111,7 @@ fn usage_from_value(value: &Value) -> Option<TokenUsage> {
 fn gemini_usage_from_value(value: &Value) -> Option<TokenUsage> {
     // Gemini API 返回 `usageMetadata`：prompt/candidates/total token 计数。
     let input_tokens = value.get("promptTokenCount").and_then(Value::as_u64);
-    let output_tokens = value
-        .get("candidatesTokenCount")
-        .and_then(Value::as_u64);
+    let output_tokens = value.get("candidatesTokenCount").and_then(Value::as_u64);
     let total_tokens = value.get("totalTokenCount").and_then(Value::as_u64);
 
     if input_tokens.is_some() || output_tokens.is_some() || total_tokens.is_some() {

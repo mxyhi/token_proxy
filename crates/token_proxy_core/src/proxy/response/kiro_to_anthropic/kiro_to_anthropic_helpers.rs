@@ -3,8 +3,8 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::proxy::kiro::{parse_event_stream, utils::random_uuid, KiroToolUse, KiroUsage};
 use super::super::kiro_to_responses_helpers::{apply_usage_fallback, usage_json_from_kiro};
+use crate::proxy::kiro::{parse_event_stream, utils::random_uuid, KiroToolUse, KiroUsage};
 
 pub(crate) fn convert_kiro_response(
     bytes: &Bytes,
@@ -42,7 +42,10 @@ pub(super) fn split_partial_tag(segment: &str, tag: &str) -> (String, String) {
     for len in (1..=max_len).rev() {
         if segment.ends_with(&tag[..len]) {
             let emit_end = segment.len() - len;
-            return (segment[..emit_end].to_string(), segment[emit_end..].to_string());
+            return (
+                segment[..emit_end].to_string(),
+                segment[emit_end..].to_string(),
+            );
         }
     }
     (segment.to_string(), String::new())
@@ -85,10 +88,12 @@ fn build_claude_response(
             "tool_use"
         }
     });
-    let usage_value = usage_json_from_kiro(&usage).unwrap_or_else(|| json!({
-        "input_tokens": 0,
-        "output_tokens": 0
-    }));
+    let usage_value = usage_json_from_kiro(&usage).unwrap_or_else(|| {
+        json!({
+            "input_tokens": 0,
+            "output_tokens": 0
+        })
+    });
     json!({
         "id": format!("msg_{}", random_uuid()),
         "type": "message",

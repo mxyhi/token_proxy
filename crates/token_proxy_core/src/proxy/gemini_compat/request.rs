@@ -4,8 +4,8 @@ use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 
 use super::tools::{
-    map_chat_tool_choice_to_gemini, map_chat_tools_to_gemini, map_gemini_tool_config_to_chat,
-    map_gemini_tools_to_chat, gemini_function_call_to_chat_tool_call,
+    gemini_function_call_to_chat_tool_call, map_chat_tool_choice_to_gemini,
+    map_chat_tools_to_gemini, map_gemini_tool_config_to_chat, map_gemini_tools_to_chat,
 };
 
 /// 将 OpenAI Chat 请求转换为 Gemini 格式
@@ -72,10 +72,7 @@ pub(crate) fn chat_request_to_gemini(body: &Bytes) -> Result<Bytes, String> {
     if let Some(response_format) = object.get("response_format").and_then(Value::as_object) {
         if let Some(format_type) = response_format.get("type").and_then(Value::as_str) {
             if format_type == "json_object" || format_type == "json_schema" {
-                gen_config.insert(
-                    "responseMimeType".to_string(),
-                    json!("application/json"),
-                );
+                gen_config.insert("responseMimeType".to_string(), json!("application/json"));
                 // 如有 json_schema，复制 schema
                 if format_type == "json_schema" {
                     if let Some(schema) = response_format
@@ -183,7 +180,10 @@ fn chat_messages_to_gemini_contents(
             continue;
         };
 
-        let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user");
         match role {
             "system" | "developer" => {
                 if let Some(text) = extract_text_from_content(message.get("content")) {
@@ -207,8 +207,7 @@ fn chat_messages_to_gemini_contents(
                     }
                 }
                 // 处理旧版 function_call
-                if let Some(function_call) =
-                    message.get("function_call").and_then(Value::as_object)
+                if let Some(function_call) = message.get("function_call").and_then(Value::as_object)
                 {
                     if let Some(fc) = legacy_function_call_to_gemini(function_call) {
                         parts.push(fc);
@@ -268,8 +267,13 @@ fn gemini_contents_to_chat_messages(contents: &[Value]) -> Result<Vec<Value>, St
     Ok(messages)
 }
 
-fn gemini_content_to_chat_messages(content: &serde_json::Map<String, Value>) -> Result<Vec<Value>, String> {
-    let role = content.get("role").and_then(Value::as_str).unwrap_or("user");
+fn gemini_content_to_chat_messages(
+    content: &serde_json::Map<String, Value>,
+) -> Result<Vec<Value>, String> {
+    let role = content
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("user");
     let role = if role == "model" { "assistant" } else { role };
     let parts = content
         .get("parts")
@@ -295,8 +299,7 @@ fn gemini_content_to_chat_messages(content: &serde_json::Map<String, Value>) -> 
             continue;
         }
         if let Some(function_call) = part.get("functionCall").and_then(Value::as_object) {
-            let tool_call =
-                gemini_function_call_to_chat_tool_call(function_call, tool_calls.len());
+            let tool_call = gemini_function_call_to_chat_tool_call(function_call, tool_calls.len());
             tool_calls.push(tool_call);
             continue;
         }
@@ -378,7 +381,10 @@ fn gemini_file_data_to_image_url(data: &serde_json::Map<String, Value>) -> Optio
 fn function_response_to_chat_message(part: &serde_json::Map<String, Value>) -> Option<Value> {
     let response = part.get("functionResponse")?.as_object()?;
     let name = response.get("name").and_then(Value::as_str).unwrap_or("");
-    let payload = response.get("response").cloned().unwrap_or_else(|| json!({}));
+    let payload = response
+        .get("response")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let content = match payload {
         Value::String(text) => text,
         other => serde_json::to_string(&other).unwrap_or_else(|_| "{}".to_string()),
@@ -567,7 +573,10 @@ fn chat_tool_call_to_gemini_function_call(tool_call: &Value) -> Option<Value> {
     let tool_call = tool_call.as_object()?;
     let function = tool_call.get("function")?.as_object()?;
     let name = function.get("name").and_then(Value::as_str)?;
-    let arguments = function.get("arguments").and_then(Value::as_str).unwrap_or("{}");
+    let arguments = function
+        .get("arguments")
+        .and_then(Value::as_str)
+        .unwrap_or("{}");
     let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
     Some(json!({
         "functionCall": {

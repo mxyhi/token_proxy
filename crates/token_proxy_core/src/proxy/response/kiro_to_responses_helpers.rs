@@ -4,18 +4,17 @@ use super::super::kiro::KiroUsage;
 use super::super::token_estimator;
 
 pub(super) fn usage_from_kiro(usage: &KiroUsage) -> Option<super::super::log::TokenUsage> {
-    if usage.input_tokens.is_none()
-        && usage.output_tokens.is_none()
-        && usage.total_tokens.is_none()
+    if usage.input_tokens.is_none() && usage.output_tokens.is_none() && usage.total_tokens.is_none()
     {
         return None;
     }
-    let total_tokens = usage
-        .total_tokens
-        .or_else(|| match (usage.input_tokens, usage.output_tokens) {
-            (Some(input), Some(output)) => Some(input.saturating_add(output)),
-            _ => None,
-        });
+    let total_tokens =
+        usage
+            .total_tokens
+            .or_else(|| match (usage.input_tokens, usage.output_tokens) {
+                (Some(input), Some(output)) => Some(input.saturating_add(output)),
+                _ => None,
+            });
     Some(super::super::log::TokenUsage {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
@@ -219,10 +218,16 @@ fn update_usage_from_metadata(metadata: &Map<String, Value>, usage: &mut KiroUsa
         if let Some(tokens) = token_usage.get("totalTokens").and_then(Value::as_u64) {
             usage.total_tokens = Some(tokens);
         }
-        if let Some(tokens) = token_usage.get("uncachedInputTokens").and_then(Value::as_u64) {
+        if let Some(tokens) = token_usage
+            .get("uncachedInputTokens")
+            .and_then(Value::as_u64)
+        {
             usage.input_tokens = Some(tokens);
         }
-        if let Some(tokens) = token_usage.get("cacheReadInputTokens").and_then(Value::as_u64) {
+        if let Some(tokens) = token_usage
+            .get("cacheReadInputTokens")
+            .and_then(Value::as_u64)
+        {
             let current = usage.input_tokens.unwrap_or(0);
             usage.input_tokens = Some(current + tokens);
         }

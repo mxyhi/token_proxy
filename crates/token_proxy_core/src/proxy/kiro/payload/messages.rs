@@ -9,7 +9,11 @@ pub(super) fn process_messages(
     messages: &[Value],
     model_id: &str,
     origin: &str,
-) -> (Vec<KiroHistoryMessage>, Option<KiroUserInputMessage>, Vec<KiroToolResult>) {
+) -> (
+    Vec<KiroHistoryMessage>,
+    Option<KiroUserInputMessage>,
+    Vec<KiroToolResult>,
+) {
     let mut state = MessageState::new();
     for (index, message) in messages.iter().enumerate() {
         let Some(message) = message.as_object() else {
@@ -26,7 +30,11 @@ pub(super) fn process_messages(
         }
     }
     finalize_pending_tools(model_id, origin, &mut state);
-    (state.history, state.current_user, state.current_tool_results)
+    (
+        state.history,
+        state.current_user,
+        state.current_tool_results,
+    )
 }
 
 struct MessageState {
@@ -313,10 +321,7 @@ fn extract_tool_result_contents(message: &Map<String, Value>) -> Vec<KiroTextCon
         }
     }
 
-    let content = message
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let content = message.get("content").and_then(Value::as_str).unwrap_or("");
     if content.is_empty() {
         return Vec::new();
     }

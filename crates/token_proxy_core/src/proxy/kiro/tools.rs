@@ -6,7 +6,10 @@ const KIRO_MAX_TOOL_DESC_LEN: usize = 10237;
 const TOOL_COMPRESSION_TARGET_SIZE: usize = 20 * 1024;
 const MIN_TOOL_DESCRIPTION_LENGTH: usize = 50;
 
-pub(crate) fn convert_openai_tools(tools: Option<&Value>, is_chat_only: bool) -> Vec<KiroToolWrapper> {
+pub(crate) fn convert_openai_tools(
+    tools: Option<&Value>,
+    is_chat_only: bool,
+) -> Vec<KiroToolWrapper> {
     if is_chat_only {
         return Vec::new();
     }
@@ -19,7 +22,10 @@ pub(crate) fn convert_openai_tools(tools: Option<&Value>, is_chat_only: bool) ->
         let Some(tool) = item.as_object() else {
             continue;
         };
-        let tool_type = tool.get("type").and_then(Value::as_str).unwrap_or("function");
+        let tool_type = tool
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("function");
         if tool_type != "function" {
             continue;
         }
@@ -174,7 +180,9 @@ fn compress_description(description: &str, target_len: usize) -> String {
 }
 
 fn calculate_tools_size(tools: &[KiroToolWrapper]) -> usize {
-    serde_json::to_vec(tools).map(|data| data.len()).unwrap_or(0)
+    serde_json::to_vec(tools)
+        .map(|data| data.len())
+        .unwrap_or(0)
 }
 
 fn simplify_schema(value: &Value) -> Value {

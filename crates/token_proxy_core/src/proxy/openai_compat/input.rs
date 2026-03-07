@@ -19,7 +19,10 @@ fn responses_input_item_to_chat_message(item: &Value) -> Result<Value, String> {
     // 这里需要把 content parts 归一化成 Chat API 需要的字符串/多模态数组。
     if item.get("role").and_then(Value::as_str).is_some() {
         let mut output = item.clone();
-        if let Some(content) = item.get("content").and_then(responses_message_content_to_chat_content) {
+        if let Some(content) = item
+            .get("content")
+            .and_then(responses_message_content_to_chat_content)
+        {
             output.insert("content".to_string(), content);
         }
         return Ok(Value::Object(output));
@@ -33,7 +36,9 @@ fn responses_input_item_to_chat_message(item: &Value) -> Result<Value, String> {
         "message" => responses_message_item_to_chat_message(item),
         "function_call_output" => responses_function_call_output_item_to_chat_message(item),
         "function_call" => responses_function_call_item_to_chat_message(item),
-        _ => Err(format!("Unsupported Responses input item type: {item_type}")),
+        _ => Err(format!(
+            "Unsupported Responses input item type: {item_type}"
+        )),
     }
 }
 
@@ -49,7 +54,9 @@ fn responses_message_item_to_chat_message(item: &Map<String, Value>) -> Result<V
     Ok(json!({ "role": role, "content": content }))
 }
 
-fn responses_function_call_output_item_to_chat_message(item: &Map<String, Value>) -> Result<Value, String> {
+fn responses_function_call_output_item_to_chat_message(
+    item: &Map<String, Value>,
+) -> Result<Value, String> {
     let call_id = item
         .get("call_id")
         .and_then(Value::as_str)
@@ -62,7 +69,9 @@ fn responses_function_call_output_item_to_chat_message(item: &Map<String, Value>
     }))
 }
 
-fn responses_function_call_item_to_chat_message(item: &Map<String, Value>) -> Result<Value, String> {
+fn responses_function_call_item_to_chat_message(
+    item: &Map<String, Value>,
+) -> Result<Value, String> {
     let call_id = item
         .get("call_id")
         .and_then(Value::as_str)
@@ -118,7 +127,10 @@ fn responses_message_content_to_chat_content(value: &Value) -> Option<Value> {
                         // Chat Completions expects `{type:"image_url", image_url:{url:"..."}}`.
                         let url = match part.get("image_url") {
                             Some(Value::String(url)) => Some(json!({ "url": url })),
-                            Some(Value::Object(object)) => object.get("url").and_then(Value::as_str).map(|url| json!({ "url": url })),
+                            Some(Value::Object(object)) => object
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .map(|url| json!({ "url": url })),
                             _ => None,
                         };
                         let Some(image_url) = url else {

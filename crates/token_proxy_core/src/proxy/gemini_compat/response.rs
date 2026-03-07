@@ -56,7 +56,10 @@ pub(crate) fn chat_response_to_gemini(
 }
 
 /// 将 Gemini 响应转换为 OpenAI Chat 格式
-pub(crate) fn gemini_response_to_chat(bytes: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {
+pub(crate) fn gemini_response_to_chat(
+    bytes: &Bytes,
+    model_hint: Option<&str>,
+) -> Result<Bytes, String> {
     let value: Value =
         serde_json::from_slice(bytes).map_err(|_| "Upstream response must be JSON.".to_string())?;
     let Some(object) = value.as_object() else {
@@ -126,10 +129,7 @@ fn handle_gemini_error(error: &Value, model_hint: Option<&str>) -> Result<Bytes,
         .get("message")
         .and_then(Value::as_str)
         .unwrap_or("Unknown error from Gemini");
-    let code = error
-        .get("code")
-        .and_then(Value::as_i64)
-        .unwrap_or(500);
+    let code = error.get("code").and_then(Value::as_i64).unwrap_or(500);
 
     let model = model_hint.unwrap_or("gemini");
     let now_ms = std::time::SystemTime::now()
@@ -241,9 +241,7 @@ fn gemini_usage_to_chat_usage(usage: &Map<String, Value>) -> Value {
         .get("totalTokenCount")
         .and_then(Value::as_u64)
         .unwrap_or(prompt_tokens + completion_tokens);
-    let cached_tokens = usage
-        .get("cachedContentTokenCount")
-        .and_then(Value::as_u64);
+    let cached_tokens = usage.get("cachedContentTokenCount").and_then(Value::as_u64);
 
     let mut result = json!({
         "prompt_tokens": prompt_tokens,
@@ -292,7 +290,10 @@ fn chat_choice_to_gemini_candidate(choice: &Value, index: usize) -> Option<Value
     });
     if let Some(reason) = finish_reason {
         if let Some(obj) = candidate.as_object_mut() {
-            obj.insert("finishReason".to_string(), Value::String(reason.to_string()));
+            obj.insert(
+                "finishReason".to_string(),
+                Value::String(reason.to_string()),
+            );
         }
     }
     Some(candidate)

@@ -2,14 +2,15 @@ use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 use std::time::Instant;
 
-use super::{ActiveBlock, KiroToAnthropicState, ToolUseState, USAGE_UPDATE_CHAR_THRESHOLD, USAGE_UPDATE_TIME_INTERVAL, USAGE_UPDATE_TOKEN_DELTA};
+use super::super::super::kiro_to_responses_helpers::{
+    apply_usage_fallback, usage_from_kiro, usage_json_from_kiro,
+};
+use super::{
+    ActiveBlock, KiroToAnthropicState, ToolUseState, USAGE_UPDATE_CHAR_THRESHOLD,
+    USAGE_UPDATE_TIME_INTERVAL, USAGE_UPDATE_TOKEN_DELTA,
+};
 use crate::proxy::log::{build_log_entry, UsageSnapshot};
 use crate::proxy::token_estimator;
-use super::super::super::kiro_to_responses_helpers::{
-    apply_usage_fallback,
-    usage_from_kiro,
-    usage_json_from_kiro,
-};
 
 impl<S, E> KiroToAnthropicState<S>
 where
@@ -57,10 +58,12 @@ where
             return;
         }
         self.sent_message_start = true;
-        let usage = usage_json_from_kiro(&self.usage).unwrap_or_else(|| json!({
-            "input_tokens": 0,
-            "output_tokens": 0
-        }));
+        let usage = usage_json_from_kiro(&self.usage).unwrap_or_else(|| {
+            json!({
+                "input_tokens": 0,
+                "output_tokens": 0
+            })
+        });
         let message = json!({
             "id": self.message_id.as_str(),
             "type": "message",
@@ -120,28 +123,37 @@ where
         if !self.tool_uses.contains_key(tool_use_id) {
             let index = self.next_block_index;
             self.next_block_index += 1;
-            self.tool_uses.insert(tool_use_id.to_string(), ToolUseState {
-                index,
-                name: name.to_string(),
-                sent_start: false,
-                sent_stop: false,
-                sent_input: false,
-            });
+            self.tool_uses.insert(
+                tool_use_id.to_string(),
+                ToolUseState {
+                    index,
+                    name: name.to_string(),
+                    sent_start: false,
+                    sent_stop: false,
+                    sent_input: false,
+                },
+            );
         }
         if let Some(state) = self.tool_uses.get_mut(tool_use_id) {
             if state.name.is_empty() {
                 state.name = name.to_string();
             }
         }
-        if !self.tool_uses.get(tool_use_id).is_some_and(|state| state.sent_start) {
+        if !self
+            .tool_uses
+            .get(tool_use_id)
+            .is_some_and(|state| state.sent_start)
+        {
             self.start_tool_use_block(tool_use_id);
         }
     }
 
     fn start_tool_use_block(&mut self, tool_use_id: &str) {
-        let Some((index, name, sent_start)) = self.tool_uses.get(tool_use_id).map(|state| {
-            (state.index, state.name.clone(), state.sent_start)
-        }) else {
+        let Some((index, name, sent_start)) = self
+            .tool_uses
+            .get(tool_use_id)
+            .map(|state| (state.index, state.name.clone(), state.sent_start))
+        else {
             return;
         };
         if sent_start {
@@ -306,12 +318,14 @@ where
     pub(super) fn maybe_emit_usage_ping(&mut self) {
         let len = self.raw_content.len();
         let should_send = len.saturating_sub(self.last_ping_len) >= USAGE_UPDATE_CHAR_THRESHOLD
-            || (self.last_ping_time.elapsed() >= USAGE_UPDATE_TIME_INTERVAL && len > self.last_ping_len);
+            || (self.last_ping_time.elapsed() >= USAGE_UPDATE_TIME_INTERVAL
+                && len > self.last_ping_len);
         if !should_send {
             return;
         }
 
-        let output_tokens = token_estimator::estimate_text_tokens(Some(&self.model), &self.raw_content);
+        let output_tokens =
+            token_estimator::estimate_text_tokens(Some(&self.model), &self.raw_content);
         if output_tokens > self.last_reported_output_tokens + USAGE_UPDATE_TOKEN_DELTA {
             self.ensure_message_start();
             let input_tokens = self.usage.input_tokens.unwrap_or(0);

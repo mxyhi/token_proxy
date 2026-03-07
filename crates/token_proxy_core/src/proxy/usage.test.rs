@@ -31,7 +31,10 @@ fn extract_cached_tokens_from_openai_input_tokens_details() {
     );
     let snapshot = extract_usage_from_response(&bytes);
     assert_eq!(snapshot.cached_tokens, Some(4));
-    assert_eq!(snapshot.usage_json.expect("usage_json")["input_tokens"], json!(1));
+    assert_eq!(
+        snapshot.usage_json.expect("usage_json")["input_tokens"],
+        json!(1)
+    );
 }
 
 #[test]
@@ -41,7 +44,10 @@ fn extract_cached_tokens_from_openai_prompt_tokens_details() {
     );
     let snapshot = extract_usage_from_response(&bytes);
     assert_eq!(snapshot.cached_tokens, Some(4));
-    assert_eq!(snapshot.usage_json.expect("usage_json")["prompt_tokens"], json!(1));
+    assert_eq!(
+        snapshot.usage_json.expect("usage_json")["prompt_tokens"],
+        json!(1)
+    );
 }
 
 #[test]

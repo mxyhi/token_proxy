@@ -623,10 +623,7 @@ pub fn run() {
             app.manage(token_rate.clone());
             let app_handle_for_request_detail = app.handle().clone();
             let on_request_detail_change = Arc::new(move |state: RequestDetailCaptureEvent| {
-                let _ = app_handle_for_request_detail.emit(
-                    REQUEST_DETAIL_CAPTURE_EVENT,
-                    state,
-                );
+                let _ = app_handle_for_request_detail.emit(REQUEST_DETAIL_CAPTURE_EVENT, state);
             });
             let request_detail = Arc::new(proxy::request_detail::RequestDetailCapture::new(Some(
                 on_request_detail_change,

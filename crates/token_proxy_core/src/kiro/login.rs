@@ -5,11 +5,19 @@ use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 
-use super::callback::{callback_file_path, parse_callback_url, read_callback_file, write_callback_file};
+use super::callback::{
+    callback_file_path, parse_callback_url, read_callback_file, write_callback_file,
+};
 use super::oauth::{build_login_url, KiroOAuthClient};
-use super::sso_oidc::{build_auth_code_url, CreateTokenResponse, RegisterClientResponse, SsoOidcClient, StartDeviceAuthResponse, TokenPollError};
+use super::sso_oidc::{
+    build_auth_code_url, CreateTokenResponse, RegisterClientResponse, SsoOidcClient,
+    StartDeviceAuthResponse, TokenPollError,
+};
 use super::store::KiroAccountStore;
-use super::types::{KiroAccountSummary, KiroLoginMethod, KiroLoginPollResponse, KiroLoginStartResponse, KiroLoginStatus, KiroTokenRecord};
+use super::types::{
+    KiroAccountSummary, KiroLoginMethod, KiroLoginPollResponse, KiroLoginStartResponse,
+    KiroLoginStatus, KiroTokenRecord,
+};
 use super::util::{expires_at_from_seconds, generate_pkce, generate_state, now_rfc3339};
 use crate::app_proxy::AppProxyState;
 
@@ -180,15 +188,13 @@ impl KiroLoginManager {
             verification_uri_complete: None,
             user_code: None,
             interval_seconds: None,
-            expires_at: Some(expires_at_from_seconds(SOCIAL_CALLBACK_TIMEOUT.as_secs() as i64)),
+            expires_at: Some(expires_at_from_seconds(
+                SOCIAL_CALLBACK_TIMEOUT.as_secs() as i64
+            )),
         })
     }
 
-    async fn insert_session(
-        &self,
-        state: &str,
-        expires_at: Option<OffsetDateTime>,
-    ) {
+    async fn insert_session(&self, state: &str, expires_at: Option<OffsetDateTime>) {
         let session = LoginSession {
             status: KiroLoginStatus::Waiting,
             error: None,
@@ -247,24 +253,26 @@ async fn start_auth_code_callback(state: String) -> Result<AuthCodeCallback, Str
     let redirect_uri = format!("http://127.0.0.1:{port}/oauth/callback");
     let router = axum::Router::new().route(
         "/oauth/callback",
-        axum::routing::get(move |query: axum::extract::Query<HashMap<String, String>>| {
-            let expected_state = state.clone();
-            let tx = tx.clone();
-            async move {
-                let code = query.get("code").cloned();
-                let state = query.get("state").cloned();
-                let error = query.get("error").cloned();
-                let has_error = error.is_some();
-                let state_matches = state.as_deref() == Some(&expected_state);
-                let _ = tx.send(AuthCodeResult { code, state, error }).await;
-                let body = if has_error || !state_matches {
-                    "Login failed. You can close this window."
-                } else {
-                    "Login successful. You can close this window."
-                };
-                axum::response::Html(body)
-            }
-        }),
+        axum::routing::get(
+            move |query: axum::extract::Query<HashMap<String, String>>| {
+                let expected_state = state.clone();
+                let tx = tx.clone();
+                async move {
+                    let code = query.get("code").cloned();
+                    let state = query.get("state").cloned();
+                    let error = query.get("error").cloned();
+                    let has_error = error.is_some();
+                    let state_matches = state.as_deref() == Some(&expected_state);
+                    let _ = tx.send(AuthCodeResult { code, state, error }).await;
+                    let body = if has_error || !state_matches {
+                        "Login failed. You can close this window."
+                    } else {
+                        "Login successful. You can close this window."
+                    };
+                    axum::response::Html(body)
+                }
+            },
+        ),
     );
     tokio::spawn(async move {
         let _ = axum::serve(listener, router)
@@ -287,8 +295,7 @@ async fn run_device_code_login(
     auth: StartDeviceAuthResponse,
 ) {
     let mut interval = Duration::from_secs(auth.interval.max(1) as u64);
-    let deadline = OffsetDateTime::now_utc()
-        + time::Duration::seconds(auth.expires_in.max(1));
+    let deadline = OffsetDateTime::now_utc() + time::Duration::seconds(auth.expires_in.max(1));
     let proxy_url = manager.app_proxy_url().await;
     let client = match SsoOidcClient::new(proxy_url.as_deref()) {
         Ok(client) => client,
@@ -319,7 +326,9 @@ async fn run_device_code_login(
             }
         }
     }
-    manager.fail_session(&state, "Authorization timed out.".to_string()).await;
+    manager
+        .fail_session(&state, "Authorization timed out.".to_string())
+        .await;
 }
 
 async fn run_auth_code_login(

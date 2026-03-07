@@ -164,14 +164,8 @@ impl TokenRateTracker {
         }
         self.maybe_cleanup(Instant::now()).await;
         let now = Instant::now();
-        let windows: Vec<Arc<Mutex<RequestWindow>>> = self
-            .inner
-            .requests
-            .read()
-            .await
-            .values()
-            .cloned()
-            .collect();
+        let windows: Vec<Arc<Mutex<RequestWindow>>> =
+            self.inner.requests.read().await.values().cloned().collect();
         let mut input = 0u64;
         let mut output = 0u64;
         for window in windows {
@@ -213,13 +207,7 @@ impl TokenRateTracker {
     }
 
     async fn unregister(&self, id: u64) {
-        let removed = self
-            .inner
-            .requests
-            .write()
-            .await
-            .remove(&id)
-            .is_some();
+        let removed = self.inner.requests.write().await.remove(&id).is_some();
         if removed {
             self.inner.active.fetch_sub(1, Ordering::SeqCst);
         }

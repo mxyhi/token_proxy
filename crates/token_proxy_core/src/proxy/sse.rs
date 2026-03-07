@@ -61,4 +61,3 @@ impl SseEventParser {
         on_event(data.to_string());
     }
 }
-

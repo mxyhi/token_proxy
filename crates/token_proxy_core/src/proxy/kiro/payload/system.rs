@@ -154,7 +154,8 @@ pub(super) fn extract_response_format_hint(object: &Map<String, Value>) -> Optio
 }
 
 fn format_timestamp() -> String {
-    let format = time::format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second] UTC");
+    let format =
+        time::format_description::parse("[year]-[month]-[day] [hour]:[minute]:[second] UTC");
     if let Ok(format) = format {
         if let Ok(value) = OffsetDateTime::now_utc().format(&format) {
             return value;
@@ -166,7 +167,9 @@ fn format_timestamp() -> String {
 }
 
 fn thinking_enabled_from_header(headers: &HeaderMap) -> bool {
-    let beta = headers.get("anthropic-beta").or_else(|| headers.get("Anthropic-Beta"));
+    let beta = headers
+        .get("anthropic-beta")
+        .or_else(|| headers.get("Anthropic-Beta"));
     let Some(beta) = beta else {
         return false;
     };

@@ -1,15 +1,17 @@
 use axum::body::Bytes;
 use futures_util::{stream::unfold, StreamExt};
 use serde_json::{json, Map, Value};
-use std::collections::VecDeque;
 use sha2::{Digest, Sha256};
+use std::collections::VecDeque;
 
-use crate::proxy::antigravity_schema::{clean_json_schema_for_antigravity, clean_json_schema_for_gemini};
+use crate::proxy::antigravity_schema::{
+    clean_json_schema_for_antigravity, clean_json_schema_for_gemini,
+};
 use crate::proxy::sse::SseEventParser;
 
-mod signature_cache;
 mod claude;
 mod gemini_fixups;
+mod signature_cache;
 
 pub(crate) use claude::claude_request_to_antigravity;
 
@@ -64,7 +66,10 @@ pub(crate) fn wrap_gemini_request(
         "userAgent".to_string(),
         Value::String(PAYLOAD_USER_AGENT.to_string()),
     );
-    root.insert("requestType".to_string(), Value::String("agent".to_string()));
+    root.insert(
+        "requestType".to_string(),
+        Value::String("agent".to_string()),
+    );
 
     serde_json::to_vec(&Value::Object(root))
         .map(Bytes::from)
@@ -162,8 +167,7 @@ where
 
     fn push_event(&mut self, data: &str) {
         if data == "[DONE]" {
-            self.out
-                .push_back(Bytes::from(format!("data: {data}\n\n")));
+            self.out.push_back(Bytes::from(format!("data: {data}\n\n")));
             return;
         }
         let Ok(value) = serde_json::from_str::<Value>(data) else {
@@ -171,12 +175,10 @@ where
         };
         if let Some(response) = value.get("response") {
             if let Ok(json) = serde_json::to_string(response) {
-                self.out
-                    .push_back(Bytes::from(format!("data: {json}\n\n")));
+                self.out.push_back(Bytes::from(format!("data: {json}\n\n")));
             }
         } else if let Ok(json) = serde_json::to_string(&value) {
-            self.out
-                .push_back(Bytes::from(format!("data: {json}\n\n")));
+            self.out.push_back(Bytes::from(format!("data: {json}\n\n")));
         }
     }
 }
@@ -435,7 +437,10 @@ fn trim_generation_config(request: &mut Map<String, Value>, model: &str) {
     if model.to_lowercase().contains("claude") {
         return;
     }
-    let Some(gen) = request.get_mut("generationConfig").and_then(Value::as_object_mut) else {
+    let Some(gen) = request
+        .get_mut("generationConfig")
+        .and_then(Value::as_object_mut)
+    else {
         return;
     };
     gen.remove("maxOutputTokens");
@@ -458,10 +463,7 @@ fn ensure_tool_config_mode(request: &mut Map<String, Value>, model_lower: &str) 
     let Some(calling) = calling.as_object_mut() else {
         return;
     };
-    calling.insert(
-        "mode".to_string(),
-        Value::String("VALIDATED".to_string()),
-    );
+    calling.insert("mode".to_string(), Value::String("VALIDATED".to_string()));
 }
 
 fn generate_request_id() -> String {
@@ -485,6 +487,10 @@ fn generate_project_id() -> String {
     let noun = NOUNS[(rand::random::<u64>() as usize) % NOUNS.len()];
     let uuid = crate::proxy::kiro::utils::random_uuid();
     let random_part = uuid.replace('-', "");
-    let random_part = random_part.chars().take(5).collect::<String>().to_ascii_lowercase();
+    let random_part = random_part
+        .chars()
+        .take(5)
+        .collect::<String>()
+        .to_ascii_lowercase();
     format!("{adj}-{noun}-{random_part}")
 }

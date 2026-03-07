@@ -55,32 +55,39 @@ async fn run(cli: Cli) -> Result<(), String> {
                 Ok(())
             }
         },
-        Command::Serve => {
-            serve(paths).await
-        }
+        Command::Serve => serve(paths).await,
     }
 }
 
 async fn serve(paths: token_proxy_core::paths::TokenProxyPaths) -> Result<(), String> {
     // 1) 初始化日志（默认 silent；服务启动时会根据配置动态 apply）
-    let logging = token_proxy_core::logging::LoggingState::init(token_proxy_core::logging::LogLevel::Silent);
+    let logging =
+        token_proxy_core::logging::LoggingState::init(token_proxy_core::logging::LogLevel::Silent);
 
     // 2) 初始化 app_proxy（供 accounts/reqwest client 复用）
     let app_proxy = token_proxy_core::app_proxy::new_state();
-    let config_file = token_proxy_core::proxy::config::read_config(&paths).await?.config;
+    let config_file = token_proxy_core::proxy::config::read_config(&paths)
+        .await?
+        .config;
     let proxy_url = token_proxy_core::proxy::config::app_proxy_url_from_config(&config_file)?;
     token_proxy_core::app_proxy::set(&app_proxy, proxy_url).await;
 
     // 3) 初始化运行时依赖（尽量保持与 Tauri 侧一致，确保行为一致）
-    let request_detail = Arc::new(token_proxy_core::proxy::request_detail::RequestDetailCapture::default());
+    let request_detail =
+        Arc::new(token_proxy_core::proxy::request_detail::RequestDetailCapture::default());
     let token_rate = token_proxy_core::proxy::token_rate::TokenRateTracker::new();
 
-    let kiro_accounts = Arc::new(token_proxy_core::kiro::KiroAccountStore::new(&paths, app_proxy.clone())?);
-    let codex_accounts = Arc::new(token_proxy_core::codex::CodexAccountStore::new(&paths, app_proxy.clone())?);
-    let antigravity_accounts = Arc::new(token_proxy_core::antigravity::AntigravityAccountStore::new(
+    let kiro_accounts = Arc::new(token_proxy_core::kiro::KiroAccountStore::new(
         &paths,
         app_proxy.clone(),
     )?);
+    let codex_accounts = Arc::new(token_proxy_core::codex::CodexAccountStore::new(
+        &paths,
+        app_proxy.clone(),
+    )?);
+    let antigravity_accounts = Arc::new(
+        token_proxy_core::antigravity::AntigravityAccountStore::new(&paths, app_proxy.clone())?,
+    );
 
     let ctx = token_proxy_core::proxy::service::ProxyContext {
         paths: Arc::new(paths),

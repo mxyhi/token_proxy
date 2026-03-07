@@ -5,18 +5,15 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::extract_tool_name_map_from_request_body;
 use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::response::STREAM_DROPPED_ERROR;
 use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
+use super::extract_tool_name_map_from_request_body;
 
 pub(crate) fn stream_codex_to_chat<E>(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
-        + Unpin
-        + Send
-        + 'static,
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     token_tracker: RequestTokenTracker,
@@ -81,7 +78,8 @@ where
             .model
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let tool_name_map = extract_tool_name_map_from_request_body(context.request_body.as_deref());
+        let tool_name_map =
+            extract_tool_name_map_from_request_body(context.request_body.as_deref());
         context.request_body = None;
 
         Self {
@@ -256,7 +254,9 @@ where
         if self.sent_done {
             return;
         }
-        let finish = self.finish_reason.unwrap_or_else(|| self.resolve_finish_reason());
+        let finish = self
+            .finish_reason
+            .unwrap_or_else(|| self.resolve_finish_reason());
         let done = chat_chunk_sse(
             &self.response_id,
             self.created,
@@ -283,10 +283,7 @@ where
 }
 
 pub(crate) fn stream_codex_to_responses<E>(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
-        + Unpin
-        + Send
-        + 'static,
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     token_tracker: RequestTokenTracker,
@@ -340,7 +337,8 @@ where
         log: Arc<LogWriter>,
         token_tracker: RequestTokenTracker,
     ) -> Self {
-        let tool_name_map = extract_tool_name_map_from_request_body(context.request_body.as_deref());
+        let tool_name_map =
+            extract_tool_name_map_from_request_body(context.request_body.as_deref());
         context.request_body = None;
         Self {
             upstream,
@@ -465,7 +463,10 @@ fn restore_tool_names_in_response(
     }
 }
 
-fn restore_tool_names_in_item(item: &mut Map<String, Value>, tool_name_map: &HashMap<String, String>) {
+fn restore_tool_names_in_item(
+    item: &mut Map<String, Value>,
+    tool_name_map: &HashMap<String, String>,
+) {
     if item.get("type").and_then(Value::as_str) != Some("function_call") {
         return;
     }

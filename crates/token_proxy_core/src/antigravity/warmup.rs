@@ -131,15 +131,24 @@ impl AntigravityWarmupScheduler {
         let client = build_reqwest_client(proxy_url.as_deref(), Duration::from_secs(20))?;
         let mut project_id = record.project_id.clone();
         if project_id.is_none() {
-            if let Ok(info) = project::load_code_assist(&record.access_token, proxy_url.as_deref()).await {
+            if let Ok(info) =
+                project::load_code_assist(&record.access_token, proxy_url.as_deref()).await
+            {
                 if let Some(value) = info.project_id.clone() {
-                    let _ = self.store.update_project_id(account_id, value.clone()).await;
+                    let _ = self
+                        .store
+                        .update_project_id(account_id, value.clone())
+                        .await;
                     project_id = Some(value);
                 } else if let Some(tier_id) = info.plan_type.as_deref() {
                     if let Ok(Some(value)) =
-                        project::onboard_user(&record.access_token, proxy_url.as_deref(), tier_id).await
+                        project::onboard_user(&record.access_token, proxy_url.as_deref(), tier_id)
+                            .await
                     {
-                        let _ = self.store.update_project_id(account_id, value.clone()).await;
+                        let _ = self
+                            .store
+                            .update_project_id(account_id, value.clone())
+                            .await;
                         project_id = Some(value);
                     }
                 }
@@ -185,9 +194,7 @@ impl AntigravityWarmupScheduler {
         loop {
             let due = self.collect_due().await;
             for item in due {
-                let _ = self
-                    .run_warmup(&item.account_id, &item.model, false)
-                    .await;
+                let _ = self.run_warmup(&item.account_id, &item.model, false).await;
                 self.bump_schedule(&item.account_id, &item.model).await;
             }
             tokio::time::sleep(Duration::from_secs(30)).await;
@@ -226,14 +233,19 @@ impl AntigravityWarmupScheduler {
 
 fn format_next_run(interval_minutes: u64) -> String {
     let next = OffsetDateTime::now_utc() + time::Duration::minutes(interval_minutes as i64);
-    next.format(&Rfc3339).unwrap_or_else(|_| next.unix_timestamp().to_string())
+    next.format(&Rfc3339)
+        .unwrap_or_else(|_| next.unix_timestamp().to_string())
 }
 
 fn schedule_key(account_id: &str, model: &str) -> String {
     format!("{}::{}", account_id.trim(), model.trim())
 }
 
-fn build_warmup_payload(model: &str, project_id: Option<&str>, user_agent: &str) -> serde_json::Value {
+fn build_warmup_payload(
+    model: &str,
+    project_id: Option<&str>,
+    user_agent: &str,
+) -> serde_json::Value {
     let project = project_id.unwrap_or_default();
     let request_id = format!("agent-{}", OffsetDateTime::now_utc().unix_timestamp());
     serde_json::json!({

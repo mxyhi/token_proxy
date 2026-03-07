@@ -3,15 +3,15 @@ use futures_util::{stream::try_unfold, StreamExt};
 use serde_json::Value;
 use std::{collections::VecDeque, sync::Arc};
 
-use super::{
-    PROVIDER_ANTHROPIC, PROVIDER_ANTIGRAVITY, PROVIDER_CODEX, PROVIDER_GEMINI, PROVIDER_OPENAI,
-    PROVIDER_OPENAI_RESPONSES,
-};
 use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::model;
 use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
+use super::{
+    PROVIDER_ANTHROPIC, PROVIDER_ANTIGRAVITY, PROVIDER_CODEX, PROVIDER_GEMINI, PROVIDER_OPENAI,
+    PROVIDER_OPENAI_RESPONSES,
+};
 
 pub(crate) const STREAM_DROPPED_ERROR: &str = "stream dropped before completion";
 
@@ -139,7 +139,8 @@ pub(super) fn stream_with_logging_and_model_override<E>(
 where
     E: std::error::Error + Send + Sync + 'static,
 {
-    let state = ModelOverrideStreamState::new(upstream, context, log, model_override, token_tracker);
+    let state =
+        ModelOverrideStreamState::new(upstream, context, log, model_override, token_tracker);
     try_unfold(state, |state| async move { state.step().await })
 }
 
@@ -254,9 +255,9 @@ where
 
     fn push_event_output(&mut self, data: &str) {
         let output = rewrite_sse_data(data, &self.model_override);
-        self.out.push_back(Bytes::from(format!("data: {output}\n\n")));
+        self.out
+            .push_back(Bytes::from(format!("data: {output}\n\n")));
     }
-
 }
 
 fn rewrite_sse_data(data: &str, model_override: &str) -> String {

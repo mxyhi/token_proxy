@@ -15,10 +15,7 @@ mod format;
 mod state_types;
 
 pub(super) fn stream_chat_to_responses<E>(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
-        + Unpin
-        + Send
-        + 'static,
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     token_tracker: RequestTokenTracker,
@@ -587,7 +584,11 @@ where
     }
 
     fn parallel_tool_calls(&self) -> bool {
-        self.function_calls.iter().filter(|call| call.is_some()).count() > 1
+        self.function_calls
+            .iter()
+            .filter(|call| call.is_some())
+            .count()
+            > 1
     }
 
     fn log_usage_once(&mut self) {

@@ -10,8 +10,8 @@ use tokio::time::timeout;
 use super::config::ProxyConfig;
 use super::log::LogWriter;
 use super::request_detail::RequestDetailCapture;
-use super::sqlite;
 use super::server;
+use super::sqlite;
 use super::ProxyState;
 use crate::logging::LoggingState;
 use crate::paths::TokenProxyPaths;
@@ -167,7 +167,9 @@ impl ProxyServiceInner {
 
     fn status(&self) -> ProxyServiceStatus {
         match &self.running {
-            Some(running) => ProxyServiceStatus::running(running.addr.clone(), self.last_error.clone()),
+            Some(running) => {
+                ProxyServiceStatus::running(running.addr.clone(), self.last_error.clone())
+            }
             None => ProxyServiceStatus::stopped(self.last_error.clone()),
         }
     }
@@ -289,7 +291,10 @@ impl ProxyServiceInner {
             let mut guard = running.state_handle.write().await;
             *guard = new_state;
         }
-        tracing::debug!(elapsed_ms = start.elapsed().as_millis(), "proxy reload applied");
+        tracing::debug!(
+            elapsed_ms = start.elapsed().as_millis(),
+            "proxy reload applied"
+        );
         Ok(())
     }
 
@@ -302,7 +307,11 @@ impl ProxyServiceInner {
         }
     }
 
-    async fn await_stop(&mut self, task: JoinHandle<Result<(), String>>, timeout_duration: Duration) {
+    async fn await_stop(
+        &mut self,
+        task: JoinHandle<Result<(), String>>,
+        timeout_duration: Duration,
+    ) {
         let mut task = task;
         match timeout(timeout_duration, &mut task).await {
             Ok(Ok(Ok(()))) => {}
@@ -336,10 +345,8 @@ async fn build_router_state(
     let state = build_proxy_state(ctx, config, sqlite_pool).await?;
     let max_request_body_bytes = state.config.max_request_body_bytes;
     let state_handle = Arc::new(RwLock::new(state));
-    let router =
-        server::build_router(state_handle.clone(), max_request_body_bytes).with_state::<()>(
-            state_handle.clone(),
-        );
+    let router = server::build_router(state_handle.clone(), max_request_body_bytes)
+        .with_state::<()>(state_handle.clone());
     Ok((state_handle.clone(), router))
 }
 

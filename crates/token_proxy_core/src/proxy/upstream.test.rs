@@ -1,5 +1,5 @@
-use super::*;
 use super::utils::is_retryable_status;
+use super::*;
 
 #[test]
 fn retryable_status_matches_proxy_policy() {
@@ -11,14 +11,17 @@ fn retryable_status_matches_proxy_policy() {
 
     // Exclude 504/524 timeouts from retries.
     assert!(!is_retryable_status(StatusCode::GATEWAY_TIMEOUT));
-    assert!(!is_retryable_status(StatusCode::from_u16(524).expect("524")));
+    assert!(!is_retryable_status(
+        StatusCode::from_u16(524).expect("524")
+    ));
 
     assert!(!is_retryable_status(StatusCode::UNAUTHORIZED));
 }
 
 #[test]
 fn extract_query_param_reads_key_value() {
-    let value = utils::extract_query_param("/v1beta/models/x:generateContent?key=abc&foo=bar", "key");
+    let value =
+        utils::extract_query_param("/v1beta/models/x:generateContent?key=abc&foo=bar", "key");
     assert_eq!(value.as_deref(), Some("abc"));
 }
 
@@ -46,9 +49,15 @@ fn apply_header_overrides_sets_and_removes() {
     use axum::http::{HeaderMap, HeaderName, HeaderValue};
 
     let mut headers = HeaderMap::new();
-    headers.insert(HeaderName::from_static("x-remove"), HeaderValue::from_static("value"));
+    headers.insert(
+        HeaderName::from_static("x-remove"),
+        HeaderValue::from_static("value"),
+    );
     headers.insert(AUTHORIZATION, HeaderValue::from_static("Bearer original"));
-    headers.insert(HeaderName::from_static("x-keep"), HeaderValue::from_static("old"));
+    headers.insert(
+        HeaderName::from_static("x-keep"),
+        HeaderValue::from_static("old"),
+    );
 
     let overrides = vec![
         super::super::config::HeaderOverride {
@@ -91,10 +100,8 @@ fn apply_header_overrides_sets_and_removes() {
 
 #[test]
 fn mapped_model_reasoning_suffix_is_stripped_and_becomes_effort() {
-    let (model, effort) = normalize_mapped_model_reasoning_suffix(
-        Some("gpt-4.1-reasoning-high".to_string()),
-        None,
-    );
+    let (model, effort) =
+        normalize_mapped_model_reasoning_suffix(Some("gpt-4.1-reasoning-high".to_string()), None);
     assert_eq!(model.as_deref(), Some("gpt-4.1"));
     assert_eq!(effort.as_deref(), Some("high"));
 }

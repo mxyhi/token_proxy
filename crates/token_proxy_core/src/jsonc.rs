@@ -147,4 +147,3 @@ fn strip_trailing_commas(contents: &str) -> String {
 
     String::from_utf8(output).unwrap_or_default()
 }
-

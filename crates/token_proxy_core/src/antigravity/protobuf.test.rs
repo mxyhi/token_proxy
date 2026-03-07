@@ -27,7 +27,9 @@ fn inject_and_extract_roundtrip() {
     };
 
     let encoded = inject_token_record("", &record).expect("inject");
-    let extracted = extract_token_record(&encoded).expect("extract").expect("record");
+    let extracted = extract_token_record(&encoded)
+        .expect("extract")
+        .expect("record");
 
     assert_eq!(extracted.access_token, record.access_token);
     assert_eq!(extracted.refresh_token, record.refresh_token);

@@ -3,8 +3,8 @@ use std::time::Instant;
 
 use crate::paths::TokenProxyPaths;
 
-use super::ProxyConfigFile;
 use super::migrate::migrate_config_json;
+use super::ProxyConfigFile;
 
 const DEFAULT_CONFIG_HEADER: &str = concat!(
     "// Token Proxy config (JSONC). Comments and trailing commas are supported.\n",

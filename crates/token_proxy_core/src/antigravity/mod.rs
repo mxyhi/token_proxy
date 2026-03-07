@@ -1,8 +1,8 @@
+pub mod endpoints;
 mod ide;
 mod ide_db;
 mod login;
 mod oauth;
-pub mod endpoints;
 pub mod project;
 mod protobuf;
 mod quota;
@@ -15,11 +15,7 @@ pub use login::AntigravityLoginManager;
 pub use quota::fetch_quotas;
 pub use store::AntigravityAccountStore;
 pub use types::{
-    AntigravityAccountSummary,
-    AntigravityIdeStatus,
-    AntigravityLoginPollResponse,
-    AntigravityLoginStartResponse,
-    AntigravityQuotaSummary,
-    AntigravityWarmupScheduleSummary,
+    AntigravityAccountSummary, AntigravityIdeStatus, AntigravityLoginPollResponse,
+    AntigravityLoginStartResponse, AntigravityQuotaSummary, AntigravityWarmupScheduleSummary,
 };
 pub use warmup::AntigravityWarmupScheduler;

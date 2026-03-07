@@ -172,9 +172,8 @@ enum WordType {
 fn bpe_for_model(model: Option<&str>) -> &'static CoreBPE {
     if matches_o200k(model) {
         static O200K: OnceLock<CoreBPE> = OnceLock::new();
-        return O200K.get_or_init(|| {
-            o200k_base().unwrap_or_else(|_| cl100k_base().expect("cl100k_base"))
-        });
+        return O200K
+            .get_or_init(|| o200k_base().unwrap_or_else(|_| cl100k_base().expect("cl100k_base")));
     }
 
     static CL100K: OnceLock<CoreBPE> = OnceLock::new();
@@ -271,7 +270,8 @@ fn math_symbol_set() -> &'static HashSet<char> {
     static SYMBOLS: OnceLock<HashSet<char>> = OnceLock::new();
     SYMBOLS.get_or_init(|| {
         // Keep this list identical to `.reference/new-api/service/token_estimator.go` to avoid drift.
-        const MATH_SYMBOLS: &str = "∑∫∂√∞≤≥≠≈±×÷∈∉∋∌⊂⊃⊆⊇∪∩∧∨¬∀∃∄∅∆∇∝∟∠∡∢°′″‴⁺⁻⁼⁽⁾ⁿ₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎²³¹⁴⁵⁶⁷⁸⁹⁰";
+        const MATH_SYMBOLS: &str =
+            "∑∫∂√∞≤≥≠≈±×÷∈∉∋∌⊂⊃⊆⊇∪∩∧∨¬∀∃∄∅∆∇∝∟∠∡∢°′″‴⁺⁻⁼⁽⁾ⁿ₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎²³¹⁴⁵⁶⁷⁸⁹⁰";
         MATH_SYMBOLS.chars().collect()
     })
 }

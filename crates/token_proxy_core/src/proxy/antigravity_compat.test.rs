@@ -13,7 +13,10 @@ fn keeps_claude_model_unchanged() {
 
 #[test]
 fn trims_model_name() {
-    assert_eq!(map_antigravity_model("  gemini-1.5-pro  "), "gemini-1.5-pro");
+    assert_eq!(
+        map_antigravity_model("  gemini-1.5-pro  "),
+        "gemini-1.5-pro"
+    );
 }
 
 #[test]
@@ -231,7 +234,10 @@ fn gemini_schema_cleaner_renames_and_does_not_add_placeholders() {
     let wrapped = wrap_gemini_request(&bytes, None, None, "ua").expect("wrap ok");
     let value: serde_json::Value = serde_json::from_slice(&wrapped).expect("wrapped json");
     let schema = &value["request"]["tools"][0]["function_declarations"][0]["parameters"];
-    assert!(schema.get("properties").and_then(|v| v.get("reason")).is_none());
+    assert!(schema
+        .get("properties")
+        .and_then(|v| v.get("reason"))
+        .is_none());
     assert!(schema.get("required").is_none());
 }
 
@@ -268,8 +274,14 @@ fn request_id_and_project_match_reference_shapes() {
     let project = value["project"].as_str().expect("project");
     let parts: Vec<&str> = project.split('-').collect();
     assert_eq!(parts.len(), 3);
-    assert!(matches!(parts[0], "useful" | "bright" | "swift" | "calm" | "bold"));
-    assert!(matches!(parts[1], "fuze" | "wave" | "spark" | "flow" | "core"));
+    assert!(matches!(
+        parts[0],
+        "useful" | "bright" | "swift" | "calm" | "bold"
+    ));
+    assert!(matches!(
+        parts[1],
+        "fuze" | "wave" | "spark" | "flow" | "core"
+    ));
     assert_eq!(parts[2].len(), 5);
     assert!(parts[2].chars().all(|ch| ch.is_ascii_hexdigit()));
 }
@@ -321,7 +333,9 @@ fn merges_function_responses_for_parallel_calls_and_does_not_set_response_signat
     let bytes = Bytes::from(request.to_string());
     let wrapped = wrap_gemini_request(&bytes, None, None, "ua").expect("wrap ok");
     let value: serde_json::Value = serde_json::from_slice(&wrapped).expect("wrapped json");
-    let contents = value["request"]["contents"].as_array().expect("contents array");
+    let contents = value["request"]["contents"]
+        .as_array()
+        .expect("contents array");
     assert_eq!(contents.len(), 2);
     assert_eq!(contents[0]["role"].as_str(), Some("model"));
     assert_eq!(contents[1]["role"].as_str(), Some("user"));
@@ -346,7 +360,9 @@ fn normalizes_invalid_roles_in_contents() {
     let bytes = Bytes::from(request.to_string());
     let wrapped = wrap_gemini_request(&bytes, None, None, "ua").expect("wrap ok");
     let value: serde_json::Value = serde_json::from_slice(&wrapped).expect("wrapped json");
-    let contents = value["request"]["contents"].as_array().expect("contents array");
+    let contents = value["request"]["contents"]
+        .as_array()
+        .expect("contents array");
     assert_eq!(contents[0]["role"].as_str(), Some("user"));
     assert_eq!(contents[1]["role"].as_str(), Some("model"));
 }
@@ -361,11 +377,8 @@ fn is_uuid_like(value: &str) -> bool {
             return false;
         }
     }
-    value
-        .chars()
-        .enumerate()
-        .all(|(idx, ch)| match idx {
-            8 | 13 | 18 | 23 => ch == '-',
-            _ => ch.is_ascii_hexdigit(),
-        })
+    value.chars().enumerate().all(|(idx, ch)| match idx {
+        8 | 13 | 18 | 23 => ch == '-',
+        _ => ch.is_ascii_hexdigit(),
+    })
 }

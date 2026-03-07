@@ -1,10 +1,8 @@
-use axum::body::Bytes;
 use super::super::log::UsageSnapshot;
 use super::kiro_to_responses_helpers::{
-    apply_usage_fallback,
-    usage_from_kiro,
-    usage_json_from_kiro,
+    apply_usage_fallback, usage_from_kiro, usage_json_from_kiro,
 };
+use axum::body::Bytes;
 
 pub(super) fn extract_kiro_usage_snapshot(
     bytes: &Bytes,

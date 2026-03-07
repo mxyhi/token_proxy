@@ -22,7 +22,10 @@ pub(crate) fn chat_request_to_codex(
 ) -> Result<Bytes, String> {
     let object = parse_object(body)?;
     let model = resolve_model(&object, model_hint);
-    let stream = object.get("stream").and_then(Value::as_bool).unwrap_or(false);
+    let stream = object
+        .get("stream")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let effort = resolve_reasoning_effort(&object, Some(&model));
     let tool_map = build_tool_name_map(&object);
     let messages = object
@@ -35,7 +38,10 @@ pub(crate) fn chat_request_to_codex(
     output.insert("model".to_string(), Value::String(model));
     output.insert("instructions".to_string(), Value::String(String::new()));
     output.insert("parallel_tool_calls".to_string(), Value::Bool(true));
-    output.insert("include".to_string(), json!(["reasoning.encrypted_content"]));
+    output.insert(
+        "include".to_string(),
+        json!(["reasoning.encrypted_content"]),
+    );
     output.insert(
         "reasoning".to_string(),
         json!({ "effort": effort, "summary": "auto" }),
@@ -53,7 +59,11 @@ pub(crate) fn chat_request_to_codex(
             map_tool_choice(tool_choice, &tool_map),
         );
     }
-    apply_text_format(object.get("response_format"), object.get("text"), &mut output);
+    apply_text_format(
+        object.get("response_format"),
+        object.get("text"),
+        &mut output,
+    );
 
     output.insert("store".to_string(), Value::Bool(false));
 
@@ -89,8 +99,8 @@ pub(crate) fn responses_request_to_codex(
 }
 
 fn parse_object(body: &Bytes) -> Result<Map<String, Value>, String> {
-    let value: Value = serde_json::from_slice(body)
-        .map_err(|_| "Request body must be JSON.".to_string())?;
+    let value: Value =
+        serde_json::from_slice(body).map_err(|_| "Request body must be JSON.".to_string())?;
     value
         .as_object()
         .cloned()
@@ -220,10 +230,12 @@ fn map_message_content(role: &str, content: &Value) -> Vec<Value> {
                     push_text_part(&mut parts, role, text);
                     continue;
                 }
-                if item.get("type").and_then(Value::as_str) == Some("image_url")
-                    && role == "user"
-                {
-                    if let Some(url) = item.get("image_url").and_then(|value| value.get("url")).and_then(Value::as_str) {
+                if item.get("type").and_then(Value::as_str) == Some("image_url") && role == "user" {
+                    if let Some(url) = item
+                        .get("image_url")
+                        .and_then(|value| value.get("url"))
+                        .and_then(Value::as_str)
+                    {
                         parts.push(json!({ "type": "input_image", "image_url": url }));
                     }
                 }
@@ -238,7 +250,11 @@ fn map_message_content(role: &str, content: &Value) -> Vec<Value> {
 }
 
 fn push_text_part(parts: &mut Vec<Value>, role: &str, text: &str) {
-    let part_type = if role == "assistant" { "output_text" } else { "input_text" };
+    let part_type = if role == "assistant" {
+        "output_text"
+    } else {
+        "input_text"
+    };
     parts.push(json!({ "type": part_type, "text": text }));
 }
 
@@ -295,10 +311,16 @@ fn map_tools(tools: &Value, tool_map: &ToolNameMap) -> Value {
                 item.insert("name".to_string(), Value::String(tool_map.shorten(name)));
             }
         }
-        if let Some(desc) = function.get("description").or_else(|| tool.get("description")) {
+        if let Some(desc) = function
+            .get("description")
+            .or_else(|| tool.get("description"))
+        {
             item.insert("description".to_string(), desc.clone());
         }
-        if let Some(params) = function.get("parameters").or_else(|| tool.get("parameters")) {
+        if let Some(params) = function
+            .get("parameters")
+            .or_else(|| tool.get("parameters"))
+        {
             item.insert("parameters".to_string(), params.clone());
         }
         if let Some(strict) = function.get("strict").or_else(|| tool.get("strict")) {
@@ -337,7 +359,11 @@ fn map_tool_choice(choice: &Value, tool_map: &ToolNameMap) -> Value {
     Value::Object(output)
 }
 
-fn apply_text_format(response_format: Option<&Value>, text: Option<&Value>, output: &mut Map<String, Value>) {
+fn apply_text_format(
+    response_format: Option<&Value>,
+    text: Option<&Value>,
+    output: &mut Map<String, Value>,
+) {
     if let Some(rf) = response_format {
         let rf_type = rf.get("type").and_then(Value::as_str).unwrap_or_default();
         let mut text_obj = Map::new();
@@ -368,7 +394,9 @@ fn apply_text_format(response_format: Option<&Value>, text: Option<&Value>, outp
 
     if let Some(text) = text {
         if let Some(verbosity) = text.get("verbosity") {
-            let entry = output.entry("text".to_string()).or_insert_with(|| json!({}));
+            let entry = output
+                .entry("text".to_string())
+                .or_insert_with(|| json!({}));
             if let Value::Object(obj) = entry {
                 obj.insert("verbosity".to_string(), verbosity.clone());
             }

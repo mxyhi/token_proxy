@@ -25,18 +25,20 @@ const HEADER_AMZ_SDK_INVOCATION_ID: HeaderName = HeaderName::from_static("amz-sd
 const HEADER_KIRO_AGENT_MODE: HeaderName = HeaderName::from_static("x-amzn-kiro-agent-mode");
 const HEADER_KIRO_OPTOUT: HeaderName = HeaderName::from_static("x-amzn-codewhisperer-optout");
 
-pub(super) fn build_kiro_headers(
-    access_token: &str,
-    amz_target: &str,
-    is_idc: bool,
-) -> HeaderMap {
+pub(super) fn build_kiro_headers(access_token: &str, amz_target: &str, is_idc: bool) -> HeaderMap {
     let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static(KIRO_REQUEST_CONTENT_TYPE));
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static(KIRO_REQUEST_CONTENT_TYPE),
+    );
     headers.insert(ACCEPT, HeaderValue::from_static(KIRO_REQUEST_ACCEPT));
     if let Ok(value) = HeaderValue::from_str(amz_target) {
         headers.insert(HEADER_AMZ_TARGET, value);
     }
-    headers.insert(HEADER_AMZ_SDK_REQUEST, HeaderValue::from_static(KIRO_SDK_REQUEST));
+    headers.insert(
+        HEADER_AMZ_SDK_REQUEST,
+        HeaderValue::from_static(KIRO_SDK_REQUEST),
+    );
     if let Ok(value) = HeaderValue::from_str(&crate::proxy::kiro::utils::random_uuid()) {
         headers.insert(HEADER_AMZ_SDK_INVOCATION_ID, value);
     }

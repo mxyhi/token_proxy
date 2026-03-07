@@ -63,10 +63,7 @@ impl AntigravityLoginManager {
         })
     }
 
-    pub async fn poll_login(
-        &self,
-        state: &str,
-    ) -> Result<AntigravityLoginPollResponse, String> {
+    pub async fn poll_login(&self, state: &str) -> Result<AntigravityLoginPollResponse, String> {
         let mut guard = self.sessions.write().await;
         let session = guard
             .get_mut(state)
@@ -148,24 +145,26 @@ async fn start_auth_code_callback(state: String) -> Result<AuthCodeCallback, Str
     let redirect_uri = format!("http://localhost:{CALLBACK_PORT}/oauth-callback");
     let router = axum::Router::new().route(
         "/oauth-callback",
-        axum::routing::get(move |query: axum::extract::Query<HashMap<String, String>>| {
-            let expected_state = state.clone();
-            let tx = tx.clone();
-            async move {
-                let code = query.get("code").cloned();
-                let state = query.get("state").cloned();
-                let error = query.get("error").cloned();
-                let has_error = error.is_some();
-                let state_matches = state.as_deref() == Some(&expected_state);
-                let _ = tx.send(AuthCodeResult { code, state, error }).await;
-                let body = if has_error || !state_matches {
-                    "Login failed. You can close this window."
-                } else {
-                    "Login successful. You can close this window."
-                };
-                axum::response::Html(body)
-            }
-        }),
+        axum::routing::get(
+            move |query: axum::extract::Query<HashMap<String, String>>| {
+                let expected_state = state.clone();
+                let tx = tx.clone();
+                async move {
+                    let code = query.get("code").cloned();
+                    let state = query.get("state").cloned();
+                    let error = query.get("error").cloned();
+                    let has_error = error.is_some();
+                    let state_matches = state.as_deref() == Some(&expected_state);
+                    let _ = tx.send(AuthCodeResult { code, state, error }).await;
+                    let body = if has_error || !state_matches {
+                        "Login failed. You can close this window."
+                    } else {
+                        "Login successful. You can close this window."
+                    };
+                    axum::response::Html(body)
+                }
+            },
+        ),
     );
     tokio::spawn(async move {
         let _ = axum::serve(listener, router)
@@ -218,18 +217,15 @@ async fn run_auth_code_login(
         }
     };
 
-    let project_id = match project::load_code_assist(&token.access_token, proxy_url.as_deref()).await
+    let project_id = match project::load_code_assist(&token.access_token, proxy_url.as_deref())
+        .await
     {
         Ok(info) => {
             let mut project_id = info.project_id.clone();
             if project_id.is_none() {
                 if let Some(tier_id) = info.plan_type.as_deref() {
-                    match project::onboard_user(
-                        &token.access_token,
-                        proxy_url.as_deref(),
-                        tier_id,
-                    )
-                    .await
+                    match project::onboard_user(&token.access_token, proxy_url.as_deref(), tier_id)
+                        .await
                     {
                         Ok(Some(value)) => project_id = Some(value),
                         Ok(None) => {}

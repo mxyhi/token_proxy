@@ -202,7 +202,9 @@ async fn median_latency_with_time_range_filter() {
     .unwrap();
 
     // 只查询 ts_ms 在 150-250 范围内的数据，应该只有 latency_ms=100 的记录
-    let result = query_median_latency(&pool, Some(150), Some(250)).await.unwrap();
+    let result = query_median_latency(&pool, Some(150), Some(250))
+        .await
+        .unwrap();
     assert_eq!(result, 100, "Should filter by time range");
 
     // 查询所有数据，中位数应为 100

@@ -1,27 +1,22 @@
-use axum::body::Bytes;
-use axum::body::Body;
-use axum::http::{HeaderMap, Method, StatusCode};
-use serde_json::Value;
-use std::time::{Duration, Instant};
-use super::{result, AttemptOutcome};
 use super::kiro_http::{
-    build_client,
-    handle_send_error,
-    read_request_json,
-    refresh_kiro_account,
-    send_kiro_request,
+    build_client, handle_send_error, read_request_json, refresh_kiro_account, send_kiro_request,
 };
+use super::{result, AttemptOutcome};
+use crate::kiro::KiroTokenRecord;
 use crate::proxy::http;
 use crate::proxy::kiro::{
-    build_payload_from_claude, build_payload_from_responses,
-    determine_agentic_mode, map_model_to_kiro, select_endpoints, BuildPayloadResult,
-    KiroEndpointConfig,
+    build_payload_from_claude, build_payload_from_responses, determine_agentic_mode,
+    map_model_to_kiro, select_endpoints, BuildPayloadResult, KiroEndpointConfig,
 };
 use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_body::ReplayableBody;
-use crate::proxy::{ProxyState, RequestMeta};
 use crate::proxy::{config::UpstreamRuntime, request_detail::RequestDetailSnapshot};
-use crate::kiro::KiroTokenRecord;
+use crate::proxy::{ProxyState, RequestMeta};
+use axum::body::Body;
+use axum::body::Bytes;
+use axum::http::{HeaderMap, Method, StatusCode};
+use serde_json::Value;
+use std::time::{Duration, Instant};
 
 const MAX_KIRO_RETRIES: usize = 2;
 const MAX_KIRO_BACKOFF_SECS: u64 = 30;
@@ -176,9 +171,7 @@ async fn attempt_endpoint(
                 Err(outcome) => return EndpointOutcome::Done(outcome),
             };
 
-        match handle_response_action(context, response, start_time, attempt, is_last)
-        .await
-        {
+        match handle_response_action(context, response, start_time, attempt, is_last).await {
             ResponseAction::RetryAfter(delay) => {
                 tokio::time::sleep(delay).await;
                 continue;
@@ -222,9 +215,7 @@ async fn build_endpoint_payload(
     endpoint: &KiroEndpointConfig,
 ) -> Result<BuildPayloadResult, AttemptOutcome> {
     let payload = match context.source_format {
-        KiroSourceFormat::Anthropic => {
-            build_payload_from_anthropic(context, endpoint.origin).await
-        }
+        KiroSourceFormat::Anthropic => build_payload_from_anthropic(context, endpoint.origin).await,
         KiroSourceFormat::Responses => build_payload_from_responses(
             &context.request_value,
             &context.model_id,

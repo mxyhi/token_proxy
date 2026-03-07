@@ -30,7 +30,9 @@ pub(crate) fn parse_callback_url(url: &str) -> Result<OAuthCallbackPayload, Stri
 }
 
 pub(crate) fn callback_file_path(dir: &Path, state: &str) -> PathBuf {
-    dir.join(format!("{CALLBACK_FILE_PREFIX}{state}{CALLBACK_FILE_SUFFIX}"))
+    dir.join(format!(
+        "{CALLBACK_FILE_PREFIX}{state}{CALLBACK_FILE_SUFFIX}"
+    ))
 }
 
 pub(crate) async fn write_callback_file(
@@ -57,6 +59,5 @@ pub(crate) async fn read_callback_file(path: &Path) -> Result<OAuthCallbackPaylo
     let content = tokio::fs::read_to_string(path)
         .await
         .map_err(|err| format!("Failed to read callback file: {err}"))?;
-    serde_json::from_str(&content)
-        .map_err(|err| format!("Failed to parse callback file: {err}"))
+    serde_json::from_str(&content).map_err(|err| format!("Failed to parse callback file: {err}"))
 }

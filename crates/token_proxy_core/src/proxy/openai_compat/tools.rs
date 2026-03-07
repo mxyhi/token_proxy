@@ -4,7 +4,10 @@ pub(super) fn map_responses_tools_to_chat(value: &Value) -> Value {
     let Some(tools) = value.as_array() else {
         return value.clone();
     };
-    let mapped = tools.iter().map(map_responses_tool_to_chat).collect::<Vec<_>>();
+    let mapped = tools
+        .iter()
+        .map(map_responses_tool_to_chat)
+        .collect::<Vec<_>>();
     Value::Array(mapped)
 }
 
@@ -41,7 +44,10 @@ pub(super) fn map_chat_tools_to_responses(value: &Value) -> Value {
     let Some(tools) = value.as_array() else {
         return value.clone();
     };
-    let mapped = tools.iter().map(map_chat_tool_to_responses).collect::<Vec<_>>();
+    let mapped = tools
+        .iter()
+        .map(map_chat_tool_to_responses)
+        .collect::<Vec<_>>();
     Value::Array(mapped)
 }
 
@@ -111,4 +117,3 @@ pub(super) fn map_chat_tool_choice_to_responses(value: &Value) -> Value {
         "name": name
     })
 }
-

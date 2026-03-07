@@ -19,9 +19,14 @@ fn chat_request_to_responses_maps_common_fields() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients, None)
-            .await
-            .expect("transform")
+        transform_request_body(
+            FormatTransform::ChatToResponses,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("transform")
     });
     let value = json_from_bytes(output);
 
@@ -71,15 +76,23 @@ fn responses_request_to_chat_maps_tools_and_tool_choice() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
-            .await
-            .expect("transform")
+        transform_request_body(
+            FormatTransform::ResponsesToChat,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("transform")
     });
     let value = json_from_bytes(output);
 
     assert_eq!(value["tools"][0]["type"], json!("function"));
     assert_eq!(value["tools"][0]["function"]["name"], json!("search"));
-    assert_eq!(value["tools"][0]["function"]["description"], json!("Search something"));
+    assert_eq!(
+        value["tools"][0]["function"]["description"],
+        json!("Search something")
+    );
     assert_eq!(value["tools"][0]["function"]["parameters"], parameters);
     assert_eq!(value["tool_choice"]["type"], json!("function"));
     assert_eq!(value["tool_choice"]["function"]["name"], json!("search"));
@@ -111,9 +124,14 @@ fn chat_request_to_responses_maps_tools_and_tool_choice() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients, None)
-            .await
-            .expect("transform")
+        transform_request_body(
+            FormatTransform::ChatToResponses,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("transform")
     });
     let value = json_from_bytes(output);
 
@@ -137,9 +155,14 @@ fn responses_request_to_chat_instructions_becomes_system_message() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
-            .await
-            .expect("transform")
+        transform_request_body(
+            FormatTransform::ResponsesToChat,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("transform")
     });
     let value = json_from_bytes(output);
     let messages = value["messages"].as_array().expect("messages array");
@@ -165,9 +188,14 @@ fn responses_request_to_chat_accepts_message_array_input() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
-            .await
-            .expect("transform")
+        transform_request_body(
+            FormatTransform::ResponsesToChat,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("transform")
     });
     let value = json_from_bytes(output);
 
@@ -192,9 +220,14 @@ fn responses_request_to_chat_converts_input_text_content_parts_to_string() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
-            .await
-            .expect("transform")
+        transform_request_body(
+            FormatTransform::ResponsesToChat,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("transform")
     });
     let value = json_from_bytes(output);
 
@@ -221,14 +254,22 @@ fn chat_request_to_responses_maps_response_format() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients, None)
-            .await
-            .expect("transform")
+        transform_request_body(
+            FormatTransform::ChatToResponses,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("transform")
     });
     let value = json_from_bytes(output);
 
     assert_eq!(value["text"]["format"]["type"], json!("json_schema"));
-    assert_eq!(value["text"]["format"]["json_schema"]["name"], json!("example"));
+    assert_eq!(
+        value["text"]["format"]["json_schema"]["name"],
+        json!("example")
+    );
 }
 
 #[test]
@@ -241,9 +282,14 @@ fn responses_request_to_chat_maps_text_format_to_response_format() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
-            .await
-            .expect("transform")
+        transform_request_body(
+            FormatTransform::ResponsesToChat,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("transform")
     });
     let value = json_from_bytes(output);
 
@@ -274,7 +320,8 @@ fn responses_response_to_chat_extracts_output_text_and_maps_usage() {
         }
     }));
 
-    let output = transform_response_body(FormatTransform::ResponsesToChat, &input, None).expect("transform");
+    let output =
+        transform_response_body(FormatTransform::ResponsesToChat, &input, None).expect("transform");
     let value = json_from_bytes(output);
 
     assert_eq!(value["id"], json!("resp_123"));
@@ -282,7 +329,10 @@ fn responses_response_to_chat_extracts_output_text_and_maps_usage() {
     assert_eq!(value["created"], json!(1700000000));
     assert_eq!(value["model"], json!("gpt-4.1"));
     assert_eq!(value["choices"][0]["message"]["role"], json!("assistant"));
-    assert_eq!(value["choices"][0]["message"]["content"], json!("Hello world"));
+    assert_eq!(
+        value["choices"][0]["message"]["content"],
+        json!("Hello world")
+    );
     assert_eq!(value["choices"][0]["finish_reason"], json!("stop"));
     assert_eq!(value["usage"]["prompt_tokens"], json!(1));
     assert_eq!(value["usage"]["completion_tokens"], json!(2));
@@ -311,7 +361,8 @@ fn responses_response_to_chat_maps_reasoning_content() {
         ]
     }));
 
-    let output = transform_response_body(FormatTransform::ResponsesToChat, &input, None).expect("transform");
+    let output =
+        transform_response_body(FormatTransform::ResponsesToChat, &input, None).expect("transform");
     let value = json_from_bytes(output);
 
     let message = &value["choices"][0]["message"];
@@ -344,7 +395,8 @@ fn responses_response_to_chat_includes_tool_calls_and_multimodal_content() {
         "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
     }));
 
-    let output = transform_response_body(FormatTransform::ResponsesToChat, &input, None).expect("transform");
+    let output =
+        transform_response_body(FormatTransform::ResponsesToChat, &input, None).expect("transform");
     let value = json_from_bytes(output);
 
     let message = &value["choices"][0]["message"];
@@ -357,8 +409,14 @@ fn responses_response_to_chat_includes_tool_calls_and_multimodal_content() {
         json!("https://example.com/a.png")
     );
     assert_eq!(message["tool_calls"][0]["id"], json!("call_foo"));
-    assert_eq!(message["tool_calls"][0]["function"]["name"], json!("doThing"));
-    assert_eq!(message["tool_calls"][0]["function"]["arguments"], json!("{\"a\":1}"));
+    assert_eq!(
+        message["tool_calls"][0]["function"]["name"],
+        json!("doThing")
+    );
+    assert_eq!(
+        message["tool_calls"][0]["function"]["arguments"],
+        json!("{\"a\":1}")
+    );
     assert_eq!(value["choices"][0]["finish_reason"], json!("tool_calls"));
 }
 
@@ -379,7 +437,8 @@ fn chat_response_to_responses_extracts_choice_text_and_maps_usage() {
         }
     }));
 
-    let output = transform_response_body(FormatTransform::ChatToResponses, &input, None).expect("transform");
+    let output =
+        transform_response_body(FormatTransform::ChatToResponses, &input, None).expect("transform");
     let value = json_from_bytes(output);
 
     assert_eq!(value["id"], json!("chatcmpl_123"));
@@ -388,7 +447,10 @@ fn chat_response_to_responses_extracts_choice_text_and_maps_usage() {
     assert_eq!(value["model"], json!("gpt-4.1"));
     assert_eq!(value["output"][0]["type"], json!("message"));
     assert_eq!(value["output"][0]["role"], json!("assistant"));
-    assert_eq!(value["output"][0]["content"][0]["type"], json!("output_text"));
+    assert_eq!(
+        value["output"][0]["content"][0]["type"],
+        json!("output_text")
+    );
     assert_eq!(value["output"][0]["content"][0]["text"], json!("Hello"));
     assert_eq!(value["usage"]["input_tokens"], json!(1));
     assert_eq!(value["usage"]["output_tokens"], json!(2));
@@ -411,7 +473,8 @@ fn chat_response_to_responses_maps_finish_reason_to_incomplete_details() {
         "usage": { "prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3 }
     }));
 
-    let output = transform_response_body(FormatTransform::ChatToResponses, &input, None).expect("transform");
+    let output =
+        transform_response_body(FormatTransform::ChatToResponses, &input, None).expect("transform");
     let value = json_from_bytes(output);
 
     assert_eq!(value["status"], json!("incomplete"));
@@ -430,9 +493,14 @@ fn responses_request_to_chat_converts_function_call_output_to_tool_message() {
     }));
 
     let output = run_async(async {
-        transform_request_body(FormatTransform::ResponsesToChat, &input, &http_clients, None)
-            .await
-            .expect("transform")
+        transform_request_body(
+            FormatTransform::ResponsesToChat,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("transform")
     });
     let value = json_from_bytes(output);
     let messages = value["messages"].as_array().expect("messages array");
@@ -471,7 +539,8 @@ fn chat_response_to_responses_maps_tool_calls_into_output() {
         "usage": { "prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3 }
     }));
 
-    let output = transform_response_body(FormatTransform::ChatToResponses, &input, None).expect("transform");
+    let output =
+        transform_response_body(FormatTransform::ChatToResponses, &input, None).expect("transform");
     let value = json_from_bytes(output);
 
     assert_eq!(value["id"], json!("chatcmpl_123"));
@@ -492,9 +561,14 @@ fn chat_request_to_responses_rejects_missing_messages() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = bytes_from_json(json!({ "model": "gpt-4.1" }));
     let err = run_async(async {
-        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients, None)
-            .await
-            .expect_err("should fail")
+        transform_request_body(
+            FormatTransform::ChatToResponses,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect_err("should fail")
     });
     assert!(err.contains("messages"));
 }
@@ -504,9 +578,14 @@ fn transform_request_body_rejects_non_json() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = Bytes::from_static(b"not-json");
     let err = run_async(async {
-        transform_request_body(FormatTransform::ChatToResponses, &input, &http_clients, None)
-            .await
-            .expect_err("should fail")
+        transform_request_body(
+            FormatTransform::ChatToResponses,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect_err("should fail")
     });
     assert!(err.contains("JSON"));
 }

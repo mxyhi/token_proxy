@@ -33,7 +33,11 @@ fn transform_request_value(
     json_from_bytes(output)
 }
 
-fn transform_response_value(transform: FormatTransform, input: Value, model_hint: Option<&str>) -> Value {
+fn transform_response_value(
+    transform: FormatTransform,
+    input: Value,
+    model_hint: Option<&str>,
+) -> Value {
     let bytes = bytes_from_json(input);
     let output = transform_response_body(transform, &bytes, model_hint).expect("transform");
     json_from_bytes(output)
@@ -44,4 +48,3 @@ fn transform_response_value(transform: FormatTransform, input: Value, model_hint
 mod part1;
 #[path = "openai_compat.test.part2.rs"]
 mod part2;
-

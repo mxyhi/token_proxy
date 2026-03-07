@@ -60,7 +60,9 @@ fn migrate_default_legacy_enable_true_when_missing() {
     assert!(changed);
 
     let obj = value.as_object().expect("root must be object");
-    let upstream = obj["upstreams"][0].as_object().expect("upstream must be object");
+    let upstream = obj["upstreams"][0]
+        .as_object()
+        .expect("upstream must be object");
     let map = upstream["convert_from_map"]
         .as_object()
         .expect("convert_from_map must be object");
@@ -107,4 +109,3 @@ fn migrate_legacy_enable_false_keeps_conversion_disabled_except_antigravity_mess
         .iter()
         .any(|v| v.as_str() == Some("anthropic_messages")));
 }
-

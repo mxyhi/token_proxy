@@ -18,7 +18,8 @@ pub(crate) fn claude_request_to_antigravity(
     let (contents, enable_thinking_translate) = build_contents(&object, &mapped_model)?;
     let tools = build_tools(&object);
     let thinking_enabled = thinking_enabled(&object);
-    let should_hint = tools.is_some() && thinking_enabled && is_claude_thinking_model(&mapped_model);
+    let should_hint =
+        tools.is_some() && thinking_enabled && is_claude_thinking_model(&mapped_model);
 
     let mut out = Map::new();
     if !mapped_model.trim().is_empty() {
@@ -132,7 +133,10 @@ fn build_contents(
         let Some(message) = message.as_object() else {
             continue;
         };
-        let role = message.get("role").and_then(Value::as_str).unwrap_or("user");
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user");
         let role = if role == "assistant" { "model" } else { role };
         let mut parts = Vec::new();
         let mut current_signature = String::new();
@@ -173,7 +177,13 @@ fn handle_block(
 ) {
     match block_type {
         "thinking" => {
-            handle_thinking_block(item, model_name, current_signature, enable_thinking_translate, parts);
+            handle_thinking_block(
+                item,
+                model_name,
+                current_signature,
+                enable_thinking_translate,
+                parts,
+            );
         }
         "text" => {
             if let Some(text) = item.get("text").and_then(Value::as_str) {
@@ -303,7 +313,10 @@ fn parse_tool_use_input(input: Option<&Value>) -> Option<Value> {
 }
 
 fn tool_result_to_part(item: &Map<String, Value>) -> Option<Value> {
-    let tool_call_id = item.get("tool_use_id").and_then(Value::as_str).unwrap_or("");
+    let tool_call_id = item
+        .get("tool_use_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     if tool_call_id.is_empty() {
         return None;
     }

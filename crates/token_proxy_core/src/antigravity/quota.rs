@@ -49,7 +49,9 @@ async fn fetch_account_quota(
                 project_id = Some(value.clone());
                 let _ = store.update_project_id(&account.account_id, value).await;
             } else if let Some(tier_id) = info.plan_type.as_deref() {
-                match project::onboard_user_with_client(&client, &record.access_token, tier_id).await {
+                match project::onboard_user_with_client(&client, &record.access_token, tier_id)
+                    .await
+                {
                     Ok(Some(value)) => {
                         project_id = Some(value.clone());
                         let _ = store.update_project_id(&account.account_id, value).await;
@@ -61,21 +63,16 @@ async fn fetch_account_quota(
         }
         Err(err) => load_error = Some(err),
     }
-    let quotas = match fetch_available_models(
-        &client,
-        &record.access_token,
-        project_id.as_deref(),
-    )
-    .await
-    {
-        Ok(quotas) => quotas,
-        Err(err) => {
-            if let Some(load_error) = load_error {
-                return Err(format!("{load_error}; {err}"));
+    let quotas =
+        match fetch_available_models(&client, &record.access_token, project_id.as_deref()).await {
+            Ok(quotas) => quotas,
+            Err(err) => {
+                if let Some(load_error) = load_error {
+                    return Err(format!("{load_error}; {err}"));
+                }
+                return Err(err);
             }
-            return Err(err);
-        }
-    };
+        };
     if let Some(load_error) = load_error {
         tracing::warn!(error = %load_error, "antigravity loadCodeAssist failed for quota");
     }

@@ -14,10 +14,7 @@ pub(super) const USAGE_UPDATE_TIME_INTERVAL: Duration = Duration::from_secs(15);
 pub(super) const USAGE_UPDATE_TOKEN_DELTA: u64 = 10;
 
 pub(crate) fn stream_kiro_to_anthropic<E>(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
-        + Unpin
-        + Send
-        + 'static,
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     token_tracker: RequestTokenTracker,

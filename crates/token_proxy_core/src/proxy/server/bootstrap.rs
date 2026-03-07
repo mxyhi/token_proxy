@@ -1,16 +1,10 @@
-use axum::{
-    extract::DefaultBodyLimit,
-    routing::any,
-    Router,
-};
+use axum::{extract::DefaultBodyLimit, routing::any, Router};
 use std::{collections::HashMap, sync::atomic::AtomicUsize};
 
-use crate::proxy::config::ProxyConfig;
 use super::{proxy_request, ProxyStateHandle};
+use crate::proxy::config::ProxyConfig;
 
-pub(crate) fn build_upstream_cursors(
-    config: &ProxyConfig,
-) -> HashMap<String, Vec<AtomicUsize>> {
+pub(crate) fn build_upstream_cursors(config: &ProxyConfig) -> HashMap<String, Vec<AtomicUsize>> {
     let mut cursors: HashMap<String, Vec<AtomicUsize>> = HashMap::new();
     for (provider, upstreams) in &config.upstreams {
         let group_cursors = upstreams

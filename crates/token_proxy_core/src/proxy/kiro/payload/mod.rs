@@ -12,15 +12,15 @@ use inference::build_inference_config;
 use input::extract_input_messages;
 use messages::{build_final_content, deduplicate_tool_results, process_messages};
 use system::{
-    extract_response_format_hint, extract_system_prompt, extract_tool_choice_hint,
-    inject_hint, inject_timestamp, is_thinking_enabled,
+    extract_response_format_hint, extract_system_prompt, extract_tool_choice_hint, inject_hint,
+    inject_timestamp, is_thinking_enabled,
 };
 
+mod claude;
 mod inference;
 mod input;
 mod messages;
 mod system;
-mod claude;
 
 const THINKING_HINT: &str =
     "<thinking_mode>enabled</thinking_mode>\n<max_thinking_length>200000</max_thinking_length>";
@@ -116,7 +116,11 @@ fn build_current_message(
     is_chat_only: bool,
 ) -> KiroCurrentMessage {
     if let Some(mut user) = current_user {
-        let prompt = if history.is_empty() { system_prompt } else { "" };
+        let prompt = if history.is_empty() {
+            system_prompt
+        } else {
+            ""
+        };
         user.content = build_final_content(&user.content, prompt, &tool_results);
         tool_results = deduplicate_tool_results(tool_results);
         let tools = convert_openai_tools(object.get("tools"), is_chat_only);
@@ -134,9 +138,7 @@ fn build_current_message(
     let fallback = if system_prompt.trim().is_empty() {
         "Continue".to_string()
     } else {
-        format!(
-            "--- SYSTEM PROMPT ---\n{system_prompt}\n--- END SYSTEM PROMPT ---\n"
-        )
+        format!("--- SYSTEM PROMPT ---\n{system_prompt}\n--- END SYSTEM PROMPT ---\n")
     };
     KiroCurrentMessage {
         user_input_message: KiroUserInputMessage {

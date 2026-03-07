@@ -94,8 +94,10 @@ pub(crate) fn parse_event_stream(bytes: &[u8]) -> Result<KiroParsedResponse, Str
                 tool_state = next_state;
             }
             "reasoningContentEvent" => {
-                if let Some(Value::Object(reasoning_event)) = event_obj.get("reasoningContentEvent") {
-                    if let Some(text) = reasoning_event.get("thinkingText").and_then(Value::as_str) {
+                if let Some(Value::Object(reasoning_event)) = event_obj.get("reasoningContentEvent")
+                {
+                    if let Some(text) = reasoning_event.get("thinkingText").and_then(Value::as_str)
+                    {
                         reasoning.push_str(text);
                     }
                     if let Some(text) = reasoning_event.get("text").and_then(Value::as_str) {
@@ -207,10 +209,7 @@ fn detect_event_type(event: &Map<String, Value>) -> &str {
 
 fn extract_error(event: &Map<String, Value>) -> Option<String> {
     if let Some(Value::String(err_type)) = event.get("_type") {
-        let message = event
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let message = event.get("message").and_then(Value::as_str).unwrap_or("");
         return Some(format!("Kiro error: {err_type} {message}"));
     }
     if let Some(Value::String(kind)) = event.get("type") {
@@ -218,10 +217,7 @@ fn extract_error(event: &Map<String, Value>) -> Option<String> {
             kind.as_str(),
             "error" | "exception" | "internalServerException"
         ) {
-            let message = event
-                .get("message")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let message = event.get("message").and_then(Value::as_str).unwrap_or("");
             if message.is_empty() {
                 if let Some(Value::Object(err_obj)) = event.get("error") {
                     if let Some(text) = err_obj.get("message").and_then(Value::as_str) {
@@ -279,7 +275,10 @@ fn update_usage(event: &Map<String, Value>, usage: &mut KiroUsage) {
         update_usage_from_usage_obj(usage_obj, usage);
     }
 
-    if let Some(links) = event.get("supplementaryWebLinksEvent").and_then(Value::as_object) {
+    if let Some(links) = event
+        .get("supplementaryWebLinksEvent")
+        .and_then(Value::as_object)
+    {
         if let Some(tokens) = links.get("inputTokens").and_then(Value::as_u64) {
             usage.input_tokens = Some(tokens);
         }
@@ -306,10 +305,16 @@ fn update_usage_from_metadata(metadata: &Map<String, Value>, usage: &mut KiroUsa
         if let Some(tokens) = token_usage.get("totalTokens").and_then(Value::as_u64) {
             usage.total_tokens = Some(tokens);
         }
-        if let Some(tokens) = token_usage.get("uncachedInputTokens").and_then(Value::as_u64) {
+        if let Some(tokens) = token_usage
+            .get("uncachedInputTokens")
+            .and_then(Value::as_u64)
+        {
             usage.input_tokens = Some(tokens);
         }
-        if let Some(tokens) = token_usage.get("cacheReadInputTokens").and_then(Value::as_u64) {
+        if let Some(tokens) = token_usage
+            .get("cacheReadInputTokens")
+            .and_then(Value::as_u64)
+        {
             let current = usage.input_tokens.unwrap_or(0);
             usage.input_tokens = Some(current + tokens);
         }

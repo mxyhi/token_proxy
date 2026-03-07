@@ -105,4 +105,3 @@ pub fn build_reqwest_client(proxy_url: Option<&str>, timeout: Duration) -> Resul
         .build()
         .map_err(|err| format!("Failed to build HTTP client: {err}"))
 }
-

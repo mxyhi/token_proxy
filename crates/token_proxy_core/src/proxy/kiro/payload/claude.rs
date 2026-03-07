@@ -9,12 +9,12 @@ use super::super::types::{
     KiroImageSource, KiroPayload, KiroTextContent, KiroToolResult, KiroToolUse,
     KiroUserInputMessage, KiroUserInputMessageContext,
 };
+use super::super::utils::random_uuid;
 use super::inference::build_inference_config;
 use super::system::{
     extract_tool_choice_hint, has_thinking_tags, inject_hint, inject_timestamp, is_thinking_enabled,
 };
 use super::{BuildPayloadResult, THINKING_HINT};
-use super::super::utils::random_uuid;
 
 pub(crate) fn build_payload_from_claude(
     request: &Value,
@@ -72,7 +72,11 @@ fn extract_messages(object: &Map<String, Value>) -> Result<Vec<Value>, String> {
         .ok_or_else(|| "Request must include messages.".to_string())
 }
 
-fn build_system_prompt(object: &Map<String, Value>, headers: &HeaderMap, is_agentic: bool) -> String {
+fn build_system_prompt(
+    object: &Map<String, Value>,
+    headers: &HeaderMap,
+    is_agentic: bool,
+) -> String {
     let base_system_prompt = extract_claude_system(object);
     let thinking_enabled = is_thinking_enabled(object, headers, &base_system_prompt);
 
@@ -181,12 +185,23 @@ fn merge_text_blocks(existing: &mut Vec<Value>, next: &mut Vec<Value>) {
     if first.get("type").and_then(Value::as_str) != Some("text") {
         return;
     }
-    let last_text = last.get("text").and_then(Value::as_str).unwrap_or("").to_string();
-    let first_text = first.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+    let last_text = last
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let first_text = first
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
     if last_text.is_empty() && first_text.is_empty() {
         return;
     }
-    last.insert("text".to_string(), Value::String(format!("{last_text}\n{first_text}")));
+    last.insert(
+        "text".to_string(),
+        Value::String(format!("{last_text}\n{first_text}")),
+    );
     next.remove(0);
 }
 
@@ -194,7 +209,11 @@ fn process_claude_messages(
     messages: &[Value],
     model_id: &str,
     origin: &str,
-) -> (Vec<KiroHistoryMessage>, Option<KiroUserInputMessage>, Vec<KiroToolResult>) {
+) -> (
+    Vec<KiroHistoryMessage>,
+    Option<KiroUserInputMessage>,
+    Vec<KiroToolResult>,
+) {
     let mut history = Vec::new();
     let mut current_user = None;
     let mut current_tool_results = Vec::new();
@@ -300,8 +319,7 @@ fn build_user_message(
                         && part.get("tool_use_id").is_some()
                         && part.get("content").is_some()
                     {
-                        if let Some(result) =
-                            parse_tool_result_block(part, &mut seen_tool_use_ids)
+                        if let Some(result) = parse_tool_result_block(part, &mut seen_tool_use_ids)
                         {
                             tool_results.push(result);
                         }
@@ -360,10 +378,11 @@ fn parse_tool_result_block(
     }
     seen_tool_use_ids.insert(tool_use_id.to_string());
 
-    let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-    let content = block
-        .get("content")
-        .or_else(|| block.get("output"));
+    let is_error = block
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let content = block.get("content").or_else(|| block.get("output"));
     let mut contents = parse_tool_result_contents(content);
     if contents.is_empty() {
         contents = vec![KiroTextContent {

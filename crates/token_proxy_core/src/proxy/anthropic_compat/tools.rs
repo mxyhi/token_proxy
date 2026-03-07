@@ -9,7 +9,10 @@ pub(super) fn map_responses_tools_to_anthropic(value: &Value) -> Value {
     let Some(tools) = value.as_array() else {
         return Value::Array(Vec::new());
     };
-    let mapped = tools.iter().filter_map(map_responses_tool).collect::<Vec<_>>();
+    let mapped = tools
+        .iter()
+        .filter_map(map_responses_tool)
+        .collect::<Vec<_>>();
     Value::Array(mapped)
 }
 
@@ -122,13 +125,19 @@ pub(super) fn map_anthropic_tool_choice_to_responses(
         return (None, None);
     };
 
-    let choice_type = tool_choice.get("type").and_then(Value::as_str).unwrap_or("");
+    let choice_type = tool_choice
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let mapped_choice = match choice_type {
         "auto" => Some(json!("auto")),
         "any" => Some(json!("required")),
         "none" => Some(json!("none")),
         "tool" => {
-            let name = tool_choice.get("name").and_then(Value::as_str).unwrap_or("");
+            let name = tool_choice
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             if name.is_empty() {
                 None
             } else {
@@ -170,4 +179,3 @@ pub(super) fn map_anthropic_stop_sequences_to_openai_stop(stop: Option<&Value>) 
         _ => Some(Value::Array(items.clone())),
     }
 }
-

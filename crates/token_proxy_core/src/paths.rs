@@ -31,7 +31,10 @@ impl TokenProxyPaths {
             .filter(|path| !path.as_os_str().is_empty())
             .map(PathBuf::from)
             .unwrap_or(cwd);
-        Ok(Self { config_file, data_dir })
+        Ok(Self {
+            config_file,
+            data_dir,
+        })
     }
 
     /// 从应用数据目录构造（例如：Tauri 的 app_config_dir）。
@@ -60,4 +63,3 @@ impl TokenProxyPaths {
         self.data_dir.join(DB_FILE_NAME)
     }
 }
-

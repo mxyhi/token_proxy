@@ -381,7 +381,11 @@ fn select_best(items: &[Value]) -> (usize, Vec<String>) {
     let mut types = Vec::new();
     for (idx, item) in items.iter().enumerate() {
         let mut score = 0;
-        let mut typ = item.get("type").and_then(Value::as_str).unwrap_or("").to_string();
+        let mut typ = item
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         if typ == "object" || item.get("properties").is_some() {
             score = 3;
             if typ.is_empty() {

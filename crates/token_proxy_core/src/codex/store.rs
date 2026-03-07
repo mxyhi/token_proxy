@@ -6,11 +6,8 @@ use tokio::sync::RwLock;
 
 use crate::app_proxy::AppProxyState;
 use crate::oauth_util::{
-    expires_at_from_seconds,
-    extract_chatgpt_account_id_from_jwt,
-    extract_email_from_jwt,
-    now_rfc3339,
-    sanitize_id_part,
+    expires_at_from_seconds, extract_chatgpt_account_id_from_jwt, extract_email_from_jwt,
+    now_rfc3339, sanitize_id_part,
 };
 use crate::paths::TokenProxyPaths;
 

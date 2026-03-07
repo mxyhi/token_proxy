@@ -175,7 +175,10 @@ pub struct ProxyConfigFile {
     pub antigravity_process_names: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub antigravity_user_agent: Option<String>,
-    #[serde(default = "default_log_level", deserialize_with = "deserialize_log_level")]
+    #[serde(
+        default = "default_log_level",
+        deserialize_with = "deserialize_log_level"
+    )]
     pub log_level: LogLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_request_body_bytes: Option<u64>,

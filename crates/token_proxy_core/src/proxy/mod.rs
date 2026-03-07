@@ -1,31 +1,31 @@
+mod anthropic_compat;
+mod antigravity_compat;
+mod antigravity_schema;
+mod codex_compat;
+mod compat_content;
+mod compat_reason;
 pub mod config;
 pub mod dashboard;
-mod http_client;
-pub mod logs;
-pub mod request_detail;
-pub mod service;
-mod codex_compat;
-mod antigravity_compat;
 mod gemini;
 mod gemini_compat;
 mod http;
+mod http_client;
 mod inbound;
 mod kiro;
 mod log;
+pub mod logs;
 mod model;
-mod anthropic_compat;
-mod compat_content;
-mod compat_reason;
 mod openai_compat;
-mod antigravity_schema;
+mod redact;
 mod request_body;
+pub mod request_detail;
 mod request_token_estimate;
 mod response;
-mod redact;
 mod server;
 mod server_helpers;
-mod sse;
+pub mod service;
 pub mod sqlite;
+mod sse;
 mod token_estimator;
 pub mod token_rate;
 mod upstream;
@@ -70,10 +70,7 @@ struct RequestMeta {
 
 impl RequestMeta {
     fn model_override(&self) -> Option<&str> {
-        match (
-            self.original_model.as_deref(),
-            self.mapped_model.as_deref(),
-        ) {
+        match (self.original_model.as_deref(), self.mapped_model.as_deref()) {
             (Some(original), Some(mapped)) if original != mapped => Some(original),
             _ => None,
         }

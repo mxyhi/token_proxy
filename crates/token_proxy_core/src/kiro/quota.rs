@@ -32,9 +32,7 @@ pub struct KiroQuotaSummary {
     pub error: Option<String>,
 }
 
-pub async fn fetch_quotas(
-    store: &KiroAccountStore,
-) -> Result<Vec<KiroQuotaSummary>, String> {
+pub async fn fetch_quotas(store: &KiroAccountStore) -> Result<Vec<KiroQuotaSummary>, String> {
     let accounts = store.list_accounts().await?;
     let proxy_url = store.app_proxy_url().await;
     let mut results = Vec::with_capacity(accounts.len());
@@ -199,7 +197,9 @@ fn extract_usage_values(obj: &Map<String, Value>) -> (Option<f64>, Option<f64>) 
 }
 
 fn get_string(obj: &Map<String, Value>, key: &str) -> Option<String> {
-    obj.get(key).and_then(Value::as_str).map(|val| val.to_string())
+    obj.get(key)
+        .and_then(Value::as_str)
+        .map(|val| val.to_string())
 }
 
 fn get_f64(obj: &Map<String, Value>, key: &str) -> Option<f64> {

@@ -9,8 +9,8 @@ pub(crate) fn codex_response_to_chat(
     bytes: &Bytes,
     request_body: Option<&str>,
 ) -> Result<Bytes, String> {
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|_| "Response body must be JSON.".to_string())?;
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|_| "Response body must be JSON.".to_string())?;
     let Some(response) = extract_response_object(&value) else {
         return Err("Codex response missing response object.".to_string());
     };
@@ -26,8 +26,8 @@ pub(crate) fn codex_response_to_responses(
     bytes: &Bytes,
     request_body: Option<&str>,
 ) -> Result<Bytes, String> {
-    let value: Value = serde_json::from_slice(bytes)
-        .map_err(|_| "Response body must be JSON.".to_string())?;
+    let value: Value =
+        serde_json::from_slice(bytes).map_err(|_| "Response body must be JSON.".to_string())?;
     let Some(mut response) = extract_response_object(&value) else {
         return Err("Codex response missing response object.".to_string());
     };
@@ -94,11 +94,18 @@ fn build_chat_completion_value(
     Value::Object(output)
 }
 
-fn build_chat_message(content: &str, reasoning: &str, tool_calls: Vec<Value>) -> Map<String, Value> {
+fn build_chat_message(
+    content: &str,
+    reasoning: &str,
+    tool_calls: Vec<Value>,
+) -> Map<String, Value> {
     let mut message = Map::new();
     message.insert("role".to_string(), Value::String("assistant".to_string()));
     message.insert("content".to_string(), optional_text_value(content));
-    message.insert("reasoning_content".to_string(), optional_text_value(reasoning));
+    message.insert(
+        "reasoning_content".to_string(),
+        optional_text_value(reasoning),
+    );
     if tool_calls.is_empty() {
         message.insert("tool_calls".to_string(), Value::Null);
     } else {
@@ -188,10 +195,7 @@ fn build_tool_call(
 ) -> Option<Value> {
     let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
     let name = item.get("name").and_then(Value::as_str).unwrap_or("");
-    let arguments = item
-        .get("arguments")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("");
     let restored_name = tool_name_map.get(name).map(String::as_str).unwrap_or(name);
 
     Some(json!({
@@ -267,8 +271,14 @@ fn map_usage(response: &Map<String, Value>) -> Option<Value> {
         .and_then(Value::as_i64)
     {
         let mut details = Map::new();
-        details.insert("reasoning_tokens".to_string(), Value::Number(reasoning.into()));
-        mapped.insert("completion_tokens_details".to_string(), Value::Object(details));
+        details.insert(
+            "reasoning_tokens".to_string(),
+            Value::Number(reasoning.into()),
+        );
+        mapped.insert(
+            "completion_tokens_details".to_string(),
+            Value::Object(details),
+        );
     }
     Some(Value::Object(mapped))
 }

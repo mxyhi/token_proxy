@@ -120,7 +120,11 @@ impl KiroAccountStore {
                 provider: record.provider.clone(),
                 auth_method: record.auth_method.clone(),
                 email: record.email.clone(),
-                expires_at: record.expires_at().map(|value| value.format(&time::format_description::well_known::Rfc3339).unwrap_or_else(|_| record.expires_at.clone())),
+                expires_at: record.expires_at().map(|value| {
+                    value
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap_or_else(|_| record.expires_at.clone())
+                }),
                 status: record.status(),
             })
             .collect();
@@ -145,9 +149,7 @@ impl KiroAccountStore {
     pub(crate) async fn refresh_account(&self, account_id: &str) -> Result<(), String> {
         let record = self.load_account(account_id).await?;
         let refreshed = self.refresh_record(account_id, record).await?;
-        let summary = self
-            .save_record(account_id.to_string(), refreshed)
-            .await?;
+        let summary = self.save_record(account_id.to_string(), refreshed).await?;
         if matches!(summary.status, KiroAccountStatus::Expired) {
             return Err("Kiro token refresh failed.".to_string());
         }
@@ -173,7 +175,11 @@ impl KiroAccountStore {
             provider: record.provider.clone(),
             auth_method: record.auth_method.clone(),
             email: record.email.clone(),
-            expires_at: record.expires_at().map(|value| value.format(&time::format_description::well_known::Rfc3339).unwrap_or_else(|_| record.expires_at.clone())),
+            expires_at: record.expires_at().map(|value| {
+                value
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_else(|_| record.expires_at.clone())
+            }),
             status: record.status(),
         })
     }
@@ -234,7 +240,9 @@ impl KiroAccountStore {
             "social" => oauth::refresh_social_token(&record, proxy_url.as_deref()).await?,
             _ => return Err("Unsupported Kiro auth method.".to_string()),
         };
-        let summary = self.save_record(account_id.to_string(), refreshed.clone()).await?;
+        let summary = self
+            .save_record(account_id.to_string(), refreshed.clone())
+            .await?;
         if matches!(summary.status, KiroAccountStatus::Expired) {
             return Err("Kiro token refresh failed.".to_string());
         }
@@ -382,10 +390,8 @@ fn kam_account_to_record(account: KamAccount) -> Option<KiroTokenRecord> {
         .filter(|value| !value.trim().is_empty())
         .or(account.idp.filter(|value| !value.trim().is_empty()))
         .unwrap_or_else(|| "AWS".to_string());
-    let auth_method = normalize_auth_method(
-        credentials.auth_method.as_deref(),
-        Some(provider.as_str()),
-    );
+    let auth_method =
+        normalize_auth_method(credentials.auth_method.as_deref(), Some(provider.as_str()));
     let expires_at = credentials
         .expires_at
         .and_then(format_expires_at)
@@ -481,12 +487,12 @@ impl KiroIdeTokenFile {
             .auth_method
             .filter(|value| !value.trim().is_empty())
             .unwrap_or_else(|| {
-            if provider.eq_ignore_ascii_case("google") {
-                "social".to_string()
-            } else {
-                "builder-id".to_string()
-            }
-        });
+                if provider.eq_ignore_ascii_case("google") {
+                    "social".to_string()
+                } else {
+                    "builder-id".to_string()
+                }
+            });
         let expires_at = match self.expires_at.as_deref() {
             Some(value) if !value.trim().is_empty() => value.to_string(),
             _ => expires_at_from_seconds(3600),

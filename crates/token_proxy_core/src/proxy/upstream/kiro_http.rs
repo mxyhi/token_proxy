@@ -1,15 +1,15 @@
 use axum::http::{Method, StatusCode};
 use tokio::time::timeout;
 
+use super::kiro_headers::build_kiro_headers;
 use super::request;
 use super::{result, AttemptOutcome};
-use super::kiro_headers::build_kiro_headers;
+use crate::proxy::config::UpstreamRuntime;
 use crate::proxy::http;
+use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_body::ReplayableBody;
 use crate::proxy::request_detail::RequestDetailSnapshot;
 use crate::proxy::{ProxyState, RequestMeta, UPSTREAM_NO_DATA_TIMEOUT};
-use crate::proxy::{config::UpstreamRuntime};
-use crate::proxy::openai_compat::FormatTransform;
 
 pub(super) enum KiroSendError {
     Timeout,
@@ -94,9 +94,7 @@ pub(super) async fn refresh_kiro_account(
         .kiro_accounts
         .refresh_account(account_id)
         .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
-        })
+        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))
 }
 
 pub(super) async fn handle_send_error(

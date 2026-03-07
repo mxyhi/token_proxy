@@ -225,7 +225,11 @@ fn parse_tool_input(raw: &str) -> Map<String, Value> {
 
 fn generate_tool_use_id() -> String {
     let raw = random_uuid().replace('-', "");
-    let suffix = if raw.len() >= 12 { &raw[..12] } else { raw.as_str() };
+    let suffix = if raw.len() >= 12 {
+        &raw[..12]
+    } else {
+        raw.as_str()
+    };
     format!("toolu_{suffix}")
 }
 

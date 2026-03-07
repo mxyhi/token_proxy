@@ -1,11 +1,6 @@
 use serde::{Deserialize, Serialize};
 use tracing_subscriber::{
-    fmt,
-    layer::SubscriberExt,
-    reload,
-    util::SubscriberInitExt,
-    EnvFilter,
-    Registry,
+    fmt, layer::SubscriberExt, reload, util::SubscriberInitExt, EnvFilter, Registry,
 };
 
 const DEFAULT_DIRECTIVE: &str = "off";
@@ -57,16 +52,14 @@ impl LoggingState {
         let filter = EnvFilter::new(level.as_directive());
         let (filter_layer, handle) = reload::Layer::new(filter);
 
-        let subscriber = tracing_subscriber::registry()
-            .with(filter_layer)
-            .with(
-                fmt::layer()
-                    .with_target(true)
-                    .with_thread_ids(false)
-                    .with_file(true)
-                    .with_line_number(true)
-                    .with_writer(std::io::stderr),
-            );
+        let subscriber = tracing_subscriber::registry().with(filter_layer).with(
+            fmt::layer()
+                .with_target(true)
+                .with_thread_ids(false)
+                .with_file(true)
+                .with_line_number(true)
+                .with_writer(std::io::stderr),
+        );
 
         let handle = match subscriber.try_init() {
             Ok(()) => Some(handle),
@@ -85,4 +78,3 @@ impl LoggingState {
         }
     }
 }
-

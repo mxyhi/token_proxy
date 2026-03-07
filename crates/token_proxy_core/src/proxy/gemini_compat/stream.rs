@@ -132,7 +132,10 @@ where
             parser: SseEventParser::new(),
             collector: SseUsageCollector::new(),
             log,
-            model: context.model.clone().unwrap_or_else(|| "gemini".to_string()),
+            model: context
+                .model
+                .clone()
+                .unwrap_or_else(|| "gemini".to_string()),
             context,
             token_tracker,
             out: VecDeque::new(),

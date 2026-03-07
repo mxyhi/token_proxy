@@ -23,7 +23,10 @@ impl EventStreamDecoder {
         Self { buffer: Vec::new() }
     }
 
-    pub(crate) fn push(&mut self, chunk: &[u8]) -> Result<Vec<EventStreamMessage>, EventStreamError> {
+    pub(crate) fn push(
+        &mut self,
+        chunk: &[u8],
+    ) -> Result<Vec<EventStreamMessage>, EventStreamError> {
         self.buffer.extend_from_slice(chunk);
         self.decode_available()
     }
@@ -73,7 +76,10 @@ impl EventStreamDecoder {
             let payload = self.buffer[payload_start..payload_end].to_vec();
 
             let event_type = parse_event_type(headers).unwrap_or_default();
-            out.push(EventStreamMessage { event_type, payload });
+            out.push(EventStreamMessage {
+                event_type,
+                payload,
+            });
 
             self.buffer.drain(0..total_len);
         }
@@ -120,10 +126,7 @@ fn parse_event_type(headers: &[u8]) -> Option<String> {
                 if cursor + 2 > headers.len() {
                     return None;
                 }
-                let len = u16::from_be_bytes([
-                    headers[cursor],
-                    headers[cursor + 1],
-                ]) as usize;
+                let len = u16::from_be_bytes([headers[cursor], headers[cursor + 1]]) as usize;
                 cursor += 2;
                 if cursor + len > headers.len() {
                     return None;

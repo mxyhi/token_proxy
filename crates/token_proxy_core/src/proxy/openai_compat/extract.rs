@@ -17,7 +17,10 @@ pub(super) fn extract_chat_choice_text(value: &Value) -> Option<String> {
     let choices = value.get("choices")?.as_array()?;
     let first = choices.first()?.as_object()?;
     let message = first.get("message")?.as_object()?;
-    message.get("content")?.as_str().map(|text| text.to_string())
+    message
+        .get("content")?
+        .as_str()
+        .map(|text| text.to_string())
 }
 
 pub(super) fn extract_chat_tool_calls(value: &Value) -> Vec<ChatToolCall> {
@@ -78,8 +81,13 @@ fn extract_chat_message_tool_calls(tool_calls: &[Value]) -> Vec<ChatToolCall> {
     output
 }
 
-fn extract_chat_message_legacy_function_call(function_call: &Map<String, Value>) -> Option<ChatToolCall> {
-    let name = function_call.get("name").and_then(Value::as_str).unwrap_or("");
+fn extract_chat_message_legacy_function_call(
+    function_call: &Map<String, Value>,
+) -> Option<ChatToolCall> {
+    let name = function_call
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
     let arguments = function_call
         .get("arguments")
         .and_then(Value::as_str)

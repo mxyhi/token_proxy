@@ -3,7 +3,9 @@ use serde_json::{Map, Value};
 pub(super) fn extract_input_messages(object: &Map<String, Value>) -> Result<Vec<Value>, String> {
     let input = object.get("input");
     match input {
-        Some(Value::String(text)) => Ok(vec![serde_json::json!({ "role": "user", "content": text })]),
+        Some(Value::String(text)) => {
+            Ok(vec![serde_json::json!({ "role": "user", "content": text })])
+        }
         Some(Value::Array(items)) => responses_input_to_chat_messages(items),
         Some(Value::Null) | None => Ok(Vec::new()),
         _ => Err("Responses input must be a string or array.".to_string()),
@@ -68,7 +70,10 @@ fn responses_function_call_output_item_to_chat_message(
     let output = item.get("output").and_then(Value::as_str).unwrap_or("");
     let mut message = Map::new();
     message.insert("role".to_string(), Value::String("tool".to_string()));
-    message.insert("tool_call_id".to_string(), Value::String(call_id.to_string()));
+    message.insert(
+        "tool_call_id".to_string(),
+        Value::String(call_id.to_string()),
+    );
     message.insert("content".to_string(), Value::String(output.to_string()));
     if let Some(is_error) = item.get("is_error").and_then(Value::as_bool) {
         if is_error {
@@ -81,7 +86,9 @@ fn responses_function_call_output_item_to_chat_message(
     Ok(Value::Object(message))
 }
 
-fn responses_function_call_item_to_chat_message(item: &Map<String, Value>) -> Result<Value, String> {
+fn responses_function_call_item_to_chat_message(
+    item: &Map<String, Value>,
+) -> Result<Value, String> {
     let call_id = item
         .get("call_id")
         .and_then(Value::as_str)

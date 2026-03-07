@@ -15,13 +15,23 @@ const HEADER_ORIGINATOR: &str = "codex_cli_rs";
 
 pub(crate) fn apply_codex_headers(headers: &mut HeaderMap, inbound: &HeaderMap) {
     ensure_header(headers, inbound, &HEADER_VERSION_NAME, HEADER_VERSION);
-    ensure_header(headers, inbound, &HEADER_OPENAI_BETA_NAME, HEADER_OPENAI_BETA);
+    ensure_header(
+        headers,
+        inbound,
+        &HEADER_OPENAI_BETA_NAME,
+        HEADER_OPENAI_BETA,
+    );
     if !headers.contains_key(&HEADER_SESSION_ID_NAME) {
         if let Ok(value) = HeaderValue::from_str(&generate_session_id()) {
             headers.insert(HEADER_SESSION_ID_NAME, value);
         }
     }
-    ensure_header(headers, inbound, &HEADER_USER_AGENT_NAME, DEFAULT_USER_AGENT);
+    ensure_header(
+        headers,
+        inbound,
+        &HEADER_USER_AGENT_NAME,
+        DEFAULT_USER_AGENT,
+    );
     ensure_header(headers, inbound, &HEADER_ORIGINATOR_NAME, HEADER_ORIGINATOR);
     ensure_header(headers, inbound, &HEADER_ACCEPT_NAME, "text/event-stream");
     ensure_header(headers, inbound, &HEADER_CONNECTION_NAME, "Keep-Alive");

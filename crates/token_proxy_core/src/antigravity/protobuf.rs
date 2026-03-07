@@ -19,13 +19,15 @@ pub(crate) fn extract_token_record(
     let mut pos = 0usize;
     while pos < bytes.len() {
         let tag_start = pos;
-        let tag = read_varint(&bytes, &mut pos).ok_or_else(|| "Invalid protobuf tag.".to_string())?;
+        let tag =
+            read_varint(&bytes, &mut pos).ok_or_else(|| "Invalid protobuf tag.".to_string())?;
         let field_number = tag >> 3;
         let wire_type = (tag & 0x07) as u8;
         let field_end = skip_field(&bytes, pos, wire_type)?;
         if field_number == FIELD_OAUTH && wire_type == 2 {
             let length = read_varint(&bytes, &mut pos)
-                .ok_or_else(|| "Invalid protobuf length.".to_string())? as usize;
+                .ok_or_else(|| "Invalid protobuf length.".to_string())?
+                as usize;
             let end = pos + length;
             if end > bytes.len() {
                 return Err("Invalid protobuf length.".to_string());
@@ -54,7 +56,8 @@ pub(crate) fn inject_token_record(
     let mut pos = 0usize;
     while pos < bytes.len() {
         let field_start = pos;
-        let tag = read_varint(&bytes, &mut pos).ok_or_else(|| "Invalid protobuf tag.".to_string())?;
+        let tag =
+            read_varint(&bytes, &mut pos).ok_or_else(|| "Invalid protobuf tag.".to_string())?;
         let field_number = tag >> 3;
         let wire_type = (tag & 0x07) as u8;
         let field_end = skip_field(&bytes, pos, wire_type)?;
@@ -106,7 +109,8 @@ fn parse_oauth_message(data: &[u8]) -> Result<Option<AntigravityTokenRecord>, St
             }
             FIELD_EXPIRES_AT if wire_type == 2 => {
                 let length = read_varint(data, &mut pos)
-                    .ok_or_else(|| "Invalid expiry length.".to_string())? as usize;
+                    .ok_or_else(|| "Invalid expiry length.".to_string())?
+                    as usize;
                 let end = pos + length;
                 if end > data.len() {
                     return Err("Invalid expiry length.".to_string());
@@ -125,8 +129,8 @@ fn parse_oauth_message(data: &[u8]) -> Result<Option<AntigravityTokenRecord>, St
         None => return Ok(None),
     };
     let now = OffsetDateTime::now_utc();
-    let expires_at = expires_seconds
-        .and_then(|seconds| OffsetDateTime::from_unix_timestamp(seconds).ok());
+    let expires_at =
+        expires_seconds.and_then(|seconds| OffsetDateTime::from_unix_timestamp(seconds).ok());
     let expired = expires_at
         .and_then(|value| value.format(&Rfc3339).ok())
         .filter(|value| !value.is_empty());
@@ -148,7 +152,11 @@ fn parse_oauth_message(data: &[u8]) -> Result<Option<AntigravityTokenRecord>, St
 fn build_oauth_message(record: &AntigravityTokenRecord) -> Result<Vec<u8>, String> {
     let mut output = Vec::new();
     push_length_delimited(&mut output, FIELD_ACCESS_TOKEN, &record.access_token)?;
-    if let Some(token_type) = record.token_type.as_deref().filter(|value| !value.trim().is_empty()) {
+    if let Some(token_type) = record
+        .token_type
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
         push_length_delimited(&mut output, FIELD_TOKEN_TYPE, token_type)?;
     }
     if let Some(refresh) = record
@@ -221,7 +229,8 @@ fn skip_field(bytes: &[u8], pos: usize, wire_type: u8) -> Result<usize, String> 
         1 => Ok(cursor + 8),
         2 => {
             let length = read_varint(bytes, &mut cursor)
-                .ok_or_else(|| "Invalid protobuf length.".to_string())? as usize;
+                .ok_or_else(|| "Invalid protobuf length.".to_string())?
+                as usize;
             let end = cursor + length;
             if end > bytes.len() {
                 return Err("Invalid protobuf length.".to_string());
@@ -234,7 +243,8 @@ fn skip_field(bytes: &[u8], pos: usize, wire_type: u8) -> Result<usize, String> 
 }
 
 fn read_length_delimited_string(bytes: &[u8], pos: &mut usize) -> Result<String, String> {
-    let length = read_varint(bytes, pos).ok_or_else(|| "Invalid string length.".to_string())? as usize;
+    let length =
+        read_varint(bytes, pos).ok_or_else(|| "Invalid string length.".to_string())? as usize;
     let end = *pos + length;
     if end > bytes.len() {
         return Err("Invalid string length.".to_string());
@@ -247,7 +257,8 @@ fn read_length_delimited_string(bytes: &[u8], pos: &mut usize) -> Result<String,
 fn parse_timestamp_seconds(data: &[u8]) -> Result<Option<i64>, String> {
     let mut pos = 0usize;
     while pos < data.len() {
-        let tag = read_varint(data, &mut pos).ok_or_else(|| "Invalid timestamp tag.".to_string())?;
+        let tag =
+            read_varint(data, &mut pos).ok_or_else(|| "Invalid timestamp tag.".to_string())?;
         let field_number = tag >> 3;
         let wire_type = (tag & 0x07) as u8;
         if field_number == FIELD_TIMESTAMP_SECONDS && wire_type == 0 {
@@ -260,11 +271,7 @@ fn parse_timestamp_seconds(data: &[u8]) -> Result<Option<i64>, String> {
     Ok(None)
 }
 
-fn push_length_delimited(
-    out: &mut Vec<u8>,
-    field_number: u64,
-    value: &str,
-) -> Result<(), String> {
+fn push_length_delimited(out: &mut Vec<u8>, field_number: u64, value: &str) -> Result<(), String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Ok(());

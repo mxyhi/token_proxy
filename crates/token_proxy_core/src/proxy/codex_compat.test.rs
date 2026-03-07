@@ -1,8 +1,8 @@
 use axum::body::Bytes;
 use serde_json::json;
 
-use super::{chat_request_to_codex, codex_response_to_chat, responses_request_to_codex};
 use super::tool_names::shorten_name_if_needed;
+use super::{chat_request_to_codex, codex_response_to_chat, responses_request_to_codex};
 
 #[test]
 fn chat_request_to_codex_sets_model_and_stream() {
@@ -76,7 +76,10 @@ fn chat_request_to_codex_skips_missing_tool_names() {
     assert_eq!(tools.len(), 1);
     assert!(tools[0].get("name").is_none());
     let tool_choice = value["tool_choice"].as_object().expect("tool_choice");
-    assert_eq!(tool_choice.get("type").and_then(serde_json::Value::as_str), Some("function"));
+    assert_eq!(
+        tool_choice.get("type").and_then(serde_json::Value::as_str),
+        Some("function")
+    );
     assert!(tool_choice.get("name").is_none());
 }
 
@@ -99,7 +102,9 @@ fn responses_request_to_codex_uses_top_level_tool_name() {
     assert_eq!(tools[0]["description"], "noop");
     assert!(tools[0]["parameters"].is_object());
     assert_eq!(
-        value["tool_choice"].get("name").and_then(serde_json::Value::as_str),
+        value["tool_choice"]
+            .get("name")
+            .and_then(serde_json::Value::as_str),
         Some("demo_tool")
     );
 }

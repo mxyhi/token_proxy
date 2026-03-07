@@ -14,7 +14,11 @@ impl<E: fmt::Display> fmt::Display for UpstreamStreamError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::IdleTimeout(duration) => {
-                write!(f, "Upstream stream idle timeout after {}s.", duration.as_secs())
+                write!(
+                    f,
+                    "Upstream stream idle timeout after {}s.",
+                    duration.as_secs()
+                )
             }
             Self::Upstream(err) => write!(f, "{err}"),
         }

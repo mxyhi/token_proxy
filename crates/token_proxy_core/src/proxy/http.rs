@@ -160,9 +160,10 @@ pub(crate) fn resolve_request_auth(
             let Ok(value) = value.to_str() else {
                 return Err("Upstream API key is invalid.".to_string());
             };
-            auth.openai_bearer = Some(bearer_header(value).ok_or_else(|| {
-                "Upstream API key contains invalid characters.".to_string()
-            })?);
+            auth.openai_bearer = Some(
+                bearer_header(value)
+                    .ok_or_else(|| "Upstream API key contains invalid characters.".to_string())?,
+            );
         }
 
         // Anthropic uses `x-api-key`; allow explicit overrides as well.

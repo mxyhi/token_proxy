@@ -17,8 +17,14 @@ pub(super) fn map_chat_tools_to_gemini(tools: &Value) -> Value {
             }
             let function = tool.get("function")?.as_object()?;
             let name = function.get("name").and_then(Value::as_str)?;
-            let description = function.get("description").and_then(Value::as_str).unwrap_or("");
-            let parameters = function.get("parameters").cloned().unwrap_or_else(|| json!({}));
+            let description = function
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let parameters = function
+                .get("parameters")
+                .cloned()
+                .unwrap_or_else(|| json!({}));
             Some(json!({
                 "name": name,
                 "description": description,
@@ -79,7 +85,10 @@ pub(super) fn map_gemini_tools_to_chat(value: &Value) -> Value {
             let Some(declaration) = declaration.as_object() else {
                 continue;
             };
-            let name = declaration.get("name").and_then(Value::as_str).unwrap_or("");
+            let name = declaration
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             if name.is_empty() {
                 continue;
             }

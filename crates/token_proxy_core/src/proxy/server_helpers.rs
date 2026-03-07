@@ -5,16 +5,14 @@ use axum::{
 use serde_json::{Map, Value};
 
 use super::{
-    antigravity_compat,
-    gemini,
+    antigravity_compat, gemini,
     http_client::ProxyHttpClients,
     openai_compat::{
         transform_request_body, FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES,
         RESPONSES_PATH,
     },
-    request_token_estimate,
     request_body::ReplayableBody,
-    RequestMeta,
+    request_token_estimate, RequestMeta,
 };
 
 const ANTHROPIC_MESSAGES_PREFIX: &str = "/v1/messages";
@@ -183,14 +181,14 @@ pub(crate) async fn log_debug_headers_body(
         return;
     }
 
-    let header_snapshot = headers
-        .map(snapshot_headers_raw)
-        .unwrap_or_default();
+    let header_snapshot = headers.map(snapshot_headers_raw).unwrap_or_default();
     let body_text = if let Some(body) = body {
         match body.read_bytes_if_small(max_body_bytes).await {
             Ok(Some(bytes)) => Some(String::from_utf8_lossy(&bytes).into_owned()),
-            Ok(None) => Some(format!("[body omitted: larger than {max_body_bytes} bytes]")),
-            Err(err) => Some(format!("[body read failed: {err}]") ),
+            Ok(None) => Some(format!(
+                "[body omitted: larger than {max_body_bytes} bytes]"
+            )),
+            Err(err) => Some(format!("[body read failed: {err}]")),
         }
     } else {
         None
@@ -321,14 +319,12 @@ pub(crate) async fn maybe_force_openai_stream_options_include_usage(
         return Ok(body);
     }
 
-    let outbound_bytes = serde_json::to_vec(&value)
-        .map(Bytes::from)
-        .map_err(|err| {
-            RequestError::new(
-                StatusCode::BAD_REQUEST,
-                format!("Failed to serialize request: {err}"),
-            )
-        })?;
+    let outbound_bytes = serde_json::to_vec(&value).map(Bytes::from).map_err(|err| {
+        RequestError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Failed to serialize request: {err}"),
+        )
+    })?;
     let outbound_body = ReplayableBody::from_bytes(outbound_bytes);
     log_debug_headers_body(
         "stream_options.output",
@@ -386,14 +382,12 @@ pub(crate) async fn maybe_rewrite_openai_reasoning_effort_from_model_suffix(
         object,
     );
 
-    let outbound_bytes = serde_json::to_vec(&value)
-        .map(Bytes::from)
-        .map_err(|err| {
-            RequestError::new(
-                StatusCode::BAD_REQUEST,
-                format!("Failed to serialize request: {err}"),
-            )
-        })?;
+    let outbound_bytes = serde_json::to_vec(&value).map(Bytes::from).map_err(|err| {
+        RequestError::new(
+            StatusCode::BAD_REQUEST,
+            format!("Failed to serialize request: {err}"),
+        )
+    })?;
     Ok(Some(ReplayableBody::from_bytes(outbound_bytes)))
 }
 

@@ -32,9 +32,7 @@ pub struct CodexQuotaSummary {
     pub error: Option<String>,
 }
 
-pub async fn fetch_quotas(
-    store: &CodexAccountStore,
-) -> Result<Vec<CodexQuotaSummary>, String> {
+pub async fn fetch_quotas(store: &CodexAccountStore) -> Result<Vec<CodexQuotaSummary>, String> {
     let accounts = store.list_accounts().await?;
     let proxy_url = store.app_proxy_url().await;
     let mut results = Vec::with_capacity(accounts.len());
@@ -58,7 +56,12 @@ async fn fetch_account_quota(
     proxy_url: Option<&str>,
 ) -> Result<CodexQuotaSummary, String> {
     let record = store.get_account_record(&account.account_id).await?;
-    let response = request_usage(&record.access_token, record.account_id.as_deref(), proxy_url).await?;
+    let response = request_usage(
+        &record.access_token,
+        record.account_id.as_deref(),
+        proxy_url,
+    )
+    .await?;
     Ok(map_usage_response(account, response))
 }
 
@@ -74,11 +77,7 @@ async fn request_usage(
         match request_usage_once(access_token, chatgpt_account_id, &attempt).await {
             Ok(response) => return Ok(response),
             Err(UsageRequestError::Send(err)) => {
-                send_errors.push(format!(
-                    "{}: {}",
-                    attempt.label,
-                    format_reqwest_error(&err)
-                ));
+                send_errors.push(format!("{}: {}", attempt.label, format_reqwest_error(&err)));
             }
             Err(err) => {
                 return Err(format!(
@@ -134,7 +133,11 @@ fn build_window_quota(name: &str, window: Option<CodexRateWindow>) -> Option<Cod
 
 fn reset_at_from_seconds(seconds: i64) -> Option<String> {
     let value = OffsetDateTime::from_unix_timestamp(seconds).ok()?;
-    Some(value.format(&Rfc3339).unwrap_or_else(|_| seconds.to_string()))
+    Some(
+        value
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| seconds.to_string()),
+    )
 }
 
 async fn request_usage_once(
@@ -175,8 +178,8 @@ fn build_usage_client(proxy_url: Option<&str>, http1_only: bool) -> Result<Clien
     let mut builder = Client::builder().timeout(Duration::from_secs(30));
     let proxy_url = proxy_url.map(str::trim).filter(|value| !value.is_empty());
     if let Some(proxy_url) = proxy_url {
-        let proxy = Proxy::all(proxy_url)
-            .map_err(|_| "app_proxy_url is not a valid URL.".to_string())?;
+        let proxy =
+            Proxy::all(proxy_url).map_err(|_| "app_proxy_url is not a valid URL.".to_string())?;
         builder = builder.proxy(proxy);
     }
     builder

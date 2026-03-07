@@ -5,22 +5,21 @@ use axum::{
 };
 use std::sync::Arc;
 
-use super::super::{
-    kiro_to_anthropic, kiro_to_responses, token_count, upstream_read, upstream_stream,
-    PROVIDER_ANTIGRAVITY, PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
-};
 use super::super::super::{
-    antigravity_compat, codex_compat,
-    http,
+    antigravity_compat, codex_compat, http,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     model,
     openai_compat::{transform_response_body, FormatTransform},
-    request_body::ReplayableBody,
     redact::redact_query_param_value,
+    request_body::ReplayableBody,
     server_helpers::{log_debug_headers_body, truncate_for_log},
     token_rate::RequestTokenTracker,
     usage::extract_usage_from_response,
     UPSTREAM_NO_DATA_TIMEOUT,
+};
+use super::super::{
+    kiro_to_anthropic, kiro_to_responses, token_count, upstream_read, upstream_stream,
+    PROVIDER_ANTIGRAVITY, PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
 };
 
 const DEBUG_BODY_LOG_LIMIT_BYTES: usize = usize::MAX;
@@ -107,7 +106,8 @@ pub(super) async fn build_buffered_response(
     )
     .await;
     let provider_for_tokens = provider_for_tokens(response_transform, context.provider.as_str());
-    token_count::apply_output_tokens_from_response(&request_tracker, provider_for_tokens, &output).await;
+    token_count::apply_output_tokens_from_response(&request_tracker, provider_for_tokens, &output)
+        .await;
 
     http::build_response(status, headers, Body::from(output))
 }
@@ -127,13 +127,9 @@ fn convert_success_body(
     request_body: Option<&str>,
 ) -> Result<ConvertedBody, Response> {
     match transform {
-        FormatTransform::KiroToAnthropic => convert_kiro_to_anthropic_body(
-            bytes,
-            context,
-            usage,
-            log,
-            estimated_input_tokens,
-        ),
+        FormatTransform::KiroToAnthropic => {
+            convert_kiro_to_anthropic_body(bytes, context, usage, log, estimated_input_tokens)
+        }
         FormatTransform::CodexToChat => {
             convert_codex_to_chat_body(bytes, context, usage, log, request_body)
         }

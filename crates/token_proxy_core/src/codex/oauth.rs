@@ -57,7 +57,10 @@ impl CodexOAuthClient {
         self.post_form(payload).await
     }
 
-    pub(crate) async fn refresh_token(&self, refresh_token: &str) -> Result<CodexTokenResponse, String> {
+    pub(crate) async fn refresh_token(
+        &self,
+        refresh_token: &str,
+    ) -> Result<CodexTokenResponse, String> {
         let payload = TokenExchangeRequest {
             grant_type: "refresh_token".to_string(),
             client_id: OPENAI_CLIENT_ID.to_string(),

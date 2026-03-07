@@ -47,9 +47,7 @@ pub struct RequestDetailCapture {
 }
 
 impl RequestDetailCapture {
-    pub fn new(
-        on_change: Option<Arc<dyn Fn(RequestDetailCaptureState) + Send + Sync>>,
-    ) -> Self {
+    pub fn new(on_change: Option<Arc<dyn Fn(RequestDetailCaptureState) + Send + Sync>>) -> Self {
         Self {
             expires_at_ms: AtomicU64::new(DISARMED_AT_MS),
             window_ms: duration_to_millis(REQUEST_DETAIL_CAPTURE_WINDOW),
@@ -199,10 +197,7 @@ mod tests {
         RequestDetailCapture::new_with_clock(
             Duration::from_secs(30),
             Some(Arc::new(move |state| {
-                change_sink
-                    .lock()
-                    .expect("lock change sink")
-                    .push(state);
+                change_sink.lock().expect("lock change sink").push(state);
             })),
             Arc::new(move || now_ms.load(Ordering::SeqCst)),
         )
@@ -242,10 +237,7 @@ mod tests {
         assert_eq!(capture.snapshot(), RequestDetailCaptureState::idle());
 
         let observed = changes.lock().expect("lock changes").clone();
-        assert_eq!(
-            observed,
-            vec![active, RequestDetailCaptureState::idle()]
-        );
+        assert_eq!(observed, vec![active, RequestDetailCaptureState::idle()]);
     }
 
     #[test]

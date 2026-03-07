@@ -14,10 +14,7 @@ use super::super::usage::SseUsageCollector;
 use super::streaming::STREAM_DROPPED_ERROR;
 
 pub(super) fn stream_responses_to_anthropic<E>(
-    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>>
-        + Unpin
-        + Send
-        + 'static,
+    upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
     log: Arc<LogWriter>,
     token_tracker: RequestTokenTracker,
@@ -288,7 +285,11 @@ where
         };
         self.ensure_message_start();
         self.ensure_tool_use_state(item_id);
-        if !self.tool_uses.get(item_id).is_some_and(|state| state.sent_start) {
+        if !self
+            .tool_uses
+            .get(item_id)
+            .is_some_and(|state| state.sent_start)
+        {
             self.start_tool_use_block(item_id);
         }
         self.set_active_tool_use(item_id);
@@ -341,9 +342,11 @@ where
             return;
         };
         self.handle_response_output_items(response);
-        self.stop_reason_override = Some(compat_reason::anthropic_stop_reason_from_chat_finish_reason(
-            compat_reason::chat_finish_reason_from_response_object(response, self.saw_tool_use),
-        ));
+        self.stop_reason_override = Some(
+            compat_reason::anthropic_stop_reason_from_chat_finish_reason(
+                compat_reason::chat_finish_reason_from_response_object(response, self.saw_tool_use),
+            ),
+        );
     }
 
     fn handle_response_incomplete(&mut self, value: &Value) {
@@ -351,9 +354,11 @@ where
             return;
         };
         self.handle_response_output_items(response);
-        self.stop_reason_override = Some(compat_reason::anthropic_stop_reason_from_chat_finish_reason(
-            compat_reason::chat_finish_reason_from_response_object(response, self.saw_tool_use),
-        ));
+        self.stop_reason_override = Some(
+            compat_reason::anthropic_stop_reason_from_chat_finish_reason(
+                compat_reason::chat_finish_reason_from_response_object(response, self.saw_tool_use),
+            ),
+        );
     }
 
     fn handle_response_output_items(&mut self, response: &Map<String, Value>) {
@@ -483,14 +488,17 @@ where
         if !self.tool_uses.contains_key(item_id) {
             let index = self.next_block_index;
             self.next_block_index += 1;
-            self.tool_uses.insert(item_id.to_string(), ToolUseState {
-                index,
-                tool_use_id: tool_use_id.to_string(),
-                name: name.to_string(),
-                sent_start: false,
-                sent_stop: false,
-                sent_input: false,
-            });
+            self.tool_uses.insert(
+                item_id.to_string(),
+                ToolUseState {
+                    index,
+                    tool_use_id: tool_use_id.to_string(),
+                    name: name.to_string(),
+                    sent_start: false,
+                    sent_stop: false,
+                    sent_input: false,
+                },
+            );
         }
 
         if let Some(state) = self.tool_uses.get_mut(item_id) {
@@ -502,35 +510,43 @@ where
             }
         }
 
-        if !self.tool_uses.get(item_id).is_some_and(|state| state.sent_start) {
+        if !self
+            .tool_uses
+            .get(item_id)
+            .is_some_and(|state| state.sent_start)
+        {
             self.start_tool_use_block(item_id);
         }
     }
 
     fn ensure_tool_use_state(&mut self, item_id: &str) -> &mut ToolUseState {
-        self.tool_uses.entry(item_id.to_string()).or_insert_with(|| {
-            let index = self.next_block_index;
-            self.next_block_index += 1;
-            ToolUseState {
-                index,
-                tool_use_id: item_id.to_string(),
-                name: String::new(),
-                sent_start: false,
-                sent_stop: false,
-                sent_input: false,
-            }
-        })
+        self.tool_uses
+            .entry(item_id.to_string())
+            .or_insert_with(|| {
+                let index = self.next_block_index;
+                self.next_block_index += 1;
+                ToolUseState {
+                    index,
+                    tool_use_id: item_id.to_string(),
+                    name: String::new(),
+                    sent_start: false,
+                    sent_stop: false,
+                    sent_input: false,
+                }
+            })
     }
 
     fn start_tool_use_block(&mut self, item_id: &str) {
-        let Some((index, tool_use_id, name, sent_start)) = self.tool_uses.get(item_id).map(|state| {
-            (
-                state.index,
-                state.tool_use_id.clone(),
-                state.name.clone(),
-                state.sent_start,
-            )
-        }) else {
+        let Some((index, tool_use_id, name, sent_start)) =
+            self.tool_uses.get(item_id).map(|state| {
+                (
+                    state.index,
+                    state.tool_use_id.clone(),
+                    state.name.clone(),
+                    state.sent_start,
+                )
+            })
+        else {
             return;
         };
         if sent_start {

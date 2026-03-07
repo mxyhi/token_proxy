@@ -133,7 +133,10 @@ fn responses_request_to_anthropic_maps_tool_choice_and_tool_result() {
     assert_eq!(value["tools"][0]["name"], json!("search"));
     assert_eq!(value["tool_choice"]["type"], json!("tool"));
     assert_eq!(value["tool_choice"]["name"], json!("search"));
-    assert_eq!(value["tool_choice"]["disable_parallel_tool_use"], json!(true));
+    assert_eq!(
+        value["tool_choice"]["disable_parallel_tool_use"],
+        json!(true)
+    );
     assert_eq!(value["stop_sequences"], json!(["a", "b"]));
 
     let messages = value["messages"].as_array().expect("messages array");

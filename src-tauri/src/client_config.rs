@@ -103,7 +103,9 @@ pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
     })
 }
 
-pub(crate) async fn write_claude_code_settings(app: AppHandle) -> Result<ClientConfigWriteResult, String> {
+pub(crate) async fn write_claude_code_settings(
+    app: AppHandle,
+) -> Result<ClientConfigWriteResult, String> {
     let config = load_proxy_config(&app).await?;
     let proxy_http_base_url = build_proxy_http_base_url(&config)?;
     let settings_path = resolve_claude_settings_path(&app)?;
@@ -119,7 +121,12 @@ pub(crate) async fn write_claude_code_settings(app: AppHandle) -> Result<ClientC
         "ANTHROPIC_BASE_URL".to_string(),
         serde_json::Value::String(proxy_http_base_url),
     );
-    match config.local_api_key.as_ref().map(|key| key.trim()).filter(|key| !key.is_empty()) {
+    match config
+        .local_api_key
+        .as_ref()
+        .map(|key| key.trim())
+        .filter(|key| !key.is_empty())
+    {
         Some(token) => {
             env.insert(
                 "ANTHROPIC_AUTH_TOKEN".to_string(),
@@ -165,11 +172,13 @@ pub(crate) async fn write_codex_config(app: AppHandle) -> Result<ClientConfigWri
     ensure_toml_table_path(&mut doc, &["model_providers"])?;
     ensure_toml_table_path(&mut doc, &["model_providers", CODEX_MODEL_PROVIDER])?;
 
-    doc["model_providers"][CODEX_MODEL_PROVIDER]["base_url"] = toml_edit::value(codex_provider_base_url);
+    doc["model_providers"][CODEX_MODEL_PROVIDER]["base_url"] =
+        toml_edit::value(codex_provider_base_url);
     doc["model_providers"][CODEX_MODEL_PROVIDER]["name"] = toml_edit::value(CODEX_PROVIDER_NAME);
     doc["model_providers"][CODEX_MODEL_PROVIDER]["requires_openai_auth"] =
         toml_edit::value(CODEX_PROVIDER_REQUIRES_OPENAI_AUTH);
-    doc["model_providers"][CODEX_MODEL_PROVIDER]["wire_api"] = toml_edit::value(CODEX_PROVIDER_WIRE_API);
+    doc["model_providers"][CODEX_MODEL_PROVIDER]["wire_api"] =
+        toml_edit::value(CODEX_PROVIDER_WIRE_API);
 
     if let Some(table) = doc["model_providers"][CODEX_MODEL_PROVIDER].as_table_mut() {
         table.remove("experimental_bearer_token");
@@ -204,7 +213,9 @@ pub(crate) async fn write_codex_config(app: AppHandle) -> Result<ClientConfigWri
     })
 }
 
-pub(crate) async fn write_opencode_config(app: AppHandle) -> Result<ClientConfigWriteResult, String> {
+pub(crate) async fn write_opencode_config(
+    app: AppHandle,
+) -> Result<ClientConfigWriteResult, String> {
     let config = load_proxy_config(&app).await?;
     let proxy_http_base_url = build_proxy_http_base_url(&config)?;
     let opencode_config_path = resolve_opencode_config_path(&app)?;
@@ -269,7 +280,9 @@ pub(crate) async fn write_opencode_config(app: AppHandle) -> Result<ClientConfig
 
 async fn load_proxy_config(app: &AppHandle) -> Result<ProxyConfigFile, String> {
     let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
-    Ok(crate::proxy::config::read_config(paths.inner().as_ref()).await?.config)
+    Ok(crate::proxy::config::read_config(paths.inner().as_ref())
+        .await?
+        .config)
 }
 
 fn resolve_home_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -341,7 +354,10 @@ fn resolve_opencode_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     if let Some(dir) = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from) {
         return Ok(dir.join("opencode"));
     }
-    Ok(resolve_home_dir(app)?.join(".local").join("share").join("opencode"))
+    Ok(resolve_home_dir(app)?
+        .join(".local")
+        .join("share")
+        .join("opencode"))
 }
 
 fn build_proxy_http_base_url(config: &ProxyConfigFile) -> Result<String, String> {
@@ -412,7 +428,10 @@ fn build_opencode_provider_config(base_url: &str, models: &[String]) -> serde_js
                 serde_json::Value::String(base_url.to_string()),
             )])),
         ),
-        ("models".to_string(), serde_json::Value::Object(models_object)),
+        (
+            "models".to_string(),
+            serde_json::Value::Object(models_object),
+        ),
     ]))
 }
 
@@ -432,13 +451,10 @@ async fn read_json_object_or_default(
         return Ok(serde_json::Map::new());
     }
     let sanitized = crate::jsonc::sanitize_jsonc(&text);
-    let mut value: serde_json::Value =
-        serde_json::from_str(&sanitized).map_err(|err| format!("Failed to parse {}: {err}", path.display()))?;
+    let mut value: serde_json::Value = serde_json::from_str(&sanitized)
+        .map_err(|err| format!("Failed to parse {}: {err}", path.display()))?;
     let Some(object) = value.as_object_mut() else {
-        return Err(format!(
-            "{} must be a JSON object.",
-            path.display()
-        ));
+        return Err(format!("{} must be a JSON object.", path.display()));
     };
     Ok(object.clone())
 }
@@ -518,10 +534,7 @@ fn build_backup_path(path: &Path) -> PathBuf {
     }
 }
 
-fn ensure_toml_table_path(
-    doc: &mut toml_edit::DocumentMut,
-    path: &[&str],
-) -> Result<(), String> {
+fn ensure_toml_table_path(doc: &mut toml_edit::DocumentMut, path: &[&str]) -> Result<(), String> {
     if path.is_empty() {
         return Ok(());
     }
@@ -536,7 +549,9 @@ fn ensure_toml_table_path(
         let table = current
             .as_table_mut()
             .ok_or_else(|| "Failed to build TOML table path.".to_string())?;
-        current = table.entry(*segment).or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+        current = table
+            .entry(*segment)
+            .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
     }
 
     Ok(())

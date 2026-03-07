@@ -1,3 +1,5 @@
+use crate::antigravity::endpoints as antigravity_endpoints;
+use crate::antigravity::project as antigravity_project;
 use axum::{
     http::{
         header::{AUTHORIZATION, USER_AGENT},
@@ -5,46 +7,35 @@ use axum::{
     },
     response::Response,
 };
-use crate::antigravity::endpoints as antigravity_endpoints;
-use crate::antigravity::project as antigravity_project;
-use std::{
-    sync::{
-        Arc,
-    },
-    time::Instant,
-};
+use std::{sync::Arc, time::Instant};
 
 const GEMINI_API_KEY_QUERY: &str = "key";
 const LOCAL_UPSTREAM_ID: &str = "local";
 const ANTIGRAVITY_GENERATE_PATH: &str = "/v1internal:generateContent";
 const ANTIGRAVITY_STREAM_PATH: &str = "/v1internal:streamGenerateContent";
 
-mod request;
 mod attempt;
-mod result;
-mod utils;
 mod kiro;
 mod kiro_headers;
 mod kiro_http;
+mod request;
+mod result;
+mod utils;
 
-use utils::{
-    build_group_order, resolve_group_start,
-};
+use utils::{build_group_order, resolve_group_start};
 
 #[cfg(test)]
 use crate::proxy::redact::redact_query_param_value;
 
 use super::{
     config::{InboundApiFormat, ProviderUpstreams, UpstreamRuntime},
-    gemini,
-    http,
+    gemini, http,
     http::RequestAuth,
     inbound::detect_inbound_api_format,
     openai_compat::FormatTransform,
-    request_detail::RequestDetailSnapshot,
     request_body::ReplayableBody,
-    ProxyState,
-    RequestMeta,
+    request_detail::RequestDetailSnapshot,
+    ProxyState, RequestMeta,
 };
 
 const REQUEST_MODEL_MAPPING_LIMIT_BYTES: usize = 4 * 1024 * 1024;
@@ -179,10 +170,7 @@ enum AttemptOutcome {
     SkippedAuth,
 }
 
-fn apply_attempt_outcome(
-    result: &mut GroupAttemptResult,
-    outcome: AttemptOutcome,
-) -> bool {
+fn apply_attempt_outcome(result: &mut GroupAttemptResult, outcome: AttemptOutcome) -> bool {
     match outcome {
         AttemptOutcome::Success(response) | AttemptOutcome::Fatal(response) => {
             result.response = Some(response);
@@ -367,10 +355,7 @@ fn finalize_forward_response(
             format!("Upstream request failed: {err}"),
         );
     }
-    http::error_response(
-        StatusCode::BAD_GATEWAY,
-        "No available upstream configured.",
-    )
+    http::error_response(StatusCode::BAD_GATEWAY, "No available upstream configured.")
 }
 
 async fn try_group_upstreams(
@@ -526,7 +511,9 @@ async fn resolve_kiro_upstream(
         .kiro_accounts
         .get_access_token(account_id)
         .await
-        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
+        .map_err(|err| {
+            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
+        })?;
     let value = http::bearer_header(&token).ok_or_else(|| {
         AttemptOutcome::Fatal(http::error_response(
             StatusCode::UNAUTHORIZED,
@@ -559,7 +546,9 @@ async fn resolve_codex_upstream(
         .codex_accounts
         .get_account_record(account_id)
         .await
-        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
+        .map_err(|err| {
+            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
+        })?;
     let value = http::bearer_header(&record.access_token).ok_or_else(|| {
         AttemptOutcome::Fatal(http::error_response(
             StatusCode::UNAUTHORIZED,
@@ -569,7 +558,10 @@ async fn resolve_codex_upstream(
     let mut extra_headers = HeaderMap::new();
     if let Some(account_id) = record.account_id.as_deref() {
         if let Ok(value) = axum::http::HeaderValue::from_str(account_id) {
-            extra_headers.insert(axum::http::HeaderName::from_static("chatgpt-account-id"), value);
+            extra_headers.insert(
+                axum::http::HeaderName::from_static("chatgpt-account-id"),
+                value,
+            );
         }
     }
     let extra_headers = if extra_headers.is_empty() {
@@ -603,7 +595,9 @@ async fn resolve_antigravity_upstream(
         .antigravity_accounts
         .get_account_record(account_id)
         .await
-        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
+        .map_err(|err| {
+            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
+        })?;
     if record
         .project_id
         .as_deref()
@@ -612,7 +606,8 @@ async fn resolve_antigravity_upstream(
         .is_none()
     {
         let proxy_url = state.antigravity_accounts.app_proxy_url().await;
-        match antigravity_project::load_code_assist(&record.access_token, proxy_url.as_deref()).await
+        match antigravity_project::load_code_assist(&record.access_token, proxy_url.as_deref())
+            .await
         {
             Ok(info) => {
                 if let Some(value) = info.project_id.clone() {
@@ -679,16 +674,18 @@ async fn resolve_antigravity_upstream(
     })
 }
 
-fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime, provider: &str) -> RequestMeta {
+fn build_mapped_meta(
+    meta: &RequestMeta,
+    upstream: &UpstreamRuntime,
+    provider: &str,
+) -> RequestMeta {
     // 只有当实际发生映射时才设置 mapped_model，避免与 original_model 重复
     let mapped_model = meta
         .original_model
         .as_deref()
         .and_then(|original| upstream.map_model(original));
-    let (mapped_model, reasoning_effort) = normalize_mapped_model_reasoning_suffix(
-        mapped_model,
-        meta.reasoning_effort.clone(),
-    );
+    let (mapped_model, reasoning_effort) =
+        normalize_mapped_model_reasoning_suffix(mapped_model, meta.reasoning_effort.clone());
     let mapped_model = mapped_model.map(|model| {
         if provider == "antigravity" {
             super::antigravity_compat::map_antigravity_model(&model)

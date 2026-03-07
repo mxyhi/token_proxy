@@ -75,18 +75,42 @@ LIMIT 1;
         provider: row.try_get::<String, _>("provider").unwrap_or_default(),
         upstream_id: row.try_get::<String, _>("upstream_id").unwrap_or_default(),
         model: row.try_get::<Option<String>, _>("model").ok().flatten(),
-        mapped_model: row.try_get::<Option<String>, _>("mapped_model").ok().flatten(),
+        mapped_model: row
+            .try_get::<Option<String>, _>("mapped_model")
+            .ok()
+            .flatten(),
         stream: row.try_get::<i32, _>("stream").unwrap_or_default() != 0,
         status: row.try_get::<i32, _>("status").unwrap_or_default(),
         input_tokens: row.try_get::<Option<i64>, _>("input_tokens").ok().flatten(),
-        output_tokens: row.try_get::<Option<i64>, _>("output_tokens").ok().flatten(),
+        output_tokens: row
+            .try_get::<Option<i64>, _>("output_tokens")
+            .ok()
+            .flatten(),
         total_tokens: row.try_get::<Option<i64>, _>("total_tokens").ok().flatten(),
-        cached_tokens: row.try_get::<Option<i64>, _>("cached_tokens").ok().flatten(),
+        cached_tokens: row
+            .try_get::<Option<i64>, _>("cached_tokens")
+            .ok()
+            .flatten(),
         latency_ms: row.try_get::<i64, _>("latency_ms").unwrap_or_default(),
-        upstream_request_id: row.try_get::<Option<String>, _>("upstream_request_id").ok().flatten(),
-        usage_json: row.try_get::<Option<String>, _>("usage_json").ok().flatten(),
-        request_headers: row.try_get::<Option<String>, _>("request_headers").ok().flatten(),
-        request_body: row.try_get::<Option<String>, _>("request_body").ok().flatten(),
-        response_error: row.try_get::<Option<String>, _>("response_error").ok().flatten(),
+        upstream_request_id: row
+            .try_get::<Option<String>, _>("upstream_request_id")
+            .ok()
+            .flatten(),
+        usage_json: row
+            .try_get::<Option<String>, _>("usage_json")
+            .ok()
+            .flatten(),
+        request_headers: row
+            .try_get::<Option<String>, _>("request_headers")
+            .ok()
+            .flatten(),
+        request_body: row
+            .try_get::<Option<String>, _>("request_body")
+            .ok()
+            .flatten(),
+        response_error: row
+            .try_get::<Option<String>, _>("response_error")
+            .ok()
+            .flatten(),
     })
 }

@@ -18,10 +18,22 @@ fn responses_and_gemini_request_conversions() {
         &http_clients,
         None,
     );
-    assert_eq!(responses_value["contents"][0]["parts"][0]["text"], json!("hi"));
-    assert_eq!(responses_value["systemInstruction"]["parts"][0]["text"], json!("sys"));
-    assert_eq!(responses_value["generationConfig"]["maxOutputTokens"], json!(128));
-    assert_eq!(responses_value["generationConfig"]["stopSequences"], json!(["a", "b"]));
+    assert_eq!(
+        responses_value["contents"][0]["parts"][0]["text"],
+        json!("hi")
+    );
+    assert_eq!(
+        responses_value["systemInstruction"]["parts"][0]["text"],
+        json!("sys")
+    );
+    assert_eq!(
+        responses_value["generationConfig"]["maxOutputTokens"],
+        json!(128)
+    );
+    assert_eq!(
+        responses_value["generationConfig"]["stopSequences"],
+        json!(["a", "b"])
+    );
     assert_eq!(responses_value["generationConfig"]["seed"], json!(7));
     let gemini_value = transform_request_value(
         FormatTransform::GeminiToResponses,
@@ -36,7 +48,10 @@ fn responses_and_gemini_request_conversions() {
     );
     assert_eq!(gemini_value["model"], json!("gemini-1.5-flash"));
     assert_eq!(gemini_value["instructions"], json!("rules"));
-    assert_eq!(gemini_value["input"][0]["content"][0]["text"], json!("hello"));
+    assert_eq!(
+        gemini_value["input"][0]["content"][0]["text"],
+        json!("hello")
+    );
     assert_eq!(gemini_value["max_output_tokens"], json!(64));
     assert_eq!(gemini_value["top_p"], json!(0.8));
 }
@@ -55,7 +70,10 @@ fn gemini_and_anthropic_request_conversions() {
     );
     assert_eq!(gemini_value["model"], json!("claude-3-5-sonnet"));
     assert_eq!(gemini_value["system"][0]["text"], json!("sys"));
-    assert_eq!(gemini_value["messages"][0]["content"][0]["text"], json!("ping"));
+    assert_eq!(
+        gemini_value["messages"][0]["content"][0]["text"],
+        json!("ping")
+    );
     assert_eq!(gemini_value["max_tokens"], json!(42));
     let anthropic_value = transform_request_value(
         FormatTransform::AnthropicToGemini,
@@ -69,10 +87,22 @@ fn gemini_and_anthropic_request_conversions() {
         &http_clients,
         None,
     );
-    assert_eq!(anthropic_value["systemInstruction"]["parts"][0]["text"], json!("guard"));
-    assert_eq!(anthropic_value["contents"][0]["parts"][0]["text"], json!("yo"));
-    assert_eq!(anthropic_value["generationConfig"]["maxOutputTokens"], json!(321));
-    assert_eq!(anthropic_value["generationConfig"]["stopSequences"], json!(["x"]));
+    assert_eq!(
+        anthropic_value["systemInstruction"]["parts"][0]["text"],
+        json!("guard")
+    );
+    assert_eq!(
+        anthropic_value["contents"][0]["parts"][0]["text"],
+        json!("yo")
+    );
+    assert_eq!(
+        anthropic_value["generationConfig"]["maxOutputTokens"],
+        json!(321)
+    );
+    assert_eq!(
+        anthropic_value["generationConfig"]["stopSequences"],
+        json!(["x"])
+    );
 }
 #[test]
 fn responses_and_gemini_response_conversions() {
@@ -93,10 +123,22 @@ fn responses_and_gemini_response_conversions() {
         }),
         None,
     );
-    assert_eq!(responses_value["candidates"][0]["content"]["parts"][0]["text"], json!("Hello"));
-    assert_eq!(responses_value["usageMetadata"]["promptTokenCount"], json!(2));
-    assert_eq!(responses_value["usageMetadata"]["candidatesTokenCount"], json!(3));
-    assert_eq!(responses_value["usageMetadata"]["totalTokenCount"], json!(5));
+    assert_eq!(
+        responses_value["candidates"][0]["content"]["parts"][0]["text"],
+        json!("Hello")
+    );
+    assert_eq!(
+        responses_value["usageMetadata"]["promptTokenCount"],
+        json!(2)
+    );
+    assert_eq!(
+        responses_value["usageMetadata"]["candidatesTokenCount"],
+        json!(3)
+    );
+    assert_eq!(
+        responses_value["usageMetadata"]["totalTokenCount"],
+        json!(5)
+    );
     let gemini_value = transform_response_value(
         FormatTransform::GeminiToResponses,
         json!({
@@ -147,8 +189,20 @@ fn gemini_and_anthropic_response_conversions() {
         }),
         None,
     );
-    assert_eq!(anthropic_value["candidates"][0]["content"]["parts"][0]["text"], json!("Yo"));
-    assert_eq!(anthropic_value["usageMetadata"]["promptTokenCount"], json!(4));
-    assert_eq!(anthropic_value["usageMetadata"]["candidatesTokenCount"], json!(6));
-    assert_eq!(anthropic_value["usageMetadata"]["totalTokenCount"], json!(10));
+    assert_eq!(
+        anthropic_value["candidates"][0]["content"]["parts"][0]["text"],
+        json!("Yo")
+    );
+    assert_eq!(
+        anthropic_value["usageMetadata"]["promptTokenCount"],
+        json!(4)
+    );
+    assert_eq!(
+        anthropic_value["usageMetadata"]["candidatesTokenCount"],
+        json!(6)
+    );
+    assert_eq!(
+        anthropic_value["usageMetadata"]["totalTokenCount"],
+        json!(10)
+    );
 }

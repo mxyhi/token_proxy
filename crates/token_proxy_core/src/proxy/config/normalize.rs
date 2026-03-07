@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
+use super::types::InboundApiFormatMask;
 use super::{
     model_mapping::compile_model_mappings, HeaderOverride, InboundApiFormat, ProviderUpstreams,
     UpstreamConfig, UpstreamGroup, UpstreamOverrides, UpstreamRuntime,
 };
-use super::types::InboundApiFormatMask;
 use axum::http::header::{HeaderName, HeaderValue};
 
 const APP_PROXY_URL_PLACEHOLDER: &str = "$app_proxy_url";
@@ -113,11 +113,8 @@ fn normalize_single_upstream(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
-    let proxy_url = normalize_upstream_proxy_url(
-        upstream.proxy_url.as_deref(),
-        app_proxy_url,
-        &upstream.id,
-    )?;
+    let proxy_url =
+        normalize_upstream_proxy_url(upstream.proxy_url.as_deref(), app_proxy_url, &upstream.id)?;
     let model_mappings = compile_model_mappings(&upstream.id, &upstream.model_mappings)?;
     let header_overrides = normalize_header_overrides(upstream.overrides.as_ref())?;
 
@@ -161,7 +158,10 @@ fn normalize_single_upstream(
 
 fn normalize_providers(upstream: &UpstreamConfig) -> Result<Vec<String>, String> {
     if upstream.providers.is_empty() {
-        return Err(format!("Upstream {} providers cannot be empty.", upstream.id));
+        return Err(format!(
+            "Upstream {} providers cannot be empty.",
+            upstream.id
+        ));
     }
 
     let mut providers = Vec::with_capacity(upstream.providers.len());
@@ -209,7 +209,10 @@ fn validate_provider_mix(upstream_id: &str, providers: &[String]) -> Result<(), 
     Ok(())
 }
 
-fn validate_convert_from_map(upstream: &UpstreamConfig, providers: &[String]) -> Result<(), String> {
+fn validate_convert_from_map(
+    upstream: &UpstreamConfig,
+    providers: &[String],
+) -> Result<(), String> {
     if upstream.convert_from_map.is_empty() {
         return Ok(());
     }
@@ -232,11 +235,7 @@ fn validate_convert_from_map(upstream: &UpstreamConfig, providers: &[String]) ->
     Ok(())
 }
 
-fn resolve_base_url(
-    upstream_id: &str,
-    base_url: &str,
-    provider: &str,
-) -> Result<String, String> {
+fn resolve_base_url(upstream_id: &str, base_url: &str, provider: &str) -> Result<String, String> {
     let base_url = base_url.trim();
     if !base_url.is_empty() {
         return Ok(base_url.to_string());
@@ -327,13 +326,15 @@ fn normalize_header_overrides(
             Some(value) => {
                 if value.is_empty() {
                     // 允许空字符串，代表设置为空值。
-                    Some(HeaderValue::from_str("").map_err(|_| {
-                        format!("Invalid header value for {raw_name}")
-                    })?)
+                    Some(
+                        HeaderValue::from_str("")
+                            .map_err(|_| format!("Invalid header value for {raw_name}"))?,
+                    )
                 } else {
-                    Some(HeaderValue::from_str(value).map_err(|_| {
-                        format!("Invalid header value for {raw_name}")
-                    })?)
+                    Some(
+                        HeaderValue::from_str(value)
+                            .map_err(|_| format!("Invalid header value for {raw_name}"))?,
+                    )
                 }
             }
             None => None,
@@ -362,15 +363,16 @@ fn normalize_upstream_proxy_url(
                 "Upstream {upstream_id} proxy_url is set to {APP_PROXY_URL_PLACEHOLDER}, but app_proxy_url is empty."
             ));
         }
-        return Ok(Some(validate_proxy_url(app_proxy_url, upstream_id)?.to_string()));
+        return Ok(Some(
+            validate_proxy_url(app_proxy_url, upstream_id)?.to_string(),
+        ));
     }
     Ok(Some(validate_proxy_url(value, upstream_id)?.to_string()))
 }
 
 fn validate_proxy_url<'a>(value: &'a str, upstream_id: &str) -> Result<&'a str, String> {
-    let parsed = url::Url::parse(value).map_err(|_| {
-        format!("Upstream {upstream_id} proxy_url is not a valid URL.")
-    })?;
+    let parsed = url::Url::parse(value)
+        .map_err(|_| format!("Upstream {upstream_id} proxy_url is not a valid URL."))?;
     match parsed.scheme() {
         "http" | "https" | "socks5" | "socks5h" => Ok(value),
         scheme => Err(format!(

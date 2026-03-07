@@ -7,18 +7,18 @@ use axum::http::{
 use reqwest::{Client, Proxy};
 use tokio::time::timeout;
 
-use super::result;
 use super::request;
+use super::result;
 use super::utils::{is_retryable_error, sanitize_upstream_error};
 use super::{AttemptOutcome, PreparedUpstreamRequest};
 use crate::antigravity::endpoints as antigravity_endpoints;
 use crate::proxy::http;
 use crate::proxy::openai_compat::FormatTransform;
-use crate::proxy::request_detail::RequestDetailSnapshot;
 use crate::proxy::request_body::ReplayableBody;
+use crate::proxy::request_detail::RequestDetailSnapshot;
 use crate::proxy::server_helpers::log_debug_headers_body;
+use crate::proxy::UPSTREAM_NO_DATA_TIMEOUT;
 use crate::proxy::{config::UpstreamRuntime, ProxyState, RequestMeta};
-use crate::proxy::{UPSTREAM_NO_DATA_TIMEOUT};
 
 const DEBUG_UPSTREAM_LOG_LIMIT_BYTES: usize = usize::MAX;
 
@@ -345,7 +345,7 @@ async fn send_antigravity_with_fallback(
                 .client_for_proxy_url(upstream.proxy_url.as_deref())
                 .map_err(|message| {
                     AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
-            })?,
+                })?,
             &method,
             url,
             &request_headers,
@@ -593,9 +593,14 @@ async fn send_codex_attempt(
         DEBUG_UPSTREAM_LOG_LIMIT_BYTES,
     )
     .await;
-    let client = build_codex_client(attempt.proxy_url.as_deref(), attempt.http1_only).map_err(|message| {
-        CodexAttemptError::Fatal(AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message)))
-    })?;
+    let client = build_codex_client(attempt.proxy_url.as_deref(), attempt.http1_only).map_err(
+        |message| {
+            CodexAttemptError::Fatal(AttemptOutcome::Fatal(http::error_response(
+                StatusCode::BAD_GATEWAY,
+                message,
+            )))
+        },
+    )?;
     let upstream_body = request::build_upstream_body(
         provider,
         upstream,
@@ -606,15 +611,7 @@ async fn send_codex_attempt(
     )
     .await
     .map_err(CodexAttemptError::Fatal)?;
-    match send_request_once(
-        client,
-        method,
-        upstream_url,
-        request_headers,
-        upstream_body,
-    )
-    .await
-    {
+    match send_request_once(client, method, upstream_url, request_headers, upstream_body).await {
         Ok(result) => Ok(result),
         Err(SendFailure::Timeout) => Err(CodexAttemptError::Fatal(handle_upstream_timeout(
             state,
@@ -889,10 +886,7 @@ fn map_upstream_error(
         error_message.clone(),
         start_time,
     );
-    AttemptOutcome::Fatal(http::error_response(
-        StatusCode::BAD_GATEWAY,
-        error_message,
-    ))
+    AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, error_message))
 }
 
 fn should_refresh_kiro(provider: &str, response: &reqwest::Response) -> bool {
@@ -915,7 +909,5 @@ async fn refresh_kiro_account(
         .kiro_accounts
         .refresh_account(account_id)
         .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
-        })
+        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))
 }

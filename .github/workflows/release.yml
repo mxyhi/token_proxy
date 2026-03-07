@@ -100,7 +100,7 @@ jobs:
 
   stable_release:
     name: Release (${{ matrix.platform }} / ${{ matrix.target }})
-    needs: stable_tag
+    needs: [stable_tag, stable_release_bootstrap]
     if: needs.stable_tag.outputs.tag != ''
     runs-on: ${{ matrix.platform }}
     permissions:
@@ -234,9 +234,56 @@ jobs:
           echo "Missing expected macOS (aarch64) updater assets after retries: ${missing[*]}" >&2
           exit 1
 
+  # 先创建 release 条目，再让桌面端与 CLI 并行上传资产。
+  # 这样可以彻底消除“tag 已推送但 release 尚未创建”这类竞态，
+  # 同时保留 CLI 与桌面端并行构建的吞吐。
+  stable_release_bootstrap:
+    name: Bootstrap GitHub Release
+    needs: stable_tag
+    if: needs.stable_tag.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Ensure GitHub Release exists
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ needs.stable_tag.outputs.tag }}
+          RELEASE_NAME: Release ${{ needs.stable_tag.outputs.version }}
+          RELEASE_BODY: ${{ needs.stable_tag.outputs.release_notes }}
+        with:
+          script: |
+            const tag = process.env.RELEASE_TAG;
+
+            try {
+              const { data } = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag,
+              });
+              core.info(`Release ${tag} already exists (#${data.id}).`);
+              return;
+            } catch (error) {
+              if (error.status !== 404) {
+                throw error;
+              }
+            }
+
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: tag,
+              name: process.env.RELEASE_NAME,
+              body: process.env.RELEASE_BODY ?? "",
+              draft: false,
+              prerelease: false,
+            });
+
+            core.info(`Release ${tag} created (#${data.id}) before parallel asset uploads.`);
+
   stable_cli_release:
     name: Release CLI (${{ matrix.platform }} / ${{ matrix.target }})
-    needs: stable_tag
+    needs: [stable_tag, stable_release_bootstrap]
     if: needs.stable_tag.outputs.tag != ''
     runs-on: ${{ matrix.platform }}
     permissions:
@@ -303,13 +350,6 @@ jobs:
           Compress-Archive -Path "target/$env:TARGET/release/token-proxy.exe" -DestinationPath "dist/cli/$assetName" -Force
           "asset_path=dist/cli/$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "asset_name=$assetName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-
-      # GitHub Release 由桌面端 tauri-action 创建；CLI job 可以并行构建，
-      # 但上传前需要等待 release 已存在，避免并发下偶发找不到 tag。
-      - name: Wait for GitHub Release
-        uses: ./.github/actions/wait-for-release
-        with:
-          tag: ${{ needs.stable_tag.outputs.tag }}
 
       - name: Upload CLI archive
         if: runner.os != 'Windows'

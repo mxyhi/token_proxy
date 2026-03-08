@@ -1,3 +1,6 @@
+import type { ReactElement } from "react";
+
+import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { Ban, Check, Columns3, Copy, Eye, EyeOff, Pencil, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   getUpstreamLabel,
   toMaskedApiKey,
@@ -36,9 +40,36 @@ type UpstreamsToolbarProps = {
 const UPSTREAM_STRATEGY_VALUES: ReadonlySet<string> = new Set(
   UPSTREAM_STRATEGIES.map((strategy) => strategy.value)
 );
+const CELL_PLACEHOLDER = "—";
+const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 
 function toUpstreamStrategy(value: string): UpstreamStrategy | null {
   return UPSTREAM_STRATEGY_VALUES.has(value) ? (value as UpstreamStrategy) : null;
+}
+
+type CellTooltipProps = {
+  content: string;
+  disabled?: boolean;
+  children: ReactElement;
+};
+
+function shouldDisableTooltip(content: string) {
+  const trimmed = content.trim();
+  return trimmed.length === 0 || trimmed === CELL_PLACEHOLDER;
+}
+
+function CellTooltip({ content, disabled, children }: CellTooltipProps) {
+  if (disabled || shouldDisableTooltip(content)) {
+    return children;
+  }
+  return (
+    <TooltipPrimitive.Root>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="top" className={TOOLTIP_CONTENT_CLASS}>
+        {content}
+      </TooltipContent>
+    </TooltipPrimitive.Root>
+  );
 }
 
 export function UpstreamsToolbar({
@@ -141,10 +172,13 @@ type CodexAccountMap = Map<string, CodexAccountSummary>;
 type AntigravityAccountMap = Map<string, AntigravityAccountSummary>;
 
 function renderTextCell(value: string, placeholder: string) {
-  return value.trim() ? (
-    <span className="truncate text-foreground">{value}</span>
-  ) : (
-    <span className="truncate text-muted-foreground">{placeholder}</span>
+  const trimmed = value.trim();
+  return (
+    <CellTooltip content={trimmed} disabled={!trimmed}>
+      <span className={trimmed ? "block w-full truncate text-foreground" : "block w-full truncate text-muted-foreground"}>
+        {trimmed || placeholder}
+      </span>
+    </CellTooltip>
   );
 }
 
@@ -167,58 +201,50 @@ function renderAccountCell(
   if (provider === "kiro") {
     const accountId = upstream.kiroAccountId.trim();
     if (!accountId) {
-      return <span className="truncate text-muted-foreground">{m.kiro_account_unset()}</span>;
+      return renderTextCell("", m.kiro_account_unset());
     }
     const account = kiroAccounts.get(accountId);
     if (!account) {
-      return <span className="truncate text-muted-foreground">{m.kiro_account_missing()}</span>;
+      return renderTextCell("", m.kiro_account_missing());
     }
-    return <span className="truncate text-foreground">{account.account_id}</span>;
+    return renderTextCell(account.account_id, m.kiro_account_unset());
   }
   if (provider === "codex") {
     const accountId = upstream.codexAccountId.trim();
     if (!accountId) {
-      return <span className="truncate text-muted-foreground">{m.codex_account_unset()}</span>;
+      return renderTextCell("", m.codex_account_unset());
     }
     const account = codexAccounts.get(accountId);
     if (!account) {
-      return <span className="truncate text-muted-foreground">{m.codex_account_missing()}</span>;
+      return renderTextCell("", m.codex_account_missing());
     }
     const label = account.email?.trim() ? account.email : account.account_id;
-    return <span className="truncate text-foreground">{label}</span>;
+    return renderTextCell(label, m.codex_account_unset());
   }
   if (provider === "antigravity") {
     const accountId = upstream.antigravityAccountId.trim();
     if (!accountId) {
-      return <span className="truncate text-muted-foreground">{m.antigravity_account_unset()}</span>;
+      return renderTextCell("", m.antigravity_account_unset());
     }
     const account = antigravityAccounts.get(accountId);
     if (!account) {
-      return <span className="truncate text-muted-foreground">{m.antigravity_account_missing()}</span>;
+      return renderTextCell("", m.antigravity_account_missing());
     }
     const label = account.email?.trim() ? account.email : account.account_id;
-    return <span className="truncate text-foreground">{label}</span>;
+    return renderTextCell(label, m.antigravity_account_unset());
   }
-  return <span className="truncate text-muted-foreground">—</span>;
+  return renderTextCell("", CELL_PLACEHOLDER);
 }
 
 function renderApiKeyCell(upstream: UpstreamForm, showApiKeys: boolean) {
   const value = showApiKeys ? upstream.apiKey : toMaskedApiKey(upstream.apiKey);
-  return value.trim() ? (
-    <span className="truncate text-foreground">{value}</span>
-  ) : (
-    <span className="truncate text-muted-foreground">{m.common_optional()}</span>
-  );
+  return renderTextCell(value, m.common_optional());
 }
 
 function renderProxyUrlCell(upstream: UpstreamForm, showApiKeys: boolean) {
   const rawValue = upstream.proxyUrl;
   const value = showApiKeys ? rawValue : toMaskedProxyUrl(rawValue);
-  return value.trim() ? (
-    <span className="truncate text-foreground">{value}</span>
-  ) : (
-    <span className="truncate text-muted-foreground">{m.upstreams_proxy_direct()}</span>
-  );
+  return renderTextCell(value, m.upstreams_proxy_direct());
 }
 
 function renderUpstreamCell(
@@ -364,7 +390,7 @@ function UpstreamsTableRow({
           key={column.id}
           className={["px-3 py-2 align-top", column.cellClassName].filter(Boolean).join(" ")}
         >
-          <div className="flex h-8 items-center">
+          <div className="flex h-8 min-w-0 items-center">
             {renderUpstreamCell(
               column.id,
               upstream,
@@ -449,30 +475,32 @@ export function UpstreamsTable({
 }: UpstreamsTableProps) {
   const sortedUpstreams = sortUpstreamsByPriority(upstreams);
   return (
-    <div className="overflow-x-auto rounded-md border border-border/60 bg-background/60">
-      <table className="w-full border-collapse text-sm">
-        <UpstreamsTableHeader columns={columns} />
-        <tbody>
-          {sortedUpstreams.map((entry, displayIndex) => (
-            <UpstreamsTableRow
-              key={entry.upstreamIndex}
-              upstream={entry.upstream}
-              upstreamIndex={entry.upstreamIndex}
-              displayIndex={displayIndex}
-              columns={columns}
-              showApiKeys={showApiKeys}
-              kiroAccounts={kiroAccounts}
-              codexAccounts={codexAccounts}
-              antigravityAccounts={antigravityAccounts}
-              disableDelete={disableDelete}
-              onEdit={onEdit}
-              onCopy={onCopy}
-              onToggleEnabled={onToggleEnabled}
-              onDelete={onDelete}
-            />
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <TooltipProvider>
+      <div className="overflow-x-auto rounded-md border border-border/60 bg-background/60">
+        <table className="w-full border-collapse text-sm">
+          <UpstreamsTableHeader columns={columns} />
+          <tbody>
+            {sortedUpstreams.map((entry, displayIndex) => (
+              <UpstreamsTableRow
+                key={entry.upstreamIndex}
+                upstream={entry.upstream}
+                upstreamIndex={entry.upstreamIndex}
+                displayIndex={displayIndex}
+                columns={columns}
+                showApiKeys={showApiKeys}
+                kiroAccounts={kiroAccounts}
+                codexAccounts={codexAccounts}
+                antigravityAccounts={antigravityAccounts}
+                disableDelete={disableDelete}
+                onEdit={onEdit}
+                onCopy={onCopy}
+                onToggleEnabled={onToggleEnabled}
+                onDelete={onDelete}
+              />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </TooltipProvider>
   );
 }

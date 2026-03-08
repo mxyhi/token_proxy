@@ -158,7 +158,7 @@ async function writeConfigIfDirty({
     return { saved: false, error: "" };
   }
   try {
-    const status = await invoke<ProxyServiceStatus>("write_proxy_config", {
+    const status = await invoke<ProxyServiceStatus>("save_proxy_config", {
       config: currentPayload,
     });
     setProxyServiceStatus(status);
@@ -245,8 +245,10 @@ async function saveConfigImpl({
 
   if (configResult.saved || autoStartResult.changed) {
     setStatus("saved");
+    setStatusMessage("");
   } else {
     setStatus("idle");
+    setStatusMessage("");
   }
 }
 

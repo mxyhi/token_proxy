@@ -51,10 +51,13 @@ impl UpstreamSelectorRuntime {
     }
 
     pub(crate) fn mark_retryable_failure(&self, provider: &str, upstream_id: &str) {
+        let Some(until) = Instant::now().checked_add(self.retryable_failure_cooldown) else {
+            return;
+        };
         self.mark_cooldown_until(
             provider,
             upstream_id,
-            Instant::now() + self.retryable_failure_cooldown,
+            until,
         );
     }
 

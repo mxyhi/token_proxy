@@ -63,6 +63,7 @@ type AppViewProps = {
   proxyServiceMessage: string;
   status: "idle" | "loading" | "saving" | "saved" | "error";
   statusMessage: string;
+  canSave: boolean;
   isDirty: boolean;
   validation: { valid: boolean; message: string };
   onToggleLocalKey: () => void;
@@ -76,6 +77,7 @@ type AppViewProps = {
     index: number,
     patch: Partial<ConfigForm["upstreams"][number]>
   ) => void;
+  onSave: () => void;
   onReload: () => void;
   onProxyServiceRefresh: () => void;
   onProxyServiceStart: () => void;
@@ -98,7 +100,8 @@ function ConfigToolbar({
   onReload,
 }: ConfigToolbarProps) {
   const isLoading = status === "loading";
-  const canReload = status !== "saving" && !isLoading;
+  const isSaving = status === "saving";
+  const canReload = !isSaving && !isLoading;
 
   return (
     <div
@@ -161,19 +164,39 @@ function ConfigToolbar({
 }
 
 type StatusAlertProps = {
+  status: AppViewProps["status"];
   statusMessage: string;
+  canSave: boolean;
+  isDirty: boolean;
+  onSave: () => void;
 };
 
-function StatusAlert({ statusMessage }: StatusAlertProps) {
-  if (!statusMessage) {
+function StatusAlert({
+  status,
+  statusMessage,
+  canSave,
+  isDirty,
+  onSave,
+}: StatusAlertProps) {
+  if (status !== "error" || !statusMessage) {
     return null;
   }
+
+  const canRetrySave = isDirty && canSave;
+
   return (
     <Alert variant="destructive" className="mb-4">
       <AlertCircle className="size-4" aria-hidden="true" />
-      <div>
-        <AlertTitle>{m.config_request_failed_title()}</AlertTitle>
-        <AlertDescription>{statusMessage}</AlertDescription>
+      <div className="flex flex-1 items-start justify-between gap-3">
+        <div>
+          <AlertTitle>{m.config_request_failed_title()}</AlertTitle>
+          <AlertDescription>{statusMessage}</AlertDescription>
+        </div>
+        {canRetrySave ? (
+          <Button type="button" variant="outline" size="sm" onClick={onSave}>
+            {m.config_retry_save()}
+          </Button>
+        ) : null}
       </div>
     </Alert>
   );
@@ -276,7 +299,13 @@ function ConfigSectionContent({
         isDirty={props.isDirty}
         onReload={props.onReload}
       />
-      <StatusAlert statusMessage={props.statusMessage} />
+      <StatusAlert
+        status={props.status}
+        statusMessage={props.statusMessage}
+        canSave={props.canSave}
+        isDirty={props.isDirty}
+        onSave={props.onSave}
+      />
       <ConfigSectionBody
         {...props}
         activeSectionId={activeSectionId}

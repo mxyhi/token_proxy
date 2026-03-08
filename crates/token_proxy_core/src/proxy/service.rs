@@ -44,6 +44,13 @@ pub struct ProxyServiceHandle {
     inner: Arc<ProxyService>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProxyConfigApplyBehavior {
+    SavedOnly,
+    Reload,
+    Restart,
+}
+
 impl ProxyServiceHandle {
     pub fn new() -> Self {
         Self {
@@ -69,6 +76,13 @@ impl ProxyServiceHandle {
 
     pub async fn reload(&self, ctx: &ProxyContext) -> Result<ProxyServiceStatus, String> {
         self.inner.reload(ctx).await
+    }
+
+    pub async fn reload_behavior(
+        &self,
+        ctx: &ProxyContext,
+    ) -> Result<ProxyConfigApplyBehavior, String> {
+        self.inner.reload_behavior(ctx).await
     }
 }
 
@@ -147,6 +161,15 @@ impl ProxyService {
         inner.refresh_if_finished().await;
         inner.reload(ctx).await?;
         Ok(inner.status())
+    }
+
+    async fn reload_behavior(
+        &self,
+        ctx: &ProxyContext,
+    ) -> Result<ProxyConfigApplyBehavior, String> {
+        let mut inner = self.inner.lock().await;
+        inner.refresh_if_finished().await;
+        inner.reload_behavior(ctx).await
     }
 }
 
@@ -248,35 +271,22 @@ impl ProxyServiceInner {
             return self.start(ctx).await;
         }
         let loaded_config = ProxyConfig::load(ctx.paths.as_ref()).await?;
+        let current_running_config = self.current_running_config().await;
         let addr = loaded_config.addr();
-        let current_addr = self
-            .running
+        let current_addr = current_running_config
             .as_ref()
-            .map(|running| running.addr.as_str())
+            .map(|(current_addr, _)| current_addr.as_str())
             .unwrap_or_default()
             .to_string();
 
         tracing::debug!(addr = %addr, current_addr = %current_addr, "proxy reload config loaded");
-        if addr != current_addr {
-            // host/port 变更无法热更新监听地址；退化为安全重启。
+        if classify_reload_behavior(current_running_config, &loaded_config)
+            == ProxyConfigApplyBehavior::Restart
+        {
             tracing::info!(
                 addr = %addr,
                 current_addr = %current_addr,
-                "proxy reload detected addr change, restarting"
-            );
-            return self.restart(ctx).await;
-        }
-        let current_max_request_body_bytes = if let Some(running) = self.running.as_ref() {
-            let guard = running.state_handle.read().await;
-            guard.config.max_request_body_bytes
-        } else {
-            loaded_config.max_request_body_bytes
-        };
-        if loaded_config.max_request_body_bytes != current_max_request_body_bytes {
-            tracing::info!(
-                new_max_request_body_bytes = loaded_config.max_request_body_bytes,
-                current_max_request_body_bytes = current_max_request_body_bytes,
-                "proxy reload detected body limit change, restarting"
+                "proxy reload detected restart-required config change"
             );
             return self.restart(ctx).await;
         }
@@ -296,6 +306,21 @@ impl ProxyServiceInner {
             "proxy reload applied"
         );
         Ok(())
+    }
+
+    async fn reload_behavior(
+        &mut self,
+        ctx: &ProxyContext,
+    ) -> Result<ProxyConfigApplyBehavior, String> {
+        let loaded_config = ProxyConfig::load(ctx.paths.as_ref()).await?;
+        let current_running_config = self.current_running_config().await;
+        Ok(classify_reload_behavior(current_running_config, &loaded_config))
+    }
+
+    async fn current_running_config(&self) -> Option<(String, usize)> {
+        let running = self.running.as_ref()?;
+        let guard = running.state_handle.read().await;
+        Some((running.addr.clone(), guard.config.max_request_body_bytes))
     }
 
     async fn finish_task(&mut self, mut running: RunningProxy) {
@@ -379,3 +404,22 @@ async fn build_proxy_state(
         antigravity_accounts,
     }))
 }
+
+fn classify_reload_behavior(
+    current_running_config: Option<(String, usize)>,
+    loaded_config: &ProxyConfig,
+) -> ProxyConfigApplyBehavior {
+    let Some((current_addr, current_max_request_body_bytes)) = current_running_config else {
+        return ProxyConfigApplyBehavior::SavedOnly;
+    };
+    if loaded_config.addr() != current_addr
+        || loaded_config.max_request_body_bytes != current_max_request_body_bytes
+    {
+        return ProxyConfigApplyBehavior::Restart;
+    }
+    ProxyConfigApplyBehavior::Reload
+}
+
+#[cfg(test)]
+#[path = "service.test.rs"]
+mod tests;

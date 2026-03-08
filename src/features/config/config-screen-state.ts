@@ -247,7 +247,7 @@ export function useConfigDerived(
     return segments.join("|");
   }, [autoStartDirty, autoStartEnabled, configDirty, currentPayload]);
 
-  const canAutoSave = status !== "saving" && validation.valid && isDirty;
+  const canSave = status !== "saving" && validation.valid && isDirty;
 
   return {
     validation,
@@ -257,7 +257,8 @@ export function useConfigDerived(
     autoSaveKey,
     isDirty,
     statusBadge,
-    canAutoSave,
+    canSave,
+    canAutoSave: canSave,
     providerOptions,
   };
 }

@@ -26,7 +26,7 @@
 ## 快速上手（macOS）
 1) 安装：把 `Token Proxy.app` 放到 `/Applications`。若被拦截，执行 `xattr -cr /Applications/Token\ Proxy.app`。
 2) 启动应用，代理会自动运行。
-3) 打开 **Config File** 标签，编辑并保存（写入 Tauri 配置目录下的 `config.jsonc`）。默认配置可用，只需填入上游 API Key。
+3) 打开 **Config File** 标签，编辑并保存（写入 Tauri 配置目录下的 `config.jsonc`）。默认配置可用，只需填入上游 API Key。若代理正在运行，保存后会按需自动 reload 或重启。
 4) 发请求（本地鉴权示例）：
 ```bash
 curl -X POST \
@@ -100,7 +100,7 @@ pnpm exec tsc --noEmit
 | `app_proxy_url` | `null` | 应用更新 & 上游可复用的代理；支持 `http/https/socks5/socks5h`；可在 upstream `proxy_url` 用 `"$app_proxy_url"` 占位 |
 | `log_level` | `silent` | `silent|error|warn|info|debug|trace`；debug/trace 会记录请求头（鉴权打码）与小体积请求体（≤64KiB）；release 强制 `silent` |
 | `max_request_body_bytes` | `20971520` (20 MiB) | 0 表示回落到默认；保护入站体积 |
-| `retryable_failure_cooldown_secs` | `15` | 对适合短时降级的可重试失败施加冷却窗口；`0` 表示关闭冷却。保存配置后会重置当前冷却状态 |
+| `retryable_failure_cooldown_secs` | `15` | 对适合短时降级的可重试失败施加冷却窗口；`0` 表示关闭冷却。重载或重启运行中的代理会重置当前冷却状态 |
 | `tray_token_rate.enabled` | `true` | macOS 托盘实时速率；其他平台无害 |
 | `tray_token_rate.format` | `split` | `combined`(总数) / `split`(↑入 ↓出) / `both`(总数 | ↑入 ↓出) |
 | `upstream_strategy` | `priority_fill_first` | `priority_fill_first` 默认先填满高优先级；`priority_round_robin` 在同组内轮询 |

@@ -156,7 +156,7 @@ async fn write_opencode_config(
 }
 
 #[tauri::command]
-async fn write_proxy_config(
+async fn save_proxy_config(
     app: tauri::AppHandle,
     proxy_service: tauri::State<'_, ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,
@@ -164,14 +164,14 @@ async fn write_proxy_config(
     app_proxy_state: tauri::State<'_, app_proxy::AppProxyState>,
     config: proxy::config::ProxyConfigFile,
 ) -> Result<ProxyServiceStatus, String> {
-    tracing::debug!("write_proxy_config start");
+    tracing::debug!("save_proxy_config start");
     let start = Instant::now();
-    tracing::debug!("write_proxy_config apply_config start");
+    tracing::debug!("save_proxy_config apply_config start");
     let apply_start = Instant::now();
     tray_state.apply_config(&config.tray_token_rate).await;
     tracing::debug!(
         elapsed_ms = apply_start.elapsed().as_millis(),
-        "write_proxy_config apply_config done"
+        "save_proxy_config apply_config done"
     );
     let log_level = config.log_level;
     let app_proxy_url = proxy::config::app_proxy_url_from_config(&config)
@@ -179,38 +179,28 @@ async fn write_proxy_config(
         .flatten();
     let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
     if let Err(err) = proxy::config::write_config(paths.inner().as_ref(), config).await {
-        tracing::error!(error = %err, "write_proxy_config save failed");
+        tracing::error!(error = %err, "save_proxy_config save failed");
         tray_state.apply_error("保存失败", &err);
         return Err(err);
     }
     tracing::debug!(
         elapsed_ms = start.elapsed().as_millis(),
-        "write_proxy_config saved"
+        "save_proxy_config saved"
     );
-    let reload_start = Instant::now();
     logging_state.apply_level(log_level);
     app_proxy::set(&app_proxy_state, app_proxy_url).await;
     let proxy_context = app.state::<proxy::service::ProxyContext>();
-    match proxy_service.reload(proxy_context.inner()).await {
-        Ok(status) => {
-            tracing::debug!(
-                elapsed_ms = reload_start.elapsed().as_millis(),
-                state = ?status.state,
-                "write_proxy_config reloaded"
-            );
-            tray_state.apply_status(&status);
-            Ok(status)
+    let status = match proxy_service.reload_behavior(proxy_context.inner()).await? {
+        proxy::service::ProxyConfigApplyBehavior::SavedOnly => proxy_service.status().await,
+        proxy::service::ProxyConfigApplyBehavior::Reload => {
+            proxy_service.reload(proxy_context.inner()).await?
         }
-        Err(err) => {
-            tracing::error!(
-                elapsed_ms = reload_start.elapsed().as_millis(),
-                error = %err,
-                "write_proxy_config reload failed"
-            );
-            tray_state.apply_error("重载失败", &err);
-            Err(err)
+        proxy::service::ProxyConfigApplyBehavior::Restart => {
+            proxy_service.restart(proxy_context.inner()).await?
         }
-    }
+    };
+    tray_state.apply_status(&status);
+    Ok(status)
 }
 
 #[tauri::command]
@@ -763,7 +753,7 @@ pub fn run() {
             write_claude_code_settings,
             write_codex_config,
             write_opencode_config,
-            write_proxy_config,
+            save_proxy_config,
             read_dashboard_snapshot,
             read_request_log_detail,
             read_request_detail_capture,

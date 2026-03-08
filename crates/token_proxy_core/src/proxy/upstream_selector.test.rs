@@ -70,3 +70,16 @@ fn zero_retryable_failure_cooldown_disables_cross_request_cooling() {
 
     assert_eq!(order, vec![0, 1]);
 }
+
+#[test]
+fn extreme_retryable_failure_cooldown_does_not_panic() {
+    let selector = UpstreamSelectorRuntime::new_with_cooldown(Duration::from_secs(u64::MAX));
+    let items = vec![runtime("a"), runtime("b")];
+
+    let result = std::panic::catch_unwind(|| {
+        selector.mark_retryable_failure("responses", "a");
+        selector.order_group(UpstreamStrategy::PriorityFillFirst, "responses", &items, 0)
+    });
+
+    assert!(result.is_ok());
+}

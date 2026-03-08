@@ -123,6 +123,7 @@ fn config_with_runtime_upstreams(
         local_api_key: None,
         log_level: LogLevel::Silent,
         max_request_body_bytes: 20 * 1024 * 1024,
+        retryable_failure_cooldown: std::time::Duration::from_secs(15),
         upstream_strategy: UpstreamStrategy::PriorityRoundRobin,
         upstreams: provider_map,
         kiro_preferred_endpoint: None,
@@ -263,12 +264,16 @@ async fn build_test_state_handle(config: ProxyConfig, data_dir: PathBuf) -> Prox
             }
         }
     }
+    let retryable_failure_cooldown = config.retryable_failure_cooldown;
     let state = Arc::new(ProxyState {
         config,
         http_clients: super::super::http_client::ProxyHttpClients::new().expect("http clients"),
         log: Arc::new(super::super::log::LogWriter::new(None)),
         cursors,
-        upstream_selector: super::super::upstream_selector::UpstreamSelectorRuntime::new(),
+        upstream_selector:
+            super::super::upstream_selector::UpstreamSelectorRuntime::new_with_cooldown(
+                retryable_failure_cooldown,
+            ),
         request_detail: Arc::new(super::super::request_detail::RequestDetailCapture::new(
             None,
         )),
@@ -417,6 +422,48 @@ fn responses_request_falls_back_from_403_to_codex() {
 }
 
 #[test]
+fn responses_request_falls_back_from_401_to_codex() {
+    run_async(assert_responses_retry_fallback_status(
+        StatusCode::UNAUTHORIZED,
+    ));
+}
+
+#[test]
+fn responses_request_falls_back_from_404_to_codex() {
+    run_async(assert_responses_retry_fallback_status(
+        StatusCode::NOT_FOUND,
+    ));
+}
+
+#[test]
+fn responses_request_falls_back_from_408_to_codex() {
+    run_async(assert_responses_retry_fallback_status(
+        StatusCode::REQUEST_TIMEOUT,
+    ));
+}
+
+#[test]
+fn responses_request_falls_back_from_422_to_codex() {
+    run_async(assert_responses_retry_fallback_status(
+        StatusCode::UNPROCESSABLE_ENTITY,
+    ));
+}
+
+#[test]
+fn responses_request_falls_back_from_504_to_codex() {
+    run_async(assert_responses_retry_fallback_status(
+        StatusCode::GATEWAY_TIMEOUT,
+    ));
+}
+
+#[test]
+fn responses_request_falls_back_from_524_to_codex() {
+    run_async(assert_responses_retry_fallback_status(
+        StatusCode::from_u16(524).expect("524"),
+    ));
+}
+
+#[test]
 fn responses_request_skips_recently_failed_same_provider_upstream() {
     run_async(async {
         let primary = spawn_mock_upstream(
@@ -495,6 +542,90 @@ fn responses_request_skips_recently_failed_same_provider_upstream() {
             primary_requests.len(),
             1,
             "primary upstream should be cooled down after the first retryable failure"
+        );
+        assert_eq!(secondary_requests.len(), 2);
+    });
+}
+
+#[test]
+fn responses_request_cooldowns_same_provider_upstream_after_401() {
+    run_async(async {
+        let primary = spawn_mock_upstream(
+            StatusCode::UNAUTHORIZED,
+            json!({
+                "error": { "message": "primary unauthorized" }
+            }),
+        )
+        .await;
+        let secondary = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_from_secondary",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from secondary" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+        )
+        .await;
+
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-primary",
+                primary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-secondary",
+                secondary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        config.upstream_strategy = UpstreamStrategy::PriorityFillFirst;
+
+        let data_dir = next_test_data_dir("responses_same_provider_cooldown_401");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+
+        let (first_status, first_json) = send_responses_request(state.clone()).await;
+        let (second_status, second_json) = send_responses_request(state).await;
+
+        let primary_requests = primary.requests();
+        let secondary_requests = secondary.requests();
+
+        primary.abort();
+        secondary.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(first_status, StatusCode::OK);
+        assert_eq!(second_status, StatusCode::OK);
+        assert_eq!(
+            first_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from secondary")
+        );
+        assert_eq!(
+            second_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from secondary")
+        );
+        assert_eq!(
+            primary_requests.len(),
+            1,
+            "401 should cool down the upstream to avoid repeatedly hitting the same invalid account"
         );
         assert_eq!(secondary_requests.len(), 2);
     });
@@ -581,6 +712,104 @@ fn responses_request_does_not_cooldown_same_provider_upstream_after_400() {
             "400 should stay retryable for same-request fallback, but must not cool down the upstream"
         );
         assert_eq!(secondary_requests.len(), 2);
+    });
+}
+
+#[test]
+fn responses_request_reload_resets_existing_cooldown_and_applies_new_duration() {
+    run_async(async {
+        let primary = spawn_mock_upstream(
+            StatusCode::UNAUTHORIZED,
+            json!({
+                "error": { "message": "primary unauthorized" }
+            }),
+        )
+        .await;
+        let secondary = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_from_secondary",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from secondary" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+        )
+        .await;
+
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-primary",
+                primary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-secondary",
+                secondary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        config.upstream_strategy = UpstreamStrategy::PriorityFillFirst;
+        config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
+
+        let data_dir = next_test_data_dir("responses_same_provider_reload_resets_cooldown");
+        let state = build_test_state_handle(config.clone(), data_dir.clone()).await;
+
+        let _ = send_responses_request(state.clone()).await;
+        let _ = send_responses_request(state.clone()).await;
+
+        let primary_requests_before_reload = primary.requests();
+        assert_eq!(
+            primary_requests_before_reload.len(),
+            1,
+            "pre-reload second request should skip cooled-down upstream"
+        );
+
+        let mut reloaded_config = config;
+        reloaded_config.retryable_failure_cooldown = std::time::Duration::ZERO;
+        let reloaded_state_handle =
+            build_test_state_handle(reloaded_config, data_dir.clone()).await;
+        let reloaded_state = {
+            let guard = reloaded_state_handle.read().await;
+            guard.clone()
+        };
+        {
+            let mut guard = state.write().await;
+            *guard = reloaded_state;
+        }
+
+        let _ = send_responses_request(state.clone()).await;
+        let _ = send_responses_request(state).await;
+
+        let primary_requests = primary.requests();
+        let secondary_requests = secondary.requests();
+
+        primary.abort();
+        secondary.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(
+            primary_requests.len(),
+            3,
+            "reload should clear old cooldowns, and zero cooldown should allow primary to be retried on every later request"
+        );
+        assert_eq!(secondary_requests.len(), 4);
     });
 }
 

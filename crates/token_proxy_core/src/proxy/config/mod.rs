@@ -5,6 +5,7 @@ mod normalize;
 mod types;
 
 use crate::paths::TokenProxyPaths;
+use std::time::Duration;
 
 const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 20 * 1024 * 1024;
 
@@ -67,6 +68,7 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
         local_api_key: config.local_api_key,
         log_level,
         max_request_body_bytes,
+        retryable_failure_cooldown: Duration::from_secs(config.retryable_failure_cooldown_secs),
         upstream_strategy: config.upstream_strategy,
         upstreams,
         kiro_preferred_endpoint: config.kiro_preferred_endpoint,

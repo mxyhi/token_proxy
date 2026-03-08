@@ -8,14 +8,49 @@ fn retryable_status_matches_proxy_policy() {
     assert!(is_retryable_status(StatusCode::TOO_MANY_REQUESTS));
     assert!(is_retryable_status(StatusCode::TEMPORARY_REDIRECT));
     assert!(is_retryable_status(StatusCode::INTERNAL_SERVER_ERROR));
+    assert!(is_retryable_status(StatusCode::UNAUTHORIZED));
+    assert!(is_retryable_status(StatusCode::NOT_FOUND));
+    assert!(is_retryable_status(StatusCode::REQUEST_TIMEOUT));
+    assert!(is_retryable_status(StatusCode::UNPROCESSABLE_ENTITY));
+    assert!(is_retryable_status(StatusCode::GATEWAY_TIMEOUT));
+    assert!(is_retryable_status(
+        StatusCode::from_u16(524).expect("524")
+    ));
+}
 
-    // Exclude 504/524 timeouts from retries.
-    assert!(!is_retryable_status(StatusCode::GATEWAY_TIMEOUT));
-    assert!(!is_retryable_status(
+#[test]
+fn cooldown_status_matches_proxy_policy() {
+    assert!(result::should_cooldown_retryable_status(
+        StatusCode::UNAUTHORIZED
+    ));
+    assert!(result::should_cooldown_retryable_status(
+        StatusCode::FORBIDDEN
+    ));
+    assert!(result::should_cooldown_retryable_status(
+        StatusCode::REQUEST_TIMEOUT
+    ));
+    assert!(result::should_cooldown_retryable_status(
+        StatusCode::TOO_MANY_REQUESTS
+    ));
+    assert!(result::should_cooldown_retryable_status(
+        StatusCode::GATEWAY_TIMEOUT
+    ));
+    assert!(result::should_cooldown_retryable_status(
         StatusCode::from_u16(524).expect("524")
     ));
 
-    assert!(!is_retryable_status(StatusCode::UNAUTHORIZED));
+    assert!(!result::should_cooldown_retryable_status(
+        StatusCode::BAD_REQUEST
+    ));
+    assert!(!result::should_cooldown_retryable_status(
+        StatusCode::NOT_FOUND
+    ));
+    assert!(!result::should_cooldown_retryable_status(
+        StatusCode::UNPROCESSABLE_ENTITY
+    ));
+    assert!(!result::should_cooldown_retryable_status(
+        StatusCode::TEMPORARY_REDIRECT
+    ));
 }
 
 #[test]

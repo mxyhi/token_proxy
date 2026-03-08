@@ -63,20 +63,19 @@ pub(super) fn is_retryable_error(err: &reqwest::Error) -> bool {
 }
 
 pub(super) fn is_retryable_status(status: StatusCode) -> bool {
-    // 基于 new-api 的重试策略：400/429/307/5xx（排除 504/524）；额外允许 403 触发 fallback。
-    if status == StatusCode::BAD_REQUEST
-        || status == StatusCode::FORBIDDEN
-        || status == StatusCode::TOO_MANY_REQUESTS
-        || status == StatusCode::TEMPORARY_REDIRECT
-    {
-        return true;
-    }
-    if status == StatusCode::GATEWAY_TIMEOUT {
-        return false;
-    }
-    if status.as_u16() == 524 {
-        // Cloudflare timeout.
-        return false;
-    }
-    status.is_server_error()
+    // 为了尽量提供“无反馈”的自动切换体验，以下错误都允许继续尝试下一个渠道：
+    // - 显式可回退的鉴权/路由/请求超时/语义校验错误：401/404/408/422
+    // - 配额/权限/重定向：400/403/429/307
+    // - 所有 5xx，包括 504 与 Cloudflare 524。
+    matches!(
+        status,
+        StatusCode::BAD_REQUEST
+            | StatusCode::UNAUTHORIZED
+            | StatusCode::FORBIDDEN
+            | StatusCode::NOT_FOUND
+            | StatusCode::REQUEST_TIMEOUT
+            | StatusCode::UNPROCESSABLE_ENTITY
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::TEMPORARY_REDIRECT
+    ) || status.is_server_error()
 }

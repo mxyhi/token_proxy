@@ -365,11 +365,13 @@ async fn build_proxy_state(
     let codex_accounts = ctx.codex_accounts.clone();
     let antigravity_accounts = ctx.antigravity_accounts.clone();
     Ok(Arc::new(ProxyState {
+        upstream_selector: super::upstream_selector::UpstreamSelectorRuntime::new_with_cooldown(
+            config.retryable_failure_cooldown,
+        ),
         config,
         http_clients,
         log,
         cursors,
-        upstream_selector: super::upstream_selector::UpstreamSelectorRuntime::new(),
         request_detail,
         token_rate,
         kiro_accounts,

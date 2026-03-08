@@ -22,7 +22,7 @@ fn runtime(id: &str) -> UpstreamRuntime {
 
 #[test]
 fn cooled_upstream_moves_behind_ready_candidates() {
-    let selector = UpstreamSelectorRuntime::new();
+    let selector = UpstreamSelectorRuntime::new_with_cooldown(Duration::from_secs(15));
     let items = vec![runtime("a"), runtime("b"), runtime("c")];
 
     selector.mark_cooldown_until("responses", "a", Instant::now() + Duration::from_secs(10));
@@ -34,7 +34,7 @@ fn cooled_upstream_moves_behind_ready_candidates() {
 
 #[test]
 fn all_cooled_upstreams_probe_earliest_expiry_first() {
-    let selector = UpstreamSelectorRuntime::new();
+    let selector = UpstreamSelectorRuntime::new_with_cooldown(Duration::from_secs(15));
     let items = vec![runtime("a"), runtime("b"), runtime("c")];
 
     selector.mark_cooldown_until("responses", "a", Instant::now() + Duration::from_secs(30));
@@ -48,11 +48,23 @@ fn all_cooled_upstreams_probe_earliest_expiry_first() {
 
 #[test]
 fn clear_cooldown_restores_base_order() {
-    let selector = UpstreamSelectorRuntime::new();
+    let selector = UpstreamSelectorRuntime::new_with_cooldown(Duration::from_secs(15));
     let items = vec![runtime("a"), runtime("b")];
 
     selector.mark_cooldown_until("responses", "a", Instant::now() + Duration::from_secs(10));
     selector.clear_cooldown("responses", "a");
+
+    let order = selector.order_group(UpstreamStrategy::PriorityFillFirst, "responses", &items, 0);
+
+    assert_eq!(order, vec![0, 1]);
+}
+
+#[test]
+fn zero_retryable_failure_cooldown_disables_cross_request_cooling() {
+    let selector = UpstreamSelectorRuntime::new_with_cooldown(Duration::ZERO);
+    let items = vec![runtime("a"), runtime("b")];
+
+    selector.mark_retryable_failure("responses", "a");
 
     let order = selector.order_group(UpstreamStrategy::PriorityFillFirst, "responses", &items, 0);
 

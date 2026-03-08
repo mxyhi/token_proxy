@@ -6,8 +6,6 @@ use std::{
 
 use super::{config::UpstreamRuntime, config::UpstreamStrategy};
 
-const RETRYABLE_FAILURE_COOLDOWN: Duration = Duration::from_secs(15);
-
 #[derive(Hash, PartialEq, Eq)]
 struct CooldownKey {
     provider: String,
@@ -23,14 +21,17 @@ impl CooldownKey {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct UpstreamSelectorRuntime {
+    retryable_failure_cooldown: Duration,
     cooldowns: Mutex<HashMap<CooldownKey, Instant>>,
 }
 
 impl UpstreamSelectorRuntime {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new_with_cooldown(retryable_failure_cooldown: Duration) -> Self {
+        Self {
+            retryable_failure_cooldown,
+            cooldowns: Mutex::new(HashMap::new()),
+        }
     }
 
     pub(crate) fn order_group(
@@ -53,7 +54,7 @@ impl UpstreamSelectorRuntime {
         self.mark_cooldown_until(
             provider,
             upstream_id,
-            Instant::now() + RETRYABLE_FAILURE_COOLDOWN,
+            Instant::now() + self.retryable_failure_cooldown,
         );
     }
 

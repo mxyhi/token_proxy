@@ -158,3 +158,10 @@ fn test_upstream_url() {
         "https://api.example.com/openai/v1/messages"
     );
 }
+
+#[test]
+fn proxy_config_file_defaults_retryable_failure_cooldown_to_15_seconds() {
+    let config = ProxyConfigFile::default();
+
+    assert_eq!(config.retryable_failure_cooldown_secs, 15);
+}

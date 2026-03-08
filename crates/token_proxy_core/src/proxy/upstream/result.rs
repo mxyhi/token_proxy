@@ -13,6 +13,18 @@ use crate::proxy::response::{build_proxy_response, build_proxy_response_buffered
 use crate::proxy::token_rate::TokenRateTracker;
 use crate::proxy::RequestMeta;
 
+pub(super) fn should_cooldown_retryable_status(status: StatusCode) -> bool {
+    // cooldown 只用于“更像上游账号/节点短时异常”的错误，避免把请求内容问题扩散到后续请求。
+    // 因此 400/404/422/307 虽然可在当前请求内换路重试，但不会跨请求冷却整个 upstream。
+    matches!(
+        status,
+        StatusCode::UNAUTHORIZED
+            | StatusCode::FORBIDDEN
+            | StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_MANY_REQUESTS
+    ) || status.is_server_error()
+}
+
 pub(super) async fn handle_upstream_result(
     upstream_res: Result<reqwest::Response, reqwest::Error>,
     meta: &RequestMeta,
@@ -45,9 +57,7 @@ pub(super) async fn handle_upstream_result(
                 message: format!("Upstream responded with {}", response.status()),
                 response: Some(response),
                 is_timeout: false,
-                should_cooldown: status == StatusCode::FORBIDDEN
-                    || status == StatusCode::TOO_MANY_REQUESTS
-                    || status.is_server_error(),
+                should_cooldown: should_cooldown_retryable_status(status),
             }
         }
         Ok(res) => {

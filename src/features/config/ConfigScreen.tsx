@@ -136,8 +136,11 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
   }, [loadConfig]);
 
   useEffect(() => {
+    if (!state.lastConfig) {
+      return;
+    }
     setAppProxyUrl(appProxyUrl);
-  }, [appProxyUrl, setAppProxyUrl]);
+  }, [appProxyUrl, setAppProxyUrl, state.lastConfig]);
 
   useEffect(() => {
     void refreshProxyStatus();

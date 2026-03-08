@@ -163,7 +163,7 @@ async fn save_proxy_config(
     logging_state: tauri::State<'_, logging::LoggingState>,
     app_proxy_state: tauri::State<'_, app_proxy::AppProxyState>,
     config: proxy::config::ProxyConfigFile,
-) -> Result<ProxyServiceStatus, String> {
+) -> Result<proxy::service::ProxyConfigSaveResult, String> {
     tracing::debug!("save_proxy_config start");
     let start = Instant::now();
     tracing::debug!("save_proxy_config apply_config start");
@@ -190,17 +190,12 @@ async fn save_proxy_config(
     logging_state.apply_level(log_level);
     app_proxy::set(&app_proxy_state, app_proxy_url).await;
     let proxy_context = app.state::<proxy::service::ProxyContext>();
-    let status = match proxy_service.reload_behavior(proxy_context.inner()).await? {
-        proxy::service::ProxyConfigApplyBehavior::SavedOnly => proxy_service.status().await,
-        proxy::service::ProxyConfigApplyBehavior::Reload => {
-            proxy_service.reload(proxy_context.inner()).await?
-        }
-        proxy::service::ProxyConfigApplyBehavior::Restart => {
-            proxy_service.restart(proxy_context.inner()).await?
-        }
-    };
-    tray_state.apply_status(&status);
-    Ok(status)
+    let result = proxy_service.apply_saved_config(proxy_context.inner()).await;
+    tray_state.apply_status(&result.status);
+    if let Some(error) = result.apply_error.as_deref() {
+        tray_state.apply_error("应用失败", error);
+    }
+    Ok(result)
 }
 
 #[tauri::command]

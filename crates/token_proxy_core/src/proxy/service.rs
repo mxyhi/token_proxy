@@ -84,6 +84,10 @@ impl ProxyServiceHandle {
     ) -> Result<ProxyConfigApplyBehavior, String> {
         self.inner.reload_behavior(ctx).await
     }
+
+    pub async fn apply_saved_config(&self, ctx: &ProxyContext) -> ProxyConfigSaveResult {
+        self.inner.apply_saved_config(ctx).await
+    }
 }
 
 #[derive(Clone, Serialize, Debug)]
@@ -100,6 +104,12 @@ pub struct ProxyServiceStatus {
     pub last_error: Option<String>,
 }
 
+#[derive(Clone, Serialize)]
+pub struct ProxyConfigSaveResult {
+    pub status: ProxyServiceStatus,
+    pub apply_error: Option<String>,
+}
+
 impl ProxyServiceStatus {
     fn stopped(last_error: Option<String>) -> Self {
         Self {
@@ -114,6 +124,22 @@ impl ProxyServiceStatus {
             state: ProxyServiceState::Running,
             addr: Some(addr),
             last_error,
+        }
+    }
+}
+
+impl ProxyConfigSaveResult {
+    fn success(status: ProxyServiceStatus) -> Self {
+        Self {
+            status,
+            apply_error: None,
+        }
+    }
+
+    fn apply_error(status: ProxyServiceStatus, error: String) -> Self {
+        Self {
+            status,
+            apply_error: Some(error),
         }
     }
 }
@@ -171,6 +197,12 @@ impl ProxyService {
         inner.refresh_if_finished().await;
         inner.reload_behavior(ctx).await
     }
+
+    async fn apply_saved_config(&self, ctx: &ProxyContext) -> ProxyConfigSaveResult {
+        let mut inner = self.inner.lock().await;
+        inner.refresh_if_finished().await;
+        inner.apply_saved_config(ctx).await
+    }
 }
 
 struct ProxyServiceInner {
@@ -212,6 +244,21 @@ impl ProxyServiceInner {
     }
 
     async fn start(&mut self, ctx: &ProxyContext) -> Result<(), String> {
+        let was_running = self.running.is_some();
+        let result = self.start_inner(ctx).await;
+        match &result {
+            Ok(()) if !was_running => {
+                self.last_error = None;
+            }
+            Err(error) => {
+                self.last_error = Some(error.clone());
+            }
+            Ok(()) => {}
+        }
+        result
+    }
+
+    async fn start_inner(&mut self, ctx: &ProxyContext) -> Result<(), String> {
         if self.running.is_some() {
             return Ok(());
         }
@@ -246,7 +293,6 @@ impl ProxyServiceInner {
             task: Some(task),
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
         });
-        self.last_error = None;
         Ok(())
     }
 
@@ -264,6 +310,21 @@ impl ProxyServiceInner {
     }
 
     async fn reload(&mut self, ctx: &ProxyContext) -> Result<(), String> {
+        let was_running = self.running.is_some();
+        let result = self.reload_inner(ctx).await;
+        match &result {
+            Ok(()) if was_running => {
+                self.last_error = None;
+            }
+            Err(error) => {
+                self.last_error = Some(error.clone());
+            }
+            Ok(()) => {}
+        }
+        result
+    }
+
+    async fn reload_inner(&mut self, ctx: &ProxyContext) -> Result<(), String> {
         tracing::debug!("proxy reload start");
         let start = Instant::now();
         if self.running.is_none() {
@@ -315,6 +376,19 @@ impl ProxyServiceInner {
         let loaded_config = ProxyConfig::load(ctx.paths.as_ref()).await?;
         let current_running_config = self.current_running_config().await;
         Ok(classify_reload_behavior(current_running_config, &loaded_config))
+    }
+
+    async fn apply_saved_config(&mut self, ctx: &ProxyContext) -> ProxyConfigSaveResult {
+        // 保存后的自动应用必须把“是否仍在运行”的判断与真正的 reload/restart
+        // 放在同一把锁内完成，避免 save 与 stop/start 交错后把已停止的代理重新拉起。
+        if self.running.is_none() {
+            return ProxyConfigSaveResult::success(self.status());
+        }
+
+        match self.reload(ctx).await {
+            Ok(()) => ProxyConfigSaveResult::success(self.status()),
+            Err(error) => ProxyConfigSaveResult::apply_error(self.status(), error),
+        }
     }
 
     async fn current_running_config(&self) -> Option<(String, usize)> {

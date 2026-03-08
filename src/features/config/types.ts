@@ -105,6 +105,11 @@ export type ProxyServiceStatus = {
   last_error: string | null;
 };
 
+export type SaveProxyConfigResult = {
+  status: ProxyServiceStatus;
+  apply_error: string | null;
+};
+
 export type ProxyServiceRequestState = "idle" | "working" | "error";
 
 export type UpstreamForm = {

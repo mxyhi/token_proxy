@@ -4,7 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConfigScreen } from "@/features/config/ConfigScreen";
 import { EMPTY_FORM, toPayload } from "@/features/config/form";
-import type { ConfigForm, ProxyServiceStatus } from "@/features/config/types";
+import type {
+  ConfigForm,
+  ProxyServiceStatus,
+  SaveProxyConfigResult,
+} from "@/features/config/types";
 import { I18nProvider } from "@/lib/i18n";
 
 const { setAppProxyUrlMock } = vi.hoisted(() => ({
@@ -76,6 +80,16 @@ const PROXY_STATUS: ProxyServiceStatus = {
   last_error: null,
 };
 
+function createSaveResult(
+  status: ProxyServiceStatus = PROXY_STATUS,
+  applyError: string | null = null
+): SaveProxyConfigResult {
+  return {
+    status,
+    apply_error: applyError,
+  };
+}
+
 describe("config/ConfigScreen auto save", () => {
   beforeEach(() => {
     setAppProxyUrlMock.mockReset();
@@ -104,7 +118,7 @@ describe("config/ConfigScreen auto save", () => {
         return PROXY_STATUS;
       }
       if (command === "save_proxy_config") {
-        return { ...PROXY_STATUS, args };
+        return { ...createSaveResult(), args };
       }
       throw new Error(`unexpected command: ${command}`);
     });
@@ -183,6 +197,49 @@ describe("config/ConfigScreen auto save", () => {
     expect(screen.getByTestId("status-message")).toHaveTextContent("disk full");
   });
 
+  it("waits until config is loaded before applying app proxy url to updater", async () => {
+    const invokeMock = vi.mocked(invoke);
+    const config = {
+      ...toPayload(EMPTY_FORM),
+      app_proxy_url: "socks5h://127.0.0.1:7891",
+    };
+
+    let resolveReadConfig: ((value: { path: string; config: typeof config }) => void) | null = null;
+
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "read_proxy_config") {
+        return await new Promise<{ path: string; config: typeof config }>((resolve) => {
+          resolveReadConfig = resolve;
+        });
+      }
+      if (command === "proxy_status") {
+        return PROXY_STATUS;
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(
+      <I18nProvider>
+        <ConfigScreen activeSectionId="core" />
+      </I18nProvider>
+    );
+
+    await waitFor(() => {
+      expect(
+        invokeMock.mock.calls.filter(([command]) => command === "read_proxy_config")
+      ).toHaveLength(1);
+    });
+
+    expect(setAppProxyUrlMock).not.toHaveBeenCalled();
+
+    expect(resolveReadConfig).not.toBeNull();
+    resolveReadConfig!({ path: "/tmp/config.json", config });
+
+    await waitFor(() => {
+      expect(setAppProxyUrlMock).toHaveBeenCalledWith("socks5h://127.0.0.1:7891");
+    });
+  });
+
   it("allows retrying the same failed draft from the error retry action", async () => {
     const invokeMock = vi.mocked(invoke);
     const config = { ...toPayload(EMPTY_FORM), host: "10.0.0.1" };
@@ -241,11 +298,11 @@ describe("config/ConfigScreen auto save", () => {
         return PROXY_STATUS;
       }
       if (command === "save_proxy_config") {
-        return {
+        return createSaveResult({
           state: "running",
           addr: "127.0.0.1:9300",
           last_error: null,
-        };
+        });
       }
       throw new Error(`unexpected command: ${command}`);
     });
@@ -267,5 +324,51 @@ describe("config/ConfigScreen auto save", () => {
     await waitFor(() => {
       expect(screen.getByTestId("status-message")).toHaveTextContent("");
     });
+  });
+
+  it("marks config as saved but still shows apply errors returned after save", async () => {
+    const invokeMock = vi.mocked(invoke);
+    const config = { ...toPayload(EMPTY_FORM), host: "10.0.0.1" };
+
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "read_proxy_config") {
+        return { path: "/tmp/config.json", config };
+      }
+      if (command === "proxy_status") {
+        return PROXY_STATUS;
+      }
+      if (command === "save_proxy_config") {
+        return createSaveResult(
+          {
+            state: "stopped",
+            addr: null,
+            last_error: "Failed to bind 127.0.0.1:9300",
+          },
+          "Failed to bind 127.0.0.1:9300"
+        );
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(
+      <I18nProvider>
+        <ConfigScreen activeSectionId="core" />
+      </I18nProvider>
+    );
+
+    const hostInput = screen.getByLabelText("host");
+    await waitFor(() => {
+      expect(hostInput).toHaveValue("10.0.0.1");
+    });
+
+    fireEvent.change(hostInput, { target: { value: "10.0.0.9" } });
+    await waitForAutoSaveWindow();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("status-message")).toHaveTextContent(
+        "Failed to bind 127.0.0.1:9300"
+      );
+    });
+    expect(screen.getByTestId("dirty")).toHaveTextContent("false");
   });
 });

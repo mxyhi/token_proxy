@@ -1,4 +1,4 @@
-import { AlertCircle, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, RefreshCw } from "lucide-react";
 import { useMemo, type CSSProperties } from "react";
 
 import { AppSidebar } from "@/components/app-sidebar";
@@ -63,7 +63,6 @@ type AppViewProps = {
   proxyServiceMessage: string;
   status: "idle" | "loading" | "saving" | "saved" | "error";
   statusMessage: string;
-  canSave: boolean;
   isDirty: boolean;
   validation: { valid: boolean; message: string };
   onToggleLocalKey: () => void;
@@ -77,7 +76,6 @@ type AppViewProps = {
     index: number,
     patch: Partial<ConfigForm["upstreams"][number]>
   ) => void;
-  onSave: () => void;
   onReload: () => void;
   onProxyServiceRefresh: () => void;
   onProxyServiceStart: () => void;
@@ -89,23 +87,18 @@ type AppViewProps = {
 type ConfigToolbarProps = {
   section: ConfigSection;
   status: AppViewProps["status"];
-  canSave: boolean;
   isDirty: boolean;
   onReload: () => void;
-  onSave: () => void;
 };
 
 function ConfigToolbar({
   section,
   status,
-  canSave,
   isDirty,
   onReload,
-  onSave,
 }: ConfigToolbarProps) {
   const isLoading = status === "loading";
-  const isSaving = status === "saving";
-  const canReload = !isLoading && !isSaving;
+  const canReload = status !== "saving" && !isLoading;
 
   return (
     <div
@@ -162,13 +155,6 @@ function ConfigToolbar({
             <span className="sr-only">{m.common_refresh()}</span>
           </Button>
         )}
-        <Button type="button" onClick={onSave} disabled={!canSave}>
-          {isSaving ? (
-            <Loader2 className="animate-spin" aria-hidden="true" />
-          ) : (
-            m.common_save()
-          )}
-        </Button>
       </div>
     </div>
   );
@@ -287,10 +273,8 @@ function ConfigSectionContent({
       <ConfigToolbar
         section={findSection(activeSectionId)}
         status={props.status}
-        canSave={props.canSave}
         isDirty={props.isDirty}
         onReload={props.onReload}
-        onSave={props.onSave}
       />
       <StatusAlert statusMessage={props.statusMessage} />
       <ConfigSectionBody

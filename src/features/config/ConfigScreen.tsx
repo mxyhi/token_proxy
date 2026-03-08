@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import { AppView } from "@/features/config/AppView";
 import {
@@ -23,6 +23,7 @@ type ProxyServiceState = ReturnType<typeof useProxyServiceState>;
 type ConfigListActions = ReturnType<typeof useConfigListActions>;
 type ConfigActions = ReturnType<typeof useConfigActions>;
 type ProxyServiceActions = ReturnType<typeof useProxyServiceActions>;
+const CONFIG_AUTO_SAVE_DELAY_MS = 800;
 
 type AppViewArgs = {
   activeSectionId: ConfigSectionId;
@@ -60,7 +61,6 @@ function buildAppViewProps({
     proxyServiceMessage: proxyService.proxyServiceMessage,
     status: state.status,
     statusMessage: state.statusMessage,
-    canSave: derived.canSave,
     isDirty: derived.isDirty,
     validation: derived.validation,
     onToggleLocalKey: () => state.setShowLocalKey((value) => !value),
@@ -72,7 +72,6 @@ function buildAppViewProps({
     onAddUpstream: listActions.addUpstream,
     onRemoveUpstream: listActions.removeUpstream,
     onChangeUpstream: listActions.updateUpstream,
-    onSave: configActions.saveConfig,
     onReload: configActions.loadConfig,
     onProxyServiceRefresh: proxyActions.refreshProxyStatus,
     onProxyServiceStart: proxyActions.startProxy,
@@ -83,6 +82,8 @@ function buildAppViewProps({
 }
 
 export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
+  const lastObservedAutoSaveKeyRef = useRef("");
+  const lastAttemptedAutoSaveKeyRef = useRef("");
   const state = useConfigState();
   const derived = useConfigDerived(
     state.form,
@@ -141,6 +142,29 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
   useEffect(() => {
     void refreshProxyStatus();
   }, [refreshProxyStatus]);
+
+  useEffect(() => {
+    if (derived.autoSaveKey === lastObservedAutoSaveKeyRef.current) {
+      return;
+    }
+    lastObservedAutoSaveKeyRef.current = derived.autoSaveKey;
+    lastAttemptedAutoSaveKeyRef.current = "";
+  }, [derived.autoSaveKey]);
+
+  useEffect(() => {
+    if (!derived.canAutoSave || !derived.autoSaveKey) {
+      return;
+    }
+    if (derived.autoSaveKey === lastAttemptedAutoSaveKeyRef.current) {
+      return;
+    }
+    const timerId = window.setTimeout(() => {
+      // 失败后不应对同一份草稿无限重试；只有用户继续编辑形成新草稿时，才重新进入自动保存。
+      lastAttemptedAutoSaveKeyRef.current = derived.autoSaveKey;
+      void configActions.saveConfig();
+    }, CONFIG_AUTO_SAVE_DELAY_MS);
+    return () => window.clearTimeout(timerId);
+  }, [configActions.saveConfig, derived.autoSaveKey, derived.canAutoSave]);
 
   const appViewProps = buildAppViewProps({
     activeSectionId,

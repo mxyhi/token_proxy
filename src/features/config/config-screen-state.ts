@@ -236,16 +236,28 @@ export function useConfigDerived(
     return Array.from(providers);
   }, [form.upstreams]);
 
-  const canSave = status !== "saving" && validation.valid && isDirty;
+  const autoSaveKey = useMemo(() => {
+    const segments: string[] = [];
+    if (configDirty && currentPayload) {
+      segments.push(`config:${stableStringify(currentPayload as JsonValue)}`);
+    }
+    if (autoStartDirty) {
+      segments.push(`autostart:${autoStartEnabled ? "enabled" : "disabled"}`);
+    }
+    return segments.join("|");
+  }, [autoStartDirty, autoStartEnabled, configDirty, currentPayload]);
+
+  const canAutoSave = status !== "saving" && validation.valid && isDirty;
 
   return {
     validation,
     currentPayload,
     configDirty,
     autoStartDirty,
+    autoSaveKey,
     isDirty,
     statusBadge,
-    canSave,
+    canAutoSave,
     providerOptions,
   };
 }

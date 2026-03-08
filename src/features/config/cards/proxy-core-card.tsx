@@ -118,6 +118,23 @@ function ProxyCoreFields({
           {m.proxy_core_kiro_preferred_endpoint_help()}
         </p>
       </div>
+      <div className="grid gap-2">
+        <Label htmlFor="retryable-failure-cooldown-secs">
+          {m.proxy_core_retryable_failure_cooldown_secs_label()}
+        </Label>
+        <Input
+          id="retryable-failure-cooldown-secs"
+          value={form.retryableFailureCooldownSecs}
+          onChange={(event) =>
+            onChange({ retryableFailureCooldownSecs: event.target.value })
+          }
+          placeholder="15"
+          inputMode="numeric"
+        />
+        <p className="text-xs text-muted-foreground">
+          {m.proxy_core_retryable_failure_cooldown_secs_help()}
+        </p>
+      </div>
     </>
   );
 }

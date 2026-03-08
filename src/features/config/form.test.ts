@@ -20,6 +20,13 @@ describe("config/form", () => {
     expect(validate({ ...EMPTY_FORM, port: "9208" }).valid).toBe(true);
   });
 
+  it("validates retryable failure cooldown as non-negative integer", () => {
+    expect(validate({ ...EMPTY_FORM, retryableFailureCooldownSecs: "-1" }).valid).toBe(false);
+    expect(validate({ ...EMPTY_FORM, retryableFailureCooldownSecs: "" }).valid).toBe(false);
+    expect(validate({ ...EMPTY_FORM, retryableFailureCooldownSecs: "0" }).valid).toBe(true);
+    expect(validate({ ...EMPTY_FORM, retryableFailureCooldownSecs: "15" }).valid).toBe(true);
+  });
+
   it("requires upstream id for enabled upstreams", () => {
     const upstream = createEmptyUpstream();
     const result = validate({ ...EMPTY_FORM, upstreams: [upstream] });
@@ -82,11 +89,21 @@ describe("config/form", () => {
 
     expect(payload.host).toBe("127.0.0.1");
     expect(payload.local_api_key).toBeNull();
+    expect(payload.retryable_failure_cooldown_secs).toBe(15);
     expect(payload.upstreams[0]?.id).toBe("upstream-1");
     expect(payload.upstreams[0]?.providers).toEqual(["openai", "openai-response"]);
     expect(payload.upstreams[0]?.base_url).toBe("https://example.com");
     expect(payload.upstreams[0]?.api_key).toBeNull();
     // openai_chat 对 openai 是 native 格式，应被清理；unknown provider 也应被丢弃。
     expect(payload.upstreams[0]?.convert_from_map).toBeUndefined();
+  });
+
+  it("serializes retryable failure cooldown seconds", () => {
+    const payload = toPayload({
+      ...EMPTY_FORM,
+      retryableFailureCooldownSecs: "30",
+    });
+
+    expect(payload.retryable_failure_cooldown_secs).toBe(30);
   });
 });

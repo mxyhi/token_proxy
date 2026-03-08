@@ -18,6 +18,7 @@ const DEFAULT_TRAY_TOKEN_RATE: TrayTokenRateConfig = {
 };
 
 const INTEGER_PATTERN = /^-?\d+$/;
+const NON_NEGATIVE_INTEGER_PATTERN = /^\d+$/;
 let modelMappingCounter = 0;
 
 const TRAY_TOKEN_RATE_FORMAT_VALUES: ReadonlySet<string> = new Set(
@@ -58,6 +59,7 @@ const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "antigravity_process_names",
   "antigravity_user_agent",
   "log_level",
+  "retryable_failure_cooldown_secs",
   "tray_token_rate",
   "upstream_strategy",
   "upstreams",
@@ -74,6 +76,7 @@ export const EMPTY_FORM: ConfigForm = {
   antigravityProcessNames: "",
   antigravityUserAgent: "",
   logLevel: "silent",
+  retryableFailureCooldownSecs: "15",
   trayTokenRate: { ...DEFAULT_TRAY_TOKEN_RATE },
   upstreamStrategy: "priority_fill_first",
   upstreams: [],
@@ -143,6 +146,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     antigravityProcessNames: joinListInput(config.antigravity_process_names),
     antigravityUserAgent: config.antigravity_user_agent ?? "",
     logLevel: config.log_level ?? "silent",
+    retryableFailureCooldownSecs: String(config.retryable_failure_cooldown_secs ?? 15),
     trayTokenRate: normalizeTrayTokenRate(config.tray_token_rate),
     upstreamStrategy: config.upstream_strategy,
     upstreams: config.upstreams.map((upstream) => ({
@@ -183,6 +187,9 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       ? form.antigravityUserAgent.trim()
       : null,
     log_level: form.logLevel,
+    retryable_failure_cooldown_secs: parseRetryableFailureCooldownSecs(
+      form.retryableFailureCooldownSecs,
+    ),
     tray_token_rate: form.trayTokenRate,
     upstream_strategy: form.upstreamStrategy,
     upstreams: form.upstreams.map((upstream) => {
@@ -225,6 +232,12 @@ export function validate(form: ConfigForm) {
   }
   if (form.appProxyUrl.trim() && !isValidProxyUrl(form.appProxyUrl.trim())) {
     return { valid: false, message: m.error_app_proxy_url_invalid() };
+  }
+  if (!isValidRetryableFailureCooldownSecs(form.retryableFailureCooldownSecs)) {
+    return {
+      valid: false,
+      message: m.error_retryable_failure_cooldown_secs_integer(),
+    };
   }
 
   const ids = new Set<string>();
@@ -508,4 +521,21 @@ function parseOptionalInt(value: string) {
   }
   const number = Number.parseInt(trimmed, 10);
   return Number.isFinite(number) ? number : null;
+}
+
+function isValidRetryableFailureCooldownSecs(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  return NON_NEGATIVE_INTEGER_PATTERN.test(trimmed);
+}
+
+function parseRetryableFailureCooldownSecs(value: string) {
+  const trimmed = value.trim();
+  if (!NON_NEGATIVE_INTEGER_PATTERN.test(trimmed)) {
+    return 15;
+  }
+  const number = Number.parseInt(trimmed, 10);
+  return Number.isFinite(number) ? number : 15;
 }

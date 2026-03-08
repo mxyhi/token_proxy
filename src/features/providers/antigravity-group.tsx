@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { AlertCircle, ChevronDown, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
@@ -410,12 +410,7 @@ function WarmupPanel({
   onToggleSchedule,
 }: WarmupPanelProps) {
   const defaultAccount = accounts[0]?.account_id ?? "";
-  const [accountId, setAccountId] = useState(defaultAccount);
-  useEffect(() => {
-    if (!accountId && defaultAccount) {
-      setAccountId(defaultAccount);
-    }
-  }, [accountId, defaultAccount]);
+  const [accountId, setAccountId] = useState("");
   const selectedAccountId = accountId || defaultAccount;
   const modelOptions = useMemo(() => {
     if (!selectedAccountId) return [];
@@ -423,23 +418,13 @@ function WarmupPanel({
     return quota?.quotas.map((item) => item.name) ?? [];
   }, [selectedAccountId, quotaMap]);
   const defaultModel = modelOptions[0] ?? "";
-  const [model, setModel] = useState(defaultModel);
-  useEffect(() => {
-    if (!model && defaultModel) {
-      setModel(defaultModel);
-    }
-  }, [model, defaultModel]);
-  useEffect(() => {
-    if (!model || modelOptions.length === 0) {
-      return;
-    }
-    if (!modelOptions.includes(model)) {
-      setModel(modelOptions[0] ?? "");
-    }
-  }, [model, modelOptions]);
+  const [model, setModel] = useState("");
   const [intervalMinutes, setIntervalMinutes] = useState("60");
   const [enabled, setEnabled] = useState(true);
-  const selectedModel = model || defaultModel;
+  const selectedModel =
+    model && modelOptions.includes(model)
+      ? model
+      : defaultModel;
   const canSubmit = Boolean(selectedAccountId && selectedModel);
   const showModelHint = Boolean(selectedAccountId) && modelOptions.length === 0 && !quotasLoading;
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 import { parseError } from "@/lib/error";
@@ -52,26 +52,44 @@ export function toActionState(): ActionState {
 }
 
 export function useClientSetupPreview(savedAt: string) {
-  const [previewState, setPreviewState] = useState<RequestState>("idle");
+  const [previewState, setPreviewState] = useState<RequestState>("working");
   const [previewMessage, setPreviewMessage] = useState("");
   const [setup, setSetup] = useState<ClientSetupInfo | null>(null);
+  const requestSeq = useRef(0);
 
-  const loadPreview = useCallback(async () => {
-    setPreviewState("working");
-    setPreviewMessage("");
+  const fetchPreview = useCallback(async () => {
+    const requestId = requestSeq.current + 1;
+    requestSeq.current = requestId;
     try {
       const result = await invoke<ClientSetupInfo>("preview_client_setup");
+      if (requestSeq.current !== requestId) {
+        return;
+      }
       setSetup(result);
       setPreviewState("success");
+      setPreviewMessage("");
     } catch (error) {
+      if (requestSeq.current !== requestId) {
+        return;
+      }
       setPreviewState("error");
       setPreviewMessage(parseError(error));
     }
   }, []);
 
   useEffect(() => {
-    void loadPreview();
-  }, [loadPreview, savedAt]);
+    // 延后一拍启动异步预览请求，避免在 effect 同步执行路径中触发 hooks lint 的级联更新告警。
+    const timerId = window.setTimeout(() => {
+      void fetchPreview();
+    }, 0);
+    return () => window.clearTimeout(timerId);
+  }, [fetchPreview, savedAt]);
+
+  const loadPreview = useCallback(async () => {
+    setPreviewState("working");
+    setPreviewMessage("");
+    await fetchPreview();
+  }, [fetchPreview]);
 
   return { previewState, previewMessage, setup, loadPreview };
 }

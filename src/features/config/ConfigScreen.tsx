@@ -124,22 +124,20 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
     setProxyServiceStatus: proxyService.setProxyServiceStatus,
     setProxyServiceMessage: proxyService.setProxyServiceMessage,
   });
-  const { loadConfig } = configActions;
+  const { loadConfig, saveConfig } = configActions;
   const listActions = useConfigListActions(state.setForm);
   const {
     actions: { setAppProxyUrl },
   } = useUpdater();
+  const appProxyUrl = state.lastConfig?.app_proxy_url ?? "";
 
   useEffect(() => {
     void loadConfig();
   }, [loadConfig]);
 
   useEffect(() => {
-    if (!state.lastConfig) {
-      return;
-    }
-    setAppProxyUrl(state.lastConfig.app_proxy_url ?? "");
-  }, [setAppProxyUrl, state.lastConfig?.app_proxy_url]);
+    setAppProxyUrl(appProxyUrl);
+  }, [appProxyUrl, setAppProxyUrl]);
 
   useEffect(() => {
     void refreshProxyStatus();
@@ -163,10 +161,10 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
     const timerId = window.setTimeout(() => {
       // 失败后不应对同一份草稿无限重试；只有用户继续编辑形成新草稿时，才重新进入自动保存。
       lastAttemptedAutoSaveKeyRef.current = derived.autoSaveKey;
-      void configActions.saveConfig();
+      void saveConfig();
     }, CONFIG_AUTO_SAVE_DELAY_MS);
     return () => window.clearTimeout(timerId);
-  }, [configActions.saveConfig, derived.autoSaveKey, derived.canAutoSave]);
+  }, [derived.autoSaveKey, derived.canAutoSave, saveConfig]);
 
   const appViewProps = buildAppViewProps({
     activeSectionId,

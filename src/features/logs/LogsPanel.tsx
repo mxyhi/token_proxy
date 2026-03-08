@@ -256,12 +256,18 @@ function RequestDetailSheet({
     return () => clearTimeout(timer);
   }, [copied]);
 
-  useEffect(() => {
-    if (!open) setCopied(false);
-  }, [open]);
+  const handleOpenChange = useCallback(
+    (nextOpen: boolean) => {
+      if (!nextOpen) {
+        setCopied(false);
+      }
+      onOpenChange(nextOpen);
+    },
+    [onOpenChange]
+  );
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
+    <Sheet open={open} onOpenChange={handleOpenChange}>
       <SheetContent className="sm:max-w-2xl">
         <SheetHeader>
           <div className="flex items-center gap-2">

@@ -193,8 +193,8 @@ export function useConfigDerived(
   autoStartBaseline: boolean,
   autoStartStatus: AutoStartStatus
 ) {
-  const { locale } = useI18n();
-  const validation = useMemo(() => validate(form), [form, locale]);
+  useI18n();
+  const validation = useMemo(() => validate(form), [form]);
   const currentPayload = useMemo(
     () => (validation.valid ? mergeConfigExtras(toPayload(form), configExtras) : null),
     [configExtras, form, validation.valid]

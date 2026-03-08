@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 
@@ -36,10 +36,17 @@ export function UpdateNotifier() {
   const navigate = useNavigate();
   const { state, actions } = useUpdater();
   const { checkForUpdate, downloadAndInstall, relaunchApp } = actions;
-  const [restartPromptOpen, setRestartPromptOpen] = useState(false);
+  const [dismissedRestartPromptKey, setDismissedRestartPromptKey] = useState<string | null>(null);
   const availableToastVersionRef = useRef<string | null>(null);
   const progressToastIdRef = useRef<ToastId | null>(null);
   const lastStatusRef = useRef<UpdateStatus>(state.status);
+  const installedRestartPromptKey =
+    state.status === "installed"
+      ? `${state.updateInfo?.version ?? "installed"}:${state.lastCheckedAt}`
+      : null;
+  const restartPromptOpen =
+    installedRestartPromptKey !== null &&
+    dismissedRestartPromptKey !== installedRestartPromptKey;
 
   const downloadProgressLabel = useMemo(
     () =>
@@ -111,7 +118,6 @@ export function UpdateNotifier() {
         toast.dismiss(progressToastIdRef.current);
         progressToastIdRef.current = null;
       }
-      setRestartPromptOpen(true);
       return;
     }
 
@@ -144,19 +150,31 @@ export function UpdateNotifier() {
     downloadProgressLabel,
     navigate,
     state.lastCheckSource,
+    state.lastCheckedAt,
     state.status,
     state.statusMessage,
-    state.updateInfo?.version,
+    state.updateInfo,
   ]);
 
+  const handleRestartPromptOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open && installedRestartPromptKey) {
+        setDismissedRestartPromptKey(installedRestartPromptKey);
+      }
+    },
+    [installedRestartPromptKey]
+  );
+
   const onRestartNow = () => {
-    setRestartPromptOpen(false);
+    if (installedRestartPromptKey) {
+      setDismissedRestartPromptKey(installedRestartPromptKey);
+    }
     void relaunchApp();
   };
 
   return (
     <div data-slot="update-notifier">
-      <AlertDialog open={restartPromptOpen} onOpenChange={setRestartPromptOpen}>
+      <AlertDialog open={restartPromptOpen} onOpenChange={handleRestartPromptOpenChange}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>{m.update_restart_prompt_title()}</AlertDialogTitle>

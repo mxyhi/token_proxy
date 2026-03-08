@@ -372,7 +372,7 @@ function useSaveConfigAction({
       }),
     [
       currentPayload,
-      validation.message,
+      validation,
       configDirty,
       autoStartEnabled,
       autoStartBaseline,

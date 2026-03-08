@@ -226,11 +226,7 @@ function resolveProgressLabel(status: UpdateStatus, downloadState: DownloadState
   });
 }
 
-type UpdateCardProps = {
-  // keep slot stable for future expansion
-};
-
-export function UpdateCard(_: UpdateCardProps) {
+export function UpdateCard() {
   const currentVersion = useAppVersion();
   const { state, actions } = useUpdater();
   const statusBadge = useMemo(() => resolveStatusBadge(state.status), [state.status]);

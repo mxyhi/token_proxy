@@ -259,6 +259,8 @@ function RecentRequestsHeader({ table }: { table: Table<DashboardRequestItem> })
 }
 
 function useRecentRowVirtualizer(rows: Row<DashboardRequestItem>[], scrollKey: string) {
+  "use no memo";
+
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const rowVirtualizer = useVirtualizer({
@@ -271,7 +273,7 @@ function useRecentRowVirtualizer(rows: Row<DashboardRequestItem>[], scrollKey: s
   useEffect(() => {
     rowVirtualizer.scrollToOffset(0);
     scrollRef.current?.scrollTo({ top: 0 });
-  }, [scrollKey]);
+  }, [rowVirtualizer, scrollKey]);
 
   return { scrollRef, rowVirtualizer, virtualRows: rowVirtualizer.getVirtualItems() };
 }
@@ -356,6 +358,8 @@ function RecentRequestsBody({
 }
 
 export function RecentRequestsTable({ items, scrollKey, onSelectItem }: RecentRequestsTableProps) {
+  "use no memo";
+
   const { locale } = useI18n();
   const formatter = createDashboardTimeFormatter(locale);
   const columns = buildColumns(formatter);

@@ -32,12 +32,7 @@ type DashboardStatus = "idle" | "loading" | "error"
 function usePagination(totalRequests: number) {
   const [page, setPage] = useState(1)
   const totalPages = Math.max(1, Math.ceil(totalRequests / RECENT_PAGE_SIZE))
-
-  useEffect(() => {
-    if (page > totalPages) {
-      setPage(totalPages)
-    }
-  }, [page, totalPages])
+  const currentPage = Math.min(page, totalPages)
 
   const resetPage = useCallback(() => {
     setPage(1)
@@ -48,10 +43,17 @@ function usePagination(totalRequests: number) {
   }, [])
 
   const onNextPage = useCallback(() => {
-    setPage((current) => Math.min(totalPages, current + 1))
-  }, [totalPages])
+    setPage((current) => current + 1)
+  }, [])
 
-  return { page, totalPages, totalRequests, resetPage, onPrevPage, onNextPage }
+  return {
+    page: currentPage,
+    totalPages,
+    totalRequests,
+    resetPage,
+    onPrevPage,
+    onNextPage,
+  }
 }
 
 export function useDashboardSnapshot() {
@@ -60,7 +62,7 @@ export function useDashboardSnapshot() {
   const [activeRange, setActiveRange] = useState<DashboardRange>(() =>
     resolveDashboardRange("today")
   )
-  const [status, setStatus] = useState<DashboardStatus>("idle")
+  const [status, setStatus] = useState<DashboardStatus>("loading")
   const [statusMessage, setStatusMessage] = useState("")
   const totalRequests = snapshot?.summary.totalRequests ?? 0
   const { page, totalPages, resetPage, onPrevPage, onNextPage } =
@@ -71,8 +73,6 @@ export function useDashboardSnapshot() {
     // Ignore out-of-order responses; only the latest request updates state.
     const requestId = requestSeq.current + 1
     requestSeq.current = requestId
-    setStatus("loading")
-    setStatusMessage("")
     try {
       const range = resolveDashboardRange(rangePreset)
       const offset = (page - 1) * RECENT_PAGE_SIZE
@@ -93,13 +93,38 @@ export function useDashboardSnapshot() {
   }, [page, rangePreset])
 
   useEffect(() => {
-    void loadSnapshot()
+    // 提交后一拍再启动请求，避免 effect 同步路径被误判为级联 setState。
+    const timerId = window.setTimeout(() => {
+      void loadSnapshot()
+    }, 0)
+    return () => window.clearTimeout(timerId)
   }, [loadSnapshot])
 
+  const markLoading = useCallback(() => {
+    setStatus("loading")
+    setStatusMessage("")
+  }, [])
+
   const handleRangeChange = useCallback((next: DashboardTimeRange) => {
+    markLoading()
     setRangePreset(next)
     resetPage()
-  }, [resetPage])
+  }, [markLoading, resetPage])
+
+  const handlePrevPage = useCallback(() => {
+    markLoading()
+    onPrevPage()
+  }, [markLoading, onPrevPage])
+
+  const handleNextPage = useCallback(() => {
+    markLoading()
+    onNextPage()
+  }, [markLoading, onNextPage])
+
+  const refresh = useCallback(() => {
+    markLoading()
+    void loadSnapshot()
+  }, [loadSnapshot, markLoading])
 
   return {
     snapshot,
@@ -108,10 +133,10 @@ export function useDashboardSnapshot() {
     activeRange,
     rangePreset,
     pagination: { page, totalPages, totalRequests },
-    refresh: loadSnapshot,
+    refresh,
     onRangeChange: handleRangeChange,
-    onPrevPage,
-    onNextPage,
+    onPrevPage: handlePrevPage,
+    onNextPage: handleNextPage,
   }
 }
 

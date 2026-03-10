@@ -16,8 +16,11 @@ export function DashboardPanel() {
     statusMessage,
     activeRange,
     rangePreset,
+    selectedUpstreamId,
+    upstreamOptions,
     refresh,
     onRangeChange,
+    onUpstreamChange,
   } = useDashboardSnapshot()
 
   const isLoading = status === "loading"
@@ -36,8 +39,11 @@ export function DashboardPanel() {
 
       <DashboardFilters
         range={rangePreset}
+        upstreamId={selectedUpstreamId}
+        upstreamOptions={upstreamOptions}
         loading={isLoading}
         onRangeChange={onRangeChange}
+        onUpstreamChange={onUpstreamChange}
         onRefresh={refresh}
       />
 

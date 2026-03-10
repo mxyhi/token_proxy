@@ -20,14 +20,26 @@ import {
   resolveDashboardRange,
   toDashboardTimeRange,
 } from "@/features/dashboard/range"
-import type { DashboardRange, DashboardSnapshot } from "@/features/dashboard/types"
+import type {
+  DashboardRange,
+  DashboardSnapshot,
+  DashboardUpstreamOption,
+} from "@/features/dashboard/types"
 import { parseError } from "@/lib/error"
 import { cn } from "@/lib/utils"
 import { m } from "@/paraglide/messages.js"
 
 export const RECENT_PAGE_SIZE = 50
+const ALL_UPSTREAMS_VALUE = "__all_upstreams__"
 
 type DashboardStatus = "idle" | "loading" | "error"
+
+function hasUpstreamOption(
+  upstreams: DashboardUpstreamOption[],
+  upstreamId: string
+) {
+  return upstreams.some((item) => item.upstreamId === upstreamId)
+}
 
 function usePagination(totalRequests: number) {
   const [page, setPage] = useState(1)
@@ -59,6 +71,7 @@ function usePagination(totalRequests: number) {
 export function useDashboardSnapshot() {
   const [rangePreset, setRangePreset] = useState<DashboardTimeRange>("today")
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null)
+  const [selectedUpstreamId, setSelectedUpstreamId] = useState<string | null>(null)
   const [activeRange, setActiveRange] = useState<DashboardRange>(() =>
     resolveDashboardRange("today")
   )
@@ -76,8 +89,22 @@ export function useDashboardSnapshot() {
     try {
       const range = resolveDashboardRange(rangePreset)
       const offset = (page - 1) * RECENT_PAGE_SIZE
-      const data = await readDashboardSnapshot(range, offset)
+      const data = await readDashboardSnapshot({
+        range,
+        offset,
+        upstreamId: selectedUpstreamId,
+      })
       if (requestSeq.current !== requestId) {
+        return
+      }
+      // 时间范围变化后，已选上游可能不再出现在该范围内；先回退到“全部”，
+      // 让下一个 effect 重新拉取一个合法快照，避免 Select 绑定到不存在的值。
+      if (
+        selectedUpstreamId !== null &&
+        !hasUpstreamOption(data.upstreams, selectedUpstreamId)
+      ) {
+        setSelectedUpstreamId(null)
+        setStatus("loading")
         return
       }
       setSnapshot(data)
@@ -90,7 +117,7 @@ export function useDashboardSnapshot() {
       setStatus("error")
       setStatusMessage(parseError(error))
     }
-  }, [page, rangePreset])
+  }, [page, rangePreset, selectedUpstreamId])
 
   useEffect(() => {
     // 提交后一拍再启动请求，避免 effect 同步路径被误判为级联 setState。
@@ -108,6 +135,12 @@ export function useDashboardSnapshot() {
   const handleRangeChange = useCallback((next: DashboardTimeRange) => {
     markLoading()
     setRangePreset(next)
+    resetPage()
+  }, [markLoading, resetPage])
+
+  const handleUpstreamChange = useCallback((nextUpstreamId: string | null) => {
+    markLoading()
+    setSelectedUpstreamId(nextUpstreamId)
     resetPage()
   }, [markLoading, resetPage])
 
@@ -132,18 +165,32 @@ export function useDashboardSnapshot() {
     statusMessage,
     activeRange,
     rangePreset,
+    selectedUpstreamId,
+    upstreamOptions: snapshot?.upstreams ?? [],
     pagination: { page, totalPages, totalRequests },
     refresh,
     onRangeChange: handleRangeChange,
+    onUpstreamChange: handleUpstreamChange,
     onPrevPage: handlePrevPage,
     onNextPage: handleNextPage,
   }
 }
 
+function resolveUpstreamSelectValue(upstreamId: string | null) {
+  return upstreamId ?? ALL_UPSTREAMS_VALUE
+}
+
+function toUpstreamFilterValue(value: string) {
+  return value === ALL_UPSTREAMS_VALUE ? null : value
+}
+
 type DashboardFiltersProps = {
   range: DashboardTimeRange
+  upstreamId: string | null
+  upstreamOptions: DashboardUpstreamOption[]
   loading: boolean
   onRangeChange: (range: DashboardTimeRange) => void
+  onUpstreamChange: (upstreamId: string | null) => void
   onRefresh: () => void
   /** 请求详情捕获相关，仅 LogsPanel 使用 */
   capture?: {
@@ -156,8 +203,11 @@ type DashboardFiltersProps = {
 
 export function DashboardFilters({
   range,
+  upstreamId,
+  upstreamOptions,
   loading,
   onRangeChange,
+  onUpstreamChange,
   onRefresh,
   capture,
 }: DashboardFiltersProps) {
@@ -188,6 +238,30 @@ export function DashboardFilters({
                 {DASHBOARD_RANGE_OPTIONS.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Label htmlFor="dashboard-upstream" className="text-xs text-muted-foreground">
+              {m.dashboard_upstream_label()}
+            </Label>
+            <Select
+              value={resolveUpstreamSelectValue(upstreamId)}
+              onValueChange={(value) => {
+                onUpstreamChange(toUpstreamFilterValue(value))
+              }}
+            >
+              <SelectTrigger id="dashboard-upstream" className="h-9 w-[220px]">
+                <SelectValue placeholder={m.dashboard_upstream_placeholder()} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_UPSTREAMS_VALUE}>
+                  {m.dashboard_upstream_all()}
+                </SelectItem>
+                {upstreamOptions.map((option) => (
+                  <SelectItem key={option.upstreamId} value={option.upstreamId}>
+                    {option.upstreamId} · {option.provider}
                   </SelectItem>
                 ))}
               </SelectContent>

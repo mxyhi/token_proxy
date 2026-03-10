@@ -16,20 +16,26 @@ describe("dashboard/api", () => {
         outputTokens: 0,
         cachedTokens: 0,
         avgLatencyMs: 0,
+        medianLatencyMs: 0,
       },
       providers: [],
+      upstreams: [],
       series: [],
       recent: [],
       truncated: false,
     });
 
     const range = { fromTsMs: 1, toTsMs: 2 };
-    await readDashboardSnapshot(range, 10);
+    await readDashboardSnapshot({
+      range,
+      offset: 10,
+      upstreamId: "alpha",
+    });
 
     expect(invokeMock).toHaveBeenCalledWith("read_dashboard_snapshot", {
       range,
       offset: 10,
+      upstreamId: "alpha",
     });
   });
 });
-

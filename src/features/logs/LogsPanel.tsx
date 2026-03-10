@@ -340,9 +340,12 @@ export function LogsPanel() {
     status,
     statusMessage,
     rangePreset,
+    selectedUpstreamId,
+    upstreamOptions,
     pagination,
     refresh,
     onRangeChange,
+    onUpstreamChange,
     onPrevPage,
     onNextPage,
   } = useDashboardSnapshot();
@@ -514,8 +517,11 @@ export function LogsPanel() {
 
       <DashboardFilters
         range={rangePreset}
+        upstreamId={selectedUpstreamId}
+        upstreamOptions={upstreamOptions}
         loading={isLoading}
         onRangeChange={onRangeChange}
+        onUpstreamChange={onUpstreamChange}
         onRefresh={refresh}
         capture={{
           enabled: captureEnabled,

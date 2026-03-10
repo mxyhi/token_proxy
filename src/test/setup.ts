@@ -167,3 +167,43 @@ if (typeof globalThis.IntersectionObserver === "undefined") {
 
   globalThis.IntersectionObserver = MockIntersectionObserver;
 }
+
+if (typeof Element !== "undefined" && !Element.prototype.scrollIntoView) {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn<() => void>(() => undefined),
+  });
+}
+
+function definePointerCapturePolyfill<
+  K extends "hasPointerCapture" | "setPointerCapture" | "releasePointerCapture",
+>(key: K, value: Element[K]) {
+  if (typeof Element.prototype[key] === "function") {
+    return;
+  }
+
+  Object.defineProperty(Element.prototype, key, {
+    configurable: true,
+    value,
+  });
+}
+
+definePointerCapturePolyfill(
+  "hasPointerCapture",
+  vi.fn<Element["hasPointerCapture"]>(() => false),
+);
+definePointerCapturePolyfill(
+  "setPointerCapture",
+  vi.fn<Element["setPointerCapture"]>(() => undefined),
+);
+definePointerCapturePolyfill(
+  "releasePointerCapture",
+  vi.fn<Element["releasePointerCapture"]>(() => undefined),
+);
+
+if (typeof Element.prototype.scrollIntoView !== "function") {
+  Object.defineProperty(Element.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn<Element["scrollIntoView"]>(() => undefined),
+  });
+}

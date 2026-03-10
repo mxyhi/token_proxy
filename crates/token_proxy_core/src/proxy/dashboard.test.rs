@@ -120,10 +120,56 @@ async fn insert_latency(pool: &SqlitePool, latency_ms: i64) {
     .expect("Failed to insert test data");
 }
 
+async fn insert_request(
+    pool: &SqlitePool,
+    ts_ms: i64,
+    provider: &str,
+    upstream_id: &str,
+    status: i64,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    total_tokens: Option<i64>,
+    cached_tokens: Option<i64>,
+    latency_ms: i64,
+) {
+    sqlx::query(
+        r#"
+        INSERT INTO request_logs (
+            ts_ms,
+            path,
+            provider,
+            upstream_id,
+            stream,
+            status,
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            cached_tokens,
+            latency_ms
+        )
+        VALUES (?, '/test', ?, ?, 0, ?, ?, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(ts_ms)
+    .bind(provider)
+    .bind(upstream_id)
+    .bind(status)
+    .bind(input_tokens)
+    .bind(output_tokens)
+    .bind(total_tokens)
+    .bind(cached_tokens)
+    .bind(latency_ms)
+    .execute(pool)
+    .await
+    .expect("Failed to insert request");
+}
+
 #[tokio::test]
 async fn median_latency_empty_table_returns_zero() {
     let pool = setup_test_db().await;
-    let result = query_median_latency(&pool, None, None).await.unwrap();
+    let result = query_median_latency(&pool, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(result, 0, "Empty table should return 0");
 }
 
@@ -132,7 +178,9 @@ async fn median_latency_single_value() {
     let pool = setup_test_db().await;
     insert_latency(&pool, 100).await;
 
-    let result = query_median_latency(&pool, None, None).await.unwrap();
+    let result = query_median_latency(&pool, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(result, 100, "Single value should be the median");
 }
 
@@ -144,7 +192,9 @@ async fn median_latency_odd_count() {
     insert_latency(&pool, 30).await;
     insert_latency(&pool, 20).await;
 
-    let result = query_median_latency(&pool, None, None).await.unwrap();
+    let result = query_median_latency(&pool, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(result, 20, "Odd count median should be middle value");
 }
 
@@ -157,7 +207,9 @@ async fn median_latency_even_count() {
     insert_latency(&pool, 20).await;
     insert_latency(&pool, 30).await;
 
-    let result = query_median_latency(&pool, None, None).await.unwrap();
+    let result = query_median_latency(&pool, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(
         result, 25,
         "Even count median should be average of two middle values"
@@ -171,7 +223,9 @@ async fn median_latency_even_count_rounds_down() {
     insert_latency(&pool, 10).await;
     insert_latency(&pool, 21).await;
 
-    let result = query_median_latency(&pool, None, None).await.unwrap();
+    let result = query_median_latency(&pool, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(result, 15, "Median should use integer division");
 }
 
@@ -202,12 +256,88 @@ async fn median_latency_with_time_range_filter() {
     .unwrap();
 
     // 只查询 ts_ms 在 150-250 范围内的数据，应该只有 latency_ms=100 的记录
-    let result = query_median_latency(&pool, Some(150), Some(250))
+    let result = query_median_latency(&pool, Some(150), Some(250), None)
         .await
         .unwrap();
     assert_eq!(result, 100, "Should filter by time range");
 
     // 查询所有数据，中位数应为 100
-    let result_all = query_median_latency(&pool, None, None).await.unwrap();
+    let result_all = query_median_latency(&pool, None, None, None)
+        .await
+        .unwrap();
     assert_eq!(result_all, 100, "All data median should be 100");
+}
+
+#[tokio::test]
+async fn read_snapshot_filters_by_upstream_and_keeps_all_upstream_options() {
+    let pool = setup_test_db().await;
+    insert_request(
+        &pool,
+        100,
+        "openai",
+        "alpha",
+        200,
+        Some(10),
+        Some(20),
+        None,
+        Some(5),
+        30,
+    )
+    .await;
+    insert_request(
+        &pool,
+        200,
+        "anthropic",
+        "beta",
+        500,
+        Some(3),
+        Some(4),
+        None,
+        Some(1),
+        90,
+    )
+    .await;
+
+    let snapshot = read_snapshot(
+        &pool,
+        DashboardRange {
+            from_ts_ms: None,
+            to_ts_ms: None,
+        },
+        Some(0),
+        Some(String::from("alpha")),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(snapshot.summary.total_requests, 1);
+    assert_eq!(snapshot.summary.success_requests, 1);
+    assert_eq!(snapshot.summary.error_requests, 0);
+    assert_eq!(snapshot.summary.total_tokens, 30);
+    assert_eq!(snapshot.summary.cached_tokens, 5);
+    assert_eq!(snapshot.summary.avg_latency_ms, 30);
+    assert_eq!(snapshot.summary.median_latency_ms, 30);
+
+    assert_eq!(snapshot.providers.len(), 1);
+    assert_eq!(snapshot.providers[0].provider, "openai");
+    assert_eq!(snapshot.providers[0].requests, 1);
+
+    assert_eq!(snapshot.recent.len(), 1);
+    assert_eq!(snapshot.recent[0].upstream_id, "alpha");
+    assert!(snapshot
+        .series
+        .iter()
+        .map(|point| point.total_requests)
+        .sum::<u64>()
+        >= 1);
+
+    assert_eq!(snapshot.upstreams.len(), 2);
+    assert!(snapshot
+        .upstreams
+        .iter()
+        .any(|item| item.upstream_id == "alpha" && item.provider == "openai"));
+    assert!(snapshot
+        .upstreams
+        .iter()
+        .any(|item| item.upstream_id == "beta" && item.provider == "anthropic"));
 }

@@ -25,6 +25,7 @@ const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const GEMINI_API_KEY_QUERY: &str = "key";
 const GEMINI_API_KEY_HEADER: HeaderName = HeaderName::from_static("x-goog-api-key");
+const OPENAI_CHAT_PATH: &str = "/v1/chat/completions";
 const OPENAI_RESPONSES_PATH: &str = "/v1/responses";
 // Keep in sync with server_helpers request transform limit (20 MiB).
 const REQUEST_FILTER_LIMIT_BYTES: usize = 20 * 1024 * 1024;
@@ -158,13 +159,116 @@ pub(super) async fn build_upstream_body(
         source,
     )
     .await?;
-    let final_source = filtered.as_ref().unwrap_or(source);
+    let rewrite = maybe_rewrite_developer_role_to_system(
+        upstream,
+        upstream_path_with_query,
+        filtered.as_ref().unwrap_or(source),
+    )
+    .await?;
+    let final_source = rewrite.as_ref().or(filtered.as_ref()).unwrap_or(source);
     final_source.to_reqwest_body().await.map_err(|err| {
         AttemptOutcome::Fatal(http::error_response(
             StatusCode::BAD_GATEWAY,
             format!("Failed to read cached request body: {err}"),
         ))
     })
+}
+
+async fn maybe_rewrite_developer_role_to_system(
+    upstream: &UpstreamRuntime,
+    upstream_path_with_query: &str,
+    body: &ReplayableBody,
+) -> Result<Option<ReplayableBody>, AttemptOutcome> {
+    if !should_rewrite_developer_role_to_system(upstream) {
+        return Ok(None);
+    }
+
+    let upstream_path = split_path_query(upstream_path_with_query).0;
+    if upstream_path != OPENAI_CHAT_PATH && upstream_path != OPENAI_RESPONSES_PATH {
+        return Ok(None);
+    }
+
+    let Some(bytes) = body
+        .read_bytes_if_small(REQUEST_FILTER_LIMIT_BYTES)
+        .await
+        .map_err(|err| {
+            AttemptOutcome::Fatal(http::error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to read cached request body: {err}"),
+            ))
+        })?
+    else {
+        return Ok(None);
+    };
+
+    let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else {
+        return Ok(None);
+    };
+    let Some(object) = value.as_object_mut() else {
+        return Ok(None);
+    };
+
+    let changed = if upstream_path == OPENAI_CHAT_PATH {
+        rewrite_chat_developer_roles(object)
+    } else {
+        rewrite_responses_developer_roles(object)
+    };
+    if !changed {
+        return Ok(None);
+    }
+
+    let outbound_bytes = serde_json::to_vec(&value).map(Bytes::from).map_err(|err| {
+        AttemptOutcome::Fatal(http::error_response(
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to serialize request: {err}"),
+        ))
+    })?;
+    Ok(Some(ReplayableBody::from_bytes(outbound_bytes)))
+}
+
+fn should_rewrite_developer_role_to_system(upstream: &UpstreamRuntime) -> bool {
+    upstream.rewrite_developer_role_to_system
+}
+
+fn rewrite_chat_developer_roles(object: &mut serde_json::Map<String, Value>) -> bool {
+    let Some(messages) = object.get_mut("messages").and_then(Value::as_array_mut) else {
+        return false;
+    };
+
+    let mut changed = false;
+    for message in messages {
+        let Some(item) = message.as_object_mut() else {
+            continue;
+        };
+        changed |= rewrite_role_field(item);
+    }
+    changed
+}
+
+fn rewrite_responses_developer_roles(object: &mut serde_json::Map<String, Value>) -> bool {
+    let Some(input) = object.get_mut("input").and_then(Value::as_array_mut) else {
+        return false;
+    };
+
+    let mut changed = false;
+    for item in input {
+        let Some(item) = item.as_object_mut() else {
+            continue;
+        };
+        changed |= rewrite_role_field(item);
+    }
+    changed
+}
+
+fn rewrite_role_field(object: &mut serde_json::Map<String, Value>) -> bool {
+    let Some(role) = object.get_mut("role") else {
+        return false;
+    };
+    if role.as_str() != Some("developer") {
+        return false;
+    }
+    *role = Value::String("system".to_string());
+    true
 }
 
 async fn maybe_filter_openai_responses_request_fields(

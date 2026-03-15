@@ -327,48 +327,94 @@ function UpstreamOpenAIResponsesFields({
   draft,
   onChangeDraft,
 }: UpstreamOpenAIResponsesFieldsProps) {
-  if (!draft.providers.some((value) => value.trim() === "openai-response")) {
+  const isOpenai = draft.providers.some((value) => value.trim() === "openai");
+  const isOpenaiResponses = draft.providers.some((value) => value.trim() === "openai-response");
+  if (!isOpenai && !isOpenaiResponses) {
     return null;
   }
 
   return (
     <div data-slot="upstream-openai-responses-fields" className="contents">
+      {isOpenaiResponses ? (
+        <div className="col-span-2 flex items-center gap-3">
+          <Label className="inline-flex items-center gap-1">
+            {m.field_use_chat_completions_for_responses()}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+              </TooltipTrigger>
+              <TooltipContent side="right" className="max-w-xs">
+                {m.field_use_chat_completions_for_responses_tip()}
+              </TooltipContent>
+            </Tooltip>
+          </Label>
+          <Switch
+            checked={draft.useChatCompletionsForResponses}
+            onCheckedChange={(checked) =>
+              onChangeDraft({ useChatCompletionsForResponses: checked })
+            }
+            aria-label={m.field_use_chat_completions_for_responses_aria()}
+          />
+        </div>
+      ) : null}
+      {isOpenaiResponses ? (
+        <>
+          <div className="col-span-2 flex items-center gap-3">
+            <Label className="inline-flex items-center gap-1">
+              {m.field_filter_prompt_cache_retention()}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  {m.field_filter_prompt_cache_retention_tip()}
+                </TooltipContent>
+              </Tooltip>
+            </Label>
+            <Switch
+              checked={draft.filterPromptCacheRetention}
+              onCheckedChange={(checked) =>
+                onChangeDraft({ filterPromptCacheRetention: checked })
+              }
+              aria-label={m.field_filter_prompt_cache_retention_aria()}
+            />
+          </div>
+          <div className="col-span-2 flex items-center gap-3">
+            <Label className="inline-flex items-center gap-1">
+              {m.field_filter_safety_identifier()}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+                </TooltipTrigger>
+                <TooltipContent side="right" className="max-w-xs">
+                  {m.field_filter_safety_identifier_tip()}
+                </TooltipContent>
+              </Tooltip>
+            </Label>
+            <Switch
+              checked={draft.filterSafetyIdentifier}
+              onCheckedChange={(checked) => onChangeDraft({ filterSafetyIdentifier: checked })}
+              aria-label={m.field_filter_safety_identifier_aria()}
+            />
+          </div>
+        </>
+      ) : null}
       <div className="col-span-2 flex items-center gap-3">
         <Label className="inline-flex items-center gap-1">
-          {m.field_filter_prompt_cache_retention()}
-     <Tooltip>
+          {m.field_rewrite_developer_role_to_system()}
+          <Tooltip>
             <TooltipTrigger asChild>
-        <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
+              <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
             </TooltipTrigger>
-     <TooltipContent side="right" className="max-w-xs">
-         {m.field_filter_prompt_cache_retention_tip()}
-</TooltipContent>
-        </Tooltip>
+            <TooltipContent side="right" className="max-w-xs">
+              {m.field_rewrite_developer_role_to_system_tip()}
+            </TooltipContent>
+          </Tooltip>
         </Label>
         <Switch
-checked={draft.filterPromptCacheRetention}
-          onCheckedChange={(checked) =>
-            onChangeDraft({ filterPromptCacheRetention: checked })
-          }
-          aria-label={m.field_filter_prompt_cache_retention_aria()}
- />
-      </div>
-      <div className="col-span-2 flex items-center gap-3">
- <Label className="inline-flex items-center gap-1">
-          {m.field_filter_safety_identifier()}
-      <Tooltip>
-    <TooltipTrigger asChild>
-       <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
-  </TooltipTrigger>
-     <TooltipContent side="right" className="max-w-xs">
-              {m.field_filter_safety_identifier_tip()}
-       </TooltipContent>
-      </Tooltip>
-        </Label>
-     <Switch
-          checked={draft.filterSafetyIdentifier}
-      onCheckedChange={(checked) => onChangeDraft({ filterSafetyIdentifier: checked })}
-     aria-label={m.field_filter_safety_identifier_aria()}
+          checked={draft.rewriteDeveloperRoleToSystem}
+          onCheckedChange={(checked) => onChangeDraft({ rewriteDeveloperRoleToSystem: checked })}
+          aria-label={m.field_rewrite_developer_role_to_system_aria()}
         />
       </div>
     </div>

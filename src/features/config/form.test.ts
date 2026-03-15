@@ -106,4 +106,22 @@ describe("config/form", () => {
 
     expect(payload.retryable_failure_cooldown_secs).toBe(30);
   });
+
+  it("serializes openai compatibility upstream flags", () => {
+    const upstream = createEmptyUpstream();
+    upstream.id = "glm-coding-plan";
+    upstream.providers = ["openai-response"];
+    upstream.baseUrl = "https://open.bigmodel.cn/api/coding/paas/v4";
+    upstream.enabled = true;
+    upstream.useChatCompletionsForResponses = true;
+    upstream.rewriteDeveloperRoleToSystem = true;
+
+    const payload = toPayload({
+      ...EMPTY_FORM,
+      upstreams: [upstream],
+    });
+
+    expect(payload.upstreams[0]?.use_chat_completions_for_responses).toBe(true);
+    expect(payload.upstreams[0]?.rewrite_developer_role_to_system).toBe(true);
+  });
 });

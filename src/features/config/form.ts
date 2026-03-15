@@ -90,6 +90,8 @@ export function createEmptyUpstream(): UpstreamForm {
     apiKey: "",
     filterPromptCacheRetention: false,
     filterSafetyIdentifier: false,
+    useChatCompletionsForResponses: false,
+    rewriteDeveloperRoleToSystem: false,
     kiroAccountId: "",
     codexAccountId: "",
     antigravityAccountId: "",
@@ -156,6 +158,8 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
       apiKey: upstream.api_key ?? "",
       filterPromptCacheRetention: upstream.filter_prompt_cache_retention ?? false,
       filterSafetyIdentifier: upstream.filter_safety_identifier ?? false,
+      useChatCompletionsForResponses: upstream.use_chat_completions_for_responses ?? false,
+      rewriteDeveloperRoleToSystem: upstream.rewrite_developer_role_to_system ?? false,
       kiroAccountId: upstream.kiro_account_id ?? "",
       codexAccountId: upstream.codex_account_id ?? "",
       antigravityAccountId: upstream.antigravity_account_id ?? "",
@@ -201,6 +205,8 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
         api_key: upstream.apiKey.trim() ? upstream.apiKey.trim() : null,
         filter_prompt_cache_retention: upstream.filterPromptCacheRetention,
         filter_safety_identifier: upstream.filterSafetyIdentifier,
+        use_chat_completions_for_responses: upstream.useChatCompletionsForResponses,
+        rewrite_developer_role_to_system: upstream.rewriteDeveloperRoleToSystem,
         kiro_account_id: upstream.kiroAccountId.trim()
           ? upstream.kiroAccountId.trim()
           : null,

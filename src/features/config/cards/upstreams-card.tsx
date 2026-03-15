@@ -139,6 +139,8 @@ export function UpstreamsCard({
           // openai-response 专属开关：切换到其它 provider 时清零，避免把无效字段写进配置。
           let filterPromptCacheRetention = prev.draft.filterPromptCacheRetention;
           let filterSafetyIdentifier = prev.draft.filterSafetyIdentifier;
+          let useChatCompletionsForResponses = prev.draft.useChatCompletionsForResponses;
+          let rewriteDeveloperRoleToSystem = prev.draft.rewriteDeveloperRoleToSystem;
           let convertFromMap = patch.convertFromMap ?? prev.draft.convertFromMap;
 
           if (nextPrimary === "kiro") {
@@ -175,12 +177,22 @@ export function UpstreamsCard({
           if (!nextProviders.includes("openai-response")) {
             filterPromptCacheRetention = false;
             filterSafetyIdentifier = false;
+            useChatCompletionsForResponses = false;
+          }
+          if (!nextProviders.some((provider) => provider === "openai" || provider === "openai-response")) {
+            rewriteDeveloperRoleToSystem = false;
           }
           if (patch.filterPromptCacheRetention !== undefined) {
             filterPromptCacheRetention = patch.filterPromptCacheRetention;
           }
           if (patch.filterSafetyIdentifier !== undefined) {
             filterSafetyIdentifier = patch.filterSafetyIdentifier;
+          }
+          if (patch.useChatCompletionsForResponses !== undefined) {
+            useChatCompletionsForResponses = patch.useChatCompletionsForResponses;
+          }
+          if (patch.rewriteDeveloperRoleToSystem !== undefined) {
+            rewriteDeveloperRoleToSystem = patch.rewriteDeveloperRoleToSystem;
           }
 
           convertFromMap = pruneConvertFromMap(convertFromMap, nextProviders);
@@ -209,6 +221,8 @@ export function UpstreamsCard({
               antigravityAccountId,
               filterPromptCacheRetention,
               filterSafetyIdentifier,
+              useChatCompletionsForResponses,
+              rewriteDeveloperRoleToSystem,
               convertFromMap,
             },
           };

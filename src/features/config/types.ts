@@ -52,6 +52,16 @@ export type UpstreamConfig = {
    * Only meaningful for provider "openai-response".
    */
   filter_safety_identifier?: boolean;
+  /**
+   * Whether to send inbound `/v1/responses` requests to `/v1/chat/completions` for this upstream.
+   *
+   * Only meaningful for provider "openai-response".
+   */
+  use_chat_completions_for_responses?: boolean;
+  /**
+   * Whether to rewrite OpenAI-compatible role `developer` to `system` before sending upstream.
+   */
+  rewrite_developer_role_to_system?: boolean;
   kiro_account_id?: string | null;
   codex_account_id?: string | null;
   antigravity_account_id?: string | null;
@@ -119,6 +129,8 @@ export type UpstreamForm = {
   apiKey: string;
   filterPromptCacheRetention: boolean;
   filterSafetyIdentifier: boolean;
+  useChatCompletionsForResponses: boolean;
+  rewriteDeveloperRoleToSystem: boolean;
   kiroAccountId: string;
   codexAccountId: string;
   antigravityAccountId: string;

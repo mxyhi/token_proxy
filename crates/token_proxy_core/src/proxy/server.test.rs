@@ -83,6 +83,7 @@ fn config_with_runtime_upstreams(
             api_key: Some("test-key".to_string()),
             filter_prompt_cache_retention: false,
             filter_safety_identifier: false,
+            rewrite_developer_role_to_system: false,
             kiro_account_id: None,
             codex_account_id: (*provider == PROVIDER_CODEX).then(|| format!("codex-{id}.json")),
             antigravity_account_id: None,
@@ -405,6 +406,91 @@ async fn send_responses_request(state: ProxyStateHandle) -> (StatusCode, Value) 
         .expect("proxy response bytes");
     let json = serde_json::from_slice(&body).expect("proxy response json");
     (status, json)
+}
+
+#[test]
+fn responses_request_uses_chat_compat_for_coding_plan_runtime_upstream() {
+    run_async(async {
+        let coding_plan = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 123,
+                "model": "glm-4.7",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": "from coding plan"
+                        },
+                        "finish_reason": "stop"
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 2,
+                    "completion_tokens": 3,
+                    "total_tokens": 5
+                }
+            }),
+        )
+        .await;
+
+        let coding_plan_base_url = format!("{}/api/coding/paas/v4", coding_plan.base_url);
+        let config = config_with_runtime_upstreams(&[(
+            PROVIDER_CHAT,
+            10,
+            "bigmodel-coding-plan",
+            coding_plan_base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        let data_dir = next_test_data_dir("responses_coding_plan_chat_compat_runtime");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+
+        let response = proxy_request(
+            State(state),
+            Method::POST,
+            Uri::from_static(RESPONSES_PATH),
+            axum::http::HeaderMap::new(),
+            Body::from(
+                json!({
+                    "model": "glm-4.7",
+                    "input": "hi"
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+
+        let response_status = response.status();
+        let response_bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("proxy response bytes");
+        let response_json: Value =
+            serde_json::from_slice(&response_bytes).expect("proxy response json");
+        let requests = coding_plan.requests();
+
+        coding_plan.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(response_status, StatusCode::OK);
+        assert_eq!(
+            response_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from coding plan")
+        );
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/api/coding/paas/v4/chat/completions");
+        assert_eq!(
+            requests[0].body["messages"][0]["role"].as_str(),
+            Some("user")
+        );
+        assert_eq!(
+            requests[0].body["messages"][0]["content"].as_str(),
+            Some("hi")
+        );
+        assert!(requests[0].body.get("input").is_none());
+    });
 }
 
 #[test]

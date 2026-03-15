@@ -62,6 +62,7 @@ fn test_upstream_url() {
         api_key: None,
         filter_prompt_cache_retention: false,
         filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
         antigravity_account_id: None,
@@ -84,6 +85,7 @@ fn test_upstream_url() {
         api_key: None,
         filter_prompt_cache_retention: false,
         filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
         antigravity_account_id: None,
@@ -99,6 +101,28 @@ fn test_upstream_url() {
         "https://api.example.com/openai/v1/responses"
     );
 
+    let coding_plan = UpstreamRuntime {
+        id: "coding-plan".to_string(),
+        base_url: "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
+        api_key: None,
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
+        kiro_account_id: None,
+        codex_account_id: None,
+        antigravity_account_id: None,
+        kiro_preferred_endpoint: None,
+        proxy_url: None,
+        priority: 0,
+        model_mappings: None,
+        header_overrides: None,
+        allowed_inbound_formats: Default::default(),
+    };
+    assert_eq!(
+        coding_plan.upstream_url("/v1/chat/completions"),
+        "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
+    );
+
     // 无路径前缀的 base_url
     let upstream_no_path = UpstreamRuntime {
         id: "test".to_string(),
@@ -106,6 +130,7 @@ fn test_upstream_url() {
         api_key: None,
         filter_prompt_cache_retention: false,
         filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
         antigravity_account_id: None,
@@ -132,6 +157,7 @@ fn test_upstream_url() {
         api_key: None,
         filter_prompt_cache_retention: false,
         filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
         antigravity_account_id: None,

@@ -9,6 +9,7 @@ async fn filters_prompt_cache_retention_for_openai_responses_upstream() {
         api_key: None,
         filter_prompt_cache_retention: true,
         filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
         antigravity_account_id: None,
@@ -55,6 +56,7 @@ async fn filter_prompt_cache_retention_is_noop_when_disabled() {
         api_key: None,
         filter_prompt_cache_retention: false,
         filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
         antigravity_account_id: None,
@@ -92,6 +94,7 @@ async fn filters_safety_identifier_for_openai_responses_upstream() {
         api_key: None,
         filter_prompt_cache_retention: false,
         filter_safety_identifier: true,
+        rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
         antigravity_account_id: None,
@@ -139,6 +142,7 @@ async fn filter_safety_identifier_is_noop_when_disabled() {
         api_key: None,
         filter_prompt_cache_retention: false,
         filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
         antigravity_account_id: None,
@@ -165,6 +169,200 @@ async fn filter_safety_identifier_is_noop_when_disabled() {
         Err(_) => panic!("rewrite result"),
     };
 
+    assert!(rewritten.is_none());
+}
+
+#[tokio::test]
+async fn rewrites_developer_role_to_system_for_chat_upstream() {
+    let upstream = UpstreamRuntime {
+        id: "test".to_string(),
+        base_url: "https://api.openai.com".to_string(),
+        api_key: None,
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        rewrite_developer_role_to_system: true,
+        kiro_account_id: None,
+        codex_account_id: None,
+        antigravity_account_id: None,
+        kiro_preferred_endpoint: None,
+        proxy_url: None,
+        priority: 0,
+        model_mappings: None,
+        header_overrides: None,
+        allowed_inbound_formats: Default::default(),
+    };
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"glm-5","messages":[{"role":"developer","content":"be precise"},{"role":"user","content":"hi"}]}"#,
+    ));
+
+    let rewritten = match maybe_rewrite_developer_role_to_system(
+        &upstream,
+        "/v1/chat/completions",
+        &body,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => panic!("rewrite result"),
+    };
+    let rewritten = rewritten.expect("should rewrite");
+
+    let bytes = rewritten
+        .read_bytes_if_small(1024)
+        .await
+        .expect("read rewritten bytes")
+        .expect("rewritten body exists");
+    let value: Value = serde_json::from_slice(&bytes).expect("json");
+    let messages = value["messages"].as_array().expect("messages");
+
+    assert_eq!(messages[0]["role"], "system");
+    assert_eq!(messages[1]["role"], "user");
+}
+
+#[tokio::test]
+async fn rewrites_developer_role_to_system_for_responses_upstream() {
+    let upstream = UpstreamRuntime {
+        id: "test".to_string(),
+        base_url: "https://api.openai.com".to_string(),
+        api_key: None,
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        rewrite_developer_role_to_system: true,
+        kiro_account_id: None,
+        codex_account_id: None,
+        antigravity_account_id: None,
+        kiro_preferred_endpoint: None,
+        proxy_url: None,
+        priority: 0,
+        model_mappings: None,
+        header_overrides: None,
+        allowed_inbound_formats: Default::default(),
+    };
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"glm-5","input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"be precise"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}"#,
+    ));
+
+    let rewritten =
+        match maybe_rewrite_developer_role_to_system(&upstream, "/v1/responses", &body).await {
+            Ok(value) => value,
+            Err(_) => panic!("rewrite result"),
+        };
+    let rewritten = rewritten.expect("should rewrite");
+
+    let bytes = rewritten
+        .read_bytes_if_small(1024)
+        .await
+        .expect("read rewritten bytes")
+        .expect("rewritten body exists");
+    let value: Value = serde_json::from_slice(&bytes).expect("json");
+    let input = value["input"].as_array().expect("input");
+
+    assert_eq!(input[0]["role"], "system");
+    assert_eq!(input[1]["role"], "user");
+}
+
+#[tokio::test]
+async fn developer_role_rewrite_is_noop_when_disabled() {
+    let upstream = UpstreamRuntime {
+        id: "test".to_string(),
+        base_url: "https://api.openai.com".to_string(),
+        api_key: None,
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
+        kiro_account_id: None,
+        codex_account_id: None,
+        antigravity_account_id: None,
+        kiro_preferred_endpoint: None,
+        proxy_url: None,
+        priority: 0,
+        model_mappings: None,
+        header_overrides: None,
+        allowed_inbound_formats: Default::default(),
+    };
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"glm-5","messages":[{"role":"developer","content":"be precise"}]}"#,
+    ));
+
+    let rewritten = match maybe_rewrite_developer_role_to_system(
+        &upstream,
+        "/v1/chat/completions",
+        &body,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => panic!("rewrite result"),
+    };
+
+    assert!(rewritten.is_none());
+}
+
+#[tokio::test]
+async fn developer_role_rewrite_is_noop_for_bigmodel_chat_when_disabled() {
+    let upstream = UpstreamRuntime {
+        id: "bigmodel-chat".to_string(),
+        base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
+        api_key: None,
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
+        kiro_account_id: None,
+        codex_account_id: None,
+        antigravity_account_id: None,
+        kiro_preferred_endpoint: None,
+        proxy_url: None,
+        priority: 0,
+        model_mappings: None,
+        header_overrides: None,
+        allowed_inbound_formats: Default::default(),
+    };
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"glm-5","messages":[{"role":"developer","content":"be precise"},{"role":"user","content":"hi"}]}"#,
+    ));
+
+    let rewritten = match maybe_rewrite_developer_role_to_system(
+        &upstream,
+        "/v1/chat/completions",
+        &body,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => panic!("rewrite result"),
+    };
+    assert!(rewritten.is_none());
+}
+
+#[tokio::test]
+async fn developer_role_rewrite_is_noop_for_bigmodel_responses_when_disabled() {
+    let upstream = UpstreamRuntime {
+        id: "bigmodel-responses".to_string(),
+        base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
+        api_key: None,
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
+        kiro_account_id: None,
+        codex_account_id: None,
+        antigravity_account_id: None,
+        kiro_preferred_endpoint: None,
+        proxy_url: None,
+        priority: 0,
+        model_mappings: None,
+        header_overrides: None,
+        allowed_inbound_formats: Default::default(),
+    };
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"glm-5","input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"be precise"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}"#,
+    ));
+
+    let rewritten = match maybe_rewrite_developer_role_to_system(&upstream, "/v1/responses", &body)
+        .await
+    {
+        Ok(value) => value,
+        Err(_) => panic!("rewrite result"),
+    };
     assert!(rewritten.is_none());
 }
 

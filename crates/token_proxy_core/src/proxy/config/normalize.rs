@@ -119,17 +119,31 @@ fn normalize_single_upstream(
     let header_overrides = normalize_header_overrides(upstream.overrides.as_ref())?;
 
     let mut output = Vec::with_capacity(providers.len());
+    let mut seen_runtime_providers = HashSet::new();
     for provider in providers {
-        let base_url = resolve_base_url(&upstream.id, upstream.base_url.as_str(), &provider)?;
+        let use_chat_completions_for_responses = upstream.use_chat_completions_for_responses;
+        let runtime_provider = runtime_provider_for_upstream(
+            provider.as_str(),
+            use_chat_completions_for_responses,
+        );
+        if !seen_runtime_providers.insert(runtime_provider.to_string()) {
+            return Err(format!(
+                "Upstream {} providers collapse to duplicate runtime provider: {runtime_provider}.",
+                upstream.id
+            ));
+        }
+        let base_url =
+            resolve_base_url(&upstream.id, upstream.base_url.as_str(), runtime_provider)?;
         validate_provider_account_binding(
             &upstream.id,
-            &provider,
+            runtime_provider,
             kiro_account_id.as_deref(),
             codex_account_id.as_deref(),
             antigravity_account_id.as_deref(),
         )?;
 
-        let mut allowed_inbound_formats = native_inbound_formats_for_provider(&provider);
+        let mut allowed_inbound_formats =
+            default_inbound_formats_for_provider(provider.as_str(), runtime_provider);
         if let Some(extra) = upstream.convert_from_map.get(provider.as_str()) {
             allowed_inbound_formats.extend(extra.iter().copied());
         }
@@ -140,6 +154,7 @@ fn normalize_single_upstream(
             api_key: api_key.clone(),
             filter_prompt_cache_retention: upstream.filter_prompt_cache_retention,
             filter_safety_identifier: upstream.filter_safety_identifier,
+            rewrite_developer_role_to_system: upstream.rewrite_developer_role_to_system,
             kiro_account_id: kiro_account_id.clone(),
             codex_account_id: codex_account_id.clone(),
             antigravity_account_id: antigravity_account_id.clone(),
@@ -150,10 +165,23 @@ fn normalize_single_upstream(
             header_overrides: header_overrides.clone(),
             allowed_inbound_formats,
         };
-        output.push(NormalizedUpstream { provider, runtime });
+        output.push(NormalizedUpstream {
+            provider: runtime_provider.to_string(),
+            runtime,
+        });
     }
 
     Ok(output)
+}
+
+fn runtime_provider_for_upstream<'a>(
+    provider: &'a str,
+    use_chat_completions_for_responses: bool,
+) -> &'a str {
+    if provider == "openai-response" && use_chat_completions_for_responses {
+        return "openai";
+    }
+    provider
 }
 
 fn normalize_providers(upstream: &UpstreamConfig) -> Result<Vec<String>, String> {
@@ -277,6 +305,18 @@ fn validate_provider_account_binding(
         ));
     }
     Ok(())
+}
+
+fn default_inbound_formats_for_provider(
+    configured_provider: &str,
+    runtime_provider: &str,
+) -> InboundApiFormatMask {
+    if configured_provider == "openai-response" && runtime_provider == "openai" {
+        let mut mask = InboundApiFormatMask::default();
+        mask.insert(InboundApiFormat::OpenaiResponses);
+        return mask;
+    }
+    native_inbound_formats_for_provider(runtime_provider)
 }
 
 fn native_inbound_formats_for_provider(provider: &str) -> InboundApiFormatMask {

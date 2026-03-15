@@ -21,6 +21,8 @@ function buildUpstream(): UpstreamForm {
     apiKey: "",
     filterPromptCacheRetention: false,
     filterSafetyIdentifier: false,
+    useChatCompletionsForResponses: false,
+    rewriteDeveloperRoleToSystem: false,
     kiroAccountId: "",
     codexAccountId: "codex-1.json",
     antigravityAccountId: "",

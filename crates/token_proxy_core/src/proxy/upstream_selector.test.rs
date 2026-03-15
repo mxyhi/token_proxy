@@ -8,6 +8,7 @@ fn runtime(id: &str) -> UpstreamRuntime {
         api_key: Some("test-key".to_string()),
         filter_prompt_cache_retention: false,
         filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
         antigravity_account_id: None,

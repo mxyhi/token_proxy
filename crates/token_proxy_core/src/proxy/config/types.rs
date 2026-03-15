@@ -141,6 +141,12 @@ pub struct UpstreamConfig {
     /// Only meaningful for provider "openai-response": strip `safety_identifier` from /v1/responses requests.
     #[serde(default, skip_serializing_if = "is_false")]
     pub filter_safety_identifier: bool,
+    /// Only meaningful for provider "openai-response": send inbound `/v1/responses` traffic to `/v1/chat/completions`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub use_chat_completions_for_responses: bool,
+    /// Rewrite OpenAI-compatible message role `developer` to `system` before forwarding upstream.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub rewrite_developer_role_to_system: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kiro_account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -277,6 +283,7 @@ pub struct UpstreamRuntime {
     pub(crate) api_key: Option<String>,
     pub(crate) filter_prompt_cache_retention: bool,
     pub(crate) filter_safety_identifier: bool,
+    pub(crate) rewrite_developer_role_to_system: bool,
     pub(crate) kiro_account_id: Option<String>,
     pub(crate) codex_account_id: Option<String>,
     pub(crate) antigravity_account_id: Option<String>,
@@ -300,7 +307,8 @@ impl UpstreamRuntime {
     /// 结果：https://example.com/openai/v1/chat/completions（去掉重复的 /v1）
     pub(crate) fn upstream_url(&self, path: &str) -> String {
         let base = self.base_url.trim_end_matches('/');
-        let effective_path = strip_overlapping_prefix(base, path);
+        let normalized_path = normalize_openai_compatible_path_for_base_url(base, path);
+        let effective_path = strip_overlapping_prefix(base, normalized_path);
         format!("{base}{effective_path}")
     }
 
@@ -314,6 +322,22 @@ impl UpstreamRuntime {
     pub(crate) fn supports_inbound(&self, format: InboundApiFormat) -> bool {
         self.allowed_inbound_formats.contains(format)
     }
+}
+
+fn is_bigmodel_coding_plan_base_url(base_url: &str) -> bool {
+    let Ok(url) = url::Url::parse(base_url) else {
+        return false;
+    };
+    url.path()
+        .trim_end_matches('/')
+        .contains("/api/coding/paas/")
+}
+
+fn normalize_openai_compatible_path_for_base_url<'a>(base_url: &str, path: &'a str) -> &'a str {
+    if is_bigmodel_coding_plan_base_url(base_url) && path == "/v1/chat/completions" {
+        return "/chat/completions";
+    }
+    path
 }
 
 #[derive(Serialize)]

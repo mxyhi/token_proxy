@@ -13,9 +13,7 @@ fn retryable_status_matches_proxy_policy() {
     assert!(is_retryable_status(StatusCode::REQUEST_TIMEOUT));
     assert!(is_retryable_status(StatusCode::UNPROCESSABLE_ENTITY));
     assert!(is_retryable_status(StatusCode::GATEWAY_TIMEOUT));
-    assert!(is_retryable_status(
-        StatusCode::from_u16(524).expect("524")
-    ));
+    assert!(is_retryable_status(StatusCode::from_u16(524).expect("524")));
 }
 
 #[test]

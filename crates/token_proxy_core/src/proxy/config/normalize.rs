@@ -88,13 +88,14 @@ fn normalize_single_upstream(
 
     let providers = normalize_providers(upstream)?;
     validate_convert_from_map(upstream, &providers)?;
+    let runtime_providers = resolve_runtime_providers(
+        &upstream.id,
+        &providers,
+        upstream.use_chat_completions_for_responses,
+    )?;
+    let api_keys = normalize_api_keys(upstream);
+    validate_api_key_mode(&upstream.id, &providers, api_keys.len())?;
 
-    let api_key = upstream
-        .api_key
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
     let kiro_account_id = upstream
         .kiro_account_id
         .as_ref()
@@ -118,60 +119,117 @@ fn normalize_single_upstream(
     let model_mappings = compile_model_mappings(&upstream.id, &upstream.model_mappings)?;
     let header_overrides = normalize_header_overrides(upstream.overrides.as_ref())?;
 
-    let mut output = Vec::with_capacity(providers.len());
-    let mut seen_runtime_providers = HashSet::new();
-    for provider in providers {
-        let use_chat_completions_for_responses = upstream.use_chat_completions_for_responses;
-        let runtime_provider = runtime_provider_for_upstream(
-            provider.as_str(),
-            use_chat_completions_for_responses,
-        );
-        if !seen_runtime_providers.insert(runtime_provider.to_string()) {
-            return Err(format!(
-                "Upstream {} providers collapse to duplicate runtime provider: {runtime_provider}.",
-                upstream.id
-            ));
-        }
-        let base_url =
-            resolve_base_url(&upstream.id, upstream.base_url.as_str(), runtime_provider)?;
+    let mut output = Vec::with_capacity(runtime_providers.len() * api_keys.len().max(1));
+    for (provider, runtime_provider) in runtime_providers {
+        let base_url = resolve_base_url(
+            &upstream.id,
+            upstream.base_url.as_str(),
+            runtime_provider.as_str(),
+        )?;
         validate_provider_account_binding(
             &upstream.id,
-            runtime_provider,
+            runtime_provider.as_str(),
             kiro_account_id.as_deref(),
             codex_account_id.as_deref(),
             antigravity_account_id.as_deref(),
         )?;
 
         let mut allowed_inbound_formats =
-            default_inbound_formats_for_provider(provider.as_str(), runtime_provider);
+            default_inbound_formats_for_provider(provider.as_str(), runtime_provider.as_str());
         if let Some(extra) = upstream.convert_from_map.get(provider.as_str()) {
             allowed_inbound_formats.extend(extra.iter().copied());
         }
 
-        let runtime = UpstreamRuntime {
-            id: upstream.id.trim().to_string(),
-            base_url,
-            api_key: api_key.clone(),
-            filter_prompt_cache_retention: upstream.filter_prompt_cache_retention,
-            filter_safety_identifier: upstream.filter_safety_identifier,
-            rewrite_developer_role_to_system: upstream.rewrite_developer_role_to_system,
-            kiro_account_id: kiro_account_id.clone(),
-            codex_account_id: codex_account_id.clone(),
-            antigravity_account_id: antigravity_account_id.clone(),
-            kiro_preferred_endpoint: upstream.preferred_endpoint.clone(),
-            proxy_url: proxy_url.clone(),
-            priority: upstream.priority.unwrap_or(0),
-            model_mappings: model_mappings.clone(),
-            header_overrides: header_overrides.clone(),
-            allowed_inbound_formats,
-        };
-        output.push(NormalizedUpstream {
-            provider: runtime_provider.to_string(),
-            runtime,
-        });
+        for (index, api_key) in api_keys.iter().enumerate() {
+            let runtime = UpstreamRuntime {
+                id: upstream.id.trim().to_string(),
+                selector_key: build_selector_key(&upstream.id, api_keys.len(), index),
+                base_url: base_url.clone(),
+                api_key: api_key.clone(),
+                filter_prompt_cache_retention: upstream.filter_prompt_cache_retention,
+                filter_safety_identifier: upstream.filter_safety_identifier,
+                rewrite_developer_role_to_system: upstream.rewrite_developer_role_to_system,
+                kiro_account_id: kiro_account_id.clone(),
+                codex_account_id: codex_account_id.clone(),
+                antigravity_account_id: antigravity_account_id.clone(),
+                kiro_preferred_endpoint: upstream.preferred_endpoint.clone(),
+                proxy_url: proxy_url.clone(),
+                priority: upstream.priority.unwrap_or(0),
+                model_mappings: model_mappings.clone(),
+                header_overrides: header_overrides.clone(),
+                allowed_inbound_formats,
+            };
+            output.push(NormalizedUpstream {
+                provider: runtime_provider.clone(),
+                runtime,
+            });
+        }
     }
 
     Ok(output)
+}
+
+fn resolve_runtime_providers(
+    upstream_id: &str,
+    providers: &[String],
+    use_chat_completions_for_responses: bool,
+) -> Result<Vec<(String, String)>, String> {
+    let mut output = Vec::with_capacity(providers.len());
+    let mut seen_runtime_providers = HashSet::new();
+    for provider in providers {
+        let runtime_provider =
+            runtime_provider_for_upstream(provider.as_str(), use_chat_completions_for_responses);
+        if !seen_runtime_providers.insert(runtime_provider.to_string()) {
+            return Err(format!(
+                "Upstream {upstream_id} providers collapse to duplicate runtime provider: {runtime_provider}."
+            ));
+        }
+        output.push((provider.clone(), runtime_provider.to_string()));
+    }
+    Ok(output)
+}
+
+fn normalize_api_keys(upstream: &UpstreamConfig) -> Vec<Option<String>> {
+    let mut seen = HashSet::new();
+    let mut output = Vec::new();
+    for value in &upstream.api_keys {
+        let trimmed = value.trim();
+        if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
+            continue;
+        }
+        output.push(Some(trimmed.to_string()));
+    }
+    if output.is_empty() {
+        output.push(None);
+    }
+    output
+}
+
+fn validate_api_key_mode(
+    upstream_id: &str,
+    providers: &[String],
+    api_key_count: usize,
+) -> Result<(), String> {
+    if api_key_count <= 1 {
+        return Ok(());
+    }
+    if providers
+        .iter()
+        .any(|provider| matches!(provider.as_str(), "kiro" | "codex" | "antigravity"))
+    {
+        return Err(format!(
+            "Upstream {upstream_id} does not support multiple api_keys for account-based providers."
+        ));
+    }
+    Ok(())
+}
+
+fn build_selector_key(upstream_id: &str, api_key_count: usize, index: usize) -> String {
+    let id = upstream_id.trim();
+    if api_key_count <= 1 {
+        return id.to_string();
+    }
+    format!("{id}#{}", index + 1)
 }
 
 fn runtime_provider_for_upstream<'a>(

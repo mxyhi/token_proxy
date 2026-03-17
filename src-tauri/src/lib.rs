@@ -190,7 +190,9 @@ async fn save_proxy_config(
     logging_state.apply_level(log_level);
     app_proxy::set(&app_proxy_state, app_proxy_url).await;
     let proxy_context = app.state::<proxy::service::ProxyContext>();
-    let result = proxy_service.apply_saved_config(proxy_context.inner()).await;
+    let result = proxy_service
+        .apply_saved_config(proxy_context.inner())
+        .await;
     tray_state.apply_status(&result.status);
     if let Some(error) = result.apply_error.as_deref() {
         tray_state.apply_error("应用失败", error);

@@ -38,6 +38,7 @@ fn config_without_local() -> ProxyConfig {
 fn upstream_without_key() -> UpstreamRuntime {
     UpstreamRuntime {
         id: "anthropic-test".to_string(),
+        selector_key: "anthropic-test".to_string(),
         base_url: "https://api.anthropic.com".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,

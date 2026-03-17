@@ -79,6 +79,7 @@ fn config_with_runtime_upstreams(
     for (provider, priority, id, base_url, inbound_formats) in upstreams {
         let mut runtime = UpstreamRuntime {
             id: (*id).to_string(),
+            selector_key: (*id).to_string(),
             base_url: (*base_url).to_string(),
             api_key: Some("test-key".to_string()),
             filter_prompt_cache_retention: false,

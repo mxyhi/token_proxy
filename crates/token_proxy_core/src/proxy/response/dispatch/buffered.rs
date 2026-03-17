@@ -39,17 +39,12 @@ pub(super) async fn build_buffered_response(
 ) -> Response {
     let mut context = context;
     let response_headers = upstream_res.headers().clone();
-    let bytes = match read_upstream_bytes(
-        upstream_res,
-        &mut context,
-        &log,
-        upstream_no_data_timeout,
-    )
-    .await
-    {
-        Ok(bytes) => bytes,
-        Err(response) => return response,
-    };
+    let bytes =
+        match read_upstream_bytes(upstream_res, &mut context, &log, upstream_no_data_timeout).await
+        {
+            Ok(bytes) => bytes,
+            Err(response) => return response,
+        };
     log_debug_headers_body(
         "upstream.response.raw",
         Some(&response_headers),

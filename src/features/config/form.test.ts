@@ -84,7 +84,7 @@ describe("config/form", () => {
     upstream.id = "  upstream-1 ";
     upstream.providers = [" openai ", "openai", "", " openai-response "];
     upstream.baseUrl = " https://example.com ";
-    upstream.apiKey = "   ";
+    upstream.apiKeys = "   ";
     upstream.convertFromMap = {
       openai: ["openai_chat"],
       unknown: ["gemini"],
@@ -104,9 +104,22 @@ describe("config/form", () => {
     expect(payload.upstreams[0]?.id).toBe("upstream-1");
     expect(payload.upstreams[0]?.providers).toEqual(["openai", "openai-response"]);
     expect(payload.upstreams[0]?.base_url).toBe("https://example.com");
-    expect(payload.upstreams[0]?.api_key).toBeNull();
+    expect(payload.upstreams[0]?.api_keys).toBeUndefined();
     // openai_chat 对 openai 是 native 格式，应被清理；unknown provider 也应被丢弃。
     expect(payload.upstreams[0]?.convert_from_map).toBeUndefined();
+  });
+
+  it("serializes multiple upstream api keys", () => {
+    const upstream = createEmptyUpstream();
+    upstream.id = "multi-key";
+    upstream.apiKeys = " key-a, key-b, key-a ";
+
+    const payload = toPayload({
+      ...EMPTY_FORM,
+      upstreams: [upstream],
+    });
+
+    expect(payload.upstreams[0]?.api_keys).toEqual(["key-a", "key-b"]);
   });
 
   it("serializes retryable failure cooldown seconds", () => {
@@ -126,15 +139,27 @@ describe("config/form", () => {
       port: 9208,
       local_api_key: null,
       app_proxy_url: null,
+      upstreams: [
+        {
+          id: "multi-key",
+          providers: ["openai"],
+          base_url: "https://example.com",
+          api_keys: ["key-a", "key-b"],
+          proxy_url: null,
+          priority: null,
+          enabled: true,
+          model_mappings: {},
+        },
+      ],
       tray_token_rate: {
         enabled: true,
         format: "split",
       },
       upstream_strategy: "priority_fill_first",
-      upstreams: [],
     });
 
     expect(form.upstreamNoDataTimeoutSecs).toBe("120");
+    expect(form.upstreams[0]?.apiKeys).toBe("key-a, key-b");
   });
 
   it("serializes upstream no data timeout seconds", () => {

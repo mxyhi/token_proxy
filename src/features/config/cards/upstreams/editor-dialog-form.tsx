@@ -303,14 +303,14 @@ function UpstreamAuthFields({
       <EditorField
         label={m.field_api_key()}
         tooltip={m.field_api_key_tip()}
-        htmlFor="upstream-editor-apiKey"
+        htmlFor="upstream-editor-apiKeys"
       >
         <PasswordInput
-          id="upstream-editor-apiKey"
+          id="upstream-editor-apiKeys"
           visible={showApiKeys}
           onVisibilityChange={onToggleApiKeys}
-          value={draft.apiKey}
-          onChange={(e) => onChangeDraft({ apiKey: e.target.value })}
+          value={draft.apiKeys}
+          onChange={(e) => onChangeDraft({ apiKeys: e.target.value })}
           placeholder={m.common_optional()}
         />
       </EditorField>

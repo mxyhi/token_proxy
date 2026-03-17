@@ -5,7 +5,7 @@ export type UpstreamColumnId =
   | "provider"
   | "account"
   | "baseUrl"
-  | "apiKey"
+  | "apiKeys"
   | "proxyUrl"
   | "priority"
   | "status";

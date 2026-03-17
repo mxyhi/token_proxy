@@ -50,6 +50,20 @@ function parseListInput(value: string) {
     .filter((item) => item.length > 0);
 }
 
+function parseApiKeysInput(value: string) {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const item of value.split(/[,\n]/)) {
+    const trimmed = item.trim();
+    if (!trimmed || seen.has(trimmed)) {
+      continue;
+    }
+    seen.add(trimmed);
+    output.push(trimmed);
+  }
+  return output;
+}
+
 const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "host",
   "port",
@@ -91,7 +105,7 @@ export function createEmptyUpstream(): UpstreamForm {
     id: "",
     providers: ["openai"],
     baseUrl: "",
-    apiKey: "",
+    apiKeys: "",
     filterPromptCacheRetention: false,
     filterSafetyIdentifier: false,
     useChatCompletionsForResponses: false,
@@ -162,7 +176,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
       id: upstream.id,
       providers: upstream.providers ?? [],
       baseUrl: upstream.base_url,
-      apiKey: upstream.api_key ?? "",
+      apiKeys: joinListInput(upstream.api_keys),
       filterPromptCacheRetention: upstream.filter_prompt_cache_retention ?? false,
       filterSafetyIdentifier: upstream.filter_safety_identifier ?? false,
       useChatCompletionsForResponses: upstream.use_chat_completions_for_responses ?? false,
@@ -208,11 +222,12 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     upstream_strategy: form.upstreamStrategy,
     upstreams: form.upstreams.map((upstream) => {
       const providers = normalizeProviders(upstream.providers);
+      const apiKeys = parseApiKeysInput(upstream.apiKeys);
       return {
         id: upstream.id.trim(),
         providers,
         base_url: upstream.baseUrl.trim(),
-        api_key: upstream.apiKey.trim() ? upstream.apiKey.trim() : null,
+        api_keys: apiKeys.length ? apiKeys : undefined,
         filter_prompt_cache_retention: upstream.filterPromptCacheRetention,
         filter_safety_identifier: upstream.filterSafetyIdentifier,
         use_chat_completions_for_responses: upstream.useChatCompletionsForResponses,
@@ -289,6 +304,12 @@ export function validate(form: ConfigForm) {
       return {
         valid: false,
         message: m.error_upstream_provider_required({ id }),
+      };
+    }
+    if (specialProviders.length && parseApiKeysInput(upstream.apiKeys).length > 1) {
+      return {
+        valid: false,
+        message: m.error_upstream_multiple_api_keys_unsupported({ id }),
       };
     }
     if (providers.includes("kiro") && !upstream.kiroAccountId.trim()) {

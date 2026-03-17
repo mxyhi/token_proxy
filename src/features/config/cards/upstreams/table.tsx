@@ -237,7 +237,7 @@ function renderAccountCell(
 }
 
 function renderApiKeyCell(upstream: UpstreamForm, showApiKeys: boolean) {
-  const value = showApiKeys ? upstream.apiKey : toMaskedApiKey(upstream.apiKey);
+  const value = showApiKeys ? upstream.apiKeys : toMaskedApiKey(upstream.apiKeys);
   return renderTextCell(value, m.common_optional());
 }
 
@@ -268,7 +268,7 @@ function renderUpstreamCell(
       return renderAccountCell(upstream, kiroAccounts, codexAccounts, antigravityAccounts);
     case "baseUrl":
       return renderTextCell(upstream.baseUrl, "https://api.openai.com");
-    case "apiKey":
+    case "apiKeys":
       return renderApiKeyCell(upstream, showApiKeys);
     case "proxyUrl":
       return renderProxyUrlCell(upstream, showApiKeys);

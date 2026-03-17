@@ -23,7 +23,16 @@ pub(super) fn migrate_config_json(root: &mut Value) -> bool {
                     .is_some_and(|obj| obj.contains_key("provider"))
             })
         });
-    let is_legacy_config = had_legacy_enable || had_legacy_provider;
+    let had_legacy_api_key = root_obj
+        .get("upstreams")
+        .and_then(Value::as_array)
+        .is_some_and(|items| {
+            items.iter().any(|item| {
+                item.as_object()
+                    .is_some_and(|obj| obj.contains_key("api_key"))
+            })
+        });
+    let is_legacy_config = had_legacy_enable || had_legacy_provider || had_legacy_api_key;
 
     // 仅当检测到旧字段时才进行迁移；否则避免对新配置做“默认填充”，改变用户语义。
     if !is_legacy_config {
@@ -83,6 +92,18 @@ fn migrate_single_upstream(upstream: &mut Value, legacy_enable_conversion: bool)
         }
     }
 
+    // api_key -> api_keys[]
+    if let Some(api_key_value) = obj.remove("api_key") {
+        changed = true;
+        if let Some(api_key) = api_key_value
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            merge_api_key_into_api_keys(obj, api_key);
+        }
+    }
+
     // 若用户已经写了 providers，但写成非数组，保持原样，让后续类型反序列化报错给出明确提示。
 
     // 旧版全局开关迁移：以 `convert_from_map` 显式表达允许转换的入站格式。
@@ -131,6 +152,22 @@ fn read_providers(obj: &Map<String, Value>) -> Option<Vec<String>> {
         output.push(value.to_string());
     }
     Some(output)
+}
+
+fn merge_api_key_into_api_keys(obj: &mut Map<String, Value>, api_key: &str) {
+    match obj.get_mut("api_keys") {
+        Some(Value::Array(items)) => {
+            if !items.iter().any(|value| value.as_str() == Some(api_key)) {
+                items.push(Value::String(api_key.to_string()));
+            }
+        }
+        _ => {
+            obj.insert(
+                "api_keys".to_string(),
+                Value::Array(vec![Value::String(api_key.to_string())]),
+            );
+        }
+    }
 }
 
 fn ensure_convert_from_map_contains(

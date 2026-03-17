@@ -9,14 +9,14 @@ use super::{config::UpstreamRuntime, config::UpstreamStrategy};
 #[derive(Hash, PartialEq, Eq)]
 struct CooldownKey {
     provider: String,
-    upstream_id: String,
+    upstream_key: String,
 }
 
 impl CooldownKey {
-    fn new(provider: &str, upstream_id: &str) -> Self {
+    fn new(provider: &str, upstream_key: &str) -> Self {
         Self {
             provider: provider.to_string(),
-            upstream_id: upstream_id.to_string(),
+            upstream_key: upstream_key.to_string(),
         }
     }
 }
@@ -50,23 +50,19 @@ impl UpstreamSelectorRuntime {
         self.prioritize_ready_upstreams(provider, items, base_order)
     }
 
-    pub(crate) fn mark_retryable_failure(&self, provider: &str, upstream_id: &str) {
+    pub(crate) fn mark_retryable_failure(&self, provider: &str, upstream_key: &str) {
         let Some(until) = Instant::now().checked_add(self.retryable_failure_cooldown) else {
             return;
         };
-        self.mark_cooldown_until(
-            provider,
-            upstream_id,
-            until,
-        );
+        self.mark_cooldown_until(provider, upstream_key, until);
     }
 
-    pub(crate) fn clear_cooldown(&self, provider: &str, upstream_id: &str) {
+    pub(crate) fn clear_cooldown(&self, provider: &str, upstream_key: &str) {
         let mut cooldowns = self
             .cooldowns
             .lock()
             .expect("selector cooldown lock poisoned");
-        cooldowns.remove(&CooldownKey::new(provider, upstream_id));
+        cooldowns.remove(&CooldownKey::new(provider, upstream_key));
     }
 
     fn prioritize_ready_upstreams(
@@ -88,8 +84,8 @@ impl UpstreamSelectorRuntime {
         // 2. 再把仍在 cooldown 的 upstream 后置，避免每个请求都重复撞到刚失败的账号。
         // 如果整组都在 cooldown，则按最早恢复时间优先，保证请求仍有机会探测恢复。
         for (position, item_index) in base_order.into_iter().enumerate() {
-            let upstream_id = items[item_index].id.as_str();
-            let key = CooldownKey::new(provider, upstream_id);
+            let upstream_key = items[item_index].selector_key.as_str();
+            let key = CooldownKey::new(provider, upstream_key);
             match cooldowns.get(&key).copied() {
                 Some(until) if until > now => cooled.push((position, item_index, until)),
                 Some(_) => {
@@ -115,12 +111,12 @@ impl UpstreamSelectorRuntime {
         ready
     }
 
-    fn mark_cooldown_until(&self, provider: &str, upstream_id: &str, until: Instant) {
+    fn mark_cooldown_until(&self, provider: &str, upstream_key: &str, until: Instant) {
         let mut cooldowns = self
             .cooldowns
             .lock()
             .expect("selector cooldown lock poisoned");
-        let key = CooldownKey::new(provider, upstream_id);
+        let key = CooldownKey::new(provider, upstream_key);
         match cooldowns.get_mut(&key) {
             Some(existing) if *existing >= until => {}
             Some(existing) => *existing = until,

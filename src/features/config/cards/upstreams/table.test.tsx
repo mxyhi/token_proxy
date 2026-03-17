@@ -18,7 +18,7 @@ function buildUpstream(): UpstreamForm {
     id: LONG_ID,
     providers: ["codex"],
     baseUrl: "https://api.example.com/v1",
-    apiKey: "",
+    apiKeys: "",
     filterPromptCacheRetention: false,
     filterSafetyIdentifier: false,
     useChatCompletionsForResponses: false,

@@ -167,9 +167,7 @@ async fn insert_request(
 #[tokio::test]
 async fn median_latency_empty_table_returns_zero() {
     let pool = setup_test_db().await;
-    let result = query_median_latency(&pool, None, None, None)
-        .await
-        .unwrap();
+    let result = query_median_latency(&pool, None, None, None).await.unwrap();
     assert_eq!(result, 0, "Empty table should return 0");
 }
 
@@ -178,9 +176,7 @@ async fn median_latency_single_value() {
     let pool = setup_test_db().await;
     insert_latency(&pool, 100).await;
 
-    let result = query_median_latency(&pool, None, None, None)
-        .await
-        .unwrap();
+    let result = query_median_latency(&pool, None, None, None).await.unwrap();
     assert_eq!(result, 100, "Single value should be the median");
 }
 
@@ -192,9 +188,7 @@ async fn median_latency_odd_count() {
     insert_latency(&pool, 30).await;
     insert_latency(&pool, 20).await;
 
-    let result = query_median_latency(&pool, None, None, None)
-        .await
-        .unwrap();
+    let result = query_median_latency(&pool, None, None, None).await.unwrap();
     assert_eq!(result, 20, "Odd count median should be middle value");
 }
 
@@ -207,9 +201,7 @@ async fn median_latency_even_count() {
     insert_latency(&pool, 20).await;
     insert_latency(&pool, 30).await;
 
-    let result = query_median_latency(&pool, None, None, None)
-        .await
-        .unwrap();
+    let result = query_median_latency(&pool, None, None, None).await.unwrap();
     assert_eq!(
         result, 25,
         "Even count median should be average of two middle values"
@@ -223,9 +215,7 @@ async fn median_latency_even_count_rounds_down() {
     insert_latency(&pool, 10).await;
     insert_latency(&pool, 21).await;
 
-    let result = query_median_latency(&pool, None, None, None)
-        .await
-        .unwrap();
+    let result = query_median_latency(&pool, None, None, None).await.unwrap();
     assert_eq!(result, 15, "Median should use integer division");
 }
 
@@ -262,9 +252,7 @@ async fn median_latency_with_time_range_filter() {
     assert_eq!(result, 100, "Should filter by time range");
 
     // 查询所有数据，中位数应为 100
-    let result_all = query_median_latency(&pool, None, None, None)
-        .await
-        .unwrap();
+    let result_all = query_median_latency(&pool, None, None, None).await.unwrap();
     assert_eq!(result_all, 100, "All data median should be 100");
 }
 
@@ -324,12 +312,14 @@ async fn read_snapshot_filters_by_upstream_and_keeps_all_upstream_options() {
 
     assert_eq!(snapshot.recent.len(), 1);
     assert_eq!(snapshot.recent[0].upstream_id, "alpha");
-    assert!(snapshot
-        .series
-        .iter()
-        .map(|point| point.total_requests)
-        .sum::<u64>()
-        >= 1);
+    assert!(
+        snapshot
+            .series
+            .iter()
+            .map(|point| point.total_requests)
+            .sum::<u64>()
+            >= 1
+    );
 
     assert_eq!(snapshot.upstreams.len(), 2);
     assert!(snapshot

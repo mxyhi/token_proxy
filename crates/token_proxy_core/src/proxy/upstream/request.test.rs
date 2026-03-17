@@ -5,6 +5,7 @@ use axum::http::header::AUTHORIZATION;
 async fn filters_prompt_cache_retention_for_openai_responses_upstream() {
     let upstream = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.openai.com".to_string(),
         api_key: None,
         filter_prompt_cache_retention: true,
@@ -52,6 +53,7 @@ async fn filters_prompt_cache_retention_for_openai_responses_upstream() {
 async fn filter_prompt_cache_retention_is_noop_when_disabled() {
     let upstream = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.openai.com".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -90,6 +92,7 @@ async fn filter_prompt_cache_retention_is_noop_when_disabled() {
 async fn filters_safety_identifier_for_openai_responses_upstream() {
     let upstream = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.openai.com".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -138,6 +141,7 @@ async fn filters_safety_identifier_for_openai_responses_upstream() {
 async fn filter_safety_identifier_is_noop_when_disabled() {
     let upstream = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.openai.com".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -176,6 +180,7 @@ async fn filter_safety_identifier_is_noop_when_disabled() {
 async fn rewrites_developer_role_to_system_for_chat_upstream() {
     let upstream = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.openai.com".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -223,6 +228,7 @@ async fn rewrites_developer_role_to_system_for_chat_upstream() {
 async fn rewrites_developer_role_to_system_for_responses_upstream() {
     let upstream = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.openai.com".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -265,6 +271,7 @@ async fn rewrites_developer_role_to_system_for_responses_upstream() {
 async fn developer_role_rewrite_is_noop_when_disabled() {
     let upstream = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.openai.com".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -302,6 +309,7 @@ async fn developer_role_rewrite_is_noop_when_disabled() {
 async fn developer_role_rewrite_is_noop_for_bigmodel_chat_when_disabled() {
     let upstream = UpstreamRuntime {
         id: "bigmodel-chat".to_string(),
+        selector_key: "bigmodel-chat".to_string(),
         base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -338,6 +346,7 @@ async fn developer_role_rewrite_is_noop_for_bigmodel_chat_when_disabled() {
 async fn developer_role_rewrite_is_noop_for_bigmodel_responses_when_disabled() {
     let upstream = UpstreamRuntime {
         id: "bigmodel-responses".to_string(),
+        selector_key: "bigmodel-responses".to_string(),
         base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -357,12 +366,11 @@ async fn developer_role_rewrite_is_noop_for_bigmodel_responses_when_disabled() {
         br#"{"model":"glm-5","input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"be precise"}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}"#,
     ));
 
-    let rewritten = match maybe_rewrite_developer_role_to_system(&upstream, "/v1/responses", &body)
-        .await
-    {
-        Ok(value) => value,
-        Err(_) => panic!("rewrite result"),
-    };
+    let rewritten =
+        match maybe_rewrite_developer_role_to_system(&upstream, "/v1/responses", &body).await {
+            Ok(value) => value,
+            Err(_) => panic!("rewrite result"),
+        };
     assert!(rewritten.is_none());
 }
 

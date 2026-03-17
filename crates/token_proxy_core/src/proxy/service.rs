@@ -375,7 +375,10 @@ impl ProxyServiceInner {
     ) -> Result<ProxyConfigApplyBehavior, String> {
         let loaded_config = ProxyConfig::load(ctx.paths.as_ref()).await?;
         let current_running_config = self.current_running_config().await;
-        Ok(classify_reload_behavior(current_running_config, &loaded_config))
+        Ok(classify_reload_behavior(
+            current_running_config,
+            &loaded_config,
+        ))
     }
 
     async fn apply_saved_config(&mut self, ctx: &ProxyContext) -> ProxyConfigSaveResult {

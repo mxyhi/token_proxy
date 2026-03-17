@@ -24,7 +24,7 @@ export const UPSTREAM_COLUMNS: readonly UpstreamColumnDefinition[] = [
     cellClassName: "w-[7.5rem] max-w-[7.5rem]",
   },
   { id: "baseUrl", label: () => m.upstreams_column_base_url(), defaultVisible: false, cellClassName: "min-w-[18rem]" },
-  { id: "apiKey", label: () => m.upstreams_column_api_key(), defaultVisible: false, cellClassName: "min-w-[18rem]" },
+  { id: "apiKeys", label: () => m.upstreams_column_api_key(), defaultVisible: false, cellClassName: "min-w-[18rem]" },
   { id: "proxyUrl", label: () => m.upstreams_column_proxy_url(), defaultVisible: false, cellClassName: "min-w-[18rem]" },
   {
     id: "priority",
@@ -48,7 +48,7 @@ export function createDefaultColumnVisibility() {
     provider: true,
     account: true,
     baseUrl: false,
-    apiKey: false,
+    apiKeys: false,
     proxyUrl: false,
     priority: true,
     status: true,

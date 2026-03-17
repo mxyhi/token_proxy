@@ -109,3 +109,35 @@ fn migrate_legacy_enable_false_keeps_conversion_disabled_except_antigravity_mess
         .iter()
         .any(|v| v.as_str() == Some("anthropic_messages")));
 }
+
+#[test]
+fn migrate_api_key_to_api_keys() {
+    let mut value = parse_json(
+        r#"
+        {
+          "upstreams": [
+            {
+              "id": "u1",
+              "providers": ["openai"],
+              "base_url": "https://example.com",
+              "api_key": "key-1",
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+
+    let changed = migrate_config_json(&mut value);
+    assert!(changed);
+
+    let upstream = value["upstreams"][0]
+        .as_object()
+        .expect("upstream must be object");
+    assert!(!upstream.contains_key("api_key"));
+    let keys = upstream["api_keys"]
+        .as_array()
+        .expect("api_keys must be array");
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].as_str(), Some("key-1"));
+}

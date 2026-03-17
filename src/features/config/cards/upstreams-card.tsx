@@ -98,7 +98,7 @@ export function UpstreamsCard({
     () => UPSTREAM_COLUMNS.filter((column) => columnVisibility[column.id]),
     [columnVisibility]
   );
-  const apiKeyVisible = columnVisibility.apiKey;
+  const apiKeyVisible = columnVisibility.apiKeys;
   const kiroAccountMap = useMemo(() => {
     const map = new Map(kiroAccounts.map((account) => [account.account_id, account]));
     return map;

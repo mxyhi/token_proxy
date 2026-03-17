@@ -410,7 +410,7 @@ async fn try_group_upstreams(
             AttemptOutcome::Success(_) => {
                 state
                     .upstream_selector
-                    .clear_cooldown(provider, upstream.id.as_str());
+                    .clear_cooldown(provider, upstream.selector_key.as_str());
             }
             AttemptOutcome::Retryable {
                 should_cooldown: true,
@@ -418,7 +418,7 @@ async fn try_group_upstreams(
             } => {
                 state
                     .upstream_selector
-                    .mark_retryable_failure(provider, upstream.id.as_str());
+                    .mark_retryable_failure(provider, upstream.selector_key.as_str());
             }
             _ => {}
         }

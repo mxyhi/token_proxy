@@ -51,9 +51,9 @@ pub(super) async fn build_stream_response(
     )
     .await
     {
-            Ok(stream) => stream,
-            Err(response) => return response,
-        };
+        Ok(stream) => stream,
+        Err(response) => return response,
+    };
     log_debug_headers_body(
         "upstream.response.headers",
         Some(&headers),

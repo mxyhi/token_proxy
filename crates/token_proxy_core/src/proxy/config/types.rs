@@ -142,7 +142,8 @@ pub struct UpstreamConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<String>,
     pub base_url: String,
-    pub api_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub api_keys: Vec<String>,
     /// Only meaningful for provider "openai-response": strip `prompt_cache_retention` from /v1/responses requests.
     #[serde(default, skip_serializing_if = "is_false")]
     pub filter_prompt_cache_retention: bool,
@@ -294,6 +295,7 @@ pub struct UpstreamGroup {
 #[derive(Clone)]
 pub struct UpstreamRuntime {
     pub(crate) id: String,
+    pub(crate) selector_key: String,
     pub(crate) base_url: String,
     pub(crate) api_key: Option<String>,
     pub(crate) filter_prompt_cache_retention: bool,

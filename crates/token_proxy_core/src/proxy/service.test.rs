@@ -1,13 +1,17 @@
 use super::*;
 use crate::app_proxy;
+use crate::logging::LogLevel;
 use crate::paths::TokenProxyPaths;
 use rand::random;
-use crate::logging::LogLevel;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-fn config_with_addr_and_body_limit(host: &str, port: u16, max_request_body_bytes: usize) -> ProxyConfig {
+fn config_with_addr_and_body_limit(
+    host: &str,
+    port: u16,
+    max_request_body_bytes: usize,
+) -> ProxyConfig {
     ProxyConfig {
         host: host.to_string(),
         port,
@@ -28,7 +32,10 @@ fn classify_reload_behavior_returns_reload_for_hot_reload_safe_changes() {
     let current = config_with_addr_and_body_limit("127.0.0.1", 9208, 1024);
     let next = config_with_addr_and_body_limit("127.0.0.1", 9208, 1024);
 
-    let action = classify_reload_behavior(Some((current.addr(), current.max_request_body_bytes)), &next);
+    let action = classify_reload_behavior(
+        Some((current.addr(), current.max_request_body_bytes)),
+        &next,
+    );
 
     assert_eq!(action, ProxyConfigApplyBehavior::Reload);
 }
@@ -38,7 +45,10 @@ fn classify_reload_behavior_restarts_when_addr_changes() {
     let current = config_with_addr_and_body_limit("127.0.0.1", 9208, 1024);
     let next = config_with_addr_and_body_limit("127.0.0.1", 9300, 1024);
 
-    let action = classify_reload_behavior(Some((current.addr(), current.max_request_body_bytes)), &next);
+    let action = classify_reload_behavior(
+        Some((current.addr(), current.max_request_body_bytes)),
+        &next,
+    );
 
     assert_eq!(action, ProxyConfigApplyBehavior::Restart);
 }
@@ -48,7 +58,10 @@ fn classify_reload_behavior_restarts_when_body_limit_changes() {
     let current = config_with_addr_and_body_limit("127.0.0.1", 9208, 1024);
     let next = config_with_addr_and_body_limit("127.0.0.1", 9208, 2048);
 
-    let action = classify_reload_behavior(Some((current.addr(), current.max_request_body_bytes)), &next);
+    let action = classify_reload_behavior(
+        Some((current.addr(), current.max_request_body_bytes)),
+        &next,
+    );
 
     assert_eq!(action, ProxyConfigApplyBehavior::Restart);
 }
@@ -68,7 +81,10 @@ fn classify_reload_behavior_keeps_reload_for_timeout_only_changes() {
     let mut next = config_with_addr_and_body_limit("127.0.0.1", 9208, 1024);
     next.upstream_no_data_timeout = Duration::from_secs(7);
 
-    let action = classify_reload_behavior(Some((current.addr(), current.max_request_body_bytes)), &next);
+    let action = classify_reload_behavior(
+        Some((current.addr(), current.max_request_body_bytes)),
+        &next,
+    );
 
     assert_eq!(action, ProxyConfigApplyBehavior::Reload);
 }
@@ -87,7 +103,8 @@ fn test_config_file(port: u16) -> crate::proxy::config::ProxyConfigFile {
 }
 
 fn create_test_context() -> (ProxyContext, std::path::PathBuf) {
-    let data_dir = std::env::temp_dir().join(format!("token-proxy-service-test-{}", random::<u64>()));
+    let data_dir =
+        std::env::temp_dir().join(format!("token-proxy-service-test-{}", random::<u64>()));
     std::fs::create_dir_all(&data_dir).expect("create test data dir");
     let paths = Arc::new(TokenProxyPaths::from_app_data_dir(data_dir.clone()).expect("test paths"));
     let app_proxy = app_proxy::new_state();
@@ -145,10 +162,7 @@ fn apply_saved_config_returns_status_and_error_when_restart_fails() {
         let blocker = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind blocker");
-        let blocked_port = blocker
-            .local_addr()
-            .expect("blocker local addr")
-            .port();
+        let blocked_port = blocker.local_addr().expect("blocker local addr").port();
 
         crate::proxy::config::write_config(context.paths.as_ref(), test_config_file(blocked_port))
             .await

@@ -58,6 +58,7 @@ fn test_upstream_url() {
     // openai provider: /v1/chat/completions
     let upstream = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.example.com/openai/v1".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -81,6 +82,7 @@ fn test_upstream_url() {
     // openai-response provider: /v1/responses
     let upstream_responses = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.example.com/openai/v1".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -103,6 +105,7 @@ fn test_upstream_url() {
 
     let coding_plan = UpstreamRuntime {
         id: "coding-plan".to_string(),
+        selector_key: "coding-plan".to_string(),
         base_url: "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -126,6 +129,7 @@ fn test_upstream_url() {
     // 无路径前缀的 base_url
     let upstream_no_path = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.openai.com".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,
@@ -153,6 +157,7 @@ fn test_upstream_url() {
     // 带尾斜杠的 base_url
     let upstream_trailing_slash = UpstreamRuntime {
         id: "test".to_string(),
+        selector_key: "test".to_string(),
         base_url: "https://api.example.com/openai/v1/".to_string(),
         api_key: None,
         filter_prompt_cache_retention: false,

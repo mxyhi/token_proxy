@@ -377,7 +377,9 @@ fn resolve_codex_target_provider_and_name(input: &str) -> (String, String) {
     resolve_codex_target_provider_and_name_from_doc(&doc)
 }
 
-fn resolve_codex_target_provider_and_name_from_doc(doc: &toml_edit::DocumentMut) -> (String, String) {
+fn resolve_codex_target_provider_and_name_from_doc(
+    doc: &toml_edit::DocumentMut,
+) -> (String, String) {
     let provider = doc
         .as_table()
         .get("model_provider")
@@ -687,13 +689,8 @@ base_url = "https://api.openai.com/v1"
 "#;
         let mut doc = DocumentMut::from_str(input).expect("parse config");
 
-        apply_codex_proxy_settings(
-            &mut doc,
-            "openai",
-            "OpenAI",
-            "http://127.0.0.1:9208/v1",
-        )
-        .expect("apply codex proxy settings");
+        apply_codex_proxy_settings(&mut doc, "openai", "OpenAI", "http://127.0.0.1:9208/v1")
+            .expect("apply codex proxy settings");
 
         assert_eq!(doc["model_provider"].as_str(), Some("openai"));
         assert_eq!(

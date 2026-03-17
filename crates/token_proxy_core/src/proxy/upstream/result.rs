@@ -10,8 +10,8 @@ use crate::proxy::log::{build_log_entry, LogContext, LogWriter, UsageSnapshot};
 use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_detail::RequestDetailSnapshot;
 use crate::proxy::response::{build_proxy_response, build_proxy_response_buffered};
-use crate::proxy::ProxyState;
 use crate::proxy::token_rate::TokenRateTracker;
+use crate::proxy::ProxyState;
 use crate::proxy::RequestMeta;
 
 pub(super) fn should_cooldown_retryable_status(status: StatusCode) -> bool {

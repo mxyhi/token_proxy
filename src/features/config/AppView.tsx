@@ -171,6 +171,30 @@ type StatusAlertProps = {
   onSave: () => void;
 };
 
+type ValidationAlertProps = {
+  validation: AppViewProps["validation"];
+};
+
+function ValidationAlert({ validation }: ValidationAlertProps) {
+  if (validation.valid) {
+    return null;
+  }
+
+  const message = validation.message || m.config_invalid_configuration();
+
+  return (
+    <Alert variant="destructive" className="mb-4">
+      <AlertCircle className="size-4" aria-hidden="true" />
+      <div className="flex flex-1 items-start gap-3">
+        <div>
+          <AlertTitle>{m.config_invalid_configuration()}</AlertTitle>
+          <AlertDescription>{message}</AlertDescription>
+        </div>
+      </div>
+    </Alert>
+  );
+}
+
 function StatusAlert({
   status,
   statusMessage,
@@ -299,6 +323,7 @@ function ConfigSectionContent({
         isDirty={props.isDirty}
         onReload={props.onReload}
       />
+      <ValidationAlert validation={props.validation} />
       <StatusAlert
         status={props.status}
         statusMessage={props.statusMessage}

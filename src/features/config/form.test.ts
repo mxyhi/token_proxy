@@ -5,6 +5,7 @@ import {
   createEmptyUpstream,
   extractConfigExtras,
   mergeConfigExtras,
+  toForm,
   toPayload,
   validate,
 } from "@/features/config/form";
@@ -25,6 +26,15 @@ describe("config/form", () => {
     expect(validate({ ...EMPTY_FORM, retryableFailureCooldownSecs: "" }).valid).toBe(false);
     expect(validate({ ...EMPTY_FORM, retryableFailureCooldownSecs: "0" }).valid).toBe(true);
     expect(validate({ ...EMPTY_FORM, retryableFailureCooldownSecs: "15" }).valid).toBe(true);
+  });
+
+  it("validates upstream no data timeout as integer >= 3", () => {
+    expect(validate({ ...EMPTY_FORM, upstreamNoDataTimeoutSecs: "-1" }).valid).toBe(false);
+    expect(validate({ ...EMPTY_FORM, upstreamNoDataTimeoutSecs: "" }).valid).toBe(false);
+    expect(validate({ ...EMPTY_FORM, upstreamNoDataTimeoutSecs: "0" }).valid).toBe(false);
+    expect(validate({ ...EMPTY_FORM, upstreamNoDataTimeoutSecs: "2" }).valid).toBe(false);
+    expect(validate({ ...EMPTY_FORM, upstreamNoDataTimeoutSecs: "3" }).valid).toBe(true);
+    expect(validate({ ...EMPTY_FORM, upstreamNoDataTimeoutSecs: "120" }).valid).toBe(true);
   });
 
   it("requires upstream id for enabled upstreams", () => {
@@ -90,6 +100,7 @@ describe("config/form", () => {
     expect(payload.host).toBe("127.0.0.1");
     expect(payload.local_api_key).toBeNull();
     expect(payload.retryable_failure_cooldown_secs).toBe(15);
+    expect(payload.upstream_no_data_timeout_secs).toBe(120);
     expect(payload.upstreams[0]?.id).toBe("upstream-1");
     expect(payload.upstreams[0]?.providers).toEqual(["openai", "openai-response"]);
     expect(payload.upstreams[0]?.base_url).toBe("https://example.com");
@@ -105,6 +116,34 @@ describe("config/form", () => {
     });
 
     expect(payload.retryable_failure_cooldown_secs).toBe(30);
+  });
+
+  it("defaults upstream no data timeout seconds to 120 when config omits it", () => {
+    expect(EMPTY_FORM.upstreamNoDataTimeoutSecs).toBe("120");
+
+    const form = toForm({
+      host: "127.0.0.1",
+      port: 9208,
+      local_api_key: null,
+      app_proxy_url: null,
+      tray_token_rate: {
+        enabled: true,
+        format: "split",
+      },
+      upstream_strategy: "priority_fill_first",
+      upstreams: [],
+    });
+
+    expect(form.upstreamNoDataTimeoutSecs).toBe("120");
+  });
+
+  it("serializes upstream no data timeout seconds", () => {
+    const payload = toPayload({
+      ...EMPTY_FORM,
+      upstreamNoDataTimeoutSecs: "45",
+    });
+
+    expect(payload.upstream_no_data_timeout_secs).toBe(45);
   });
 
   it("serializes openai compatibility upstream flags", () => {

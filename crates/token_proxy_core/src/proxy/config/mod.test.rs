@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::HashMap;
+use std::time::Duration;
 
 #[test]
 fn build_runtime_config_rejects_retryable_failure_cooldown_that_overflows_instant() {
@@ -88,4 +89,34 @@ fn build_runtime_config_keeps_openai_responses_provider_when_chat_compat_disable
         .expect("runtime item");
 
     assert!(item.supports_inbound(InboundApiFormat::OpenaiResponses));
+}
+
+#[test]
+fn build_runtime_config_maps_upstream_no_data_timeout_secs() {
+    let mut config = ProxyConfigFile::default();
+    config.upstream_no_data_timeout_secs = 3;
+
+    let runtime = build_runtime_config(config).expect("runtime config");
+
+    assert_eq!(runtime.upstream_no_data_timeout, Duration::from_secs(3));
+}
+
+#[test]
+fn build_runtime_config_rejects_upstream_no_data_timeout_below_minimum() {
+    let mut config = ProxyConfigFile::default();
+    config.upstream_no_data_timeout_secs = 2;
+
+    let result = build_runtime_config(config);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn build_runtime_config_rejects_upstream_no_data_timeout_that_overflows_instant() {
+    let mut config = ProxyConfigFile::default();
+    config.upstream_no_data_timeout_secs = u64::MAX;
+
+    let result = build_runtime_config(config);
+
+    assert!(result.is_err());
 }

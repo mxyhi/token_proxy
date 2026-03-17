@@ -38,6 +38,14 @@ fn is_default_retryable_failure_cooldown_secs(value: &u64) -> bool {
     *value == default_retryable_failure_cooldown_secs()
 }
 
+fn default_upstream_no_data_timeout_secs() -> u64 {
+    120
+}
+
+fn is_default_upstream_no_data_timeout_secs(value: &u64) -> bool {
+    *value == default_upstream_no_data_timeout_secs()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InboundApiFormat {
@@ -201,6 +209,11 @@ pub struct ProxyConfigFile {
         skip_serializing_if = "is_default_retryable_failure_cooldown_secs"
     )]
     pub retryable_failure_cooldown_secs: u64,
+    #[serde(
+        default = "default_upstream_no_data_timeout_secs",
+        skip_serializing_if = "is_default_upstream_no_data_timeout_secs"
+    )]
+    pub upstream_no_data_timeout_secs: u64,
     #[serde(default)]
     pub tray_token_rate: TrayTokenRateConfig,
     #[serde(default)]
@@ -224,6 +237,7 @@ impl Default for ProxyConfigFile {
             log_level: LogLevel::default(),
             max_request_body_bytes: None,
             retryable_failure_cooldown_secs: default_retryable_failure_cooldown_secs(),
+            upstream_no_data_timeout_secs: default_upstream_no_data_timeout_secs(),
             tray_token_rate: TrayTokenRateConfig::default(),
             upstream_strategy: UpstreamStrategy::PriorityFillFirst,
             upstreams: Vec::new(),
@@ -239,6 +253,7 @@ pub struct ProxyConfig {
     pub log_level: LogLevel,
     pub max_request_body_bytes: usize,
     pub retryable_failure_cooldown: std::time::Duration,
+    pub upstream_no_data_timeout: std::time::Duration,
     pub upstream_strategy: UpstreamStrategy,
     pub upstreams: HashMap<String, ProviderUpstreams>,
     pub kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,

@@ -17,6 +17,8 @@ const DEFAULT_TRAY_TOKEN_RATE: TrayTokenRateConfig = {
   format: "split",
 };
 
+const MIN_UPSTREAM_NO_DATA_TIMEOUT_SECS = 3;
+const DEFAULT_UPSTREAM_NO_DATA_TIMEOUT_SECS = 120;
 const INTEGER_PATTERN = /^-?\d+$/;
 const NON_NEGATIVE_INTEGER_PATTERN = /^\d+$/;
 let modelMappingCounter = 0;
@@ -60,6 +62,7 @@ const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "antigravity_user_agent",
   "log_level",
   "retryable_failure_cooldown_secs",
+  "upstream_no_data_timeout_secs",
   "tray_token_rate",
   "upstream_strategy",
   "upstreams",
@@ -77,6 +80,7 @@ export const EMPTY_FORM: ConfigForm = {
   antigravityUserAgent: "",
   logLevel: "silent",
   retryableFailureCooldownSecs: "15",
+  upstreamNoDataTimeoutSecs: String(DEFAULT_UPSTREAM_NO_DATA_TIMEOUT_SECS),
   trayTokenRate: { ...DEFAULT_TRAY_TOKEN_RATE },
   upstreamStrategy: "priority_fill_first",
   upstreams: [],
@@ -149,6 +153,9 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     antigravityUserAgent: config.antigravity_user_agent ?? "",
     logLevel: config.log_level ?? "silent",
     retryableFailureCooldownSecs: String(config.retryable_failure_cooldown_secs ?? 15),
+    upstreamNoDataTimeoutSecs: String(
+      config.upstream_no_data_timeout_secs ?? DEFAULT_UPSTREAM_NO_DATA_TIMEOUT_SECS,
+    ),
     trayTokenRate: normalizeTrayTokenRate(config.tray_token_rate),
     upstreamStrategy: config.upstream_strategy,
     upstreams: config.upstreams.map((upstream) => ({
@@ -193,6 +200,9 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     log_level: form.logLevel,
     retryable_failure_cooldown_secs: parseRetryableFailureCooldownSecs(
       form.retryableFailureCooldownSecs,
+    ),
+    upstream_no_data_timeout_secs: parseUpstreamNoDataTimeoutSecs(
+      form.upstreamNoDataTimeoutSecs,
     ),
     tray_token_rate: form.trayTokenRate,
     upstream_strategy: form.upstreamStrategy,
@@ -243,6 +253,12 @@ export function validate(form: ConfigForm) {
     return {
       valid: false,
       message: m.error_retryable_failure_cooldown_secs_integer(),
+    };
+  }
+  if (!isValidUpstreamNoDataTimeoutSecs(form.upstreamNoDataTimeoutSecs)) {
+    return {
+      valid: false,
+      message: m.error_upstream_no_data_timeout_secs_integer(),
     };
   }
 
@@ -544,4 +560,25 @@ function parseRetryableFailureCooldownSecs(value: string) {
   }
   const number = Number.parseInt(trimmed, 10);
   return Number.isFinite(number) ? number : 15;
+}
+
+function isValidUpstreamNoDataTimeoutSecs(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (!NON_NEGATIVE_INTEGER_PATTERN.test(trimmed)) {
+    return false;
+  }
+  const number = Number.parseInt(trimmed, 10);
+  return Number.isFinite(number) && number >= MIN_UPSTREAM_NO_DATA_TIMEOUT_SECS;
+}
+
+function parseUpstreamNoDataTimeoutSecs(value: string) {
+  const trimmed = value.trim();
+  if (!NON_NEGATIVE_INTEGER_PATTERN.test(trimmed)) {
+    return DEFAULT_UPSTREAM_NO_DATA_TIMEOUT_SECS;
+  }
+  const number = Number.parseInt(trimmed, 10);
+  return Number.isFinite(number) ? number : DEFAULT_UPSTREAM_NO_DATA_TIMEOUT_SECS;
 }

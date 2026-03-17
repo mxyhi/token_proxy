@@ -5,6 +5,7 @@ use axum::{
 };
 use futures_util::StreamExt;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::super::super::{
     antigravity_compat, codex_compat, gemini_compat, http,
@@ -13,7 +14,6 @@ use super::super::super::{
     redact::redact_query_param_value,
     server_helpers::log_debug_headers_body,
     token_rate::RequestTokenTracker,
-    UPSTREAM_NO_DATA_TIMEOUT,
 };
 use super::super::{
     anthropic_to_responses, chat_to_responses, kiro_to_anthropic, responses_to_anthropic,
@@ -38,10 +38,19 @@ pub(super) async fn build_stream_response(
     response_transform: FormatTransform,
     model_override: Option<&str>,
     estimated_input_tokens: Option<u64>,
+    upstream_no_data_timeout: Duration,
 ) -> Response {
     let mut context = context;
-    let upstream =
-        match prepare_upstream_stream(status, &headers, upstream_res, &mut context, &log).await {
+    let upstream = match prepare_upstream_stream(
+        status,
+        &headers,
+        upstream_res,
+        &mut context,
+        &log,
+        upstream_no_data_timeout,
+    )
+    .await
+    {
             Ok(stream) => stream,
             Err(response) => return response,
         };
@@ -407,6 +416,7 @@ async fn prepare_upstream_stream(
     upstream_res: reqwest::Response,
     context: &mut LogContext,
     log: &Arc<LogWriter>,
+    upstream_no_data_timeout: Duration,
 ) -> Result<
     futures_util::stream::BoxStream<
         'static,
@@ -414,11 +424,17 @@ async fn prepare_upstream_stream(
     >,
     Response,
 > {
-    let mut upstream = upstream_stream::with_idle_timeout(upstream_res.bytes_stream());
+    let mut upstream =
+        upstream_stream::with_idle_timeout(upstream_res.bytes_stream(), upstream_no_data_timeout);
     let first = upstream.next().await;
     match first {
         Some(Ok(chunk)) => Ok(chain_first_chunk(chunk, upstream, context)),
-        Some(Err(err)) => Err(stream_error_response(err, context, log)),
+        Some(Err(err)) => Err(stream_error_response(
+            err,
+            context,
+            log,
+            upstream_no_data_timeout,
+        )),
         None => Err(http::build_response(status, headers.clone(), Body::empty())),
     }
 }
@@ -443,13 +459,14 @@ fn stream_error_response(
     err: upstream_stream::UpstreamStreamError<reqwest::Error>,
     context: &mut LogContext,
     log: &Arc<LogWriter>,
+    upstream_no_data_timeout: Duration,
 ) -> Response {
     let (status, message) = match err {
         upstream_stream::UpstreamStreamError::IdleTimeout(_) => (
             StatusCode::GATEWAY_TIMEOUT,
             format!(
                 "Upstream response timed out after {}s.",
-                UPSTREAM_NO_DATA_TIMEOUT.as_secs()
+                upstream_no_data_timeout.as_secs()
             ),
         ),
         upstream_stream::UpstreamStreamError::Upstream(err) => {

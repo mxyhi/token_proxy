@@ -8,6 +8,7 @@ use crate::paths::TokenProxyPaths;
 use std::time::{Duration, Instant};
 
 const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 20 * 1024 * 1024;
+const MIN_UPSTREAM_NO_DATA_TIMEOUT_SECS: u64 = 3;
 
 pub use types::{
     ConfigResponse, HeaderOverride, InboundApiFormat, KiroPreferredEndpoint, ProviderUpstreams,
@@ -71,6 +72,9 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
         retryable_failure_cooldown: resolve_retryable_failure_cooldown(
             config.retryable_failure_cooldown_secs,
         )?,
+        upstream_no_data_timeout: resolve_upstream_no_data_timeout(
+            config.upstream_no_data_timeout_secs,
+        )?,
         upstream_strategy: config.upstream_strategy,
         upstreams,
         kiro_preferred_endpoint: config.kiro_preferred_endpoint,
@@ -82,6 +86,19 @@ fn resolve_retryable_failure_cooldown(value: u64) -> Result<Duration, String> {
     let duration = Duration::from_secs(value);
     if Instant::now().checked_add(duration).is_none() {
         return Err("retryable_failure_cooldown_secs is too large.".to_string());
+    }
+    Ok(duration)
+}
+
+fn resolve_upstream_no_data_timeout(value: u64) -> Result<Duration, String> {
+    if value < MIN_UPSTREAM_NO_DATA_TIMEOUT_SECS {
+        return Err(format!(
+            "upstream_no_data_timeout_secs must be at least {MIN_UPSTREAM_NO_DATA_TIMEOUT_SECS}."
+        ));
+    }
+    let duration = Duration::from_secs(value);
+    if Instant::now().checked_add(duration).is_none() {
+        return Err("upstream_no_data_timeout_secs is too large.".to_string());
     }
     Ok(duration)
 }

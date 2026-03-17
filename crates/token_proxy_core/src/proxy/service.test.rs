@@ -15,6 +15,7 @@ fn config_with_addr_and_body_limit(host: &str, port: u16, max_request_body_bytes
         log_level: LogLevel::Silent,
         max_request_body_bytes,
         retryable_failure_cooldown: Duration::from_secs(15),
+        upstream_no_data_timeout: Duration::from_secs(120),
         upstream_strategy: crate::proxy::config::UpstreamStrategy::PriorityFillFirst,
         upstreams: HashMap::new(),
         kiro_preferred_endpoint: None,
@@ -59,6 +60,17 @@ fn classify_reload_behavior_skips_apply_when_proxy_is_stopped() {
     let action = classify_reload_behavior(None, &next);
 
     assert_eq!(action, ProxyConfigApplyBehavior::SavedOnly);
+}
+
+#[test]
+fn classify_reload_behavior_keeps_reload_for_timeout_only_changes() {
+    let current = config_with_addr_and_body_limit("127.0.0.1", 9208, 1024);
+    let mut next = config_with_addr_and_body_limit("127.0.0.1", 9208, 1024);
+    next.upstream_no_data_timeout = Duration::from_secs(7);
+
+    let action = classify_reload_behavior(Some((current.addr(), current.max_request_body_bytes)), &next);
+
+    assert_eq!(action, ProxyConfigApplyBehavior::Reload);
 }
 
 fn run_async(test: impl std::future::Future<Output = ()>) {

@@ -1,4 +1,5 @@
 use axum::http::{Method, StatusCode};
+use std::time::Duration;
 use tokio::time::timeout;
 
 use super::kiro_headers::build_kiro_headers;
@@ -9,7 +10,7 @@ use crate::proxy::http;
 use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_body::ReplayableBody;
 use crate::proxy::request_detail::RequestDetailSnapshot;
-use crate::proxy::{ProxyState, RequestMeta, UPSTREAM_NO_DATA_TIMEOUT};
+use crate::proxy::{ProxyState, RequestMeta};
 
 pub(super) enum KiroSendError {
     Timeout,
@@ -64,6 +65,7 @@ pub(super) async fn send_kiro_request(
     is_idc: bool,
     payload: &[u8],
     overrides: Option<&[crate::proxy::config::HeaderOverride]>,
+    upstream_no_data_timeout: Duration,
 ) -> Result<reqwest::Response, KiroSendError> {
     let mut request_headers = build_kiro_headers(access_token, amz_target, is_idc);
     if let Some(overrides) = overrides {
@@ -71,7 +73,7 @@ pub(super) async fn send_kiro_request(
     }
 
     let result = timeout(
-        UPSTREAM_NO_DATA_TIMEOUT,
+        upstream_no_data_timeout,
         client
             .request(method, url)
             .headers(request_headers)
@@ -110,6 +112,7 @@ pub(super) async fn handle_send_error(
     match err {
         KiroSendError::Upstream(err) => {
             result::handle_upstream_result(
+                state,
                 Err(err),
                 meta,
                 "kiro",
@@ -126,7 +129,7 @@ pub(super) async fn handle_send_error(
         KiroSendError::Timeout => {
             let message = format!(
                 "Upstream did not respond within {}s.",
-                UPSTREAM_NO_DATA_TIMEOUT.as_secs()
+                state.config.upstream_no_data_timeout.as_secs()
             );
             result::log_upstream_error_if_needed(
                 &state.log,

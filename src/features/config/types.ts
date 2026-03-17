@@ -95,6 +95,7 @@ export type ProxyConfigFileBase = {
   antigravity_user_agent?: string | null;
   log_level?: LogLevel;
   retryable_failure_cooldown_secs?: number;
+  upstream_no_data_timeout_secs?: number;
   tray_token_rate: TrayTokenRateConfig;
   upstream_strategy: UpstreamStrategy;
   upstreams: UpstreamConfig[];
@@ -170,6 +171,7 @@ export type ConfigForm = {
   antigravityUserAgent: string;
   logLevel: LogLevel;
   retryableFailureCooldownSecs: string;
+  upstreamNoDataTimeoutSecs: string;
   trayTokenRate: TrayTokenRateConfig;
   upstreamStrategy: UpstreamStrategy;
   upstreams: UpstreamForm[];

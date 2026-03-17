@@ -409,6 +409,7 @@ async fn send_endpoint_request(
         context.is_idc,
         payload,
         context.upstream.header_overrides.as_deref(),
+        context.state.config.upstream_no_data_timeout,
     )
     .await
     {
@@ -515,11 +516,13 @@ async fn finalize_response(
             start_time,
             response_transform,
             request_detail,
+            state.config.upstream_no_data_timeout,
         )
         .await;
         return AttemptOutcome::Success(output);
     }
     result::handle_upstream_result(
+        state,
         Ok(response),
         meta,
         "kiro",

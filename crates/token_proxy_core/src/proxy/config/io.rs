@@ -9,6 +9,7 @@ use super::ProxyConfigFile;
 const DEFAULT_CONFIG_HEADER: &str = concat!(
     "// Token Proxy config (JSONC). Comments and trailing commas are supported.\n",
     "// log_level (optional): silent|error|warn|info|debug|trace. Default: silent.\n",
+    "// upstream_no_data_timeout_secs (optional): upstream no-data timeout in seconds. Minimum: 3. Default: 120.\n",
     "// app_proxy_url (optional): http(s)://... | socks5(h)://... (used for app updates and upstream proxy reuse).\n",
     "// upstreams[].proxy_url (optional): empty => direct; \"$app_proxy_url\" => use app_proxy_url; or an explicit proxy URL.\n",
     "// upstreams[].providers (required): one upstream can serve multiple providers. Example: [\"openai\", \"openai-response\"].\n",

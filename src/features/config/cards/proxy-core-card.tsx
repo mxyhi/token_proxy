@@ -135,6 +135,23 @@ function ProxyCoreFields({
           {m.proxy_core_retryable_failure_cooldown_secs_help()}
         </p>
       </div>
+      <div className="grid gap-2">
+        <Label htmlFor="upstream-no-data-timeout-secs">
+          {m.proxy_core_upstream_no_data_timeout_secs_label()}
+        </Label>
+        <Input
+          id="upstream-no-data-timeout-secs"
+          value={form.upstreamNoDataTimeoutSecs}
+          onChange={(event) =>
+            onChange({ upstreamNoDataTimeoutSecs: event.target.value })
+          }
+          placeholder="120"
+          inputMode="numeric"
+        />
+        <p className="text-xs text-muted-foreground">
+          {m.proxy_core_upstream_no_data_timeout_secs_help()}
+        </p>
+      </div>
     </>
   );
 }

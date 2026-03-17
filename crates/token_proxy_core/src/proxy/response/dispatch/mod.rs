@@ -4,6 +4,7 @@ mod stream;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::super::log::{LogContext, LogWriter};
 use super::super::openai_compat::FormatTransform;
@@ -19,6 +20,7 @@ pub(super) async fn build_stream_response(
     response_transform: FormatTransform,
     model_override: Option<&str>,
     estimated_input_tokens: Option<u64>,
+    upstream_no_data_timeout: Duration,
 ) -> Response {
     stream::build_stream_response(
         status,
@@ -30,6 +32,7 @@ pub(super) async fn build_stream_response(
         response_transform,
         model_override,
         estimated_input_tokens,
+        upstream_no_data_timeout,
     )
     .await
 }
@@ -44,6 +47,7 @@ pub(super) async fn build_buffered_response(
     response_transform: FormatTransform,
     model_override: Option<&str>,
     estimated_input_tokens: Option<u64>,
+    upstream_no_data_timeout: Duration,
 ) -> Response {
     buffered::build_buffered_response(
         status,
@@ -55,6 +59,7 @@ pub(super) async fn build_buffered_response(
         response_transform,
         model_override,
         estimated_input_tokens,
+        upstream_no_data_timeout,
     )
     .await
 }

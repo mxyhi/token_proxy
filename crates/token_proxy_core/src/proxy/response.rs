@@ -2,7 +2,7 @@ use axum::{body::Bytes, response::Response};
 use serde_json::Value;
 use std::{
     sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use super::{
@@ -33,6 +33,7 @@ pub(super) async fn build_proxy_response(
     start: Instant,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
+    upstream_no_data_timeout: Duration,
 ) -> Response {
     let status = upstream_res.status();
     let mut response_headers = http::filter_response_headers(upstream_res.headers());
@@ -78,6 +79,7 @@ pub(super) async fn build_proxy_response(
             response_transform,
             model_override,
             meta.estimated_input_tokens,
+            upstream_no_data_timeout,
         )
         .await
     } else {
@@ -91,6 +93,7 @@ pub(super) async fn build_proxy_response(
             response_transform,
             model_override,
             meta.estimated_input_tokens,
+            upstream_no_data_timeout,
         )
         .await
     }
@@ -107,6 +110,7 @@ pub(super) async fn build_proxy_response_buffered(
     start: Instant,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
+    upstream_no_data_timeout: Duration,
 ) -> Response {
     let status = upstream_res.status();
     let mut response_headers = http::filter_response_headers(upstream_res.headers());
@@ -149,6 +153,7 @@ pub(super) async fn build_proxy_response_buffered(
         response_transform,
         model_override,
         meta.estimated_input_tokens,
+        upstream_no_data_timeout,
     )
     .await
 }

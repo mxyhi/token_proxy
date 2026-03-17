@@ -2,8 +2,6 @@ use axum::body::Bytes;
 use futures_util::{stream::try_unfold, StreamExt};
 use std::{error::Error, fmt, time::Duration};
 
-use crate::proxy::UPSTREAM_NO_DATA_TIMEOUT;
-
 #[derive(Debug)]
 pub(crate) enum UpstreamStreamError<E> {
     IdleTimeout(Duration),
@@ -36,16 +34,17 @@ impl<E: Error + 'static> Error for UpstreamStreamError<E> {
 
 pub(super) fn with_idle_timeout<E>(
     upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
+    upstream_no_data_timeout: Duration,
 ) -> futures_util::stream::BoxStream<'static, Result<Bytes, UpstreamStreamError<E>>>
 where
     E: Error + Send + Sync + 'static,
 {
-    try_unfold(upstream, |mut upstream| async move {
-        match tokio::time::timeout(UPSTREAM_NO_DATA_TIMEOUT, upstream.next()).await {
+    try_unfold(upstream, move |mut upstream| async move {
+        match tokio::time::timeout(upstream_no_data_timeout, upstream.next()).await {
             Ok(Some(Ok(chunk))) => Ok(Some((chunk, upstream))),
             Ok(Some(Err(err))) => Err(UpstreamStreamError::Upstream(err)),
             Ok(None) => Ok(None),
-            Err(_) => Err(UpstreamStreamError::IdleTimeout(UPSTREAM_NO_DATA_TIMEOUT)),
+            Err(_) => Err(UpstreamStreamError::IdleTimeout(upstream_no_data_timeout)),
         }
     })
     .boxed()

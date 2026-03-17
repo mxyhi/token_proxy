@@ -125,6 +125,7 @@ fn config_with_runtime_upstreams(
         log_level: LogLevel::Silent,
         max_request_body_bytes: 20 * 1024 * 1024,
         retryable_failure_cooldown: std::time::Duration::from_secs(15),
+        upstream_no_data_timeout: std::time::Duration::from_secs(120),
         upstream_strategy: UpstreamStrategy::PriorityRoundRobin,
         upstreams: provider_map,
         kiro_preferred_endpoint: None,

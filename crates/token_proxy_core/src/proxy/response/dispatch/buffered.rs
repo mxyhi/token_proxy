@@ -4,6 +4,7 @@ use axum::{
     response::Response,
 };
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::super::super::{
     antigravity_compat, codex_compat, http,
@@ -15,7 +16,6 @@ use super::super::super::{
     server_helpers::{log_debug_headers_body, truncate_for_log},
     token_rate::RequestTokenTracker,
     usage::extract_usage_from_response,
-    UPSTREAM_NO_DATA_TIMEOUT,
 };
 use super::super::{
     kiro_to_anthropic, kiro_to_responses, token_count, upstream_read, upstream_stream,
@@ -35,10 +35,18 @@ pub(super) async fn build_buffered_response(
     response_transform: FormatTransform,
     model_override: Option<&str>,
     estimated_input_tokens: Option<u64>,
+    upstream_no_data_timeout: Duration,
 ) -> Response {
     let mut context = context;
     let response_headers = upstream_res.headers().clone();
-    let bytes = match read_upstream_bytes(upstream_res, &mut context, &log).await {
+    let bytes = match read_upstream_bytes(
+        upstream_res,
+        &mut context,
+        &log,
+        upstream_no_data_timeout,
+    )
+    .await
+    {
         Ok(bytes) => bytes,
         Err(response) => return response,
     };
@@ -247,8 +255,15 @@ async fn read_upstream_bytes(
     upstream_res: reqwest::Response,
     context: &mut LogContext,
     log: &Arc<LogWriter>,
+    upstream_no_data_timeout: Duration,
 ) -> Result<Bytes, Response> {
-    let bytes = match upstream_read::read_upstream_bytes_with_ttfb(upstream_res, context).await {
+    let bytes = match upstream_read::read_upstream_bytes_with_ttfb(
+        upstream_res,
+        context,
+        upstream_no_data_timeout,
+    )
+    .await
+    {
         Ok(bytes) => bytes,
         Err(err) => {
             let (status, message) = match err {
@@ -256,7 +271,7 @@ async fn read_upstream_bytes(
                     StatusCode::GATEWAY_TIMEOUT,
                     format!(
                         "Upstream response timed out after {}s.",
-                        UPSTREAM_NO_DATA_TIMEOUT.as_secs()
+                        upstream_no_data_timeout.as_secs()
                     ),
                 ),
                 upstream_stream::UpstreamStreamError::Upstream(err) => {

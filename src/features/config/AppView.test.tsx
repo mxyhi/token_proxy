@@ -178,4 +178,53 @@ describe("config/AppView", () => {
 
     expect(screen.queryByText("should not be shown")).not.toBeInTheDocument();
   });
+
+  it("shows validation message immediately when config is invalid", () => {
+    render(
+      <AppView
+        activeSectionId="core"
+        form={EMPTY_FORM}
+        statusBadge={{ id: "saved", label: "saved", variant: "default" }}
+        showLocalKey={false}
+        showUpstreamKeys={false}
+        providerOptions={[]}
+        configPath="/tmp/config.json"
+        savedAt=""
+        autoStartEnabled={false}
+        autoStartStatus="idle"
+        autoStartMessage=""
+        proxyServiceStatus={IDLE_PROXY_STATUS}
+        proxyServiceRequestState="idle"
+        proxyServiceMessage=""
+        status="idle"
+        statusMessage=""
+        canSave={false}
+        isDirty
+        validation={{
+          valid: false,
+          message: m.error_upstream_no_data_timeout_secs_integer(),
+        }}
+        onToggleLocalKey={() => undefined}
+        onToggleUpstreamKeys={() => undefined}
+        onFormChange={() => undefined}
+        onStrategyChange={() => undefined}
+        onAutoStartChange={() => undefined}
+        onAddUpstream={() => undefined}
+        onRemoveUpstream={() => undefined}
+        onChangeUpstream={() => undefined}
+        onReload={() => undefined}
+        onSave={() => undefined}
+        onProxyServiceRefresh={() => undefined}
+        onProxyServiceStart={() => undefined}
+        onProxyServiceStop={() => undefined}
+        onProxyServiceRestart={() => undefined}
+        onProxyServiceReload={() => undefined}
+      />
+    );
+
+    expect(screen.getByText(m.config_invalid_configuration())).toBeInTheDocument();
+    expect(
+      screen.getByText(m.error_upstream_no_data_timeout_secs_integer())
+    ).toBeInTheDocument();
+  });
 });

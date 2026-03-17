@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use axum::http::{
     header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE, USER_AGENT},
@@ -17,7 +17,6 @@ use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_body::ReplayableBody;
 use crate::proxy::request_detail::RequestDetailSnapshot;
 use crate::proxy::server_helpers::log_debug_headers_body;
-use crate::proxy::UPSTREAM_NO_DATA_TIMEOUT;
 use crate::proxy::{config::UpstreamRuntime, ProxyState, RequestMeta};
 
 const DEBUG_UPSTREAM_LOG_LIMIT_BYTES: usize = usize::MAX;
@@ -168,6 +167,7 @@ async fn finalize_attempt(
     attempt: UpstreamAttempt,
 ) -> AttemptOutcome {
     result::handle_upstream_result(
+        state,
         Ok(attempt.response),
         &attempt.meta,
         provider,
@@ -351,6 +351,7 @@ async fn send_antigravity_with_fallback(
             url,
             &request_headers,
             upstream_body,
+            state.config.upstream_no_data_timeout,
         )
         .await
         {
@@ -493,6 +494,7 @@ async fn send_upstream_request_once(
         upstream_url,
         request_headers,
         upstream_body,
+        state.config.upstream_no_data_timeout,
     )
     .await
     {
@@ -612,7 +614,16 @@ async fn send_codex_attempt(
     )
     .await
     .map_err(CodexAttemptError::Fatal)?;
-    match send_request_once(client, method, upstream_url, request_headers, upstream_body).await {
+    match send_request_once(
+        client,
+        method,
+        upstream_url,
+        request_headers,
+        upstream_body,
+        state.config.upstream_no_data_timeout,
+    )
+    .await
+    {
         Ok(result) => Ok(result),
         Err(SendFailure::Timeout) => Err(CodexAttemptError::Fatal(handle_upstream_timeout(
             state,
@@ -675,9 +686,10 @@ async fn send_request_once(
     upstream_url: &str,
     request_headers: &HeaderMap,
     upstream_body: reqwest::Body,
+    upstream_no_data_timeout: Duration,
 ) -> Result<reqwest::Response, SendFailure> {
     let upstream_res = timeout(
-        UPSTREAM_NO_DATA_TIMEOUT,
+        upstream_no_data_timeout,
         client
             .request(method.clone(), upstream_url)
             .headers(request_headers.clone())
@@ -821,7 +833,7 @@ fn handle_upstream_timeout(
 ) -> AttemptOutcome {
     let message = format!(
         "Upstream did not respond within {}s.",
-        UPSTREAM_NO_DATA_TIMEOUT.as_secs()
+        state.config.upstream_no_data_timeout.as_secs()
     );
     result::log_upstream_error_if_needed(
         &state.log,

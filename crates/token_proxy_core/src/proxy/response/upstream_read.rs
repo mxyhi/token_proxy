@@ -1,5 +1,6 @@
 use axum::body::Bytes;
 use futures_util::StreamExt;
+use std::time::Duration;
 
 use super::super::log::LogContext;
 use super::upstream_stream::{self, UpstreamStreamError};
@@ -7,8 +8,10 @@ use super::upstream_stream::{self, UpstreamStreamError};
 pub(super) async fn read_upstream_bytes_with_ttfb(
     upstream_res: reqwest::Response,
     context: &mut LogContext,
+    upstream_no_data_timeout: Duration,
 ) -> Result<Bytes, UpstreamStreamError<reqwest::Error>> {
-    let mut upstream = upstream_stream::with_idle_timeout(upstream_res.bytes_stream());
+    let mut upstream =
+        upstream_stream::with_idle_timeout(upstream_res.bytes_stream(), upstream_no_data_timeout);
     let mut out = Vec::new();
 
     while let Some(item) = upstream.next().await {

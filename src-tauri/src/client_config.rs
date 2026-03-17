@@ -12,7 +12,7 @@ use crate::proxy::config::ProxyConfigFile;
 
 const CODEX_DISABLE_RESPONSE_STORAGE: bool = true;
 const CODEX_MODEL: &str = "gpt-5.2-codex";
-const CODEX_MODEL_PROVIDER: &str = "token_proxy";
+const CODEX_DEFAULT_MODEL_PROVIDER: &str = "token_proxy";
 const CODEX_MODEL_REASONING_EFFORT: &str = "xhigh";
 const CODEX_NETWORK_ACCESS: &str = "enabled";
 const CODEX_PREFERRED_AUTH_METHOD: &str = "apikey";
@@ -69,6 +69,9 @@ pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
     let codex_auth_path = resolve_codex_auth_path(&app)?;
     let opencode_config_path = resolve_opencode_config_path(&app)?;
     let opencode_auth_path = resolve_opencode_auth_path(&app)?;
+    let codex_config_input = read_text_or_empty(&codex_config_path).await?;
+    let (codex_model_provider, codex_provider_name) =
+        resolve_codex_target_provider_and_name(&codex_config_input);
     let has_local_key = config
         .local_api_key
         .as_ref()
@@ -85,12 +88,12 @@ pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
         codex_auth_path: codex_auth_path.to_string_lossy().to_string(),
         codex_disable_response_storage: CODEX_DISABLE_RESPONSE_STORAGE,
         codex_model: CODEX_MODEL.to_string(),
-        codex_model_provider: CODEX_MODEL_PROVIDER.to_string(),
+        codex_model_provider,
         codex_model_reasoning_effort: CODEX_MODEL_REASONING_EFFORT.to_string(),
         codex_network_access: CODEX_NETWORK_ACCESS.to_string(),
         codex_preferred_auth_method: CODEX_PREFERRED_AUTH_METHOD.to_string(),
         codex_provider_base_url: openai_compat_base_url.clone(),
-        codex_provider_name: CODEX_PROVIDER_NAME.to_string(),
+        codex_provider_name,
         codex_provider_requires_openai_auth: CODEX_PROVIDER_REQUIRES_OPENAI_AUTH,
         codex_provider_wire_api: CODEX_PROVIDER_WIRE_API.to_string(),
         codex_api_key_configured: has_local_key,
@@ -161,28 +164,14 @@ pub(crate) async fn write_codex_config(app: AppHandle) -> Result<ClientConfigWri
     let input = read_text_or_empty(&config_path).await?;
     let mut doc = toml_edit::DocumentMut::from_str(&input)
         .map_err(|err| format!("Failed to parse Codex config.toml: {err}"))?;
-
-    doc["disable_response_storage"] = toml_edit::value(CODEX_DISABLE_RESPONSE_STORAGE);
-    doc["model"] = toml_edit::value(CODEX_MODEL);
-    doc["model_provider"] = toml_edit::value(CODEX_MODEL_PROVIDER);
-    doc["model_reasoning_effort"] = toml_edit::value(CODEX_MODEL_REASONING_EFFORT);
-    doc["network_access"] = toml_edit::value(CODEX_NETWORK_ACCESS);
-    doc["preferred_auth_method"] = toml_edit::value(CODEX_PREFERRED_AUTH_METHOD);
-
-    ensure_toml_table_path(&mut doc, &["model_providers"])?;
-    ensure_toml_table_path(&mut doc, &["model_providers", CODEX_MODEL_PROVIDER])?;
-
-    doc["model_providers"][CODEX_MODEL_PROVIDER]["base_url"] =
-        toml_edit::value(codex_provider_base_url);
-    doc["model_providers"][CODEX_MODEL_PROVIDER]["name"] = toml_edit::value(CODEX_PROVIDER_NAME);
-    doc["model_providers"][CODEX_MODEL_PROVIDER]["requires_openai_auth"] =
-        toml_edit::value(CODEX_PROVIDER_REQUIRES_OPENAI_AUTH);
-    doc["model_providers"][CODEX_MODEL_PROVIDER]["wire_api"] =
-        toml_edit::value(CODEX_PROVIDER_WIRE_API);
-
-    if let Some(table) = doc["model_providers"][CODEX_MODEL_PROVIDER].as_table_mut() {
-        table.remove("experimental_bearer_token");
-    }
+    let (codex_model_provider, codex_provider_name) =
+        resolve_codex_target_provider_and_name_from_doc(&doc);
+    apply_codex_proxy_settings(
+        &mut doc,
+        &codex_model_provider,
+        &codex_provider_name,
+        &codex_provider_base_url,
+    )?;
 
     write_text_with_backup(&config_path, doc.to_string()).await?;
 
@@ -381,6 +370,82 @@ fn build_openai_compat_base_url(proxy_http_base_url: &str) -> String {
     format!("{proxy_http_base_url}/v1")
 }
 
+fn resolve_codex_target_provider_and_name(input: &str) -> (String, String) {
+    let Ok(doc) = toml_edit::DocumentMut::from_str(input) else {
+        return default_codex_provider_identity();
+    };
+    resolve_codex_target_provider_and_name_from_doc(&doc)
+}
+
+fn resolve_codex_target_provider_and_name_from_doc(doc: &toml_edit::DocumentMut) -> (String, String) {
+    let provider = doc
+        .as_table()
+        .get("model_provider")
+        .and_then(toml_edit::Item::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| CODEX_DEFAULT_MODEL_PROVIDER.to_string());
+    let name = doc
+        .as_table()
+        .get("model_providers")
+        .and_then(toml_edit::Item::as_table_like)
+        .and_then(|table| table.get(&provider))
+        .and_then(toml_edit::Item::as_table_like)
+        .and_then(|table| table.get("name"))
+        .and_then(toml_edit::Item::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| default_codex_provider_name(&provider));
+    (provider, name)
+}
+
+fn default_codex_provider_identity() -> (String, String) {
+    (
+        CODEX_DEFAULT_MODEL_PROVIDER.to_string(),
+        CODEX_PROVIDER_NAME.to_string(),
+    )
+}
+
+fn default_codex_provider_name(provider: &str) -> String {
+    if provider == CODEX_DEFAULT_MODEL_PROVIDER {
+        return CODEX_PROVIDER_NAME.to_string();
+    }
+    provider.to_string()
+}
+
+fn apply_codex_proxy_settings(
+    doc: &mut toml_edit::DocumentMut,
+    codex_model_provider: &str,
+    codex_provider_name: &str,
+    codex_provider_base_url: &str,
+) -> Result<(), String> {
+    doc["disable_response_storage"] = toml_edit::value(CODEX_DISABLE_RESPONSE_STORAGE);
+    doc["model"] = toml_edit::value(CODEX_MODEL);
+    doc["model_provider"] = toml_edit::value(codex_model_provider);
+    doc["model_reasoning_effort"] = toml_edit::value(CODEX_MODEL_REASONING_EFFORT);
+    doc["network_access"] = toml_edit::value(CODEX_NETWORK_ACCESS);
+    doc["preferred_auth_method"] = toml_edit::value(CODEX_PREFERRED_AUTH_METHOD);
+
+    ensure_toml_table_path(doc, &["model_providers"])?;
+    ensure_toml_table_path(doc, &["model_providers", codex_model_provider])?;
+
+    doc["model_providers"][codex_model_provider]["base_url"] =
+        toml_edit::value(codex_provider_base_url);
+    doc["model_providers"][codex_model_provider]["name"] = toml_edit::value(codex_provider_name);
+    doc["model_providers"][codex_model_provider]["requires_openai_auth"] =
+        toml_edit::value(CODEX_PROVIDER_REQUIRES_OPENAI_AUTH);
+    doc["model_providers"][codex_model_provider]["wire_api"] =
+        toml_edit::value(CODEX_PROVIDER_WIRE_API);
+
+    if let Some(table) = doc["model_providers"][codex_model_provider].as_table_mut() {
+        table.remove("experimental_bearer_token");
+    }
+
+    Ok(())
+}
+
 fn build_opencode_model_display_name(model: &str) -> String {
     let display = model
         .split('-')
@@ -552,7 +617,12 @@ async fn write_text_with_backup(path: &Path, contents: String) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
-    use super::build_opencode_provider_config;
+    use super::{
+        apply_codex_proxy_settings, build_opencode_provider_config,
+        resolve_codex_target_provider_and_name,
+    };
+    use std::str::FromStr;
+    use toml_edit::DocumentMut;
 
     #[test]
     fn opencode_provider_uses_readable_model_display_names() {
@@ -581,6 +651,61 @@ mod tests {
 
         assert_eq!(claude_name, "Claude Sonnet 4 5");
         assert_eq!(gpt_name, "Gpt 5.2 Codex");
+    }
+
+    #[test]
+    fn resolve_codex_target_provider_preserves_existing_model_provider() {
+        let existing = r#"
+model_provider = "openai"
+
+[model_providers.openai]
+name = "OpenAI"
+"#;
+
+        let (provider, name) = resolve_codex_target_provider_and_name(existing);
+
+        assert_eq!(provider, "openai");
+        assert_eq!(name, "OpenAI");
+    }
+
+    #[test]
+    fn resolve_codex_target_provider_falls_back_to_token_proxy_for_empty_config() {
+        let (provider, name) = resolve_codex_target_provider_and_name("");
+
+        assert_eq!(provider, "token_proxy");
+        assert_eq!(name, "token_proxy");
+    }
+
+    #[test]
+    fn apply_codex_proxy_settings_keeps_existing_provider_id() {
+        let input = r#"
+model_provider = "openai"
+
+[model_providers.openai]
+name = "OpenAI"
+base_url = "https://api.openai.com/v1"
+"#;
+        let mut doc = DocumentMut::from_str(input).expect("parse config");
+
+        apply_codex_proxy_settings(
+            &mut doc,
+            "openai",
+            "OpenAI",
+            "http://127.0.0.1:9208/v1",
+        )
+        .expect("apply codex proxy settings");
+
+        assert_eq!(doc["model_provider"].as_str(), Some("openai"));
+        assert_eq!(
+            doc["model_providers"]["openai"]["base_url"].as_str(),
+            Some("http://127.0.0.1:9208/v1")
+        );
+        let token_proxy_provider = doc
+            .as_table()
+            .get("model_providers")
+            .and_then(toml_edit::Item::as_table_like)
+            .and_then(|table| table.get("token_proxy"));
+        assert!(token_proxy_provider.is_none());
     }
 }
 

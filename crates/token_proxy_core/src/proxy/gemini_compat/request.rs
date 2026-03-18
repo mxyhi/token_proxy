@@ -393,6 +393,10 @@ fn function_response_to_chat_message(part: &serde_json::Map<String, Value>) -> O
     if !name.is_empty() {
         if let Some(message) = message.as_object_mut() {
             message.insert("name".to_string(), Value::String(name.to_string()));
+            message.insert(
+                "tool_call_id".to_string(),
+                Value::String(format!("call_{name}")),
+            );
         }
     }
     Some(message)

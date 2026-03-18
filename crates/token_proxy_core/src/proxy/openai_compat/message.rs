@@ -165,6 +165,24 @@ pub(super) fn stringify_any_json(value: Option<&Value>) -> String {
     }
 }
 
+pub(super) fn chat_tool_content_to_responses_output(content: Option<&Value>) -> Value {
+    match content {
+        None => Value::Array(Vec::new()),
+        Some(Value::String(text)) => Value::Array(vec![json!({
+            "type": "input_text",
+            "text": text
+        })]),
+        Some(Value::Array(_)) => Value::Array(
+            chat_content_to_responses_message_parts(content, "input_text")
+                .unwrap_or_else(|_| Vec::new()),
+        ),
+        Some(other) => Value::Array(vec![json!({
+            "type": "input_text",
+            "text": stringify_any_json(Some(other))
+        })]),
+    }
+}
+
 pub(super) fn user_placeholder_item() -> Value {
     json!({
         "type": "message",

@@ -61,11 +61,16 @@ fn responses_function_call_output_item_to_chat_message(
         .get("call_id")
         .and_then(Value::as_str)
         .ok_or_else(|| "function_call_output must include call_id.".to_string())?;
-    let output = item.get("output").and_then(Value::as_str).unwrap_or("");
+    let content = match item.get("output") {
+        Some(Value::String(text)) => Value::String(text.to_string()),
+        Some(value) => responses_message_content_to_chat_content(value)
+            .unwrap_or_else(|| Value::String(String::new())),
+        None => Value::String(String::new()),
+    };
     Ok(json!({
         "role": "tool",
         "tool_call_id": call_id,
-        "content": output
+        "content": content
     }))
 }
 

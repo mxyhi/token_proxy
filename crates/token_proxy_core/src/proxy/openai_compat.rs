@@ -184,6 +184,7 @@ fn chat_request_to_responses(body: &Bytes) -> Result<Bytes, String> {
     copy_key(object, &mut output, "parallel_tool_calls");
     copy_key(object, &mut output, "modalities");
     copy_key(object, &mut output, "audio");
+    copy_key(object, &mut output, "previous_response_id");
 
     if let Some(max_output_tokens) = object
         .get("max_completion_tokens")
@@ -212,6 +213,14 @@ fn chat_request_to_responses(body: &Bytes) -> Result<Bytes, String> {
         let mut text_obj = Map::new();
         text_obj.insert("format".to_string(), response_format.clone());
         output.insert("text".to_string(), Value::Object(text_obj));
+    }
+    if let Some(reasoning) =
+        map_chat_reasoning_effort_to_responses_reasoning(object.get("reasoning_effort"))
+    {
+        output.insert("reasoning".to_string(), reasoning);
+    }
+    if object.get("web_search_options").is_some() {
+        append_responses_web_search_tool(&mut output, object.get("web_search_options"));
     }
 
     serde_json::to_vec(&Value::Object(output))
@@ -420,12 +429,46 @@ fn push_chat_tool_message(input: &mut Vec<Value>, message: &Map<String, Value>) 
         .get("tool_call_id")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let output = message::stringify_any_json(message.get("content"));
+    let output = message::chat_tool_content_to_responses_output(message.get("content"));
     input.push(json!({
         "type": "function_call_output",
         "call_id": call_id,
         "output": output
     }));
+}
+
+fn map_chat_reasoning_effort_to_responses_reasoning(value: Option<&Value>) -> Option<Value> {
+    match value {
+        Some(Value::String(effort)) if !effort.trim().is_empty() => {
+            Some(json!({ "effort": effort }))
+        }
+        Some(Value::Object(object)) if !object.is_empty() => Some(Value::Object(object.clone())),
+        _ => None,
+    }
+}
+
+fn append_responses_web_search_tool(
+    output: &mut Map<String, Value>,
+    web_search_options: Option<&Value>,
+) {
+    let tools = output
+        .entry("tools".to_string())
+        .or_insert_with(|| Value::Array(Vec::new()));
+    if !matches!(tools, Value::Array(_)) {
+        *tools = Value::Array(Vec::new());
+    }
+    let Value::Array(items) = tools else {
+        return;
+    };
+
+    let mut tool = Map::new();
+    tool.insert("type".to_string(), Value::String("web_search".to_string()));
+    if let Some(Value::Object(options)) = web_search_options {
+        for (key, value) in options {
+            tool.insert(key.clone(), value.clone());
+        }
+    }
+    items.push(Value::Object(tool));
 }
 
 fn responses_response_to_chat(bytes: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {

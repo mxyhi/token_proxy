@@ -244,6 +244,78 @@ fn stream_responses_to_anthropic_emits_thinking_from_reasoning_summary_events() 
         }
 
         assert!(saw_thinking_start, "missing thinking content_block_start");
-        assert!(saw_thinking_delta, "missing thinking_delta from reasoning summary");
+        assert!(
+            saw_thinking_delta,
+            "missing thinking_delta from reasoning summary"
+        );
+    });
+}
+
+#[test]
+fn stream_chat_to_gemini_waits_for_complete_tool_call_arguments() {
+    super::run_async(async {
+        let context = LogContext {
+            path: "/v1/messages".to_string(),
+            provider: "openai".to_string(),
+            upstream_id: "unit-test".to_string(),
+            model: Some("unit-model".to_string()),
+            mapped_model: Some("unit-model".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":\"}}]}}]}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"Paris\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let gemini_stream = crate::proxy::gemini_compat::stream_chat_to_gemini(
+            upstream,
+            context,
+            Arc::new(LogWriter::new(None)),
+            token_tracker,
+        );
+
+        let chunks: Vec<Bytes> = gemini_stream
+            .map(|item| item.expect("stream item"))
+            .collect()
+            .await;
+
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+
+        let function_calls = payloads
+            .iter()
+            .flat_map(|payload| {
+                payload["candidates"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|candidate| candidate["content"]["parts"].as_array())
+                    .flatten()
+                    .filter_map(|part| part.get("functionCall"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(function_calls.len(), 1);
+        assert_eq!(function_calls[0]["name"], json!("get_weather"));
+        assert_eq!(function_calls[0]["args"]["city"], json!("Paris"));
     });
 }

@@ -55,4 +55,39 @@ fn gemini_request_to_chat_maps_function_response() {
     let value: Value = serde_json::from_slice(&output).expect("json");
     assert_eq!(value["messages"][0]["role"], json!("tool"));
     assert_eq!(value["messages"][0]["name"], json!("getFoo"));
+    assert_eq!(value["messages"][0]["tool_call_id"], json!("call_getFoo"));
+}
+
+#[test]
+fn gemini_request_to_chat_maps_parameters_json_schema() {
+    let input = json!({
+        "contents": [
+            { "role": "user", "parts": [{ "text": "hi" }] }
+        ],
+        "tools": [{
+            "functionDeclarations": [
+                {
+                    "name": "getFoo",
+                    "description": "x",
+                    "parametersJsonSchema": {
+                        "type": "object",
+                        "properties": { "query": { "type": "string" } },
+                        "required": ["query"]
+                    }
+                }
+            ]
+        }]
+    });
+
+    let output = gemini_request_to_chat(
+        &Bytes::from(serde_json::to_vec(&input).unwrap()),
+        Some("gemini-1.5-flash"),
+    )
+    .expect("convert");
+    let value: Value = serde_json::from_slice(&output).expect("json");
+
+    assert_eq!(
+        value["tools"][0]["function"]["parameters"]["properties"]["query"]["type"],
+        json!("string")
+    );
 }

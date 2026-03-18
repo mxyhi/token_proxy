@@ -98,6 +98,7 @@ pub(super) fn map_gemini_tools_to_chat(value: &Value) -> Value {
                 .unwrap_or("");
             let parameters = declaration
                 .get("parameters")
+                .or_else(|| declaration.get("parametersJsonSchema"))
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             tools.push(json!({

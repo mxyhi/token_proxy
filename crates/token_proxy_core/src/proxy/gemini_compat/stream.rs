@@ -505,9 +505,18 @@ where
         if state.name.is_empty() {
             return None;
         }
-        let args: Value = serde_json::from_str(&state.arguments).unwrap_or_else(|_| json!({}));
+        let args = if state.arguments.is_empty() {
+            json!({})
+        } else {
+            match serde_json::from_str::<Value>(&state.arguments) {
+                Ok(args) => args,
+                Err(_) => return None,
+            }
+        };
+        let name = state.name.clone();
+        self.tool_calls[index] = None;
         Some(json!({
-            "functionCall": { "name": state.name, "args": args }
+            "functionCall": { "name": name, "args": args }
         }))
     }
 

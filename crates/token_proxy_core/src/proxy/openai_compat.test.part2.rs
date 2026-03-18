@@ -55,6 +55,62 @@ fn responses_and_gemini_request_conversions() {
     assert_eq!(gemini_value["max_output_tokens"], json!(64));
     assert_eq!(gemini_value["top_p"], json!(0.8));
 }
+
+#[test]
+fn chat_request_to_responses_maps_advanced_optional_params() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let value = transform_request_value(
+        FormatTransform::ChatToResponses,
+        json!({
+            "model": "gpt-5",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "reasoning_effort": "high",
+            "previous_response_id": "resp_prev_123",
+            "web_search_options": { "search_context_size": "high" }
+        }),
+        &http_clients,
+        None,
+    );
+
+    assert_eq!(value["reasoning"]["effort"], json!("high"));
+    assert_eq!(value["previous_response_id"], json!("resp_prev_123"));
+    assert_eq!(value["tools"][0]["type"], json!("web_search"));
+    assert_eq!(value["tools"][0]["search_context_size"], json!("high"));
+}
+
+#[test]
+fn chat_request_to_responses_preserves_structured_tool_output() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let value = transform_request_value(
+        FormatTransform::ChatToResponses,
+        json!({
+            "model": "gpt-4.1",
+            "messages": [
+                { "role": "user", "content": "show image result" },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_123",
+                    "content": [
+                        { "type": "text", "text": "done" },
+                        { "type": "image_url", "image_url": { "url": "https://example.com/result.png" } }
+                    ]
+                }
+            ]
+        }),
+        &http_clients,
+        None,
+    );
+
+    assert_eq!(value["input"][1]["type"], json!("function_call_output"));
+    assert_eq!(value["input"][1]["call_id"], json!("call_123"));
+    assert_eq!(value["input"][1]["output"][0]["type"], json!("input_text"));
+    assert_eq!(value["input"][1]["output"][0]["text"], json!("done"));
+    assert_eq!(value["input"][1]["output"][1]["type"], json!("input_image"));
+    assert_eq!(
+        value["input"][1]["output"][1]["image_url"]["url"],
+        json!("https://example.com/result.png")
+    );
+}
 #[test]
 fn gemini_and_anthropic_request_conversions() {
     let http_clients = ProxyHttpClients::new().expect("http clients");

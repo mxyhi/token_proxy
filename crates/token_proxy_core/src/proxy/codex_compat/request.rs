@@ -413,7 +413,9 @@ fn normalize_responses_payload(object: &mut Map<String, Value>, model_hint: Opti
     object.insert("model".to_string(), Value::String(model.to_string()));
     object.insert("stream".to_string(), Value::Bool(true));
     object.insert("store".to_string(), Value::Bool(false));
-    object.insert("parallel_tool_calls".to_string(), Value::Bool(true));
+    if !object.contains_key("parallel_tool_calls") {
+        object.insert("parallel_tool_calls".to_string(), Value::Bool(true));
+    }
     object.insert(
         "include".to_string(),
         json!(["reasoning.encrypted_content"]),
@@ -441,10 +443,32 @@ fn normalize_responses_payload(object: &mut Map<String, Value>, model_hint: Opti
             "role": "user",
             "content": [json!({"type":"input_text","text": text})]
         })],
-        Some(Value::Array(items)) => items.clone(),
+        Some(Value::Array(items)) => sanitize_responses_input_for_codex(items),
         _ => Vec::new(),
     };
     object.insert("input".to_string(), Value::Array(input));
+}
+
+fn sanitize_responses_input_for_codex(items: &[Value]) -> Vec<Value> {
+    items
+        .iter()
+        .map(sanitize_responses_input_item_for_codex)
+        .collect()
+}
+
+fn sanitize_responses_input_item_for_codex(item: &Value) -> Value {
+    let Some(object) = item.as_object() else {
+        return item.clone();
+    };
+    if object.get("type").and_then(Value::as_str) != Some("function_call_output") {
+        return item.clone();
+    }
+    let mut sanitized = object.clone();
+    // Claude -> Responses may carry structured tool output in `output_parts`.
+    // Codex only needs the flattened `output` string here; forwarding the extra field
+    // breaks composition without adding value.
+    sanitized.remove("output_parts");
+    Value::Object(sanitized)
 }
 
 fn rewrite_input_function_names(input: &mut Value, tool_map: &ToolNameMap) {

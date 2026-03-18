@@ -141,7 +141,6 @@ fn migrate_api_key_to_api_keys() {
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].as_str(), Some("key-1"));
 }
-
 #[test]
 fn migrate_legacy_upstream_strategy_string_to_structured_fill_first_serial() {
     let mut value = parse_json(

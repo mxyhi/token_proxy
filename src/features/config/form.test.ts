@@ -261,7 +261,6 @@ describe("config/form", () => {
       }).valid
     ).toBe(true);
   });
-
   it("serializes openai compatibility upstream flags", () => {
     const upstream = createEmptyUpstream();
     upstream.id = "glm-coding-plan";

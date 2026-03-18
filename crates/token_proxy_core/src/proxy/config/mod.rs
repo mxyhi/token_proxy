@@ -144,7 +144,6 @@ fn resolve_parallel_attempts(dispatch: &str, value: u64) -> Result<usize, String
     usize::try_from(value)
         .map_err(|_| "upstream_strategy.dispatch.max_parallel is too large.".to_string())
 }
-
 fn resolve_max_request_body_bytes(value: Option<u64>) -> usize {
     let value = value.unwrap_or(DEFAULT_MAX_REQUEST_BODY_BYTES);
     let value = if value == 0 {

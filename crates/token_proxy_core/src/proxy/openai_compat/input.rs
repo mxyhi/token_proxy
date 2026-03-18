@@ -5,12 +5,12 @@ use super::message::extract_text_from_part;
 pub(super) fn responses_input_to_chat_messages(items: &[Value]) -> Result<Vec<Value>, String> {
     let mut messages = Vec::with_capacity(items.len());
     for item in items {
-        messages.push(responses_input_item_to_chat_message(item)?);
+        messages.extend(responses_input_item_to_chat_messages(item)?);
     }
     Ok(messages)
 }
 
-fn responses_input_item_to_chat_message(item: &Value) -> Result<Value, String> {
+fn responses_input_item_to_chat_messages(item: &Value) -> Result<Vec<Value>, String> {
     let Some(item) = item.as_object() else {
         return Err("Responses input item must be an object.".to_string());
     };
@@ -25,7 +25,7 @@ fn responses_input_item_to_chat_message(item: &Value) -> Result<Value, String> {
         {
             output.insert("content".to_string(), content);
         }
-        return Ok(Value::Object(output));
+        return Ok(vec![Value::Object(output)]);
     }
 
     let Some(item_type) = item.get("type").and_then(Value::as_str) else {
@@ -33,9 +33,15 @@ fn responses_input_item_to_chat_message(item: &Value) -> Result<Value, String> {
     };
 
     match item_type {
-        "message" => responses_message_item_to_chat_message(item),
-        "function_call_output" => responses_function_call_output_item_to_chat_message(item),
-        "function_call" => responses_function_call_item_to_chat_message(item),
+        "message" => responses_message_item_to_chat_message(item).map(|message| vec![message]),
+        "function_call_output" | "web_search_call" | "computer_call_output" | "tool_result" => {
+            Ok(responses_tool_output_item_to_chat_message(item)
+                .into_iter()
+                .collect())
+        }
+        "function_call" => {
+            responses_function_call_item_to_chat_message(item).map(|message| vec![message])
+        }
         _ => Err(format!(
             "Unsupported Responses input item type: {item_type}"
         )),
@@ -54,23 +60,16 @@ fn responses_message_item_to_chat_message(item: &Map<String, Value>) -> Result<V
     Ok(json!({ "role": role, "content": content }))
 }
 
-fn responses_function_call_output_item_to_chat_message(
-    item: &Map<String, Value>,
-) -> Result<Value, String> {
-    let call_id = item
-        .get("call_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "function_call_output must include call_id.".to_string())?;
-    let content = match item.get("output") {
-        Some(Value::String(text)) => Value::String(text.to_string()),
-        Some(value) => responses_message_content_to_chat_content(value)
-            .unwrap_or_else(|| Value::String(String::new())),
-        None => Value::String(String::new()),
-    };
-    Ok(json!({
+fn responses_tool_output_item_to_chat_message(item: &Map<String, Value>) -> Option<Value> {
+    let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
+    if call_id.is_empty() {
+        return None;
+    }
+
+    Some(json!({
         "role": "tool",
         "tool_call_id": call_id,
-        "content": content
+        "content": normalize_tool_output_to_chat_content(item.get("output"))
     }))
 }
 
@@ -94,6 +93,24 @@ fn responses_function_call_item_to_chat_message(
             }
         ]
     }))
+}
+
+fn normalize_tool_output_to_chat_content(output: Option<&Value>) -> Value {
+    match output {
+        None | Some(Value::Null) => Value::String(String::new()),
+        Some(Value::String(text)) => Value::String(text.to_string()),
+        // Tools output often arrives as Responses content parts. Keep multimodal
+        // blocks when they are meaningful, otherwise stringify the original JSON
+        // instead of silently dropping structured payloads.
+        Some(Value::Array(parts)) => {
+            match responses_message_content_to_chat_content(&Value::Array(parts.clone())) {
+                Some(Value::Array(content)) => Value::Array(content),
+                Some(Value::String(text)) if !text.is_empty() => Value::String(text),
+                _ => Value::String(Value::Array(parts.clone()).to_string()),
+            }
+        }
+        Some(value) => Value::String(value.to_string()),
+    }
 }
 
 fn responses_message_content_to_chat_content(value: &Value) -> Option<Value> {

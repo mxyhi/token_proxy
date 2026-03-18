@@ -99,6 +99,11 @@ fn gemini_to_responses_request_preserves_audio_and_file_parts() {
 #[test]
 fn chat_request_to_responses_maps_advanced_optional_params() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
+    let schema = json!({
+        "type": "object",
+        "properties": { "answer": { "type": "string" } },
+        "required": ["answer"]
+    });
     let value = transform_request_value(
         FormatTransform::ChatToResponses,
         json!({
@@ -106,7 +111,29 @@ fn chat_request_to_responses_maps_advanced_optional_params() {
             "messages": [{ "role": "user", "content": "hi" }],
             "reasoning_effort": "high",
             "previous_response_id": "resp_prev_123",
-            "web_search_options": { "search_context_size": "high" }
+            "web_search_options": { "search_context_size": "high" },
+            "store": false,
+            "background": true,
+            "include": ["reasoning.encrypted_content"],
+            "truncation": "auto",
+            "service_tier": "flex",
+            "safety_identifier": "sid_123",
+            "prompt": { "id": "pmpt_123", "version": "42" },
+            "max_tool_calls": 3,
+            "prompt_cache_key": "cache-key",
+            "prompt_cache_retention": "24h",
+            "stream_options": { "include_usage": true },
+            "top_logprobs": 5,
+            "partial_images": 2,
+            "context_management": [{ "type": "compaction", "compact_threshold": 4096 }],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer_schema",
+                    "schema": schema,
+                    "strict": true
+                }
+            }
         }),
         &http_clients,
         None,
@@ -114,8 +141,188 @@ fn chat_request_to_responses_maps_advanced_optional_params() {
 
     assert_eq!(value["reasoning"]["effort"], json!("high"));
     assert_eq!(value["previous_response_id"], json!("resp_prev_123"));
+    assert_eq!(value["store"], json!(false));
+    assert_eq!(value["background"], json!(true));
+    assert_eq!(value["include"], json!(["reasoning.encrypted_content"]));
+    assert_eq!(value["truncation"], json!("auto"));
+    assert_eq!(value["service_tier"], json!("flex"));
+    assert_eq!(value["safety_identifier"], json!("sid_123"));
+    assert_eq!(value["prompt"]["id"], json!("pmpt_123"));
+    assert_eq!(value["max_tool_calls"], json!(3));
+    assert_eq!(value["prompt_cache_key"], json!("cache-key"));
+    assert_eq!(value["prompt_cache_retention"], json!("24h"));
+    assert_eq!(value["stream_options"]["include_usage"], json!(true));
+    assert_eq!(value["top_logprobs"], json!(5));
+    assert_eq!(value["partial_images"], json!(2));
+    assert_eq!(
+        value["context_management"][0]["compact_threshold"],
+        json!(4096)
+    );
+    assert_eq!(value["text"]["format"]["name"], json!("answer_schema"));
+    assert_eq!(value["text"]["format"]["schema"], schema);
+    assert_eq!(value["text"]["format"]["strict"], json!(true));
     assert_eq!(value["tools"][0]["type"], json!("web_search"));
     assert_eq!(value["tools"][0]["search_context_size"], json!("high"));
+}
+
+#[test]
+fn responses_request_to_chat_maps_reasoning_web_search_and_tool_metadata() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let schema = json!({
+        "type": "object",
+        "properties": { "answer": { "type": "string" } }
+    });
+    let value = transform_request_value(
+        FormatTransform::ResponsesToChat,
+        json!({
+            "model": "gpt-5",
+            "input": "hi",
+            "reasoning": { "effort": "medium", "summary": "detailed" },
+            "service_tier": "priority",
+            "context_management": [{ "type": "compaction", "compact_threshold": 3000 }],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "answer_schema",
+                    "schema": schema,
+                    "strict": true
+                }
+            },
+            "tools": [
+                {
+                    "type": "web_search",
+                    "search_context_size": "high",
+                    "user_location": {
+                        "type": "approximate",
+                        "country": "US",
+                        "city": "San Francisco"
+                    }
+                },
+                {
+                    "type": "function",
+                    "name": "lookup",
+                    "description": "Lookup info",
+                    "parameters": { "properties": { "q": { "type": "string" } } },
+                    "strict": true,
+                    "cache_control": { "type": "ephemeral" },
+                    "allowed_callers": ["ui"],
+                    "input_examples": [{ "q": "hello" }]
+                }
+            ]
+        }),
+        &http_clients,
+        None,
+    );
+
+    assert_eq!(value["reasoning_effort"], json!("medium"));
+    assert_eq!(value["service_tier"], json!("priority"));
+    assert_eq!(
+        value["context_management"][0]["compact_threshold"],
+        json!(3000)
+    );
+    assert_eq!(
+        value["web_search_options"]["search_context_size"],
+        json!("high")
+    );
+    assert_eq!(
+        value["web_search_options"]["user_location"]["city"],
+        json!("San Francisco")
+    );
+    assert_eq!(value["response_format"]["type"], json!("json_schema"));
+    assert_eq!(
+        value["response_format"]["json_schema"]["name"],
+        json!("answer_schema")
+    );
+    assert_eq!(value["response_format"]["json_schema"]["schema"], schema);
+    assert_eq!(
+        value["response_format"]["json_schema"]["strict"],
+        json!(true)
+    );
+    assert_eq!(value["tools"][0]["function"]["name"], json!("lookup"));
+    assert_eq!(value["tools"][0]["function"]["strict"], json!(true));
+    assert_eq!(
+        value["tools"][0]["cache_control"]["type"],
+        json!("ephemeral")
+    );
+    assert_eq!(value["tools"][0]["allowed_callers"], json!(["ui"]));
+    assert_eq!(value["tools"][0]["input_examples"][0]["q"], json!("hello"));
+}
+
+#[test]
+fn chat_request_to_responses_preserves_tool_metadata() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let value = transform_request_value(
+        FormatTransform::ChatToResponses,
+        json!({
+            "model": "gpt-4.1",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "tools": [
+                {
+                    "type": "function",
+                    "cache_control": { "type": "ephemeral" },
+                    "allowed_callers": ["ui"],
+                    "input_examples": [{ "q": "hello" }],
+                    "function": {
+                        "name": "lookup",
+                        "description": "Lookup info",
+                        "parameters": { "properties": { "q": { "type": "string" } } },
+                        "strict": true
+                    }
+                }
+            ]
+        }),
+        &http_clients,
+        None,
+    );
+
+    assert_eq!(value["tools"][0]["name"], json!("lookup"));
+    assert_eq!(value["tools"][0]["strict"], json!(true));
+    assert_eq!(
+        value["tools"][0]["cache_control"]["type"],
+        json!("ephemeral")
+    );
+    assert_eq!(value["tools"][0]["allowed_callers"], json!(["ui"]));
+    assert_eq!(value["tools"][0]["input_examples"][0]["q"], json!("hello"));
+}
+
+#[test]
+fn responses_request_to_chat_normalizes_tool_choice_object() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let auto_value = transform_request_value(
+        FormatTransform::ResponsesToChat,
+        json!({
+            "model": "gpt-5",
+            "input": "hi",
+            "tool_choice": { "type": "auto" }
+        }),
+        &http_clients,
+        None,
+    );
+    assert_eq!(auto_value["tool_choice"], json!("auto"));
+
+    let required_value = transform_request_value(
+        FormatTransform::ResponsesToChat,
+        json!({
+            "model": "gpt-5",
+            "input": "hi",
+            "tool_choice": { "type": "tool" }
+        }),
+        &http_clients,
+        None,
+    );
+    assert_eq!(required_value["tool_choice"], json!("required"));
+
+    let nameless_function_value = transform_request_value(
+        FormatTransform::ResponsesToChat,
+        json!({
+            "model": "gpt-5",
+            "input": "hi",
+            "tool_choice": { "type": "function" }
+        }),
+        &http_clients,
+        None,
+    );
+    assert_eq!(nameless_function_value["tool_choice"], json!("required"));
 }
 
 #[test]
@@ -151,6 +358,119 @@ fn chat_request_to_responses_preserves_structured_tool_output() {
         json!("https://example.com/result.png")
     );
 }
+
+#[test]
+fn responses_request_to_chat_accepts_additional_tool_output_item_types() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let value = transform_request_value(
+        FormatTransform::ResponsesToChat,
+        json!({
+            "model": "gpt-5",
+            "input": [
+                { "type": "tool_result", "call_id": "call_tool", "output": "tool ok" },
+                { "type": "computer_call_output", "call_id": "call_computer", "output": "computer ok" },
+                { "type": "web_search_call", "call_id": "call_search", "output": "search ok" }
+            ]
+        }),
+        &http_clients,
+        None,
+    );
+
+    let messages = value["messages"].as_array().expect("messages array");
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0]["role"], json!("tool"));
+    assert_eq!(messages[0]["tool_call_id"], json!("call_tool"));
+    assert_eq!(messages[0]["content"], json!("tool ok"));
+    assert_eq!(messages[1]["tool_call_id"], json!("call_computer"));
+    assert_eq!(messages[2]["tool_call_id"], json!("call_search"));
+}
+
+#[test]
+fn responses_request_to_chat_skips_tool_output_without_call_id() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let value = transform_request_value(
+        FormatTransform::ResponsesToChat,
+        json!({
+            "model": "gpt-5",
+            "input": [
+                { "type": "function_call_output", "output": "ignored" },
+                { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] }
+            ]
+        }),
+        &http_clients,
+        None,
+    );
+
+    let messages = value["messages"].as_array().expect("messages array");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"], json!("user"));
+    assert_eq!(messages[0]["content"], json!("hi"));
+}
+
+#[test]
+fn responses_request_to_chat_normalizes_object_tool_output_to_string() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let value = transform_request_value(
+        FormatTransform::ResponsesToChat,
+        json!({
+            "model": "gpt-5",
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "output": { "status": "ok", "count": 2 }
+                }
+            ]
+        }),
+        &http_clients,
+        None,
+    );
+
+    let messages = value["messages"].as_array().expect("messages array");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"], json!("tool"));
+    assert_eq!(messages[0]["tool_call_id"], json!("call_123"));
+    let content = messages[0]["content"].as_str().expect("string content");
+    assert_eq!(
+        serde_json::from_str::<Value>(content).expect("json string"),
+        json!({ "status": "ok", "count": 2 })
+    );
+}
+
+#[test]
+fn chat_request_to_responses_drops_unknown_response_format() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let value = transform_request_value(
+        FormatTransform::ChatToResponses,
+        json!({
+            "model": "gpt-5",
+            "messages": [{ "role": "user", "content": "hi" }],
+            "response_format": { "type": "xml_schema", "schema": { "type": "string" } }
+        }),
+        &http_clients,
+        None,
+    );
+
+    assert!(value.get("text").is_none());
+}
+
+#[test]
+fn responses_request_to_chat_drops_unknown_text_format() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let value = transform_request_value(
+        FormatTransform::ResponsesToChat,
+        json!({
+            "model": "gpt-5",
+            "input": "hi",
+            "text": { "format": { "type": "xml_schema", "schema": { "type": "string" } } }
+        }),
+        &http_clients,
+        None,
+    );
+
+    assert!(value.get("response_format").is_none());
+}
+
 #[test]
 fn gemini_and_anthropic_request_conversions() {
     let http_clients = ProxyHttpClients::new().expect("http clients");

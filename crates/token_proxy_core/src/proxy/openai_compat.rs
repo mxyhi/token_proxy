@@ -174,17 +174,38 @@ fn chat_request_to_responses(body: &Bytes) -> Result<Bytes, String> {
     if let Some(instructions) = instructions {
         output.insert("instructions".to_string(), Value::String(instructions));
     }
-    copy_key(object, &mut output, "stream");
-    copy_key(object, &mut output, "temperature");
-    copy_key(object, &mut output, "top_p");
-    copy_key(object, &mut output, "stop");
-    copy_key(object, &mut output, "metadata");
-    copy_key(object, &mut output, "user");
-    copy_key(object, &mut output, "seed");
-    copy_key(object, &mut output, "parallel_tool_calls");
-    copy_key(object, &mut output, "modalities");
-    copy_key(object, &mut output, "audio");
-    copy_key(object, &mut output, "previous_response_id");
+    copy_keys(
+        object,
+        &mut output,
+        &[
+            "stream",
+            "temperature",
+            "top_p",
+            "stop",
+            "metadata",
+            "user",
+            "seed",
+            "parallel_tool_calls",
+            "modalities",
+            "audio",
+            "previous_response_id",
+            "include",
+            "store",
+            "background",
+            "truncation",
+            "service_tier",
+            "safety_identifier",
+            "prompt",
+            "max_tool_calls",
+            "prompt_cache_key",
+            "prompt_cache_retention",
+            "stream_options",
+            "top_logprobs",
+            "partial_images",
+            "context_management",
+        ],
+    );
+    copy_key(object, &mut output, "text");
 
     if let Some(max_output_tokens) = object
         .get("max_completion_tokens")
@@ -210,9 +231,7 @@ fn chat_request_to_responses(body: &Bytes) -> Result<Bytes, String> {
         );
     }
     if let Some(response_format) = object.get("response_format") {
-        let mut text_obj = Map::new();
-        text_obj.insert("format".to_string(), response_format.clone());
-        output.insert("text".to_string(), Value::Object(text_obj));
+        merge_chat_response_format_into_responses_text(&mut output, response_format);
     }
     if let Some(reasoning) =
         map_chat_reasoning_effort_to_responses_reasoning(object.get("reasoning_effort"))
@@ -251,16 +270,24 @@ fn responses_request_to_chat(body: &Bytes) -> Result<Bytes, String> {
     let mut output = Map::new();
     copy_key(object, &mut output, "model");
     output.insert("messages".to_string(), Value::Array(messages));
-    copy_key(object, &mut output, "stream");
-    copy_key(object, &mut output, "temperature");
-    copy_key(object, &mut output, "top_p");
-    copy_key(object, &mut output, "stop");
-    copy_key(object, &mut output, "metadata");
-    copy_key(object, &mut output, "user");
-    copy_key(object, &mut output, "seed");
-    copy_key(object, &mut output, "parallel_tool_calls");
-    copy_key(object, &mut output, "modalities");
-    copy_key(object, &mut output, "audio");
+    copy_keys(
+        object,
+        &mut output,
+        &[
+            "stream",
+            "temperature",
+            "top_p",
+            "stop",
+            "metadata",
+            "user",
+            "seed",
+            "parallel_tool_calls",
+            "modalities",
+            "audio",
+            "service_tier",
+            "context_management",
+        ],
+    );
 
     if let Some(max_output_tokens) = object.get("max_output_tokens").and_then(Value::as_i64) {
         // Prefer the modern chat parameter.
@@ -271,10 +298,13 @@ fn responses_request_to_chat(body: &Bytes) -> Result<Bytes, String> {
     }
 
     if let Some(tools) = object.get("tools") {
-        output.insert(
-            "tools".to_string(),
-            tools::map_responses_tools_to_chat(tools),
-        );
+        let (mapped_tools, web_search_options) = tools::split_responses_tools_for_chat(tools);
+        if !mapped_tools.is_empty() {
+            output.insert("tools".to_string(), Value::Array(mapped_tools));
+        }
+        if let Some(web_search_options) = web_search_options {
+            output.insert("web_search_options".to_string(), web_search_options);
+        }
     }
     if let Some(tool_choice) = object.get("tool_choice") {
         output.insert(
@@ -282,12 +312,13 @@ fn responses_request_to_chat(body: &Bytes) -> Result<Bytes, String> {
             tools::map_responses_tool_choice_to_chat(tool_choice),
         );
     }
-    if let Some(text_format) = object
-        .get("text")
-        .and_then(Value::as_object)
-        .and_then(|text| text.get("format"))
+    if let Some(response_format) = map_responses_text_to_chat_response_format(object.get("text")) {
+        output.insert("response_format".to_string(), response_format);
+    }
+    if let Some(reasoning_effort) =
+        map_responses_reasoning_to_chat_reasoning_effort(object.get("reasoning"))
     {
-        output.insert("response_format".to_string(), text_format.clone());
+        output.insert("reasoning_effort".to_string(), reasoning_effort);
     }
 
     serde_json::to_vec(&Value::Object(output))
@@ -447,6 +478,20 @@ fn map_chat_reasoning_effort_to_responses_reasoning(value: Option<&Value>) -> Op
     }
 }
 
+fn map_responses_reasoning_to_chat_reasoning_effort(value: Option<&Value>) -> Option<Value> {
+    match value {
+        Some(Value::String(effort)) if !effort.trim().is_empty() => {
+            Some(Value::String(effort.to_string()))
+        }
+        Some(Value::Object(object)) => object
+            .get("effort")
+            .and_then(Value::as_str)
+            .filter(|effort| !effort.trim().is_empty())
+            .map(|effort| Value::String(effort.to_string())),
+        _ => None,
+    }
+}
+
 fn append_responses_web_search_tool(
     output: &mut Map<String, Value>,
     web_search_options: Option<&Value>,
@@ -469,6 +514,68 @@ fn append_responses_web_search_tool(
         }
     }
     items.push(Value::Object(tool));
+}
+
+fn merge_chat_response_format_into_responses_text(
+    output: &mut Map<String, Value>,
+    response_format: &Value,
+) {
+    let Some(format) = map_chat_response_format_to_responses_text_format(response_format) else {
+        return;
+    };
+
+    let text = output
+        .entry("text".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !matches!(text, Value::Object(_)) {
+        *text = Value::Object(Map::new());
+    }
+    let Value::Object(text_object) = text else {
+        return;
+    };
+    text_object.insert("format".to_string(), format);
+}
+
+fn map_chat_response_format_to_responses_text_format(response_format: &Value) -> Option<Value> {
+    let object = response_format.as_object()?;
+    match object.get("type").and_then(Value::as_str) {
+        Some("json_schema") => {
+            let schema = object
+                .get("json_schema")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            Some(json!({
+                "type": "json_schema",
+                "name": schema.get("name").cloned().unwrap_or_else(|| json!("response_schema")),
+                "schema": schema.get("schema").cloned().unwrap_or_else(|| json!({})),
+                "strict": schema.get("strict").cloned().unwrap_or_else(|| json!(false))
+            }))
+        }
+        Some("json_object") => Some(json!({ "type": "json_object" })),
+        Some("text") => Some(json!({ "type": "text" })),
+        _ => None,
+    }
+}
+
+fn map_responses_text_to_chat_response_format(text: Option<&Value>) -> Option<Value> {
+    let format = text
+        .and_then(Value::as_object)
+        .and_then(|text| text.get("format"))?;
+    let object = format.as_object()?;
+    match object.get("type").and_then(Value::as_str) {
+        Some("json_schema") => Some(json!({
+            "type": "json_schema",
+            "json_schema": {
+                "name": object.get("name").cloned().unwrap_or_else(|| json!("response_schema")),
+                "schema": object.get("schema").cloned().unwrap_or_else(|| json!({})),
+                "strict": object.get("strict").cloned().unwrap_or_else(|| json!(false))
+            }
+        })),
+        Some("json_object") => Some(json!({ "type": "json_object" })),
+        Some("text") => None,
+        _ => None,
+    }
 }
 
 fn responses_response_to_chat(bytes: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {
@@ -652,6 +759,16 @@ fn chat_response_to_responses(bytes: &Bytes) -> Result<Bytes, String> {
 fn copy_key(source: &serde_json::Map<String, Value>, target: &mut Map<String, Value>, key: &str) {
     if let Some(value) = source.get(key) {
         target.insert(key.to_string(), value.clone());
+    }
+}
+
+fn copy_keys(
+    source: &serde_json::Map<String, Value>,
+    target: &mut Map<String, Value>,
+    keys: &[&str],
+) {
+    for key in keys {
+        copy_key(source, target, key);
     }
 }
 

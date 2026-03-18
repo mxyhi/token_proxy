@@ -241,6 +241,7 @@ fn responses_request_to_chat_converts_input_text_content_parts_to_string() {
 #[test]
 fn chat_request_to_responses_maps_response_format() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
+    let schema = json!({ "type": "object", "properties": { "ok": { "type": "boolean" } } });
     let input = bytes_from_json(json!({
         "model": "gpt-4.1",
         "messages": [{ "role": "user", "content": "hi" }],
@@ -248,7 +249,8 @@ fn chat_request_to_responses_maps_response_format() {
             "type": "json_schema",
             "json_schema": {
                 "name": "example",
-                "schema": { "type": "object", "properties": { "ok": { "type": "boolean" } } }
+                "schema": schema,
+                "strict": true
             }
         }
     }));
@@ -266,10 +268,9 @@ fn chat_request_to_responses_maps_response_format() {
     let value = json_from_bytes(output);
 
     assert_eq!(value["text"]["format"]["type"], json!("json_schema"));
-    assert_eq!(
-        value["text"]["format"]["json_schema"]["name"],
-        json!("example")
-    );
+    assert_eq!(value["text"]["format"]["name"], json!("example"));
+    assert_eq!(value["text"]["format"]["schema"], schema);
+    assert_eq!(value["text"]["format"]["strict"], json!(true));
 }
 
 #[test]
@@ -294,6 +295,51 @@ fn responses_request_to_chat_maps_text_format_to_response_format() {
     let value = json_from_bytes(output);
 
     assert_eq!(value["response_format"]["type"], json!("json_object"));
+}
+
+#[test]
+fn responses_request_to_chat_maps_json_schema_text_format() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let schema = json!({
+        "type": "object",
+        "properties": { "answer": { "type": "string" } },
+        "required": ["answer"]
+    });
+    let input = bytes_from_json(json!({
+        "model": "gpt-4.1",
+        "input": "hi",
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "answer_schema",
+                "schema": schema,
+                "strict": true
+            }
+        }
+    }));
+
+    let output = run_async(async {
+        transform_request_body(
+            FormatTransform::ResponsesToChat,
+            &input,
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("transform")
+    });
+    let value = json_from_bytes(output);
+
+    assert_eq!(value["response_format"]["type"], json!("json_schema"));
+    assert_eq!(
+        value["response_format"]["json_schema"]["name"],
+        json!("answer_schema")
+    );
+    assert_eq!(value["response_format"]["json_schema"]["schema"], schema);
+    assert_eq!(
+        value["response_format"]["json_schema"]["strict"],
+        json!(true)
+    );
 }
 
 #[test]

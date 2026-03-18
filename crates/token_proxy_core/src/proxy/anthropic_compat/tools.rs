@@ -62,6 +62,11 @@ pub(super) fn map_anthropic_tools_to_responses(value: &Value) -> Value {
 
 fn map_anthropic_tool(value: &Value) -> Option<Value> {
     let tool = value.as_object()?;
+    let tool_type = tool.get("type").and_then(Value::as_str).unwrap_or("");
+    let tool_name = tool.get("name").and_then(Value::as_str).unwrap_or("");
+    if tool_type.starts_with("web_search") || tool_name == "web_search" {
+        return Some(json!({ "type": "web_search_preview" }));
+    }
     let name = tool.get("name").and_then(Value::as_str)?;
     let mut out = Map::new();
     out.insert("type".to_string(), json!("function"));

@@ -177,3 +177,73 @@ fn stream_responses_to_chat_persists_log_when_client_drops_stream_early() {
         );
     });
 }
+
+#[test]
+fn stream_responses_to_anthropic_emits_thinking_from_reasoning_summary_events() {
+    super::run_async(async {
+        let context = LogContext {
+            path: "/v1/messages".to_string(),
+            provider: "openai-response".to_string(),
+            upstream_id: "unit-test".to_string(),
+            model: Some("unit-model".to_string()),
+            mapped_model: Some("unit-model".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from(
+                "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_1\",\"delta\":\"think step by step\"}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"think step by step\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let anthropic_stream = super::super::responses_to_anthropic::stream_responses_to_anthropic(
+            upstream,
+            context,
+            Arc::new(LogWriter::new(None)),
+            token_tracker,
+        );
+
+        let chunks: Vec<Bytes> = anthropic_stream
+            .map(|item| item.expect("stream item"))
+            .collect()
+            .await;
+
+        let mut saw_thinking_start = false;
+        let mut saw_thinking_delta = false;
+        for chunk in &chunks {
+            let Some((event_type, data)) = super::parse_anthropic_sse(chunk) else {
+                continue;
+            };
+            if event_type == "content_block_start"
+                && data["content_block"]["type"] == json!("thinking")
+            {
+                saw_thinking_start = true;
+            }
+            if event_type == "content_block_delta"
+                && data["delta"]["type"] == json!("thinking_delta")
+                && data["delta"]["thinking"] == json!("think step by step")
+            {
+                saw_thinking_delta = true;
+            }
+        }
+
+        assert!(saw_thinking_start, "missing thinking content_block_start");
+        assert!(saw_thinking_delta, "missing thinking_delta from reasoning summary");
+    });
+}

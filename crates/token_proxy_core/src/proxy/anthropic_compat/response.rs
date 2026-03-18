@@ -52,6 +52,12 @@ pub(super) fn responses_response_to_anthropic(
             continue;
         };
         match item.get("type").and_then(Value::as_str) {
+            Some("reasoning") => {
+                let summary = extract_reasoning_summary(item);
+                if !summary.is_empty() {
+                    thinking_text.push_str(&summary);
+                }
+            }
             Some("message") => {
                 if item.get("role").and_then(Value::as_str) != Some("assistant") {
                     continue;
@@ -201,6 +207,25 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
     serde_json::to_vec(&out)
         .map(Bytes::from)
         .map_err(|err| format!("Failed to serialize response: {err}"))
+}
+
+fn extract_reasoning_summary(item: &Map<String, Value>) -> String {
+    let Some(summary) = item.get("summary").and_then(Value::as_array) else {
+        return String::new();
+    };
+    let mut combined = String::new();
+    for part in summary {
+        let Some(part) = part.as_object() else {
+            continue;
+        };
+        if part.get("type").and_then(Value::as_str) != Some("summary_text") {
+            continue;
+        }
+        if let Some(text) = part.get("text").and_then(Value::as_str) {
+            combined.push_str(text);
+        }
+    }
+    combined
 }
 
 fn responses_function_call_to_tool_use(item: &Map<String, Value>) -> Option<Value> {

@@ -153,6 +153,28 @@ pub(super) async fn anthropic_request_to_responses(
         out.insert("top_p".to_string(), top_p.clone());
     }
 
+    if let Some(reasoning) = map_anthropic_thinking_to_responses_reasoning(object.get("thinking"))
+    {
+        out.insert("reasoning".to_string(), reasoning);
+    }
+
+    if let Some(text_format) = map_anthropic_output_format_to_responses_text(
+        object.get("output_format"),
+        object.get("output_config"),
+    ) {
+        out.insert("text".to_string(), text_format);
+    }
+
+    if let Some(context_management) =
+        map_anthropic_context_management_to_responses(object.get("context_management"))
+    {
+        out.insert("context_management".to_string(), context_management);
+    }
+
+    if let Some(user) = map_anthropic_metadata_to_responses_user(object.get("metadata")) {
+        out.insert("user".to_string(), Value::String(user));
+    }
+
     if let Some(stop) =
         tools::map_anthropic_stop_sequences_to_openai_stop(object.get("stop_sequences"))
     {
@@ -372,6 +394,13 @@ fn claude_message_to_responses_input_items(
             "text" => {
                 if let Some(text) = block.get("text").and_then(Value::as_str) {
                     message_parts.push(json!({ "type": text_part_type, "text": text }));
+                }
+            }
+            "thinking" => {
+                if let Some(text) = block.get("thinking").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        message_parts.push(json!({ "type": "output_text", "text": text }));
+                    }
                 }
             }
             "image" => {
@@ -625,4 +654,96 @@ fn ensure_claude_content_array_in_place(content: &mut Value) {
         return;
     }
     *content = Value::Array(Vec::new());
+}
+
+fn map_anthropic_thinking_to_responses_reasoning(value: Option<&Value>) -> Option<Value> {
+    let thinking = value?.as_object()?;
+    if thinking.get("type").and_then(Value::as_str) != Some("enabled") {
+        return None;
+    }
+
+    let budget = thinking
+        .get("budget_tokens")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    let effort = if budget >= 10_000 {
+        "high"
+    } else if budget >= 5_000 {
+        "medium"
+    } else if budget >= 2_000 {
+        "low"
+    } else {
+        "minimal"
+    };
+
+    Some(json!({
+        "effort": effort,
+        "summary": "detailed"
+    }))
+}
+
+fn map_anthropic_output_format_to_responses_text(
+    output_format: Option<&Value>,
+    output_config: Option<&Value>,
+) -> Option<Value> {
+    let format = match output_format {
+        Some(Value::Object(object)) => Some(object),
+        _ => output_config
+            .and_then(Value::as_object)
+            .and_then(|config| config.get("format"))
+            .and_then(Value::as_object),
+    }?;
+
+    if format.get("type").and_then(Value::as_str) != Some("json_schema") {
+        return None;
+    }
+    let schema = format.get("schema")?;
+    Some(json!({
+        "format": {
+            "type": "json_schema",
+            "name": "structured_output",
+            "schema": schema,
+            "strict": true
+        }
+    }))
+}
+
+fn map_anthropic_context_management_to_responses(value: Option<&Value>) -> Option<Value> {
+    let context_management = value?.as_object()?;
+    let edits = context_management.get("edits")?.as_array()?;
+    let mut mapped = Vec::new();
+    for edit in edits {
+        let Some(edit) = edit.as_object() else {
+            continue;
+        };
+        if edit.get("type").and_then(Value::as_str) != Some("compact_20260112") {
+            continue;
+        }
+        let mut item = Map::new();
+        item.insert("type".to_string(), json!("compaction"));
+        if let Some(value) = edit
+            .get("trigger")
+            .and_then(Value::as_object)
+            .and_then(|trigger| trigger.get("value"))
+            .and_then(Value::as_i64)
+        {
+            item.insert("compact_threshold".to_string(), json!(value));
+        }
+        mapped.push(Value::Object(item));
+    }
+    if mapped.is_empty() {
+        None
+    } else {
+        Some(Value::Array(mapped))
+    }
+}
+
+fn map_anthropic_metadata_to_responses_user(value: Option<&Value>) -> Option<String> {
+    let metadata = value?.as_object()?;
+    let user = metadata.get("user_id")?.as_str()?.trim();
+    if user.is_empty() {
+        None
+    } else {
+        Some(user.chars().take(64).collect())
+    }
 }

@@ -63,7 +63,10 @@ impl AntigravityOAuthClient {
         code: &str,
         redirect_uri: &str,
     ) -> Result<AntigravityTokenResponse, String> {
-        let client = build_reqwest_client(self.proxy_url.as_deref(), Duration::from_secs(DEFAULT_TIMEOUT_SECS))?;
+        let client = build_reqwest_client(
+            self.proxy_url.as_deref(),
+            Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+        )?;
         let mut params = HashMap::new();
         params.insert("code", code);
         params.insert("client_id", CLIENT_ID);
@@ -92,7 +95,10 @@ impl AntigravityOAuthClient {
         &self,
         refresh_token: &str,
     ) -> Result<AntigravityTokenResponse, String> {
-        let client = build_reqwest_client(self.proxy_url.as_deref(), Duration::from_secs(DEFAULT_TIMEOUT_SECS))?;
+        let client = build_reqwest_client(
+            self.proxy_url.as_deref(),
+            Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+        )?;
         let mut params = HashMap::new();
         params.insert("client_id", CLIENT_ID);
         params.insert("client_secret", CLIENT_SECRET);
@@ -116,11 +122,17 @@ impl AntigravityOAuthClient {
             .map_err(|err| format!("Failed to parse refresh response: {err}"))
     }
 
-    pub(crate) async fn fetch_user_email(&self, access_token: &str) -> Result<Option<String>, String> {
+    pub(crate) async fn fetch_user_email(
+        &self,
+        access_token: &str,
+    ) -> Result<Option<String>, String> {
         if access_token.trim().is_empty() {
             return Ok(None);
         }
-        let client = build_reqwest_client(self.proxy_url.as_deref(), Duration::from_secs(DEFAULT_TIMEOUT_SECS))?;
+        let client = build_reqwest_client(
+            self.proxy_url.as_deref(),
+            Duration::from_secs(DEFAULT_TIMEOUT_SECS),
+        )?;
         let response = client
             .get(USERINFO_URL)
             .bearer_auth(access_token)
@@ -136,6 +148,9 @@ impl AntigravityOAuthClient {
             .json::<UserInfoResponse>()
             .await
             .map_err(|err| format!("Failed to parse user info: {err}"))?;
-        Ok(payload.email.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()))
+        Ok(payload
+            .email
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()))
     }
 }

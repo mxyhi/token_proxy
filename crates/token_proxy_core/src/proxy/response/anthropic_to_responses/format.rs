@@ -3,6 +3,12 @@ use serde_json::{json, Value};
 use super::super::super::log::TokenUsage;
 
 pub(super) enum OutputItemSnapshot {
+    Reasoning {
+        id: String,
+        output_index: u64,
+        text: String,
+        encrypted_content: Option<String>,
+    },
     Message {
         id: String,
         output_index: u64,
@@ -35,12 +41,43 @@ pub(super) fn usage_to_value(usage: TokenUsage, cached_tokens: Option<u64>) -> V
     })
 }
 
-pub(super) fn snapshot_to_output_item(snapshot: &OutputItemSnapshot) -> Value {
+pub(super) fn snapshot_to_output_item(
+    snapshot: &OutputItemSnapshot,
+    response_status: &str,
+) -> Value {
     match snapshot {
+        OutputItemSnapshot::Reasoning {
+            id,
+            text,
+            encrypted_content,
+            ..
+        } => {
+            let mut item = json!({
+                "id": id,
+                "type": "reasoning",
+                "status": response_status,
+                "summary": []
+            });
+            if let Some(item) = item.as_object_mut() {
+                if !text.is_empty() {
+                    item.insert(
+                        "summary".to_string(),
+                        json!([{ "type": "summary_text", "text": text }]),
+                    );
+                }
+                if let Some(encrypted_content) = encrypted_content {
+                    item.insert(
+                        "encrypted_content".to_string(),
+                        Value::String(encrypted_content.clone()),
+                    );
+                }
+            }
+            item
+        }
         OutputItemSnapshot::Message { id, text, .. } => json!({
             "id": id,
             "type": "message",
-            "status": "completed",
+            "status": response_status,
             "role": "assistant",
             "content": [
                 { "type": "output_text", "text": text, "annotations": [] }

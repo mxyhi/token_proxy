@@ -57,6 +57,46 @@ fn responses_and_gemini_request_conversions() {
 }
 
 #[test]
+fn gemini_to_responses_request_preserves_audio_and_file_parts() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let gemini_value = transform_request_value(
+        FormatTransform::GeminiToResponses,
+        json!({
+            "contents": [{
+                "role": "user",
+                "parts": [
+                    {
+                        "inlineData": {
+                            "mimeType": "audio/wav",
+                            "data": "UklGRg=="
+                        }
+                    },
+                    {
+                        "fileData": {
+                            "mimeType": "application/pdf",
+                            "fileUri": "https://example.com/spec.pdf"
+                        }
+                    }
+                ]
+            }]
+        }),
+        &http_clients,
+        Some("gemini-2.0-flash"),
+    );
+
+    let content = gemini_value["input"][0]["content"]
+        .as_array()
+        .expect("responses content");
+    assert_eq!(content[0]["type"], json!("input_audio"));
+    assert_eq!(content[0]["input_audio"]["data"], json!("UklGRg=="));
+    assert_eq!(content[1]["type"], json!("input_file"));
+    assert_eq!(
+        content[1]["file_url"],
+        json!("https://example.com/spec.pdf")
+    );
+}
+
+#[test]
 fn chat_request_to_responses_maps_advanced_optional_params() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let value = transform_request_value(

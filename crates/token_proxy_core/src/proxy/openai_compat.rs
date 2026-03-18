@@ -479,6 +479,12 @@ fn responses_response_to_chat(bytes: &Bytes, model_hint: Option<&str>) -> Result
     };
 
     let extracted = extract::extract_responses_output(&value);
+    let content_parts = extracted.content_parts;
+    let reasoning_text = extracted.reasoning_text;
+    let tool_calls = extracted.tool_calls;
+    let annotations = extracted.annotations;
+    let audio = extracted.audio;
+    let thinking_blocks = extracted.thinking_blocks;
     let id = object
         .get("id")
         .and_then(Value::as_str)
@@ -497,17 +503,18 @@ fn responses_response_to_chat(bytes: &Bytes, model_hint: Option<&str>) -> Result
         .get("usage")
         .and_then(|usage| usage::map_usage_responses_to_chat(usage));
 
-    let finish_reason = compat_reason::chat_finish_reason_from_response_object(
-        object,
-        !extracted.tool_calls.is_empty(),
-    );
+    let finish_reason =
+        compat_reason::chat_finish_reason_from_response_object(object, !tool_calls.is_empty());
 
-    let reasoning_text = extracted.reasoning_text.clone();
+    let audio =
+        audio.or_else(|| compat_content::chat_message_audio_from_responses_parts(&content_parts));
+    let mut content = compat_content::chat_message_content_from_responses_parts(&content_parts);
+    if audio.is_some() && chat_message_content_is_empty(&content) {
+        content = Value::Null;
+    }
     let mut message = json!({
         "role": "assistant",
-        "content": compat_content::chat_message_content_from_responses_parts(
-            &extracted.content_parts,
-        )
+        "content": content
     });
     if let Some(message) = message.as_object_mut() {
         if !reasoning_text.trim().is_empty() {
@@ -516,10 +523,19 @@ fn responses_response_to_chat(bytes: &Bytes, model_hint: Option<&str>) -> Result
                 Value::String(reasoning_text),
             );
         }
+        if !thinking_blocks.is_empty() {
+            message.insert("thinking_blocks".to_string(), Value::Array(thinking_blocks));
+        }
+        if !annotations.is_empty() {
+            message.insert("annotations".to_string(), Value::Array(annotations));
+        }
+        if let Some(audio) = audio {
+            message.insert("audio".to_string(), audio);
+        }
     }
-    if !extracted.tool_calls.is_empty() {
+    if !tool_calls.is_empty() {
         if let Some(message) = message.as_object_mut() {
-            message.insert("tool_calls".to_string(), Value::Array(extracted.tool_calls));
+            message.insert("tool_calls".to_string(), Value::Array(tool_calls));
         }
     }
 
@@ -550,7 +566,16 @@ fn chat_response_to_responses(bytes: &Bytes) -> Result<Bytes, String> {
         return Err("Upstream response must be a JSON object.".to_string());
     };
 
-    let content = extract::extract_chat_choice_text(&value).unwrap_or_default();
+    let first_message = object
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(Value::as_object)
+        .and_then(|choice| choice.get("message"))
+        .and_then(Value::as_object);
+    let response_parts = first_message
+        .map(chat_response_message_to_responses_parts)
+        .unwrap_or_default();
     let tool_calls = extract::extract_chat_tool_calls(&value);
     let parallel_tool_calls = tool_calls.len() > 1;
     let id = object
@@ -581,15 +606,18 @@ fn chat_response_to_responses(bytes: &Bytes) -> Result<Bytes, String> {
         .and_then(|usage| usage::map_usage_chat_to_responses(usage));
 
     let mut output = Vec::new();
-    if !content.trim().is_empty() || tool_calls.is_empty() {
+    if let Some(reasoning_item) =
+        first_message.and_then(|message| chat_response_message_to_reasoning_item(message, status))
+    {
+        output.push(reasoning_item);
+    }
+    if !response_parts.is_empty() || tool_calls.is_empty() {
         output.push(json!({
             "type": "message",
             "id": "msg_proxy",
-            "status": "completed",
+            "status": status,
             "role": "assistant",
-            "content": [
-                { "type": "output_text", "text": content, "annotations": [] }
-            ]
+            "content": response_parts
         }));
     }
     for call in tool_calls {
@@ -625,6 +653,173 @@ fn copy_key(source: &serde_json::Map<String, Value>, target: &mut Map<String, Va
     if let Some(value) = source.get(key) {
         target.insert(key.to_string(), value.clone());
     }
+}
+
+fn chat_message_content_is_empty(content: &Value) -> bool {
+    match content {
+        Value::Null => true,
+        Value::String(text) => text.is_empty(),
+        Value::Array(parts) => parts.is_empty(),
+        _ => false,
+    }
+}
+
+fn chat_response_message_to_reasoning_item(
+    message: &Map<String, Value>,
+    status: &str,
+) -> Option<Value> {
+    let mut summary_text = String::new();
+    let mut encrypted_content = None;
+
+    if let Some(thinking_blocks) = message.get("thinking_blocks").and_then(Value::as_array) {
+        for block in thinking_blocks {
+            let Some(block) = block.as_object() else {
+                continue;
+            };
+            match block.get("type").and_then(Value::as_str) {
+                Some("thinking") => {
+                    if let Some(text) = block.get("thinking").and_then(Value::as_str) {
+                        summary_text.push_str(text);
+                    }
+                }
+                Some("redacted_thinking") => {
+                    if let Some(data) = block.get("data").and_then(Value::as_str) {
+                        encrypted_content = Some(data.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    if summary_text.trim().is_empty() {
+        if let Some(reasoning_content) = message
+            .get("reasoning_content")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+        {
+            summary_text = reasoning_content.to_string();
+        }
+    }
+
+    if summary_text.trim().is_empty() && encrypted_content.is_none() {
+        return None;
+    }
+
+    let mut item = json!({
+        "type": "reasoning",
+        "id": "rs_proxy",
+        "status": status,
+        "summary": []
+    });
+    if let Some(item) = item.as_object_mut() {
+        if !summary_text.trim().is_empty() {
+            item.insert(
+                "summary".to_string(),
+                json!([{ "type": "summary_text", "text": summary_text }]),
+            );
+        }
+        if let Some(encrypted_content) = encrypted_content {
+            item.insert(
+                "encrypted_content".to_string(),
+                Value::String(encrypted_content),
+            );
+        }
+    }
+    Some(item)
+}
+
+fn chat_response_message_to_responses_parts(message: &Map<String, Value>) -> Vec<Value> {
+    let annotations = message
+        .get("annotations")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let audio_part = chat_response_audio_part(message.get("audio"));
+
+    match message.get("content") {
+        Some(Value::String(text)) => {
+            if text.is_empty() && annotations.is_empty() {
+                audio_part.into_iter().collect()
+            } else {
+                let mut parts = vec![responses_output_text_part(text.clone(), annotations)];
+                if let Some(audio_part) = audio_part {
+                    parts.push(audio_part);
+                }
+                parts
+            }
+        }
+        Some(Value::Array(parts)) => {
+            let mut combined_text = String::new();
+            let mut output_parts = Vec::new();
+
+            for part in parts {
+                let Some(part) = part.as_object() else {
+                    continue;
+                };
+                match part.get("type").and_then(Value::as_str).unwrap_or("") {
+                    "text" | "input_text" => {
+                        if let Some(text) = message::extract_text_from_part(part) {
+                            combined_text.push_str(&text);
+                        }
+                    }
+                    "image_url" | "input_image" => {
+                        let image_url = match part.get("image_url") {
+                            Some(Value::String(url)) => Some(json!({ "url": url })),
+                            Some(Value::Object(object)) => object
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .map(|url| json!({ "url": url })),
+                            _ => None,
+                        };
+                        if let Some(image_url) = image_url {
+                            output_parts.push(json!({
+                                "type": "output_image",
+                                "image_url": image_url
+                            }));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            if !combined_text.is_empty() || !annotations.is_empty() {
+                output_parts.insert(0, responses_output_text_part(combined_text, annotations));
+            }
+            if let Some(audio_part) = audio_part {
+                output_parts.push(audio_part);
+            }
+            output_parts
+        }
+        Some(Value::Null) | None => audio_part.into_iter().collect(),
+        Some(other) => {
+            let mut parts = vec![responses_output_text_part(
+                message::stringify_any_json(Some(other)),
+                annotations,
+            )];
+            if let Some(audio_part) = audio_part {
+                parts.push(audio_part);
+            }
+            parts
+        }
+    }
+}
+
+fn chat_response_audio_part(audio: Option<&Value>) -> Option<Value> {
+    audio.map(|audio| {
+        json!({
+            "type": "output_audio",
+            "audio": audio.clone()
+        })
+    })
+}
+
+fn responses_output_text_part(text: String, annotations: Vec<Value>) -> Value {
+    json!({
+        "type": "output_text",
+        "text": text,
+        "annotations": annotations
+    })
 }
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。

@@ -8,6 +8,7 @@ use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 use super::streaming::STREAM_DROPPED_ERROR;
+use crate::proxy::compat_reason;
 use format::{snapshot_to_output_item, usage_to_value, OutputItemSnapshot};
 
 mod format;
@@ -29,6 +30,13 @@ struct MessageOutput {
     id: String,
     output_index: u64,
     text: String,
+}
+
+struct ReasoningOutput {
+    id: String,
+    output_index: u64,
+    text: String,
+    encrypted_content: Option<String>,
 }
 
 struct FunctionCallOutput {
@@ -53,9 +61,14 @@ struct AnthropicToResponsesState<S> {
     model: String,
     next_output_index: u64,
     message: Option<MessageOutput>,
+    reasonings: Vec<Option<ReasoningOutput>>,
+    // Claude stream uses block index; map it to our reasoning slot.
+    reasoning_by_block_index: HashMap<usize, usize>,
     function_calls: Vec<Option<FunctionCallOutput>>,
     // Claude stream uses block index; map it to our function_call slot.
     tool_call_by_block_index: HashMap<usize, usize>,
+    response_status: Option<&'static str>,
+    incomplete_reason: Option<&'static str>,
     sequence: u64,
     sent_done: bool,
     logged: bool,
@@ -112,8 +125,12 @@ where
             model,
             next_output_index: 0,
             message: None,
+            reasonings: Vec::new(),
+            reasoning_by_block_index: HashMap::new(),
             function_calls: Vec::new(),
             tool_call_by_block_index: HashMap::new(),
+            response_status: None,
+            incomplete_reason: None,
             sequence: 0,
             sent_done: false,
             logged: false,
@@ -203,11 +220,24 @@ where
             }
             "content_block_start" => self.handle_content_block_start(&value),
             "content_block_delta" => self.handle_content_block_delta(&value, token_texts),
+            "message_delta" => self.handle_message_delta(&value),
             "message_stop" => {
                 self.push_done();
             }
             _ => {}
         }
+    }
+
+    fn handle_message_delta(&mut self, value: &Value) {
+        let stop_reason = value
+            .get("delta")
+            .and_then(Value::as_object)
+            .and_then(|delta| delta.get("stop_reason"))
+            .and_then(Value::as_str);
+        let (status, incomplete_reason) =
+            compat_reason::responses_status_from_anthropic_stop_reason(stop_reason);
+        self.response_status = status;
+        self.incomplete_reason = incomplete_reason;
     }
 
     fn handle_content_block_start(&mut self, value: &Value) {
@@ -217,6 +247,27 @@ where
         };
         let block_type = block.get("type").and_then(Value::as_str).unwrap_or("");
         match block_type {
+            "thinking" => {
+                let reasoning_index = self.ensure_reasoning_output(index);
+                self.reasoning_by_block_index.insert(index, reasoning_index);
+            }
+            "redacted_thinking" => {
+                let reasoning_index = self.ensure_reasoning_output(index);
+                if let Some(data) = block
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    if let Some(reasoning) = self
+                        .reasonings
+                        .get_mut(reasoning_index)
+                        .and_then(Option::as_mut)
+                    {
+                        reasoning.encrypted_content = Some(data.to_string());
+                    }
+                }
+                self.reasoning_by_block_index.insert(index, reasoning_index);
+            }
             "text" => {
                 self.ensure_message_output();
             }
@@ -237,6 +288,37 @@ where
         };
         let delta_type = delta.get("type").and_then(Value::as_str).unwrap_or("");
         match delta_type {
+            "thinking_delta" => {
+                let Some(text) = delta.get("thinking").and_then(Value::as_str) else {
+                    return;
+                };
+                let reasoning_index = match self.reasoning_by_block_index.get(&index) {
+                    Some(idx) => *idx,
+                    None => {
+                        let reasoning_index = self.ensure_reasoning_output(index);
+                        self.reasoning_by_block_index.insert(index, reasoning_index);
+                        reasoning_index
+                    }
+                };
+                let (item_id, output_index) = {
+                    let state = self
+                        .reasonings
+                        .get_mut(reasoning_index)
+                        .and_then(Option::as_mut)
+                        .expect("reasoning output exists");
+                    state.text.push_str(text);
+                    (state.id.clone(), state.output_index)
+                };
+                token_texts.push(text.to_string());
+                let sequence_number = self.next_sequence_number();
+                self.out.push_back(super::responses_event_sse(json!({
+                    "type": "response.reasoning_summary_text.delta",
+                    "item_id": item_id,
+                    "output_index": output_index,
+                    "delta": text,
+                    "sequence_number": sequence_number
+                })));
+            }
             "text_delta" => {
                 let Some(text) = delta.get("text").and_then(Value::as_str) else {
                     return;
@@ -292,6 +374,22 @@ where
         }
     }
 
+    fn ensure_reasoning_output(&mut self, block_index: usize) -> usize {
+        let reasoning_index = self.reasonings.len();
+        let output_index = self.next_output_index;
+        self.next_output_index += 1;
+
+        let item_id = format!("rs_{}_{}", self.id_seed, block_index);
+        self.push_reasoning_item_added(&item_id, output_index);
+        self.reasonings.push(Some(ReasoningOutput {
+            id: item_id,
+            output_index,
+            text: String::new(),
+            encrypted_content: None,
+        }));
+        reasoning_index
+    }
+
     fn ensure_message_output(&mut self) {
         if self.message.is_some() {
             return;
@@ -337,11 +435,26 @@ where
     }
 
     fn push_response_created(&mut self) {
-        let response = self.build_response_object("in_progress", Vec::new(), None, None);
+        let response = self.build_response_object("in_progress", Vec::new(), None, None, None);
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
             "type": "response.created",
             "response": response,
+            "sequence_number": sequence_number
+        })));
+    }
+
+    fn push_reasoning_item_added(&mut self, item_id: &str, output_index: u64) {
+        let sequence_number = self.next_sequence_number();
+        self.out.push_back(super::responses_event_sse(json!({
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": {
+                "id": item_id,
+                "type": "reasoning",
+                "status": "in_progress",
+                "summary": []
+            },
             "sequence_number": sequence_number
         })));
     }
@@ -415,6 +528,17 @@ where
             .map(|usage| usage_to_value(usage, usage_snapshot.cached_tokens));
 
         let mut snapshots = Vec::new();
+        for reasoning in &self.reasonings {
+            let Some(reasoning) = reasoning else {
+                continue;
+            };
+            snapshots.push(OutputItemSnapshot::Reasoning {
+                id: reasoning.id.clone(),
+                output_index: reasoning.output_index,
+                text: reasoning.text.clone(),
+                encrypted_content: reasoning.encrypted_content.clone(),
+            });
+        }
         if let Some(message) = &self.message {
             snapshots.push(OutputItemSnapshot::Message {
                 id: message.id.clone(),
@@ -435,35 +559,63 @@ where
             });
         }
         snapshots.sort_by_key(|item| match item {
+            OutputItemSnapshot::Reasoning { output_index, .. } => *output_index,
             OutputItemSnapshot::Message { output_index, .. } => *output_index,
             OutputItemSnapshot::FunctionCall { output_index, .. } => *output_index,
         });
 
+        let status = self.response_status.unwrap_or("completed");
         let output = snapshots
             .iter()
-            .map(snapshot_to_output_item)
+            .map(|snapshot| snapshot_to_output_item(snapshot, status))
             .collect::<Vec<_>>();
         for snapshot in &snapshots {
-            self.push_item_done_events(snapshot);
+            self.push_item_done_events(snapshot, status);
         }
 
-        let response = self.build_response_object("completed", output, usage, Some(completed_at));
+        let incomplete_details = self
+            .incomplete_reason
+            .map(|reason| json!({ "reason": reason }));
+        let response = self.build_response_object(
+            status,
+            output,
+            usage,
+            Some(completed_at),
+            incomplete_details,
+        );
+        let event_type = if status == "incomplete" {
+            "response.incomplete"
+        } else {
+            "response.completed"
+        };
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
-            "type": "response.completed",
+            "type": event_type,
             "response": response,
             "sequence_number": sequence_number
         })));
         self.out.push_back(Bytes::from("data: [DONE]\n\n"));
     }
 
-    fn push_item_done_events(&mut self, snapshot: &OutputItemSnapshot) {
+    fn push_item_done_events(&mut self, snapshot: &OutputItemSnapshot, response_status: &str) {
         match snapshot {
+            OutputItemSnapshot::Reasoning {
+                id,
+                output_index,
+                text,
+                encrypted_content,
+            } => self.push_reasoning_done_events(
+                id,
+                *output_index,
+                text,
+                encrypted_content.as_deref(),
+                response_status,
+            ),
             OutputItemSnapshot::Message {
                 id,
                 output_index,
                 text,
-            } => self.push_message_done_events(id, *output_index, text),
+            } => self.push_message_done_events(id, *output_index, text, response_status),
             OutputItemSnapshot::FunctionCall {
                 id,
                 output_index,
@@ -474,7 +626,50 @@ where
         }
     }
 
-    fn push_message_done_events(&mut self, item_id: &str, output_index: u64, text: &str) {
+    fn push_reasoning_done_events(
+        &mut self,
+        item_id: &str,
+        output_index: u64,
+        text: &str,
+        encrypted_content: Option<&str>,
+        response_status: &str,
+    ) {
+        let mut item = json!({
+            "id": item_id,
+            "type": "reasoning",
+            "status": response_status,
+            "summary": []
+        });
+        if let Some(item) = item.as_object_mut() {
+            if !text.is_empty() {
+                item.insert(
+                    "summary".to_string(),
+                    json!([{ "type": "summary_text", "text": text }]),
+                );
+            }
+            if let Some(encrypted_content) = encrypted_content {
+                item.insert(
+                    "encrypted_content".to_string(),
+                    Value::String(encrypted_content.to_string()),
+                );
+            }
+        }
+        let sequence_number = self.next_sequence_number();
+        self.out.push_back(super::responses_event_sse(json!({
+            "type": "response.output_item.done",
+            "output_index": output_index,
+            "item": item,
+            "sequence_number": sequence_number
+        })));
+    }
+
+    fn push_message_done_events(
+        &mut self,
+        item_id: &str,
+        output_index: u64,
+        text: &str,
+        response_status: &str,
+    ) {
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
             "type": "response.output_text.done",
@@ -506,7 +701,7 @@ where
             "item": {
                 "id": item_id,
                 "type": "message",
-                "status": "completed",
+                "status": response_status,
                 "role": "assistant",
                 "content": [
                     { "type": "output_text", "text": text, "annotations": [] }
@@ -556,6 +751,7 @@ where
         output: Vec<Value>,
         usage: Option<Value>,
         completed_at: Option<i64>,
+        incomplete_details: Option<Value>,
     ) -> Value {
         json!({
             "id": self.response_id.as_str(),
@@ -568,6 +764,7 @@ where
             "completed_at": completed_at,
             "usage": usage,
             "error": null,
+            "incomplete_details": incomplete_details.unwrap_or(Value::Null),
             "metadata": {}
         })
     }

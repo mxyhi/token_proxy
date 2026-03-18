@@ -9,7 +9,7 @@ use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 use super::streaming::STREAM_DROPPED_ERROR;
 use format::{snapshot_to_output_item, usage_to_value, OutputItemSnapshot};
-use state_types::{FunctionCallOutput, MessageOutput};
+use state_types::{FunctionCallOutput, MessageOutput, ReasoningOutput};
 
 mod format;
 mod state_types;
@@ -40,6 +40,7 @@ struct ChatToResponsesState<S> {
     created_at: i64,
     model: String,
     next_output_index: u64,
+    reasoning: Option<ReasoningOutput>,
     message: Option<MessageOutput>,
     function_calls: Vec<Option<FunctionCallOutput>>,
     sequence: u64,
@@ -97,6 +98,7 @@ where
             created_at,
             model,
             next_output_index: 0,
+            reasoning: None,
             message: None,
             function_calls: Vec::new(),
             sequence: 0,
@@ -185,6 +187,15 @@ where
         if let Some(content) = delta.get("content").and_then(Value::as_str) {
             self.handle_text_delta(content, token_texts);
         }
+        if let Some(reasoning_content) = delta.get("reasoning_content").and_then(Value::as_str) {
+            self.handle_reasoning_delta(reasoning_content, token_texts);
+        }
+        if let Some(thinking_blocks) = delta.get("thinking_blocks").and_then(Value::as_array) {
+            self.handle_thinking_blocks_delta(thinking_blocks, token_texts);
+        }
+        if let Some(audio) = delta.get("audio") {
+            self.handle_audio_delta(audio);
+        }
         if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {
             for tool_call in tool_calls {
                 self.handle_tool_call_delta(tool_call);
@@ -197,6 +208,7 @@ where
 
     fn handle_text_delta(&mut self, delta: &str, token_texts: &mut Vec<String>) {
         self.ensure_message_output();
+        self.ensure_message_text_part();
         let (item_id, output_index) = {
             let message = self.message.as_mut().expect("message output must exist");
             message.text.push_str(delta);
@@ -213,6 +225,69 @@ where
             "delta": delta,
             "sequence_number": sequence_number
         })));
+    }
+
+    fn handle_reasoning_delta(&mut self, delta: &str, token_texts: &mut Vec<String>) {
+        let (item_id, output_index) = {
+            let reasoning = self.ensure_reasoning_output();
+            reasoning.text.push_str(delta);
+            (reasoning.id.clone(), reasoning.output_index)
+        };
+        token_texts.push(delta.to_string());
+
+        let sequence_number = self.next_sequence_number();
+        self.out.push_back(super::responses_event_sse(json!({
+            "type": "response.reasoning_summary_text.delta",
+            "item_id": item_id,
+            "output_index": output_index,
+            "delta": delta,
+            "sequence_number": sequence_number
+        })));
+    }
+
+    fn handle_thinking_blocks_delta(
+        &mut self,
+        thinking_blocks: &[Value],
+        token_texts: &mut Vec<String>,
+    ) {
+        for block in thinking_blocks {
+            let Some(block) = block.as_object() else {
+                continue;
+            };
+            match block.get("type").and_then(Value::as_str) {
+                Some("thinking") => {
+                    if let Some(text) = block
+                        .get("thinking")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                    {
+                        self.handle_reasoning_delta(text, token_texts);
+                    }
+                }
+                Some("redacted_thinking") => {
+                    if let Some(data) = block
+                        .get("data")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                    {
+                        let reasoning = self.ensure_reasoning_output();
+                        reasoning.encrypted_content = Some(data.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn handle_audio_delta(&mut self, delta: &Value) {
+        self.ensure_message_output();
+        let message = self.message.as_mut().expect("message output must exist");
+        match &mut message.audio {
+            Some(existing) => merge_chat_audio_delta(existing, delta),
+            None => {
+                message.audio = Some(delta.clone());
+            }
+        }
     }
 
     fn handle_tool_call_delta(&mut self, tool_call: &Value) {
@@ -261,18 +336,52 @@ where
         }
     }
 
+    fn ensure_reasoning_output(&mut self) -> &mut ReasoningOutput {
+        if self.reasoning.is_none() {
+            let output_index = self.next_output_index;
+            self.next_output_index += 1;
+            let reasoning_id = format!("rs_{}", self.id_seed);
+            self.push_reasoning_item_added(&reasoning_id, output_index);
+            self.reasoning = Some(ReasoningOutput {
+                id: reasoning_id,
+                output_index,
+                text: String::new(),
+                encrypted_content: None,
+            });
+        }
+        self.reasoning
+            .as_mut()
+            .expect("reasoning output must exist")
+    }
+
     fn ensure_message_output(&mut self) {
         if self.message.is_none() {
             let output_index = self.next_output_index;
             self.next_output_index += 1;
             let message_id = format!("msg_{}", self.id_seed);
             self.push_message_item_added(&message_id, output_index);
-            self.push_message_content_part_added(&message_id, output_index);
             self.message = Some(MessageOutput {
                 id: message_id,
                 output_index,
                 text: String::new(),
+                text_part_started: false,
+                audio: None,
             });
+        }
+    }
+
+    fn ensure_message_text_part(&mut self) {
+        self.ensure_message_output();
+        let (item_id, output_index, should_emit) = {
+            let message = self.message.as_mut().expect("message output must exist");
+            let should_emit = !message.text_part_started;
+            if should_emit {
+                message.text_part_started = true;
+            }
+            (message.id.clone(), message.output_index, should_emit)
+        };
+        if should_emit {
+            self.push_message_content_part_added(&item_id, output_index);
         }
     }
 
@@ -350,6 +459,21 @@ where
         })));
     }
 
+    fn push_reasoning_item_added(&mut self, item_id: &str, output_index: u64) {
+        let sequence_number = self.next_sequence_number();
+        self.out.push_back(super::responses_event_sse(json!({
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": {
+                "id": item_id,
+                "type": "reasoning",
+                "status": "in_progress",
+                "summary": []
+            },
+            "sequence_number": sequence_number
+        })));
+    }
+
     fn push_message_content_part_added(&mut self, item_id: &str, output_index: u64) {
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
@@ -422,11 +546,20 @@ where
             .or_else(|| usage_snapshot.usage.map(usage_to_value));
 
         let mut snapshots = Vec::new();
+        if let Some(reasoning) = &self.reasoning {
+            snapshots.push(OutputItemSnapshot::Reasoning {
+                id: reasoning.id.clone(),
+                output_index: reasoning.output_index,
+                text: reasoning.text.clone(),
+                encrypted_content: reasoning.encrypted_content.clone(),
+            });
+        }
         if let Some(message) = &self.message {
             snapshots.push(OutputItemSnapshot::Message {
                 id: message.id.clone(),
                 output_index: message.output_index,
                 text: message.text.clone(),
+                audio: message.audio.clone(),
             });
         }
         for call in &self.function_calls {
@@ -442,6 +575,7 @@ where
             });
         }
         snapshots.sort_by_key(|item| match item {
+            OutputItemSnapshot::Reasoning { output_index, .. } => *output_index,
             OutputItemSnapshot::Message { output_index, .. } => *output_index,
             OutputItemSnapshot::FunctionCall { output_index, .. } => *output_index,
         });
@@ -466,11 +600,23 @@ where
 
     fn push_item_done_events(&mut self, snapshot: &OutputItemSnapshot) {
         match snapshot {
+            OutputItemSnapshot::Reasoning {
+                id,
+                output_index,
+                text,
+                encrypted_content,
+            } => self.push_reasoning_done_events(
+                id,
+                *output_index,
+                text,
+                encrypted_content.as_deref(),
+            ),
             OutputItemSnapshot::Message {
                 id,
                 output_index,
                 text,
-            } => self.push_message_done_events(id, *output_index, text),
+                audio,
+            } => self.push_message_done_events(id, *output_index, text, audio.as_ref()),
             OutputItemSnapshot::FunctionCall {
                 id,
                 output_index,
@@ -481,30 +627,88 @@ where
         }
     }
 
-    fn push_message_done_events(&mut self, item_id: &str, output_index: u64, text: &str) {
+    fn push_reasoning_done_events(
+        &mut self,
+        item_id: &str,
+        output_index: u64,
+        text: &str,
+        encrypted_content: Option<&str>,
+    ) {
+        let mut item = json!({
+            "id": item_id,
+            "type": "reasoning",
+            "status": "completed",
+            "summary": [
+                {
+                    "type": "summary_text",
+                    "text": text
+                }
+            ]
+        });
+        if let Some(item) = item.as_object_mut() {
+            if let Some(encrypted_content) = encrypted_content {
+                item.insert(
+                    "encrypted_content".to_string(),
+                    Value::String(encrypted_content.to_string()),
+                );
+            }
+        }
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
-            "type": "response.output_text.done",
-            "item_id": item_id,
+            "type": "response.output_item.done",
             "output_index": output_index,
-            "content_index": 0,
-            "text": text,
+            "item": item,
             "sequence_number": sequence_number
         })));
+    }
 
-        let sequence_number = self.next_sequence_number();
-        self.out.push_back(super::responses_event_sse(json!({
-            "type": "response.content_part.done",
-            "item_id": item_id,
-            "output_index": output_index,
-            "content_index": 0,
-            "part": {
+    fn push_message_done_events(
+        &mut self,
+        item_id: &str,
+        output_index: u64,
+        text: &str,
+        audio: Option<&Value>,
+    ) {
+        if !text.is_empty() {
+            let sequence_number = self.next_sequence_number();
+            self.out.push_back(super::responses_event_sse(json!({
+                "type": "response.output_text.done",
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "text": text,
+                "sequence_number": sequence_number
+            })));
+
+            let sequence_number = self.next_sequence_number();
+            self.out.push_back(super::responses_event_sse(json!({
+                "type": "response.content_part.done",
+                "item_id": item_id,
+                "output_index": output_index,
+                "content_index": 0,
+                "part": {
+                    "type": "output_text",
+                    "text": text,
+                    "annotations": []
+                },
+                "sequence_number": sequence_number
+            })));
+        }
+
+        let mut content = Vec::new();
+        if !text.is_empty() {
+            content.push(json!({
                 "type": "output_text",
                 "text": text,
                 "annotations": []
-            },
-            "sequence_number": sequence_number
-        })));
+            }));
+        }
+        if let Some(audio) = audio {
+            content.push(json!({
+                "type": "output_audio",
+                "audio": audio
+            }));
+        }
 
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
@@ -515,13 +719,7 @@ where
                 "type": "message",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {
-                        "type": "output_text",
-                        "text": text,
-                        "annotations": []
-                    }
-                ]
+                "content": content
             },
             "sequence_number": sequence_number
         })));
@@ -599,5 +797,32 @@ where
         let current = self.sequence;
         self.sequence += 1;
         current
+    }
+}
+
+fn merge_chat_audio_delta(existing: &mut Value, delta: &Value) {
+    if !existing.is_object() || !delta.is_object() {
+        *existing = delta.clone();
+        return;
+    }
+    let existing_object = existing.as_object_mut().expect("audio delta object");
+    let delta_object = delta.as_object().expect("audio delta object");
+
+    for (key, value) in delta_object {
+        match key.as_str() {
+            // Streaming chat chunks may split both base64 audio and transcript text.
+            "data" | "transcript" => {
+                let merged = existing_object
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+                    + value.as_str().unwrap_or("");
+                existing_object.insert(key.clone(), Value::String(merged));
+            }
+            _ => {
+                existing_object.insert(key.clone(), value.clone());
+            }
+        }
     }
 }

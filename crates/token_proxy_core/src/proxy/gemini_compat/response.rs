@@ -164,8 +164,11 @@ fn gemini_candidate_to_chat_choice(candidate: &Value, index: usize) -> Option<Va
     let content = candidate.get("content")?.as_object()?;
     let parts = content.get("parts").and_then(Value::as_array)?;
 
-    let mut text_content = String::new();
+    let mut content_parts = Vec::new();
     let mut tool_calls = Vec::new();
+    let mut reasoning_content = String::new();
+    let mut thought_signatures = Vec::new();
+    let mut audio = None;
     let mut tool_call_index = 0;
 
     for part in parts {
@@ -173,14 +176,59 @@ fn gemini_candidate_to_chat_choice(candidate: &Value, index: usize) -> Option<Va
             continue;
         };
 
-        // 文本内容
-        if let Some(text) = part.get("text").and_then(Value::as_str) {
-            text_content.push_str(text);
+        if let Some(signature) = part.get("thoughtSignature").and_then(Value::as_str) {
+            thought_signatures.push(Value::String(signature.to_string()));
         }
 
-        // 函数调用
+        if part
+            .get("thought")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            if let Some(text) = part.get("text").and_then(Value::as_str) {
+                reasoning_content.push_str(text);
+            }
+            continue;
+        }
+
+        if let Some(text) = part.get("text").and_then(Value::as_str) {
+            if let Some(audio_value) = audio_response_from_text_part(text) {
+                audio = Some(audio_value);
+                continue;
+            }
+            content_parts.push(json!({ "type": "text", "text": text }));
+            continue;
+        }
+
+        if let Some(inline_data) = part.get("inlineData").and_then(Value::as_object) {
+            if let Some(content_part) = gemini_inline_data_to_chat_content_part(inline_data) {
+                content_parts.push(content_part);
+                continue;
+            }
+            if audio.is_none() {
+                audio = gemini_inline_data_to_chat_audio(inline_data);
+            }
+            continue;
+        }
+
+        if let Some(file_data) = part.get("fileData").and_then(Value::as_object) {
+            if let Some(content_part) = gemini_file_data_to_chat_content_part(file_data) {
+                content_parts.push(content_part);
+            }
+            continue;
+        }
+
         if let Some(function_call) = part.get("functionCall").and_then(Value::as_object) {
-            let tool_call = gemini_function_call_to_chat_tool_call(function_call, tool_call_index);
+            let mut tool_call =
+                gemini_function_call_to_chat_tool_call(function_call, tool_call_index);
+            if let Some(signature) = part.get("thoughtSignature").and_then(Value::as_str) {
+                if let Some(tool_call) = tool_call.as_object_mut() {
+                    tool_call.insert(
+                        "provider_specific_fields".to_string(),
+                        json!({ "thought_signature": signature }),
+                    );
+                }
+            }
             tool_calls.push(tool_call);
             tool_call_index += 1;
         }
@@ -190,15 +238,43 @@ fn gemini_candidate_to_chat_choice(candidate: &Value, index: usize) -> Option<Va
         candidate.get("finishReason").and_then(Value::as_str),
         !tool_calls.is_empty(),
     );
+    let annotations = gemini_grounding_metadata_to_chat_annotations(candidate);
+    let content = build_chat_message_content(&content_parts);
 
     let mut message = json!({
         "role": "assistant",
-        "content": if text_content.is_empty() { Value::Null } else { Value::String(text_content) }
+        "content": content
     });
 
     if !tool_calls.is_empty() {
         if let Some(msg) = message.as_object_mut() {
             msg.insert("tool_calls".to_string(), Value::Array(tool_calls));
+        }
+    }
+    if !reasoning_content.trim().is_empty() {
+        if let Some(msg) = message.as_object_mut() {
+            msg.insert(
+                "reasoning_content".to_string(),
+                Value::String(reasoning_content),
+            );
+        }
+    }
+    if !annotations.is_empty() {
+        if let Some(msg) = message.as_object_mut() {
+            msg.insert("annotations".to_string(), Value::Array(annotations));
+        }
+    }
+    if !thought_signatures.is_empty() {
+        if let Some(msg) = message.as_object_mut() {
+            msg.insert(
+                "provider_specific_fields".to_string(),
+                json!({ "thought_signatures": thought_signatures }),
+            );
+        }
+    }
+    if let Some(audio) = audio {
+        if let Some(msg) = message.as_object_mut() {
+            msg.insert("audio".to_string(), audio);
         }
     }
 
@@ -223,8 +299,184 @@ fn gemini_finish_reason_to_chat(reason: Option<&str>, has_tool_calls: bool) -> &
         Some("BLOCKLIST") => "content_filter",
         Some("PROHIBITED_CONTENT") => "content_filter",
         Some("SPII") => "content_filter",
+        Some("IMAGE_SAFETY") => "content_filter",
+        Some("IMAGE_PROHIBITED_CONTENT") => "content_filter",
+        Some("TOO_MANY_TOOL_CALLS") => "stop",
+        Some("MALFORMED_RESPONSE") => "stop",
         _ => "stop",
     }
+}
+
+fn gemini_inline_data_to_chat_content_part(data: &Map<String, Value>) -> Option<Value> {
+    let mime_type = data
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .unwrap_or("application/octet-stream");
+    let payload = data.get("data").and_then(Value::as_str)?;
+    if mime_type.starts_with("image/") {
+        let url = format!("data:{mime_type};base64,{payload}");
+        return Some(json!({ "type": "image_url", "image_url": { "url": url } }));
+    }
+    if mime_type.starts_with("audio/") {
+        return None;
+    }
+    let url = format!("data:{mime_type};base64,{payload}");
+    Some(json!({ "type": "input_file", "file_url": url }))
+}
+
+fn gemini_file_data_to_chat_content_part(data: &Map<String, Value>) -> Option<Value> {
+    let uri = data.get("fileUri").and_then(Value::as_str)?;
+    let mime_type = data.get("mimeType").and_then(Value::as_str).unwrap_or("");
+    if mime_type.starts_with("image/") || looks_like_image_uri(uri) {
+        return Some(json!({ "type": "image_url", "image_url": { "url": uri } }));
+    }
+    Some(json!({ "type": "input_file", "file_url": uri }))
+}
+
+fn gemini_inline_data_to_chat_audio(data: &Map<String, Value>) -> Option<Value> {
+    let mime_type = data.get("mimeType").and_then(Value::as_str)?;
+    if !mime_type.starts_with("audio/") {
+        return None;
+    }
+    let payload = data.get("data").and_then(Value::as_str)?;
+    Some(chat_audio_response(payload))
+}
+
+fn audio_response_from_text_part(text: &str) -> Option<Value> {
+    let (mime_type, payload) = parse_data_uri(text)?;
+    if !mime_type.starts_with("audio/") {
+        return None;
+    }
+    Some(chat_audio_response(&payload))
+}
+
+fn chat_audio_response(payload: &str) -> Value {
+    let expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        + 24 * 60 * 60;
+    json!({
+        "data": payload,
+        "expires_at": expires_at,
+        "transcript": ""
+    })
+}
+
+fn build_chat_message_content(parts: &[Value]) -> Value {
+    if parts.is_empty() {
+        return Value::Null;
+    }
+    let text_only = parts
+        .iter()
+        .all(|part| part.get("type").and_then(Value::as_str) == Some("text"));
+    if text_only {
+        let text = parts
+            .iter()
+            .filter_map(|part| part.get("text").and_then(Value::as_str))
+            .collect::<String>();
+        return Value::String(text);
+    }
+    Value::Array(parts.to_vec())
+}
+
+fn gemini_grounding_metadata_to_chat_annotations(candidate: &Map<String, Value>) -> Vec<Value> {
+    let grounding_metadata = match candidate.get("groundingMetadata") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_object)
+            .cloned()
+            .collect::<Vec<_>>(),
+        Some(Value::Object(object)) => vec![object.clone()],
+        _ => Vec::new(),
+    };
+
+    let mut annotations = Vec::new();
+    for metadata in grounding_metadata {
+        let grounding_supports = metadata
+            .get("groundingSupports")
+            .and_then(Value::as_array)
+            .map(|value| value.as_slice())
+            .unwrap_or(&[]);
+        let grounding_chunks = metadata
+            .get("groundingChunks")
+            .and_then(Value::as_array)
+            .map(|value| value.as_slice())
+            .unwrap_or(&[]);
+
+        let chunk_map = grounding_chunks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, chunk)| {
+                let web = chunk.get("web")?.as_object()?;
+                let uri = web.get("uri").and_then(Value::as_str)?;
+                Some((
+                    index,
+                    (
+                        uri.to_string(),
+                        web.get("title")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string(),
+                    ),
+                ))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
+
+        for support in grounding_supports {
+            let Some(support) = support.as_object() else {
+                continue;
+            };
+            let segment = support.get("segment").and_then(Value::as_object);
+            let start_index = segment
+                .and_then(|segment| segment.get("startIndex"))
+                .and_then(Value::as_i64);
+            let end_index = segment
+                .and_then(|segment| segment.get("endIndex"))
+                .and_then(Value::as_i64);
+            let Some(chunk_index) = support
+                .get("groundingChunkIndices")
+                .and_then(Value::as_array)
+                .and_then(|indices| indices.first())
+                .and_then(Value::as_u64)
+            else {
+                continue;
+            };
+            let Some((url, title)) = chunk_map.get(&(chunk_index as usize)) else {
+                continue;
+            };
+            let (Some(start_index), Some(end_index)) = (start_index, end_index) else {
+                continue;
+            };
+            annotations.push(json!({
+                "type": "url_citation",
+                "url": url,
+                "title": title,
+                "start_index": start_index,
+                "end_index": end_index
+            }));
+        }
+    }
+
+    annotations
+}
+
+fn parse_data_uri(value: &str) -> Option<(String, String)> {
+    let rest = value.strip_prefix("data:")?;
+    let (mime_type, data) = rest.split_once(";base64,")?;
+    Some((mime_type.to_string(), data.to_string()))
+}
+
+fn looks_like_image_uri(uri: &str) -> bool {
+    let extension = uri
+        .split('?')
+        .next()
+        .and_then(|value| value.rsplit('.').next())
+        .map(|value| value.to_ascii_lowercase());
+    matches!(
+        extension.as_deref(),
+        Some("png" | "jpg" | "jpeg" | "gif" | "webp")
+    )
 }
 
 /// 将 Gemini usageMetadata 转换为 Chat usage

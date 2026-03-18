@@ -45,6 +45,7 @@ pub(super) fn responses_response_to_anthropic(
         .unwrap_or(&[]);
     let mut combined_text = String::new();
     let mut thinking_text = String::new();
+    let mut redacted_thinking_blocks = Vec::new();
     let mut tool_uses = Vec::new();
 
     for item in output {
@@ -56,6 +57,16 @@ pub(super) fn responses_response_to_anthropic(
                 let summary = extract_reasoning_summary(item);
                 if !summary.is_empty() {
                     thinking_text.push_str(&summary);
+                }
+                if let Some(encrypted_content) = item
+                    .get("encrypted_content")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    redacted_thinking_blocks.push(json!({
+                        "type": "redacted_thinking",
+                        "data": encrypted_content
+                    }));
                 }
             }
             Some("message") => {
@@ -101,6 +112,7 @@ pub(super) fn responses_response_to_anthropic(
         }
         content.push(block);
     }
+    content.extend(redacted_thinking_blocks);
     if !combined_text.trim().is_empty() || tool_uses.is_empty() {
         content.push(json!({ "type": "text", "text": combined_text }));
     }
@@ -143,6 +155,13 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     let created_at = now_s();
+    let stop_reason = object.get("stop_reason").and_then(Value::as_str);
+    let (status, incomplete_reason) =
+        compat_reason::responses_status_from_anthropic_stop_reason(stop_reason);
+    let status = status.unwrap_or("completed");
+    let incomplete_details = incomplete_reason
+        .map(|reason| json!({ "reason": reason }))
+        .unwrap_or(Value::Null);
 
     let usage = object
         .get("usage")
@@ -156,6 +175,8 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
         .unwrap_or(&[]);
     let mut output = Vec::new();
 
+    let mut thinking_text = String::new();
+    let mut encrypted_content = None;
     let mut combined_text = String::new();
     let mut tool_calls = Vec::new();
     for block in content {
@@ -163,6 +184,20 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
             continue;
         };
         match block.get("type").and_then(Value::as_str) {
+            Some("thinking") => {
+                if let Some(text) = block.get("thinking").and_then(Value::as_str) {
+                    thinking_text.push_str(text);
+                }
+            }
+            Some("redacted_thinking") => {
+                if let Some(data) = block
+                    .get("data")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    encrypted_content = Some(data.to_string());
+                }
+            }
             Some("text") => {
                 if let Some(text) = block.get("text").and_then(Value::as_str) {
                     combined_text.push_str(text);
@@ -179,11 +214,34 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
 
     let parallel_tool_calls = tool_calls.len() > 1;
 
+    if !thinking_text.trim().is_empty() || encrypted_content.is_some() {
+        let mut reasoning_item = json!({
+            "type": "reasoning",
+            "id": "rs_proxy",
+            "status": status,
+            "summary": []
+        });
+        if let Some(item) = reasoning_item.as_object_mut() {
+            if !thinking_text.trim().is_empty() {
+                item.insert(
+                    "summary".to_string(),
+                    json!([{ "type": "summary_text", "text": thinking_text }]),
+                );
+            }
+            if let Some(encrypted_content) = encrypted_content {
+                item.insert(
+                    "encrypted_content".to_string(),
+                    Value::String(encrypted_content),
+                );
+            }
+        }
+        output.push(reasoning_item);
+    }
     if !combined_text.trim().is_empty() || tool_calls.is_empty() {
         output.push(json!({
             "type": "message",
             "id": "msg_proxy",
-            "status": "completed",
+            "status": status,
             "role": "assistant",
             "content": [
                 { "type": "output_text", "text": combined_text, "annotations": [] }
@@ -196,8 +254,9 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
         "id": id,
         "object": "response",
         "created_at": created_at,
-        "status": "completed",
+        "status": status,
         "error": null,
+        "incomplete_details": incomplete_details,
         "model": model,
         "parallel_tool_calls": parallel_tool_calls,
         "output": output,

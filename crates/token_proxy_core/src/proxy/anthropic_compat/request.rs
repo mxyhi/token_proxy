@@ -1,5 +1,6 @@
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
+use std::collections::{HashMap, HashSet};
 
 use super::super::http_client::ProxyHttpClients;
 use super::media;
@@ -45,6 +46,7 @@ pub(super) async fn responses_request_to_anthropic(
     let mut messages = Vec::new();
     responses_input_to_claude_messages(input, &mut system_texts, &mut messages, http_clients)
         .await?;
+    messages = sanitize_claude_messages_for_anthropic(messages);
 
     let mut out = Map::new();
     out.insert("model".to_string(), Value::String(model.to_string()));
@@ -153,8 +155,7 @@ pub(super) async fn anthropic_request_to_responses(
         out.insert("top_p".to_string(), top_p.clone());
     }
 
-    if let Some(reasoning) = map_anthropic_thinking_to_responses_reasoning(object.get("thinking"))
-    {
+    if let Some(reasoning) = map_anthropic_thinking_to_responses_reasoning(object.get("thinking")) {
         out.insert("reasoning".to_string(), reasoning);
     }
 
@@ -291,17 +292,130 @@ async fn responses_input_item_to_claude_messages(
         }
         "function_call_output" => {
             let tool_use_id = object.get("call_id").and_then(Value::as_str).unwrap_or("");
-            let output = object.get("output").and_then(Value::as_str).unwrap_or("");
-            let block = json!({
-                "type": "tool_result",
-                "tool_use_id": tool_use_id,
-                "content": output
-            });
-            push_tool_result_block(messages, block);
+            let content =
+                responses_function_call_output_to_claude_content(object, http_clients).await?;
+            let mut block = Map::new();
+            block.insert("type".to_string(), json!("tool_result"));
+            block.insert("tool_use_id".to_string(), json!(tool_use_id));
+            block.insert("content".to_string(), content);
+            if object
+                .get("is_error")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                block.insert("is_error".to_string(), Value::Bool(true));
+            }
+            push_tool_result_block(messages, Value::Object(block));
         }
         _ => {}
     }
     Ok(())
+}
+
+async fn responses_function_call_output_to_claude_content(
+    item: &Map<String, Value>,
+    http_clients: &ProxyHttpClients,
+) -> Result<Value, String> {
+    // Tool results carry looser structured payloads than normal message content.
+    // Prefer `output_parts` when present so we preserve text/media/error semantics instead of
+    // collapsing everything into one string.
+    if let Some(output_parts) = item.get("output_parts") {
+        return responses_tool_result_content_to_claude(output_parts, http_clients).await;
+    }
+
+    match item.get("output") {
+        Some(Value::String(text)) => Ok(Value::String(text.clone())),
+        Some(other) => responses_tool_result_content_to_claude(other, http_clients).await,
+        None => Ok(Value::String(String::new())),
+    }
+}
+
+async fn responses_tool_result_content_to_claude(
+    value: &Value,
+    http_clients: &ProxyHttpClients,
+) -> Result<Value, String> {
+    match value {
+        Value::Null => Ok(Value::String(String::new())),
+        Value::String(text) => Ok(Value::String(text.clone())),
+        Value::Array(parts) => Ok(Value::Array(
+            responses_tool_result_parts_to_claude_blocks(parts, http_clients).await?,
+        )),
+        Value::Object(part) => {
+            if let Some(block) =
+                responses_tool_result_part_to_claude_block(part, http_clients).await?
+            {
+                return Ok(Value::Array(vec![block]));
+            }
+            Ok(Value::String(
+                serde_json::to_string(value).unwrap_or_default(),
+            ))
+        }
+        _ => Ok(Value::String(
+            serde_json::to_string(value).unwrap_or_default(),
+        )),
+    }
+}
+
+async fn responses_tool_result_parts_to_claude_blocks(
+    parts: &[Value],
+    http_clients: &ProxyHttpClients,
+) -> Result<Vec<Value>, String> {
+    let mut blocks = Vec::new();
+    for part in parts {
+        match part {
+            Value::String(text) => blocks.push(tool_result_text_block(text)),
+            Value::Object(object) => {
+                if let Some(block) =
+                    responses_tool_result_part_to_claude_block(object, http_clients).await?
+                {
+                    blocks.push(block);
+                } else {
+                    blocks.push(tool_result_text_block(
+                        &serde_json::to_string(part).unwrap_or_default(),
+                    ));
+                }
+            }
+            other => blocks.push(tool_result_text_block(
+                &serde_json::to_string(other).unwrap_or_default(),
+            )),
+        }
+    }
+    Ok(blocks)
+}
+
+async fn responses_tool_result_part_to_claude_block(
+    part: &Map<String, Value>,
+    http_clients: &ProxyHttpClients,
+) -> Result<Option<Value>, String> {
+    let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
+    match part_type {
+        "" => Ok(part
+            .get("text")
+            .and_then(Value::as_str)
+            .map(tool_result_text_block)),
+        "input_text" | "output_text" | "text" => Ok(part
+            .get("text")
+            .and_then(Value::as_str)
+            .map(tool_result_text_block)),
+        "refusal" => Ok(part
+            .get("refusal")
+            .or_else(|| part.get("text"))
+            .and_then(Value::as_str)
+            .map(tool_result_text_block)),
+        "input_image" | "image_url" => {
+            media::input_image_part_to_claude_block(part, http_clients).await
+        }
+        "input_file" => media::input_file_part_to_claude_block(part, http_clients).await,
+        "image" | "document" => Ok(Some(Value::Object(part.clone()))),
+        _ => Ok(part
+            .get("text")
+            .and_then(Value::as_str)
+            .map(tool_result_text_block)),
+    }
+}
+
+fn tool_result_text_block(text: &str) -> Value {
+    json!({ "type": "text", "text": text })
 }
 
 async fn responses_message_content_to_claude_blocks(
@@ -554,6 +668,292 @@ fn parse_tool_input_object(arguments: &str) -> Value {
         Some(other) => json!({ "_": other }),
         None => json!({ "_raw": arguments }),
     }
+}
+
+const EMPTY_MESSAGE_PLACEHOLDER: &str =
+    "[System: Empty message content sanitised to satisfy protocol]";
+const MISSING_TOOL_RESULT_PREFIX: &str =
+    "[System: Tool execution skipped/interrupted by user. No result provided for tool '";
+
+fn sanitize_claude_messages_for_anthropic(messages: Vec<Value>) -> Vec<Value> {
+    let mut sanitized = Vec::new();
+    let mut index = 0;
+
+    while index < messages.len() {
+        let Some(current) = sanitize_single_claude_message(&messages[index]) else {
+            index += 1;
+            continue;
+        };
+        let role = current
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("user");
+
+        if role == "assistant" && sanitized.is_empty() {
+            sanitized.push(claude_user_placeholder_message());
+        }
+
+        if role != "assistant" {
+            sanitized.push(current);
+            index += 1;
+            continue;
+        }
+
+        let expected_tool_uses = collect_expected_tool_uses(&current);
+        sanitized.push(current);
+        index += 1;
+
+        if expected_tool_uses.is_empty() {
+            continue;
+        }
+
+        let mut following_messages = Vec::new();
+        while index < messages.len() {
+            let Some(next) = sanitize_single_claude_message(&messages[index]) else {
+                index += 1;
+                continue;
+            };
+            if next.get("role").and_then(Value::as_str) == Some("assistant") {
+                break;
+            }
+            following_messages.push(next);
+            index += 1;
+        }
+
+        let (mut cleaned_following, matched_tool_use_ids) =
+            sanitize_following_tool_result_block(following_messages, &expected_tool_uses);
+        sanitized.append(&mut cleaned_following);
+
+        let missing_tool_results = expected_tool_uses
+            .iter()
+            .filter_map(|(tool_use_id, tool_name)| {
+                if matched_tool_use_ids.contains(tool_use_id) {
+                    None
+                } else {
+                    Some((tool_use_id.clone(), tool_name.clone()))
+                }
+            })
+            .collect::<Vec<_>>();
+        if !missing_tool_results.is_empty() {
+            sanitized.push(dummy_tool_result_message(&missing_tool_results));
+        }
+    }
+
+    sanitized
+}
+
+fn sanitize_single_claude_message(message: &Value) -> Option<Value> {
+    let mut message = message.as_object()?.clone();
+    let role = message
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or("user")
+        .to_string();
+    let content = message
+        .get("content")
+        .map(|content| claude_content_to_blocks(Some(content)))
+        .unwrap_or_default();
+    let has_tool_blocks = content.iter().any(is_claude_tool_block);
+
+    let mut sanitized_content = Vec::new();
+    for mut block in content {
+        let Some(object) = block.as_object_mut() else {
+            continue;
+        };
+        let block_type = object.get("type").and_then(Value::as_str).unwrap_or("");
+        match block_type {
+            "text" => {
+                let text = object.get("text").and_then(Value::as_str).unwrap_or("");
+                if text.trim().is_empty() {
+                    if has_tool_blocks {
+                        continue;
+                    }
+                    continue;
+                }
+                sanitized_content.push(block);
+            }
+            "tool_use" => {
+                let sanitized_id = sanitize_anthropic_tool_use_id(
+                    object.get("id").and_then(Value::as_str).unwrap_or(""),
+                );
+                object.insert("id".to_string(), Value::String(sanitized_id));
+                sanitized_content.push(block);
+            }
+            "tool_result" => {
+                let sanitized_id = sanitize_anthropic_tool_use_id(
+                    object
+                        .get("tool_use_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                );
+                object.insert("tool_use_id".to_string(), Value::String(sanitized_id));
+                sanitized_content.push(block);
+            }
+            _ => sanitized_content.push(block),
+        }
+    }
+
+    if sanitized_content.is_empty() && matches!(role.as_str(), "user" | "assistant") {
+        sanitized_content.push(text_block(EMPTY_MESSAGE_PLACEHOLDER));
+    }
+
+    message.insert("content".to_string(), Value::Array(sanitized_content));
+    Some(Value::Object(message))
+}
+
+fn sanitize_following_tool_result_block(
+    messages: Vec<Value>,
+    expected_tool_uses: &HashMap<String, String>,
+) -> (Vec<Value>, HashSet<String>) {
+    let mut matched_tool_use_ids = HashSet::new();
+    let mut keep_positions = HashSet::new();
+
+    for message_index in (0..messages.len()).rev() {
+        let Some(content) = messages[message_index]
+            .get("content")
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for block_index in (0..content.len()).rev() {
+            let Some(block) = content[block_index].as_object() else {
+                continue;
+            };
+            if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                continue;
+            }
+            let tool_use_id = block
+                .get("tool_use_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if !expected_tool_uses.contains_key(&tool_use_id) {
+                continue;
+            }
+            if matched_tool_use_ids.insert(tool_use_id) {
+                keep_positions.insert((message_index, block_index));
+            }
+        }
+    }
+
+    let mut cleaned_messages = Vec::new();
+    for (message_index, message) in messages.into_iter().enumerate() {
+        let Some(content) = message.get("content").and_then(Value::as_array) else {
+            cleaned_messages.push(message);
+            continue;
+        };
+        let filtered_content = content
+            .iter()
+            .enumerate()
+            .filter_map(|(block_index, block)| {
+                let Some(object) = block.as_object() else {
+                    return Some(block.clone());
+                };
+                if object.get("type").and_then(Value::as_str) != Some("tool_result") {
+                    return Some(block.clone());
+                }
+                let tool_use_id = object
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !expected_tool_uses.contains_key(tool_use_id) {
+                    return None;
+                }
+                if keep_positions.contains(&(message_index, block_index)) {
+                    return Some(block.clone());
+                }
+                None
+            })
+            .collect::<Vec<_>>();
+        if filtered_content.is_empty() {
+            continue;
+        }
+        let mut message = message;
+        if let Some(object) = message.as_object_mut() {
+            object.insert("content".to_string(), Value::Array(filtered_content));
+        }
+        cleaned_messages.push(message);
+    }
+
+    (cleaned_messages, matched_tool_use_ids)
+}
+
+fn collect_expected_tool_uses(message: &Value) -> HashMap<String, String> {
+    let mut expected = HashMap::new();
+    let Some(content) = message.get("content").and_then(Value::as_array) else {
+        return expected;
+    };
+    for block in content {
+        let Some(block) = block.as_object() else {
+            continue;
+        };
+        if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+            continue;
+        }
+        let tool_use_id = block.get("id").and_then(Value::as_str).unwrap_or("");
+        if tool_use_id.is_empty() {
+            continue;
+        }
+        let tool_name = block
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown_tool");
+        expected.insert(tool_use_id.to_string(), tool_name.to_string());
+    }
+    expected
+}
+
+fn sanitize_anthropic_tool_use_id(tool_use_id: &str) -> String {
+    let sanitized = tool_use_id
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '_' | '-') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if sanitized.is_empty() {
+        "tool_use_id".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn dummy_tool_result_message(missing_tool_results: &[(String, String)]) -> Value {
+    let content = missing_tool_results
+        .iter()
+        .map(|(tool_use_id, tool_name)| {
+            json!({
+                "type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "content": format!("{MISSING_TOOL_RESULT_PREFIX}{tool_name}'.]")
+            })
+        })
+        .collect::<Vec<_>>();
+    json!({ "role": "user", "content": content })
+}
+
+fn claude_user_placeholder_message() -> Value {
+    json!({
+        "role": "user",
+        "content": [text_block("...")]
+    })
+}
+
+fn text_block(text: &str) -> Value {
+    json!({ "type": "text", "text": text })
+}
+
+fn is_claude_tool_block(block: &Value) -> bool {
+    let Some(object) = block.as_object() else {
+        return false;
+    };
+    matches!(
+        object.get("type").and_then(Value::as_str),
+        Some("tool_use" | "tool_result")
+    )
 }
 
 fn claude_content_to_blocks(content: Option<&Value>) -> Vec<Value> {

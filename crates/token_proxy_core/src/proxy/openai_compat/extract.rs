@@ -11,16 +11,9 @@ pub(super) struct ResponsesOutput {
     pub(super) content_parts: Vec<Value>,
     pub(super) reasoning_text: String,
     pub(super) tool_calls: Vec<Value>,
-}
-
-pub(super) fn extract_chat_choice_text(value: &Value) -> Option<String> {
-    let choices = value.get("choices")?.as_array()?;
-    let first = choices.first()?.as_object()?;
-    let message = first.get("message")?.as_object()?;
-    message
-        .get("content")?
-        .as_str()
-        .map(|text| text.to_string())
+    pub(super) annotations: Vec<Value>,
+    pub(super) audio: Option<Value>,
+    pub(super) thinking_blocks: Vec<Value>,
 }
 
 pub(super) fn extract_chat_tool_calls(value: &Value) -> Vec<ChatToolCall> {
@@ -109,18 +102,44 @@ pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
             content_parts: Vec::new(),
             reasoning_text: String::new(),
             tool_calls: Vec::new(),
+            annotations: Vec::new(),
+            audio: None,
+            thinking_blocks: Vec::new(),
         };
     };
 
     let mut content_parts = Vec::new();
     let mut reasoning_text = String::new();
     let mut tool_calls = Vec::new();
+    let mut annotations = Vec::new();
+    let mut audio = None;
+    let mut thinking_blocks = Vec::new();
 
     for item in output {
         let Some(item) = item.as_object() else {
             continue;
         };
         match item.get("type").and_then(Value::as_str) {
+            Some("reasoning") => {
+                let summary_text = extract_reasoning_summary_text(item);
+                if !summary_text.is_empty() {
+                    reasoning_text.push_str(&summary_text);
+                    thinking_blocks.push(json!({
+                        "type": "thinking",
+                        "thinking": summary_text
+                    }));
+                }
+                if let Some(encrypted_content) = item
+                    .get("encrypted_content")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    thinking_blocks.push(json!({
+                        "type": "redacted_thinking",
+                        "data": encrypted_content
+                    }));
+                }
+            }
             Some("message") => {
                 if item.get("role").and_then(Value::as_str) != Some("assistant") {
                     continue;
@@ -134,7 +153,21 @@ pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
                         if part_type == Some("reasoning_text") {
                             if let Some(text) = part_obj.get("text").and_then(Value::as_str) {
                                 reasoning_text.push_str(text);
+                                thinking_blocks.push(json!({
+                                    "type": "thinking",
+                                    "thinking": text
+                                }));
                             }
+                        }
+                        if part_type == Some("output_text") {
+                            if let Some(part_annotations) =
+                                part_obj.get("annotations").and_then(Value::as_array)
+                            {
+                                annotations.extend(part_annotations.iter().cloned());
+                            }
+                        }
+                        if part_type == Some("output_audio") && audio.is_none() {
+                            audio = part_obj.get("audio").cloned();
                         }
                     }
                     content_parts.push(part.clone());
@@ -153,7 +186,29 @@ pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
         content_parts,
         reasoning_text,
         tool_calls,
+        annotations,
+        audio,
+        thinking_blocks,
     }
+}
+
+fn extract_reasoning_summary_text(item: &Map<String, Value>) -> String {
+    let Some(summary) = item.get("summary").and_then(Value::as_array) else {
+        return String::new();
+    };
+    let mut combined = String::new();
+    for part in summary {
+        let Some(part) = part.as_object() else {
+            continue;
+        };
+        if part.get("type").and_then(Value::as_str) != Some("summary_text") {
+            continue;
+        }
+        if let Some(text) = part.get("text").and_then(Value::as_str) {
+            combined.push_str(text);
+        }
+    }
+    combined
 }
 
 fn extract_responses_tool_call(item: &Map<String, Value>) -> Option<Value> {

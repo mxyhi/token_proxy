@@ -197,7 +197,7 @@ fn stream_responses_to_anthropic_emits_thinking_from_reasoning_summary_events() 
         };
 
         let upstream = futures_util::stream::iter(vec![
-            Ok::<Bytes, std::io::Error>(Bytes::from(
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
                 "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\"}}\n\n",
             )),
             Ok(Bytes::from(
@@ -247,6 +247,480 @@ fn stream_responses_to_anthropic_emits_thinking_from_reasoning_summary_events() 
         assert!(
             saw_thinking_delta,
             "missing thinking_delta from reasoning summary"
+        );
+    });
+}
+
+#[test]
+fn stream_responses_to_anthropic_emits_redacted_thinking_from_encrypted_reasoning() {
+    super::run_async(async {
+        let context = LogContext {
+            path: "/v1/messages".to_string(),
+            provider: "openai-response".to_string(),
+            upstream_id: "unit-test".to_string(),
+            model: Some("unit-model".to_string()),
+            mapped_model: Some("unit-model".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"ENC999\"}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let anthropic_stream = super::super::responses_to_anthropic::stream_responses_to_anthropic(
+            upstream,
+            context,
+            Arc::new(LogWriter::new(None)),
+            token_tracker,
+        );
+
+        let chunks: Vec<Bytes> = anthropic_stream
+            .map(|item| item.expect("stream item"))
+            .collect()
+            .await;
+
+        assert!(
+            chunks
+                .iter()
+                .filter_map(super::parse_anthropic_sse)
+                .any(|(event_type, data)| {
+                    event_type == "content_block_start"
+                        && data["content_block"]["type"] == json!("redacted_thinking")
+                        && data["content_block"]["data"] == json!("ENC999")
+                }),
+            "missing redacted_thinking content block"
+        );
+    });
+}
+
+#[test]
+fn stream_responses_to_chat_emits_reasoning_from_reasoning_summary_events() {
+    super::run_async(async {
+        let (log, context, _sqlite_pool) = super::setup_responses_stream().await;
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_1\",\"delta\":\"think step by step\"}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"think step by step\"}]}]}}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let chunks = super::collect_responses_to_chat_chunks(upstream, context, log).await;
+
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            payloads[0]["choices"][0]["delta"]["role"],
+            json!("assistant")
+        );
+        assert_eq!(
+            payloads[1]["choices"][0]["delta"]["reasoning_content"],
+            json!("think step by step")
+        );
+        assert_eq!(payloads[2]["choices"][0]["finish_reason"], json!("stop"));
+    });
+}
+
+#[test]
+fn stream_responses_to_chat_emits_thinking_blocks_from_reasoning_summary_events() {
+    super::run_async(async {
+        let (log, context, _sqlite_pool) = super::setup_responses_stream().await;
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_1\",\"delta\":\"think step by step\"}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let chunks = super::collect_responses_to_chat_chunks(upstream, context, log).await;
+
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            payloads[1]["choices"][0]["delta"]["thinking_blocks"][0],
+            json!({
+                "type": "thinking",
+                "thinking": "think step by step"
+            })
+        );
+        assert_eq!(payloads[2]["choices"][0]["finish_reason"], json!("stop"));
+    });
+}
+
+#[test]
+fn stream_responses_to_chat_emits_redacted_thinking_blocks_from_reasoning_snapshot() {
+    super::run_async(async {
+        let (log, context, _sqlite_pool) = super::setup_responses_stream().await;
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"ENC999\"}]}}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let chunks = super::collect_responses_to_chat_chunks(upstream, context, log).await;
+
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            payloads[1]["choices"][0]["delta"]["thinking_blocks"][0],
+            json!({
+                "type": "redacted_thinking",
+                "data": "ENC999"
+            })
+        );
+        assert_eq!(payloads[2]["choices"][0]["finish_reason"], json!("stop"));
+    });
+}
+
+#[test]
+fn stream_responses_to_chat_emits_thinking_blocks_from_reasoning_text_snapshot_parts() {
+    super::run_async(async {
+        let (log, context, _sqlite_pool) = super::setup_responses_stream().await;
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"reasoning_text\",\"text\":\"think from snapshot\"}]}]}}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let chunks = super::collect_responses_to_chat_chunks(upstream, context, log).await;
+
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            payloads[1]["choices"][0]["delta"]["thinking_blocks"][0],
+            json!({
+                "type": "thinking",
+                "thinking": "think from snapshot"
+            })
+        );
+        assert_eq!(
+            payloads[1]["choices"][0]["delta"]["reasoning_content"],
+            json!("think from snapshot")
+        );
+        assert_eq!(payloads[2]["choices"][0]["finish_reason"], json!("stop"));
+    });
+}
+
+#[test]
+fn stream_responses_to_chat_emits_audio_delta_from_output_audio_snapshot() {
+    super::run_async(async {
+        let (log, context, _sqlite_pool) = super::setup_responses_stream().await;
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_audio\",\"audio\":{\"data\":\"UklGRg==\",\"transcript\":\"spoken\"}}]}]}}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let chunks = super::collect_responses_to_chat_chunks(upstream, context, log).await;
+
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            payloads[0]["choices"][0]["delta"]["role"],
+            json!("assistant")
+        );
+        assert_eq!(
+            payloads[1]["choices"][0]["delta"]["audio"]["data"],
+            json!("UklGRg==")
+        );
+        assert_eq!(
+            payloads[1]["choices"][0]["delta"]["audio"]["transcript"],
+            json!("spoken")
+        );
+        assert_eq!(payloads[2]["choices"][0]["finish_reason"], json!("stop"));
+    });
+}
+
+#[test]
+fn stream_anthropic_to_responses_emits_reasoning_summary_events_and_snapshot() {
+    super::run_async(async {
+        let sqlite_pool = super::create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
+        let context = LogContext {
+            path: "/v1/responses".to_string(),
+            provider: "anthropic".to_string(),
+            upstream_id: "unit-test".to_string(),
+            model: Some("claude-3-7-sonnet".to_string()),
+            mapped_model: Some("claude-3-7-sonnet".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-3-7-sonnet\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"analyze first\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"final answer\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            )),
+        ]);
+
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let responses_stream = super::super::anthropic_to_responses::stream_anthropic_to_responses(
+            upstream,
+            context,
+            log,
+            token_tracker,
+        );
+
+        let chunks: Vec<Bytes> = responses_stream
+            .map(|item| item.expect("stream item"))
+            .collect()
+            .await;
+
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+
+        assert!(
+            payloads.iter().any(|payload| {
+                payload["type"] == json!("response.output_item.added")
+                    && payload["item"]["type"] == json!("reasoning")
+            }),
+            "missing reasoning output_item.added event"
+        );
+        assert!(
+            payloads.iter().any(|payload| {
+                payload["type"] == json!("response.reasoning_summary_text.delta")
+                    && payload["delta"] == json!("analyze first")
+            }),
+            "missing reasoning_summary_text.delta event"
+        );
+
+        let completed = payloads
+            .iter()
+            .find(|payload| payload["type"] == json!("response.completed"))
+            .expect("completed event");
+        assert_eq!(
+            completed["response"]["output"][0]["type"],
+            json!("reasoning")
+        );
+        assert_eq!(
+            completed["response"]["output"][0]["summary"][0],
+            json!({ "type": "summary_text", "text": "analyze first" })
+        );
+        assert_eq!(completed["response"]["output"][1]["type"], json!("message"));
+        assert_eq!(
+            completed["response"]["output"][1]["content"][0]["text"],
+            json!("final answer")
+        );
+    });
+}
+
+#[test]
+fn stream_anthropic_to_responses_maps_redacted_thinking_to_encrypted_reasoning() {
+    super::run_async(async {
+        let sqlite_pool = super::create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
+        let context = LogContext {
+            path: "/v1/responses".to_string(),
+            provider: "anthropic".to_string(),
+            upstream_id: "unit-test".to_string(),
+            model: Some("claude-3-7-sonnet".to_string()),
+            mapped_model: Some("claude-3-7-sonnet".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-3-7-sonnet\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"redacted_thinking\",\"data\":\"ENC789\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            )),
+        ]);
+
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let responses_stream = super::super::anthropic_to_responses::stream_anthropic_to_responses(
+            upstream,
+            context,
+            log,
+            token_tracker,
+        );
+
+        let chunks: Vec<Bytes> = responses_stream
+            .map(|item| item.expect("stream item"))
+            .collect()
+            .await;
+
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+
+        let completed = payloads
+            .iter()
+            .find(|payload| payload["type"] == json!("response.completed"))
+            .expect("completed event");
+        assert_eq!(
+            completed["response"]["output"][0]["type"],
+            json!("reasoning")
+        );
+        assert_eq!(
+            completed["response"]["output"][0]["encrypted_content"],
+            json!("ENC789")
+        );
+    });
+}
+
+#[test]
+fn stream_anthropic_to_responses_maps_max_tokens_to_incomplete_event() {
+    super::run_async(async {
+        let sqlite_pool = super::create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
+        let context = LogContext {
+            path: "/v1/responses".to_string(),
+            provider: "anthropic".to_string(),
+            upstream_id: "unit-test".to_string(),
+            model: Some("claude-3-7-sonnet".to_string()),
+            mapped_model: Some("claude-3-7-sonnet".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-3-7-sonnet\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial answer\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\",\"stop_sequence\":null}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            )),
+        ]);
+
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let responses_stream = super::super::anthropic_to_responses::stream_anthropic_to_responses(
+            upstream,
+            context,
+            log,
+            token_tracker,
+        );
+
+        let chunks: Vec<Bytes> = responses_stream
+            .map(|item| item.expect("stream item"))
+            .collect()
+            .await;
+
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+
+        let incomplete = payloads
+            .iter()
+            .find(|payload| payload["type"] == json!("response.incomplete"))
+            .expect("incomplete event");
+        assert_eq!(incomplete["response"]["status"], json!("incomplete"));
+        assert_eq!(
+            incomplete["response"]["incomplete_details"]["reason"],
+            json!("max_tokens")
+        );
+        assert_eq!(
+            incomplete["response"]["output"][0]["type"],
+            json!("message")
+        );
+        assert_eq!(
+            incomplete["response"]["output"][0]["status"],
+            json!("incomplete")
+        );
+        assert_eq!(
+            incomplete["response"]["output"][0]["content"][0]["text"],
+            json!("partial answer")
         );
     });
 }

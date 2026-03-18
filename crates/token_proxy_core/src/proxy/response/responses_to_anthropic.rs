@@ -2,7 +2,7 @@ use axum::body::Bytes;
 use futures_util::{stream::try_unfold, StreamExt};
 use serde_json::{json, Map, Value};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 
@@ -66,6 +66,7 @@ struct ResponsesToAnthropicState<S> {
     next_block_index: usize,
     tool_uses: HashMap<String, ToolUseState>,
     reasoning_blocks: HashMap<String, ReasoningBlockState>,
+    redacted_reasoning_emitted: HashSet<String>,
     saw_tool_use: bool,
     stop_reason_override: Option<&'static str>,
     saw_reasoning_delta: bool,
@@ -123,6 +124,7 @@ where
             next_block_index: 0,
             tool_uses: HashMap::new(),
             reasoning_blocks: HashMap::new(),
+            redacted_reasoning_emitted: HashSet::new(),
             saw_tool_use: false,
             stop_reason_override: None,
             saw_reasoning_delta: false,
@@ -370,6 +372,7 @@ where
                 };
                 self.ensure_message_start();
                 self.stop_reasoning_block(item_id);
+                self.emit_redacted_reasoning(item);
             }
             _ => {}
         }
@@ -427,6 +430,9 @@ where
                 Some("reasoning") => {
                     let summary = extract_reasoning_summary(item);
                     if summary.trim().is_empty() {
+                        if item.get("id").and_then(Value::as_str).is_some() {
+                            self.emit_redacted_reasoning(item);
+                        }
                         continue;
                     }
                     if let Some(item_id) = item.get("id").and_then(Value::as_str) {
@@ -438,6 +444,7 @@ where
                             self.emit_reasoning_summary_for_item(item_id, &summary);
                         }
                         self.stop_reasoning_block(item_id);
+                        self.emit_redacted_reasoning(item);
                     } else if reasoning_snapshot.is_empty() {
                         reasoning_snapshot = summary;
                     }
@@ -600,6 +607,49 @@ where
         if let Some(state) = self.reasoning_blocks.get_mut(item_id) {
             state.sent_delta = true;
         }
+    }
+
+    fn emit_redacted_reasoning(&mut self, item: &Map<String, Value>) {
+        let Some(encrypted_content) = item
+            .get("encrypted_content")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+
+        let dedupe_key = item
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(encrypted_content)
+            .to_string();
+        if !self.redacted_reasoning_emitted.insert(dedupe_key) {
+            return;
+        }
+
+        self.ensure_message_start();
+        self.stop_active_block();
+        let index = self.next_block_index;
+        self.next_block_index += 1;
+        self.out.push_back(super::anthropic_event_sse(
+            "content_block_start",
+            json!({
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "redacted_thinking",
+                    "data": encrypted_content
+                }
+            }),
+        ));
+        self.out.push_back(super::anthropic_event_sse(
+            "content_block_stop",
+            json!({
+                "type": "content_block_stop",
+                "index": index
+            }),
+        ));
     }
 
     fn stop_reasoning_block(&mut self, item_id: &str) {

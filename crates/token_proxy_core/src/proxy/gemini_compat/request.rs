@@ -2,6 +2,7 @@
 
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
+use std::collections::HashMap;
 
 use super::tools::{
     gemini_function_call_to_chat_tool_call, map_chat_tool_choice_to_gemini,
@@ -174,6 +175,7 @@ fn chat_messages_to_gemini_contents(
 ) -> Result<(Vec<Value>, Option<String>), String> {
     let mut system_texts = Vec::new();
     let mut contents = Vec::new();
+    let mut tool_names_by_call_id = HashMap::new();
 
     for message in messages {
         let Some(message) = message.as_object() else {
@@ -201,6 +203,18 @@ fn chat_messages_to_gemini_contents(
                 // 处理 tool_calls
                 if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
                     for tool_call in tool_calls {
+                        if let Some(tool_call) = tool_call.as_object() {
+                            let call_id = tool_call.get("id").and_then(Value::as_str).unwrap_or("");
+                            let name = tool_call
+                                .get("function")
+                                .and_then(Value::as_object)
+                                .and_then(|function| function.get("name"))
+                                .and_then(Value::as_str)
+                                .unwrap_or("");
+                            if !call_id.is_empty() && !name.is_empty() {
+                                tool_names_by_call_id.insert(call_id.to_string(), name.to_string());
+                            }
+                        }
                         if let Some(fc) = chat_tool_call_to_gemini_function_call(tool_call) {
                             parts.push(fc);
                         }
@@ -221,9 +235,23 @@ fn chat_messages_to_gemini_contents(
                 // 工具结果 → functionResponse
                 let name = message
                     .get("name")
-                    .or_else(|| message.get("tool_call_id"))
                     .and_then(Value::as_str)
-                    .unwrap_or("function");
+                    .filter(|value| !value.is_empty())
+                    .map(|value| value.to_string())
+                    .or_else(|| {
+                        message
+                            .get("tool_call_id")
+                            .and_then(Value::as_str)
+                            .and_then(|call_id| tool_names_by_call_id.get(call_id).cloned())
+                    })
+                    .or_else(|| {
+                        message
+                            .get("tool_call_id")
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.is_empty())
+                            .map(|value| value.to_string())
+                    })
+                    .unwrap_or_else(|| "function".to_string());
                 let response_content = message.get("content");
                 let response = parse_tool_response_content(response_content);
                 contents.push(json!({
@@ -355,27 +383,58 @@ fn gemini_part_to_chat_content_part(part: &serde_json::Map<String, Value>) -> Op
         return Some(json!({ "type": "text", "text": text }));
     }
     if let Some(inline) = part.get("inlineData").and_then(Value::as_object) {
-        return gemini_inline_data_to_image_url(inline);
+        return gemini_inline_data_to_chat_part(inline);
     }
     if let Some(file_data) = part.get("fileData").and_then(Value::as_object) {
-        return gemini_file_data_to_image_url(file_data);
+        return gemini_file_data_to_chat_part(file_data);
     }
     None
 }
 
-fn gemini_inline_data_to_image_url(data: &serde_json::Map<String, Value>) -> Option<Value> {
+fn gemini_inline_data_to_chat_part(data: &serde_json::Map<String, Value>) -> Option<Value> {
     let mime = data
         .get("mimeType")
         .and_then(Value::as_str)
         .unwrap_or("application/octet-stream");
     let payload = data.get("data").and_then(Value::as_str)?;
+    if mime.starts_with("audio/") {
+        return Some(json!({
+            "type": "input_audio",
+            "input_audio": {
+                "data": payload,
+                "format": mime
+            }
+        }));
+    }
     let url = format!("data:{mime};base64,{payload}");
-    Some(json!({ "type": "image_url", "image_url": { "url": url } }))
+    if mime.starts_with("image/") {
+        Some(json!({ "type": "image_url", "image_url": { "url": url } }))
+    } else {
+        Some(json!({ "type": "input_file", "file_url": url }))
+    }
 }
 
-fn gemini_file_data_to_image_url(data: &serde_json::Map<String, Value>) -> Option<Value> {
+fn gemini_file_data_to_chat_part(data: &serde_json::Map<String, Value>) -> Option<Value> {
     let uri = data.get("fileUri").and_then(Value::as_str)?;
-    Some(json!({ "type": "image_url", "image_url": { "url": uri } }))
+    let mime = data
+        .get("mimeType")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| infer_mime_type_from_uri(uri))
+        .unwrap_or_default();
+    if mime.starts_with("audio/") {
+        return Some(json!({
+            "type": "input_audio",
+            "input_audio": {
+                "url": uri,
+                "format": mime
+            }
+        }));
+    }
+    if mime.starts_with("image/") {
+        return Some(json!({ "type": "image_url", "image_url": { "url": uri } }));
+    }
+    Some(json!({ "type": "input_file", "file_url": uri }))
 }
 
 fn function_response_to_chat_message(part: &serde_json::Map<String, Value>) -> Option<Value> {
@@ -523,22 +582,61 @@ fn chat_content_to_gemini_parts(content: Option<&Value>) -> Result<Vec<Value>, S
         Value::Array(parts) => {
             let mut out = Vec::new();
             for part in parts {
-                let Some(part) = part.as_object() else {
-                    continue;
-                };
-                let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
-                match part_type {
-                    "text" => {
-                        if let Some(text) = part.get("text").and_then(Value::as_str) {
-                            out.push(json!({ "text": text }));
+                match part {
+                    Value::String(text) => out.push(json!({ "text": text })),
+                    Value::Object(part) => {
+                        let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
+                        match part_type {
+                            "text" | "input_text" | "output_text" => {
+                                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                    out.push(json!({ "text": text }));
+                                }
+                            }
+                            "refusal" => {
+                                if let Some(text) = part
+                                    .get("refusal")
+                                    .or_else(|| part.get("text"))
+                                    .and_then(Value::as_str)
+                                {
+                                    out.push(json!({ "text": text }));
+                                }
+                            }
+                            "image_url" | "input_image" | "output_image" => {
+                                out.push(media_part_to_gemini_part(
+                                    part,
+                                    "image_url",
+                                    part.get("image_url")
+                                        .and_then(extract_media_format_from_value),
+                                )?);
+                            }
+                            "input_audio" => {
+                                out.push(input_audio_part_to_gemini_part(part)?);
+                            }
+                            "input_file" | "file" => {
+                                out.push(input_file_part_to_gemini_part(part)?);
+                            }
+                            "" => {
+                                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                    out.push(json!({ "text": text }));
+                                } else {
+                                    return Err(
+                                        "Gemini content part must include a type.".to_string()
+                                    );
+                                }
+                            }
+                            other => {
+                                return Err(format!(
+                                    "Unsupported Chat content part type for Gemini: {other}"
+                                ));
+                            }
                         }
                     }
-                    "image_url" => {
-                        if let Some(inline_data) = image_url_to_gemini_inline_data(part) {
-                            out.push(json!({ "inlineData": inline_data }));
-                        }
+                    Value::Null => {}
+                    _ => {
+                        return Err(
+                            "Gemini content arrays must contain strings or objects.".to_string()
+                        );
                     }
-                    _ => {}
                 }
             }
             Ok(out)
@@ -547,29 +645,194 @@ fn chat_content_to_gemini_parts(content: Option<&Value>) -> Result<Vec<Value>, S
     }
 }
 
-/// 将 image_url 转换为 Gemini inlineData
-fn image_url_to_gemini_inline_data(part: &serde_json::Map<String, Value>) -> Option<Value> {
-    let image_url = part.get("image_url")?;
-    let url = match image_url {
-        Value::String(s) => s.as_str(),
-        Value::Object(obj) => obj.get("url").and_then(Value::as_str)?,
-        _ => return None,
-    };
+fn media_part_to_gemini_part(
+    part: &serde_json::Map<String, Value>,
+    field_name: &str,
+    explicit_mime_type: Option<String>,
+) -> Result<Value, String> {
+    let reference = part
+        .get(field_name)
+        .ok_or_else(|| format!("Gemini {field_name} part is missing {field_name}."))?;
+    let (url, inline_mime_type) = extract_media_reference(reference)?;
+    let mime_type = explicit_mime_type
+        .or(inline_mime_type)
+        .or_else(|| infer_mime_type_from_uri(&url));
 
-    // 处理 data URI（base64）
-    if let Some(rest) = url.strip_prefix("data:") {
-        if let Some((mime_type, data)) = rest.split_once(";base64,") {
-            return Some(json!({
-                "mimeType": mime_type,
+    if let Some((data_mime_type, data)) = parse_data_uri(&url) {
+        return Ok(json!({
+            "inlineData": {
+                "mimeType": data_mime_type,
                 "data": data
-            }));
-        }
+            }
+        }));
     }
 
-    // HTTP(S) URL → Gemini 支持 fileData 格式引用外部文件
-    // 但简单起见，这里仅支持 base64 inline，外部 URL 需要先下载
-    // 对于外部 URL，返回 None（或可扩展为使用 fileData）
-    None
+    if matches_uri_reference(&url) {
+        let mut file_data = Map::new();
+        file_data.insert("fileUri".to_string(), Value::String(url));
+        if let Some(mime_type) = mime_type {
+            file_data.insert("mimeType".to_string(), Value::String(mime_type));
+        }
+        return Ok(json!({ "fileData": Value::Object(file_data) }));
+    }
+
+    Err(format!(
+        "Gemini media part must use a data: URI, http(s) URL, or gs:// URI. Received: {url}"
+    ))
+}
+
+fn input_audio_part_to_gemini_part(part: &serde_json::Map<String, Value>) -> Result<Value, String> {
+    let audio = part
+        .get("input_audio")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "Gemini input_audio part must include input_audio.".to_string())?;
+
+    if let Some(data) = audio.get("data").and_then(Value::as_str) {
+        let mime_type = audio
+            .get("format")
+            .and_then(Value::as_str)
+            .and_then(audio_format_to_mime_type)
+            .or_else(|| {
+                audio
+                    .get("mime_type")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "audio/wav".to_string());
+        return Ok(json!({
+            "inlineData": {
+                "mimeType": mime_type,
+                "data": data
+            }
+        }));
+    }
+
+    if let Some(url) = audio.get("url") {
+        let mime_type = audio
+            .get("format")
+            .and_then(Value::as_str)
+            .and_then(audio_format_to_mime_type);
+        let media_part = json!({ "image_url": url });
+        let media_part = media_part
+            .as_object()
+            .cloned()
+            .ok_or_else(|| "Failed to build Gemini audio part.".to_string())?;
+        return media_part_to_gemini_part(&media_part, "image_url", mime_type);
+    }
+
+    Err("Gemini input_audio part must include data or url.".to_string())
+}
+
+fn input_file_part_to_gemini_part(part: &serde_json::Map<String, Value>) -> Result<Value, String> {
+    if part.get("file_id").is_some() {
+        return Err("Gemini input_file with file_id is not supported.".to_string());
+    }
+
+    let file_value = part
+        .get("file_url")
+        .or_else(|| part.get("file_data"))
+        .cloned()
+        .or_else(|| {
+            part.get("file")
+                .and_then(Value::as_object)
+                .and_then(|file| {
+                    file.get("file_url")
+                        .cloned()
+                        .or_else(|| file.get("file_data").cloned())
+                })
+        })
+        .ok_or_else(|| "Gemini input_file part must include file_url or file_data.".to_string())?;
+
+    let explicit_mime_type = part
+        .get("format")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| {
+            part.get("file")
+                .and_then(Value::as_object)
+                .and_then(|file| file.get("format"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    let media_part = json!({ "image_url": file_value });
+    let media_part = media_part
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "Failed to build Gemini file part.".to_string())?;
+    media_part_to_gemini_part(&media_part, "image_url", explicit_mime_type)
+}
+
+fn extract_media_reference(value: &Value) -> Result<(String, Option<String>), String> {
+    match value {
+        Value::String(url) => Ok((url.to_string(), None)),
+        Value::Object(object) => {
+            let url = object
+                .get("url")
+                .and_then(Value::as_str)
+                .ok_or_else(|| "Gemini media object must include url.".to_string())?;
+            let format = extract_media_format_from_value(value);
+            Ok((url.to_string(), format))
+        }
+        _ => Err("Gemini media reference must be a string or object.".to_string()),
+    }
+}
+
+fn extract_media_format_from_value(value: &Value) -> Option<String> {
+    let object = value.as_object()?;
+    object
+        .get("format")
+        .or_else(|| object.get("mime_type"))
+        .or_else(|| object.get("mimeType"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn parse_data_uri(uri: &str) -> Option<(String, String)> {
+    let rest = uri.strip_prefix("data:")?;
+    let (mime_type, data) = rest.split_once(";base64,")?;
+    Some((mime_type.to_string(), data.to_string()))
+}
+
+fn matches_uri_reference(uri: &str) -> bool {
+    uri.starts_with("http://") || uri.starts_with("https://") || uri.starts_with("gs://")
+}
+
+fn infer_mime_type_from_uri(uri: &str) -> Option<String> {
+    let extension = uri
+        .split('?')
+        .next()
+        .and_then(|value| value.rsplit('.').next())
+        .map(|value| value.to_ascii_lowercase())?;
+    let mime_type = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "wav" => "audio/wav",
+        "mp3" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        _ => return None,
+    };
+    Some(mime_type.to_string())
+}
+
+fn audio_format_to_mime_type(format: &str) -> Option<String> {
+    let normalized = format.trim().to_ascii_lowercase();
+    if normalized.contains('/') {
+        return Some(normalized);
+    }
+    let mime_type = match normalized.as_str() {
+        "wav" => "audio/wav",
+        "mp3" | "mpeg" => "audio/mpeg",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        "aac" => "audio/aac",
+        "pcm16" => "audio/l16",
+        _ => return None,
+    };
+    Some(mime_type.to_string())
 }
 
 /// 将 OpenAI tool_call 转换为 Gemini functionCall

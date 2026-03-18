@@ -233,6 +233,185 @@ fn responses_request_to_anthropic_maps_tool_choice_and_tool_result() {
 }
 
 #[test]
+fn responses_request_to_anthropic_preserves_structured_tool_result_parts_and_error() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+
+    let input = bytes_from_json(json!({
+        "model": "gpt-4.1",
+        "input": [
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "{\"status\":\"failed\"}",
+                "is_error": true,
+                "output_parts": [
+                    { "type": "text", "text": "tool failed" },
+                    { "type": "refusal", "refusal": "permission denied" },
+                    { "type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=" },
+                    { "type": "input_file", "file_url": "data:application/pdf;base64,JVBERi0xLjQK" }
+                ]
+            }
+        ]
+    }));
+
+    let output = run_async(async {
+        responses_request_to_anthropic(&input, &http_clients)
+            .await
+            .expect("transform")
+    });
+    let value = json_from_bytes(output);
+
+    let messages = value["messages"].as_array().expect("messages array");
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["role"], json!("user"));
+    assert_eq!(messages[0]["content"][0]["type"], json!("tool_result"));
+    assert_eq!(messages[0]["content"][0]["tool_use_id"], json!("call_1"));
+    assert_eq!(messages[0]["content"][0]["is_error"], json!(true));
+    assert_eq!(
+        messages[0]["content"][0]["content"][0],
+        json!({ "type": "text", "text": "tool failed" })
+    );
+    assert_eq!(
+        messages[0]["content"][0]["content"][1],
+        json!({ "type": "text", "text": "permission denied" })
+    );
+    assert_eq!(
+        messages[0]["content"][0]["content"][2]["type"],
+        json!("image")
+    );
+    assert_eq!(
+        messages[0]["content"][0]["content"][2]["source"]["media_type"],
+        json!("image/png")
+    );
+    assert_eq!(
+        messages[0]["content"][0]["content"][2]["source"]["data"],
+        json!("iVBORw0KGgo=")
+    );
+    assert_eq!(
+        messages[0]["content"][0]["content"][3]["type"],
+        json!("document")
+    );
+    assert_eq!(
+        messages[0]["content"][0]["content"][3]["source"]["media_type"],
+        json!("application/pdf")
+    );
+    assert_eq!(
+        messages[0]["content"][0]["content"][3]["source"]["data"],
+        json!("JVBERi0xLjQK")
+    );
+}
+
+#[test]
+fn responses_request_to_anthropic_sanitizes_tool_use_ids_and_adds_missing_results() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+
+    let input = bytes_from_json(json!({
+        "model": "gpt-4.1",
+        "input": [
+            { "type": "message", "role": "user", "content": "ask tool" },
+            {
+                "type": "function_call",
+                "call_id": "call/1?bad",
+                "name": "search",
+                "arguments": "{\"q\":\"x\"}"
+            }
+        ]
+    }));
+
+    let output = run_async(async {
+        responses_request_to_anthropic(&input, &http_clients)
+            .await
+            .expect("transform")
+    });
+    let value = json_from_bytes(output);
+
+    let messages = value["messages"].as_array().expect("messages array");
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[1]["content"][0]["type"], json!("tool_use"));
+    assert_eq!(messages[1]["content"][0]["id"], json!("call_1_bad"));
+    assert_eq!(messages[2]["role"], json!("user"));
+    assert_eq!(messages[2]["content"][0]["type"], json!("tool_result"));
+    assert_eq!(
+        messages[2]["content"][0]["tool_use_id"],
+        json!("call_1_bad")
+    );
+    assert_eq!(
+        messages[2]["content"][0]["content"],
+        json!("[System: Tool execution skipped/interrupted by user. No result provided for tool 'search'.]")
+    );
+}
+
+#[test]
+fn responses_request_to_anthropic_drops_orphaned_and_duplicate_tool_results() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+
+    let input = bytes_from_json(json!({
+        "model": "gpt-4.1",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "search",
+                "arguments": "{\"q\":\"x\"}"
+            },
+            { "type": "function_call_output", "call_id": "orphan", "output": "ignore me" },
+            { "type": "function_call_output", "call_id": "call_1", "output": "old value" },
+            { "type": "function_call_output", "call_id": "call_1", "output": "new value" }
+        ]
+    }));
+
+    let output = run_async(async {
+        responses_request_to_anthropic(&input, &http_clients)
+            .await
+            .expect("transform")
+    });
+    let value = json_from_bytes(output);
+
+    let messages = value["messages"].as_array().expect("messages array");
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[1]["role"], json!("assistant"));
+    assert_eq!(messages[2]["role"], json!("user"));
+    let content = messages[2]["content"].as_array().expect("tool results");
+    assert_eq!(content.len(), 1);
+    assert_eq!(content[0]["tool_use_id"], json!("call_1"));
+    assert_eq!(content[0]["content"], json!("new value"));
+}
+
+#[test]
+fn responses_request_to_anthropic_sanitizes_empty_text_messages() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+
+    let input = bytes_from_json(json!({
+        "model": "gpt-4.1",
+        "input": [
+            { "type": "message", "role": "user", "content": "   " },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": "" }]
+            }
+        ]
+    }));
+
+    let output = run_async(async {
+        responses_request_to_anthropic(&input, &http_clients)
+            .await
+            .expect("transform")
+    });
+    let value = json_from_bytes(output);
+
+    let messages = value["messages"].as_array().expect("messages array");
+    assert_eq!(
+        messages[0]["content"][0]["text"],
+        json!("[System: Empty message content sanitised to satisfy protocol]")
+    );
+    assert_eq!(
+        messages[1]["content"][0]["text"],
+        json!("[System: Empty message content sanitised to satisfy protocol]")
+    );
+}
+
+#[test]
 fn responses_response_to_anthropic_maps_reasoning_items_to_thinking_blocks() {
     let input = bytes_from_json(json!({
         "id": "resp_reasoning_item",
@@ -266,6 +445,129 @@ fn responses_response_to_anthropic_maps_reasoning_items_to_thinking_blocks() {
     );
     assert_eq!(value["content"][1]["type"], json!("text"));
     assert_eq!(value["content"][1]["text"], json!("final answer"));
+}
+
+#[test]
+fn anthropic_response_to_responses_maps_thinking_blocks_to_reasoning_items() {
+    let input = bytes_from_json(json!({
+        "id": "msg_thinking",
+        "model": "claude-3-7-sonnet",
+        "content": [
+            { "type": "thinking", "thinking": "analyze first" },
+            { "type": "text", "text": "final answer" },
+            { "type": "tool_use", "id": "call_1", "name": "search", "input": { "q": "x" } }
+        ],
+        "usage": { "input_tokens": 2, "output_tokens": 4 }
+    }));
+
+    let output = anthropic_response_to_responses(&input).expect("transform");
+    let value = json_from_bytes(output);
+
+    let output_items = value["output"].as_array().expect("output array");
+    assert_eq!(output_items[0]["type"], json!("reasoning"));
+    assert_eq!(output_items[0]["status"], json!("completed"));
+    assert_eq!(
+        output_items[0]["summary"][0],
+        json!({ "type": "summary_text", "text": "analyze first" })
+    );
+    assert_eq!(output_items[1]["type"], json!("message"));
+    assert_eq!(output_items[1]["content"][0]["type"], json!("output_text"));
+    assert_eq!(output_items[1]["content"][0]["text"], json!("final answer"));
+    assert_eq!(output_items[2]["type"], json!("function_call"));
+    assert_eq!(output_items[2]["call_id"], json!("call_1"));
+    assert_eq!(output_items[2]["name"], json!("search"));
+    assert_eq!(output_items[2]["arguments"], json!("{\"q\":\"x\"}"));
+}
+
+#[test]
+fn anthropic_response_to_responses_maps_redacted_thinking_to_encrypted_reasoning() {
+    let input = bytes_from_json(json!({
+        "id": "msg_redacted",
+        "model": "claude-3-7-sonnet",
+        "content": [
+            { "type": "thinking", "thinking": "analyze first" },
+            { "type": "redacted_thinking", "data": "ENC123" },
+            { "type": "text", "text": "final answer" }
+        ],
+        "usage": { "input_tokens": 2, "output_tokens": 4 }
+    }));
+
+    let output = anthropic_response_to_responses(&input).expect("transform");
+    let value = json_from_bytes(output);
+
+    let output_items = value["output"].as_array().expect("output array");
+    assert_eq!(output_items[0]["type"], json!("reasoning"));
+    assert_eq!(
+        output_items[0]["summary"][0],
+        json!({ "type": "summary_text", "text": "analyze first" })
+    );
+    assert_eq!(output_items[0]["encrypted_content"], json!("ENC123"));
+    assert_eq!(output_items[1]["type"], json!("message"));
+    assert_eq!(output_items[1]["content"][0]["text"], json!("final answer"));
+}
+
+#[test]
+fn anthropic_response_to_responses_maps_max_tokens_to_incomplete_status() {
+    let input = bytes_from_json(json!({
+        "id": "msg_incomplete",
+        "model": "claude-3-7-sonnet",
+        "stop_reason": "max_tokens",
+        "content": [
+            { "type": "text", "text": "partial answer" }
+        ],
+        "usage": { "input_tokens": 2, "output_tokens": 4 }
+    }));
+
+    let output = anthropic_response_to_responses(&input).expect("transform");
+    let value = json_from_bytes(output);
+
+    assert_eq!(value["status"], json!("incomplete"));
+    assert_eq!(value["incomplete_details"]["reason"], json!("max_tokens"));
+    assert_eq!(value["output"][0]["type"], json!("message"));
+    assert_eq!(value["output"][0]["status"], json!("incomplete"));
+    assert_eq!(
+        value["output"][0]["content"][0]["text"],
+        json!("partial answer")
+    );
+}
+
+#[test]
+fn responses_response_to_anthropic_maps_encrypted_reasoning_to_redacted_thinking() {
+    let input = bytes_from_json(json!({
+        "id": "resp_redacted",
+        "model": "gpt-4.1",
+        "output": [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [
+                    { "type": "summary_text", "text": "first analyze then answer" }
+                ],
+                "encrypted_content": "ENC456"
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    { "type": "output_text", "text": "final answer" }
+                ]
+            }
+        ],
+        "usage": { "input_tokens": 3, "output_tokens": 5 }
+    }));
+
+    let output = responses_response_to_anthropic(&input, None).expect("transform");
+    let value = json_from_bytes(output);
+
+    assert_eq!(value["content"][0]["type"], json!("thinking"));
+    assert_eq!(
+        value["content"][0]["thinking"],
+        json!("first analyze then answer")
+    );
+    assert_eq!(value["content"][1]["type"], json!("redacted_thinking"));
+    assert_eq!(value["content"][1]["data"], json!("ENC456"));
+    assert_eq!(value["content"][2]["type"], json!("text"));
+    assert_eq!(value["content"][2]["text"], json!("final answer"));
 }
 
 #[test]

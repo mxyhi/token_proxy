@@ -17,6 +17,7 @@ pub(crate) fn chat_message_content_from_responses_parts(parts: &[Value]) -> Valu
                     output_parts.push(json!({ "type": "text", "text": text }));
                 }
             }
+            Some("output_audio") => {}
             Some("reasoning_text") => {}
             Some("refusal") => {
                 let text = part
@@ -60,6 +61,21 @@ pub(crate) fn chat_message_content_from_responses_parts(parts: &[Value]) -> Valu
     } else {
         Value::Array(output_parts)
     }
+}
+
+pub(crate) fn chat_message_audio_from_responses_parts(parts: &[Value]) -> Option<Value> {
+    for part in parts {
+        let Some(part) = part.as_object() else {
+            continue;
+        };
+        if part.get("type").and_then(Value::as_str) != Some("output_audio") {
+            continue;
+        }
+        if let Some(audio) = part.get("audio") {
+            return Some(audio.clone());
+        }
+    }
+    None
 }
 
 pub(crate) fn chat_message_non_text_parts_from_responses(parts: &[Value]) -> Vec<Value> {

@@ -46,9 +46,11 @@ struct ResponsesToChatState<S> {
     tool_calls_by_item_id: HashMap<String, usize>,
     // 非文本输出只透传一次，避免重复注入。
     content_parts_sent: bool,
+    audio_sent: bool,
     finish_reason_override: Option<&'static str>,
     saw_text_delta: bool,
     saw_reasoning_delta: bool,
+    sent_redacted_thinking: bool,
 }
 
 struct ToolCallState {
@@ -111,9 +113,11 @@ where
             tool_calls: Vec::new(),
             tool_calls_by_item_id: HashMap::new(),
             content_parts_sent: false,
+            audio_sent: false,
             finish_reason_override: None,
             saw_text_delta: false,
             saw_reasoning_delta: false,
+            sent_redacted_thinking: false,
         }
     }
 
@@ -188,7 +192,9 @@ where
             self.handle_output_text_delta(&value, token_texts);
             return;
         }
-        if event_type.ends_with("reasoning_text.delta") {
+        if event_type.ends_with("reasoning_text.delta")
+            || event_type.ends_with("reasoning_summary_text.delta")
+        {
             self.handle_reasoning_text_delta(&value, token_texts);
             return;
         }
@@ -244,7 +250,15 @@ where
             &self.chat_id,
             self.created,
             &self.model,
-            json!({ "reasoning_content": delta }),
+            json!({
+                "reasoning_content": delta,
+                "thinking_blocks": [
+                    {
+                        "type": "thinking",
+                        "thinking": delta
+                    }
+                ]
+            }),
             None,
         ));
     }
@@ -378,11 +392,36 @@ where
                 continue;
             };
             match item.get("type").and_then(Value::as_str) {
+                Some("reasoning") => self.handle_reasoning_item_snapshot(item),
                 Some("function_call") => self.handle_function_call_item_snapshot(item),
                 Some("message") => self.handle_message_item_snapshot(item),
                 _ => {}
             }
         }
+    }
+
+    fn handle_reasoning_item_snapshot(&mut self, item: &Map<String, Value>) {
+        let reasoning_text = extract_reasoning_summary(item);
+        if !self.saw_reasoning_delta && !reasoning_text.trim().is_empty() {
+            self.saw_reasoning_delta = true;
+            self.ensure_role_sent();
+            self.out.push_back(chat_chunk_sse(
+                &self.chat_id,
+                self.created,
+                &self.model,
+                json!({
+                    "reasoning_content": reasoning_text,
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": reasoning_text
+                        }
+                    ]
+                }),
+                None,
+            ));
+        }
+        self.maybe_emit_redacted_thinking(item);
     }
 
     fn handle_function_call_item_snapshot(&mut self, item: &Map<String, Value>) {
@@ -473,7 +512,29 @@ where
                     &self.chat_id,
                     self.created,
                     &self.model,
-                    json!({ "reasoning_content": reasoning_text }),
+                    json!({
+                        "reasoning_content": reasoning_text,
+                        "thinking_blocks": [
+                            {
+                                "type": "thinking",
+                                "thinking": reasoning_text
+                            }
+                        ]
+                    }),
+                    None,
+                ));
+            }
+        }
+
+        if !self.audio_sent {
+            if let Some(audio) = compat_content::chat_message_audio_from_responses_parts(parts) {
+                self.audio_sent = true;
+                self.ensure_role_sent();
+                self.out.push_back(chat_chunk_sse(
+                    &self.chat_id,
+                    self.created,
+                    &self.model,
+                    json!({ "audio": audio }),
                     None,
                 ));
             }
@@ -484,10 +545,18 @@ where
         }
         let non_text_parts = compat_content::chat_message_non_text_parts_from_responses(parts);
         let delta_content = if !non_text_parts.is_empty() {
-            Value::Array(non_text_parts)
+            Some(Value::Array(non_text_parts))
         } else if !self.saw_text_delta {
-            compat_content::chat_message_content_from_responses_parts(parts)
+            let content = compat_content::chat_message_content_from_responses_parts(parts);
+            if chat_content_is_empty(&content) {
+                None
+            } else {
+                Some(content)
+            }
         } else {
+            None
+        };
+        let Some(delta_content) = delta_content else {
             return;
         };
         self.ensure_role_sent();
@@ -499,6 +568,35 @@ where
             None,
         ));
         self.content_parts_sent = true;
+    }
+
+    fn maybe_emit_redacted_thinking(&mut self, item: &Map<String, Value>) {
+        let Some(encrypted_content) = item
+            .get("encrypted_content")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+        else {
+            return;
+        };
+        if self.sent_redacted_thinking {
+            return;
+        }
+        self.sent_redacted_thinking = true;
+        self.ensure_role_sent();
+        self.out.push_back(chat_chunk_sse(
+            &self.chat_id,
+            self.created,
+            &self.model,
+            json!({
+                "thinking_blocks": [
+                    {
+                        "type": "redacted_thinking",
+                        "data": encrypted_content
+                    }
+                ]
+            }),
+            None,
+        ));
     }
 
     fn ensure_role_sent(&mut self) {
@@ -608,6 +706,34 @@ fn extract_reasoning_text(parts: &[Value]) -> String {
         }
     }
     reasoning
+}
+
+fn extract_reasoning_summary(item: &Map<String, Value>) -> String {
+    let Some(summary) = item.get("summary").and_then(Value::as_array) else {
+        return String::new();
+    };
+    let mut reasoning = String::new();
+    for part in summary {
+        let Some(part) = part.as_object() else {
+            continue;
+        };
+        if part.get("type").and_then(Value::as_str) != Some("summary_text") {
+            continue;
+        }
+        if let Some(text) = part.get("text").and_then(Value::as_str) {
+            reasoning.push_str(text);
+        }
+    }
+    reasoning
+}
+
+fn chat_content_is_empty(content: &Value) -> bool {
+    match content {
+        Value::Null => true,
+        Value::String(text) => text.is_empty(),
+        Value::Array(parts) => parts.is_empty(),
+        _ => false,
+    }
 }
 
 fn tool_call_id(call_id: &str, item_id: &str) -> String {

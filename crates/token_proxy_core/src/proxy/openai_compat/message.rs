@@ -71,7 +71,7 @@ pub(super) fn chat_content_to_responses_message_parts(
                 };
                 let part_type = part.get("type").and_then(Value::as_str).unwrap_or("");
                 match part_type {
-                    "text" | "input_text" => {
+                    "text" | "input_text" | "output_text" => {
                         if let Some(text) = extract_text_from_part(part) {
                             out.push(json!({ "type": text_part_type, "text": text }));
                         }
@@ -93,6 +93,18 @@ pub(super) fn chat_content_to_responses_message_parts(
                         if let Some(image_url) = part.get("image_url") {
                             out.push(
                                 json!({ "type": "input_image", "image_url": image_url.clone() }),
+                            );
+                        }
+                    }
+                    "input_file" => {
+                        if let Some(file_url) = part.get("file_url") {
+                            out.push(json!({ "type": "input_file", "file_url": file_url.clone() }));
+                        }
+                    }
+                    "input_audio" => {
+                        if let Some(audio) = part.get("input_audio") {
+                            out.push(
+                                json!({ "type": "input_audio", "input_audio": audio.clone() }),
                             );
                         }
                     }

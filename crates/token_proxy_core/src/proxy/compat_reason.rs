@@ -54,6 +54,17 @@ pub(crate) fn anthropic_stop_reason_from_chat_finish_reason(reason: &str) -> &'s
     }
 }
 
+pub(crate) fn responses_status_from_anthropic_stop_reason(
+    stop_reason: Option<&str>,
+) -> (Option<&'static str>, Option<&'static str>) {
+    let finish_reason = match stop_reason {
+        Some("max_tokens") => Some("length"),
+        Some("refusal") => Some("content_filter"),
+        _ => None,
+    };
+    responses_status_from_chat_finish_reason(finish_reason)
+}
+
 fn map_responses_reason_to_chat_finish_reason(reason: &str) -> &'static str {
     match reason {
         "max_output_tokens" | "max_tokens" => "length",

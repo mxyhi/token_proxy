@@ -371,6 +371,112 @@ fn responses_response_to_chat_maps_reasoning_content() {
 }
 
 #[test]
+fn responses_response_to_chat_maps_reasoning_summary_and_annotations() {
+    let input = bytes_from_json(json!({
+        "id": "resp_reason_summary",
+        "created_at": 1700000003,
+        "model": "gpt-4.1",
+        "output": [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [
+                    { "type": "summary_text", "text": "analyze first" }
+                ]
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "done",
+                        "annotations": [
+                            {
+                                "type": "url_citation",
+                                "url": "https://example.com",
+                                "title": "Example",
+                                "start_index": 0,
+                                "end_index": 4
+                            }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }));
+
+    let output =
+        transform_response_body(FormatTransform::ResponsesToChat, &input, None).expect("transform");
+    let value = json_from_bytes(output);
+
+    let message = &value["choices"][0]["message"];
+    assert_eq!(message["content"], json!("done"));
+    assert_eq!(message["reasoning_content"], json!("analyze first"));
+    assert_eq!(message["annotations"][0]["type"], json!("url_citation"));
+    assert_eq!(
+        message["annotations"][0]["url"],
+        json!("https://example.com")
+    );
+}
+
+#[test]
+fn responses_response_to_chat_maps_output_audio_and_thinking_blocks() {
+    let input = bytes_from_json(json!({
+        "id": "resp_audio_reasoning",
+        "created_at": 1700000004,
+        "model": "gpt-4.1",
+        "output": [
+            {
+                "id": "rs_1",
+                "type": "reasoning",
+                "summary": [
+                    { "type": "summary_text", "text": "analyze first" }
+                ],
+                "encrypted_content": "ENC123"
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_audio",
+                        "audio": {
+                            "data": "UklGRg==",
+                            "transcript": "spoken"
+                        }
+                    },
+                    {
+                        "type": "output_text",
+                        "text": "final answer",
+                        "annotations": []
+                    }
+                ]
+            }
+        ]
+    }));
+
+    let output =
+        transform_response_body(FormatTransform::ResponsesToChat, &input, None).expect("transform");
+    let value = json_from_bytes(output);
+
+    let message = &value["choices"][0]["message"];
+    assert_eq!(message["content"], json!("final answer"));
+    assert_eq!(message["audio"]["data"], json!("UklGRg=="));
+    assert_eq!(message["audio"]["transcript"], json!("spoken"));
+    assert_eq!(message["reasoning_content"], json!("analyze first"));
+    assert_eq!(message["thinking_blocks"][0]["type"], json!("thinking"));
+    assert_eq!(
+        message["thinking_blocks"][0]["thinking"],
+        json!("analyze first")
+    );
+    assert_eq!(
+        message["thinking_blocks"][1],
+        json!({ "type": "redacted_thinking", "data": "ENC123" })
+    );
+}
+
+#[test]
 fn responses_response_to_chat_includes_tool_calls_and_multimodal_content() {
     let input = bytes_from_json(json!({
         "id": "resp_456",
@@ -421,6 +527,69 @@ fn responses_response_to_chat_includes_tool_calls_and_multimodal_content() {
 }
 
 #[test]
+fn chat_response_to_responses_maps_audio_and_thinking_blocks() {
+    let input = bytes_from_json(json!({
+        "id": "chatcmpl_audio_reasoning",
+        "created": 1700000005,
+        "model": "gpt-4.1",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "final answer",
+                    "audio": {
+                        "data": "UklGRg==",
+                        "transcript": "spoken"
+                    },
+                    "thinking_blocks": [
+                        {
+                            "type": "thinking",
+                            "thinking": "analyze first",
+                            "signature": "sig_1"
+                        },
+                        {
+                            "type": "redacted_thinking",
+                            "data": "ENC123"
+                        }
+                    ]
+                }
+            }
+        ]
+    }));
+
+    let output =
+        transform_response_body(FormatTransform::ChatToResponses, &input, None).expect("transform");
+    let value = json_from_bytes(output);
+
+    assert_eq!(value["output"][0]["type"], json!("reasoning"));
+    assert_eq!(
+        value["output"][0]["summary"][0]["text"],
+        json!("analyze first")
+    );
+    assert_eq!(value["output"][0]["encrypted_content"], json!("ENC123"));
+    assert_eq!(value["output"][1]["type"], json!("message"));
+    assert_eq!(
+        value["output"][1]["content"][0],
+        json!({
+            "type": "output_text",
+            "text": "final answer",
+            "annotations": []
+        })
+    );
+    assert_eq!(
+        value["output"][1]["content"][1],
+        json!({
+            "type": "output_audio",
+            "audio": {
+                "data": "UklGRg==",
+                "transcript": "spoken"
+            }
+        })
+    );
+}
+
+#[test]
 fn chat_response_to_responses_extracts_choice_text_and_maps_usage() {
     let input = bytes_from_json(json!({
         "id": "chatcmpl_123",
@@ -458,6 +627,54 @@ fn chat_response_to_responses_extracts_choice_text_and_maps_usage() {
     assert_eq!(
         value["usage"]["output_tokens_details"]["reasoning_tokens"],
         json!(5)
+    );
+}
+
+#[test]
+fn chat_response_to_responses_preserves_reasoning_and_annotations() {
+    let input = bytes_from_json(json!({
+        "id": "chatcmpl_reasoning",
+        "created": 1700000001,
+        "model": "gpt-4.1",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello",
+                    "reasoning_content": "think before answer",
+                    "annotations": [
+                        {
+                            "type": "url_citation",
+                            "url": "https://example.com",
+                            "title": "Example",
+                            "start_index": 0,
+                            "end_index": 5
+                        }
+                    ]
+                }
+            }
+        ]
+    }));
+
+    let output =
+        transform_response_body(FormatTransform::ChatToResponses, &input, None).expect("transform");
+    let value = json_from_bytes(output);
+
+    assert_eq!(value["output"][0]["type"], json!("reasoning"));
+    assert_eq!(
+        value["output"][0]["summary"][0]["text"],
+        json!("think before answer")
+    );
+    assert_eq!(value["output"][1]["type"], json!("message"));
+    assert_eq!(
+        value["output"][1]["content"][0]["type"],
+        json!("output_text")
+    );
+    assert_eq!(value["output"][1]["content"][0]["text"], json!("Hello"));
+    assert_eq!(
+        value["output"][1]["content"][0]["annotations"][0]["type"],
+        json!("url_citation")
     );
 }
 

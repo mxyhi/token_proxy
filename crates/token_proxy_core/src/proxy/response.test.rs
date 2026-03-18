@@ -491,6 +491,151 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
 }
 
 #[test]
+fn stream_chat_to_responses_preserves_reasoning_and_audio_in_completed_response() {
+    run_async(async {
+        let sqlite_pool = create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
+        let context = LogContext {
+            path: "/v1/chat/completions".to_string(),
+            provider: "openai".to_string(),
+            upstream_id: "unit-test".to_string(),
+            model: Some("unit-model".to_string()),
+            mapped_model: Some("unit-model".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"analyze first\"}}]}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{\"audio\":{\"data\":\"UklGRg==\",\"transcript\":\"spoken\"}}}]}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"final answer\"}}]}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let token_tracker = super::super::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let chunks: Vec<Bytes> =
+            stream_chat_to_responses(upstream, context, log.clone(), token_tracker)
+                .map(|item| item.expect("stream item"))
+                .collect()
+                .await;
+
+        let payloads = chunks.iter().filter_map(parse_sse_json).collect::<Vec<_>>();
+
+        assert!(
+            payloads.iter().any(|payload| {
+                payload["type"] == json!("response.reasoning_summary_text.delta")
+                    && payload["delta"] == json!("analyze first")
+            }),
+            "missing reasoning summary delta"
+        );
+
+        let completed = payloads
+            .iter()
+            .find(|payload| payload["type"] == json!("response.completed"))
+            .expect("completed response");
+        assert_eq!(
+            completed["response"]["output"][0]["type"],
+            json!("reasoning")
+        );
+        assert_eq!(
+            completed["response"]["output"][0]["summary"][0]["text"],
+            json!("analyze first")
+        );
+        assert_eq!(completed["response"]["output"][1]["type"], json!("message"));
+        assert_eq!(
+            completed["response"]["output"][1]["content"][0]["text"],
+            json!("final answer")
+        );
+        assert_eq!(
+            completed["response"]["output"][1]["content"][1]["type"],
+            json!("output_audio")
+        );
+        assert_eq!(
+            completed["response"]["output"][1]["content"][1]["audio"]["data"],
+            json!("UklGRg==")
+        );
+    });
+}
+
+#[test]
+fn stream_chat_to_responses_preserves_thinking_blocks_with_encrypted_content() {
+    run_async(async {
+        let sqlite_pool = create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
+        let context = LogContext {
+            path: "/v1/chat/completions".to_string(),
+            provider: "openai".to_string(),
+            upstream_id: "unit-test".to_string(),
+            model: Some("unit-model".to_string()),
+            mapped_model: Some("unit-model".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            start: Instant::now(),
+        };
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{\"thinking_blocks\":[{\"type\":\"thinking\",\"thinking\":\"analyze first\"},{\"type\":\"redacted_thinking\",\"data\":\"ENC_STREAM\"}]}}]}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+
+        let token_tracker = super::super::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let chunks: Vec<Bytes> =
+            stream_chat_to_responses(upstream, context, log.clone(), token_tracker)
+                .map(|item| item.expect("stream item"))
+                .collect()
+                .await;
+
+        let payloads = chunks.iter().filter_map(parse_sse_json).collect::<Vec<_>>();
+
+        assert!(
+            payloads.iter().any(|payload| {
+                payload["type"] == json!("response.reasoning_summary_text.delta")
+                    && payload["delta"] == json!("analyze first")
+            }),
+            "missing reasoning summary delta from thinking block"
+        );
+
+        let completed = payloads
+            .iter()
+            .find(|payload| payload["type"] == json!("response.completed"))
+            .expect("completed response");
+        assert_eq!(
+            completed["response"]["output"][0]["type"],
+            json!("reasoning")
+        );
+        assert_eq!(
+            completed["response"]["output"][0]["summary"][0]["text"],
+            json!("analyze first")
+        );
+        assert_eq!(
+            completed["response"]["output"][0]["encrypted_content"],
+            json!("ENC_STREAM")
+        );
+    });
+}
+
+#[test]
 fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_completed_response() {
     run_async(async {
         let sqlite_pool = create_test_sqlite_pool().await;

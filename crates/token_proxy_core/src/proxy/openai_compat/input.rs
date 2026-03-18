@@ -145,8 +145,20 @@ fn responses_message_content_to_chat_content(value: &Value) -> Option<Value> {
                         output_parts.push(json!({ "type": "image_url", "image_url": image_url }));
                     }
                     Some("input_file") => {
-                        // Chat Completions doesn't have a standardized file/document part; skip for now.
                         text_only = false;
+                        if let Some(file_url) = part.get("file_url") {
+                            output_parts.push(
+                                json!({ "type": "input_file", "file_url": file_url.clone() }),
+                            );
+                        }
+                    }
+                    Some("input_audio") => {
+                        text_only = false;
+                        if let Some(audio) = part.get("input_audio") {
+                            output_parts.push(
+                                json!({ "type": "input_audio", "input_audio": audio.clone() }),
+                            );
+                        }
                     }
                     _ => continue,
                 }

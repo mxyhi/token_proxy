@@ -29,7 +29,7 @@ fn cooled_upstream_moves_behind_ready_candidates() {
 
     selector.mark_cooldown_until("responses", "a", Instant::now() + Duration::from_secs(10));
 
-    let order = selector.order_group(UpstreamStrategy::PriorityFillFirst, "responses", &items, 0);
+    let order = selector.order_group(UpstreamOrderStrategy::FillFirst, "responses", &items, 0);
 
     assert_eq!(order, vec![1, 2, 0]);
 }
@@ -43,7 +43,7 @@ fn all_cooled_upstreams_probe_earliest_expiry_first() {
     selector.mark_cooldown_until("responses", "b", Instant::now() + Duration::from_secs(5));
     selector.mark_cooldown_until("responses", "c", Instant::now() + Duration::from_secs(10));
 
-    let order = selector.order_group(UpstreamStrategy::PriorityFillFirst, "responses", &items, 0);
+    let order = selector.order_group(UpstreamOrderStrategy::FillFirst, "responses", &items, 0);
 
     assert_eq!(order, vec![1, 2, 0]);
 }
@@ -56,7 +56,7 @@ fn clear_cooldown_restores_base_order() {
     selector.mark_cooldown_until("responses", "a", Instant::now() + Duration::from_secs(10));
     selector.clear_cooldown("responses", "a");
 
-    let order = selector.order_group(UpstreamStrategy::PriorityFillFirst, "responses", &items, 0);
+    let order = selector.order_group(UpstreamOrderStrategy::FillFirst, "responses", &items, 0);
 
     assert_eq!(order, vec![0, 1]);
 }
@@ -68,7 +68,7 @@ fn zero_retryable_failure_cooldown_disables_cross_request_cooling() {
 
     selector.mark_retryable_failure("responses", "a");
 
-    let order = selector.order_group(UpstreamStrategy::PriorityFillFirst, "responses", &items, 0);
+    let order = selector.order_group(UpstreamOrderStrategy::FillFirst, "responses", &items, 0);
 
     assert_eq!(order, vec![0, 1]);
 }
@@ -80,7 +80,7 @@ fn extreme_retryable_failure_cooldown_does_not_panic() {
 
     let result = std::panic::catch_unwind(|| {
         selector.mark_retryable_failure("responses", "a");
-        selector.order_group(UpstreamStrategy::PriorityFillFirst, "responses", &items, 0)
+        selector.order_group(UpstreamOrderStrategy::FillFirst, "responses", &items, 0)
     });
 
     assert!(result.is_ok());
@@ -93,7 +93,7 @@ fn cooldown_distinguishes_runtime_items_with_same_logical_upstream_id() {
 
     selector.mark_retryable_failure("responses", "shared#1");
 
-    let order = selector.order_group(UpstreamStrategy::PriorityFillFirst, "responses", &items, 0);
+    let order = selector.order_group(UpstreamOrderStrategy::FillFirst, "responses", &items, 0);
 
     assert_eq!(order, vec![1, 0]);
 }

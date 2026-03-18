@@ -155,11 +155,22 @@ describe("config/form", () => {
         enabled: true,
         format: "split",
       },
-      upstream_strategy: "priority_fill_first",
+      upstream_strategy: {
+        order: "fill_first",
+        dispatch: {
+          type: "serial",
+        },
+      },
     });
 
     expect(form.upstreamNoDataTimeoutSecs).toBe("120");
     expect(form.upstreams[0]?.apiKeys).toBe("key-a, key-b");
+    expect(form.upstreamStrategy).toEqual({
+      order: "fill_first",
+      dispatchType: "serial",
+      hedgeDelayMs: "2000",
+      maxParallel: "2",
+    });
   });
 
   it("serializes upstream no data timeout seconds", () => {
@@ -169,6 +180,86 @@ describe("config/form", () => {
     });
 
     expect(payload.upstream_no_data_timeout_secs).toBe(45);
+  });
+
+  it("serializes structured upstream strategy", () => {
+    const payload = toPayload({
+      ...EMPTY_FORM,
+      upstreamStrategy: {
+        order: "round_robin",
+        dispatchType: "hedged",
+        hedgeDelayMs: "1500",
+        maxParallel: "3",
+      },
+    });
+
+    expect(payload.upstream_strategy).toEqual({
+      order: "round_robin",
+      dispatch: {
+        type: "hedged",
+        delay_ms: 1500,
+        max_parallel: 3,
+      },
+    });
+  });
+
+  it("validates hedged delay as positive integer", () => {
+    expect(
+      validate({
+        ...EMPTY_FORM,
+        upstreamStrategy: {
+          ...EMPTY_FORM.upstreamStrategy,
+          dispatchType: "hedged",
+          hedgeDelayMs: "0",
+        },
+      }).valid
+    ).toBe(false);
+
+    expect(
+      validate({
+        ...EMPTY_FORM,
+        upstreamStrategy: {
+          ...EMPTY_FORM.upstreamStrategy,
+          dispatchType: "hedged",
+          hedgeDelayMs: "1",
+        },
+      }).valid
+    ).toBe(true);
+  });
+
+  it("validates race and hedged max parallel as integer >= 2", () => {
+    expect(
+      validate({
+        ...EMPTY_FORM,
+        upstreamStrategy: {
+          ...EMPTY_FORM.upstreamStrategy,
+          dispatchType: "hedged",
+          maxParallel: "1",
+        },
+      }).valid
+    ).toBe(false);
+
+    expect(
+      validate({
+        ...EMPTY_FORM,
+        upstreamStrategy: {
+          ...EMPTY_FORM.upstreamStrategy,
+          dispatchType: "race",
+          maxParallel: "1",
+        },
+      }).valid
+    ).toBe(false);
+
+    expect(
+      validate({
+        ...EMPTY_FORM,
+        upstreamStrategy: {
+          ...EMPTY_FORM.upstreamStrategy,
+          dispatchType: "race",
+          maxParallel: "2",
+        },
+      }).valid
+    ).toBe(true);
   });
 
   it("serializes openai compatibility upstream flags", () => {

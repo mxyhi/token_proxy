@@ -85,17 +85,39 @@ impl InboundApiFormat {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum UpstreamStrategy {
-    PriorityRoundRobin,
-    PriorityFillFirst,
+pub enum UpstreamOrderStrategy {
+    FillFirst,
+    RoundRobin,
 }
 
-impl Default for UpstreamStrategy {
+impl Default for UpstreamOrderStrategy {
     fn default() -> Self {
-        Self::PriorityFillFirst
+        Self::FillFirst
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UpstreamDispatchStrategy {
+    #[default]
+    Serial,
+    Hedged {
+        delay_ms: u64,
+        max_parallel: u64,
+    },
+    Race {
+        max_parallel: u64,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct UpstreamStrategy {
+    #[serde(default)]
+    pub order: UpstreamOrderStrategy,
+    #[serde(default)]
+    pub dispatch: UpstreamDispatchStrategy,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -240,10 +262,38 @@ impl Default for ProxyConfigFile {
             retryable_failure_cooldown_secs: default_retryable_failure_cooldown_secs(),
             upstream_no_data_timeout_secs: default_upstream_no_data_timeout_secs(),
             tray_token_rate: TrayTokenRateConfig::default(),
-            upstream_strategy: UpstreamStrategy::PriorityFillFirst,
+            upstream_strategy: UpstreamStrategy::default(),
             upstreams: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpstreamStrategyRuntime {
+    pub order: UpstreamOrderStrategy,
+    pub dispatch: UpstreamDispatchRuntime,
+}
+
+impl Default for UpstreamStrategyRuntime {
+    fn default() -> Self {
+        Self {
+            order: UpstreamOrderStrategy::default(),
+            dispatch: UpstreamDispatchRuntime::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum UpstreamDispatchRuntime {
+    #[default]
+    Serial,
+    Hedged {
+        delay: std::time::Duration,
+        max_parallel: usize,
+    },
+    Race {
+        max_parallel: usize,
+    },
 }
 
 #[derive(Clone)]
@@ -255,7 +305,7 @@ pub struct ProxyConfig {
     pub max_request_body_bytes: usize,
     pub retryable_failure_cooldown: std::time::Duration,
     pub upstream_no_data_timeout: std::time::Duration,
-    pub upstream_strategy: UpstreamStrategy,
+    pub upstream_strategy: UpstreamStrategyRuntime,
     pub upstreams: HashMap<String, ProviderUpstreams>,
     pub kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
     pub antigravity_user_agent: Option<String>,

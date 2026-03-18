@@ -236,6 +236,7 @@ fn resolve_anthropic_plan(
             inbound_format,
             &[
                 PROVIDER_RESPONSES,
+                PROVIDER_CODEX,
                 PROVIDER_CHAT,
                 PROVIDER_GEMINI,
                 PROVIDER_ANTIGRAVITY,
@@ -250,6 +251,12 @@ fn resolve_anthropic_plan(
                 outbound_path: Some(RESPONSES_PATH),
                 request_transform: FormatTransform::AnthropicToResponses,
                 response_transform: FormatTransform::ResponsesToAnthropic,
+            },
+            PROVIDER_CODEX => DispatchPlan {
+                provider: PROVIDER_CODEX,
+                outbound_path: Some(CODEX_RESPONSES_PATH),
+                request_transform: FormatTransform::AnthropicToCodex,
+                response_transform: FormatTransform::CodexToAnthropic,
             },
             PROVIDER_CHAT => DispatchPlan {
                 provider: PROVIDER_CHAT,
@@ -545,6 +552,18 @@ fn build_retry_fallback_plan(path: &str, provider: &'static str) -> Option<Dispa
                 request_transform: FormatTransform::None,
                 response_transform: FormatTransform::KiroToAnthropic,
             },
+            PROVIDER_RESPONSES => DispatchPlan {
+                provider: PROVIDER_RESPONSES,
+                outbound_path: Some(RESPONSES_PATH),
+                request_transform: FormatTransform::AnthropicToResponses,
+                response_transform: FormatTransform::ResponsesToAnthropic,
+            },
+            PROVIDER_CODEX => DispatchPlan {
+                provider: PROVIDER_CODEX,
+                outbound_path: Some(CODEX_RESPONSES_PATH),
+                request_transform: FormatTransform::AnthropicToCodex,
+                response_transform: FormatTransform::CodexToAnthropic,
+            },
             _ => return None,
         });
     }
@@ -587,6 +606,8 @@ fn resolve_retry_fallback_provider(
         let fallback = match primary_provider {
             PROVIDER_ANTHROPIC => PROVIDER_KIRO,
             PROVIDER_KIRO => PROVIDER_ANTHROPIC,
+            PROVIDER_RESPONSES => PROVIDER_CODEX,
+            PROVIDER_CODEX => PROVIDER_RESPONSES,
             _ => return None,
         };
         return Some((fallback, Some(InboundApiFormat::AnthropicMessages)));

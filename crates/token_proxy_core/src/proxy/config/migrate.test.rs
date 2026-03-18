@@ -141,3 +141,53 @@ fn migrate_api_key_to_api_keys() {
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].as_str(), Some("key-1"));
 }
+
+#[test]
+fn migrate_legacy_upstream_strategy_string_to_structured_fill_first_serial() {
+    let mut value = parse_json(
+        r#"
+        {
+          "host": "127.0.0.1",
+          "port": 9208,
+          "upstream_strategy": "priority_fill_first",
+          "upstreams": []
+        }
+        "#,
+    );
+
+    let changed = migrate_config_json(&mut value);
+    assert!(changed);
+
+    assert_eq!(
+        value["upstream_strategy"],
+        serde_json::json!({
+            "order": "fill_first",
+            "dispatch": { "type": "serial" }
+        })
+    );
+}
+
+#[test]
+fn migrate_legacy_upstream_strategy_string_to_structured_round_robin_serial() {
+    let mut value = parse_json(
+        r#"
+        {
+          "host": "127.0.0.1",
+          "port": 9208,
+          "upstream_strategy": "priority_round_robin",
+          "upstreams": []
+        }
+        "#,
+    );
+
+    let changed = migrate_config_json(&mut value);
+    assert!(changed);
+
+    assert_eq!(
+        value["upstream_strategy"],
+        serde_json::json!({
+            "order": "round_robin",
+            "dispatch": { "type": "serial" }
+        })
+    );
+}

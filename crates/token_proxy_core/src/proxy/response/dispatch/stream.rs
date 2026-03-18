@@ -271,6 +271,9 @@ fn stream_for_composed_transform(
         FormatTransform::GeminiToResponses => {
             stream_gemini_to_responses(upstream, context, log, request_tracker)
         }
+        FormatTransform::CodexToAnthropic => {
+            stream_codex_to_anthropic(upstream, context, log, request_tracker)
+        }
         _ => streaming::stream_with_logging(upstream, context, log, request_tracker).boxed(),
     }
 }
@@ -316,6 +319,30 @@ fn stream_anthropic_to_chat(
     .boxed();
     responses_to_chat::stream_responses_to_chat(responses_stream, context, log, request_tracker)
         .boxed()
+}
+
+fn stream_codex_to_anthropic(
+    upstream: UpstreamBytesStream,
+    context: LogContext,
+    log: Arc<LogWriter>,
+    request_tracker: RequestTokenTracker,
+) -> ResponseStream {
+    let intermediate_log = Arc::new(LogWriter::new(None));
+    let intermediate_tracker = RequestTokenTracker::disabled();
+    let responses_stream = codex_compat::stream_codex_to_responses(
+        upstream,
+        context.clone(),
+        intermediate_log,
+        intermediate_tracker,
+    )
+    .boxed();
+    responses_to_anthropic::stream_responses_to_anthropic(
+        responses_stream,
+        context,
+        log,
+        request_tracker,
+    )
+    .boxed()
 }
 
 fn stream_gemini_to_anthropic(

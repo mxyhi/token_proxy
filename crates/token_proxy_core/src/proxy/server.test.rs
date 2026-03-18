@@ -22,8 +22,8 @@ use tokio::{runtime::Runtime, sync::RwLock, task::JoinHandle};
 use crate::logging::LogLevel;
 use crate::paths::TokenProxyPaths;
 use crate::proxy::config::{
-    InboundApiFormat, ProviderUpstreams, ProxyConfig, UpstreamGroup, UpstreamRuntime,
-    UpstreamStrategy,
+    InboundApiFormat, ProviderUpstreams, ProxyConfig, UpstreamDispatchRuntime, UpstreamGroup,
+    UpstreamOrderStrategy, UpstreamRuntime, UpstreamStrategyRuntime,
 };
 
 const FORMATS_ALL: &[InboundApiFormat] = &[
@@ -127,7 +127,10 @@ fn config_with_runtime_upstreams(
         max_request_body_bytes: 20 * 1024 * 1024,
         retryable_failure_cooldown: std::time::Duration::from_secs(15),
         upstream_no_data_timeout: std::time::Duration::from_secs(120),
-        upstream_strategy: UpstreamStrategy::PriorityRoundRobin,
+        upstream_strategy: UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::RoundRobin,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        },
         upstreams: provider_map,
         kiro_preferred_endpoint: None,
         antigravity_user_agent: None,
@@ -144,6 +147,7 @@ struct RecordedRequest {
 struct MockUpstreamState {
     status: StatusCode,
     body: Value,
+    delay_ms: u64,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
@@ -178,6 +182,9 @@ async fn mock_upstream_handler(
             path: uri.path().to_string(),
             body: json_body,
         });
+    if state.delay_ms > 0 {
+        tokio::time::sleep(std::time::Duration::from_millis(state.delay_ms)).await;
+    }
     (
         state.status,
         [(axum::http::header::CONTENT_TYPE, "application/json")],
@@ -187,10 +194,19 @@ async fn mock_upstream_handler(
 }
 
 async fn spawn_mock_upstream(status: StatusCode, body: Value) -> MockUpstream {
+    spawn_mock_upstream_with_delay(status, body, 0).await
+}
+
+async fn spawn_mock_upstream_with_delay(
+    status: StatusCode,
+    body: Value,
+    delay_ms: u64,
+) -> MockUpstream {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let state = Arc::new(MockUpstreamState {
         status,
         body,
+        delay_ms,
         requests: requests.clone(),
     });
     let app = Router::new()
@@ -210,6 +226,195 @@ async fn spawn_mock_upstream(status: StatusCode, body: Value) -> MockUpstream {
         requests,
         task,
     }
+}
+
+#[test]
+fn responses_request_hedged_delay_prefers_faster_same_priority_upstream() {
+    run_async(async {
+        let slow_primary = spawn_mock_upstream_with_delay(
+            StatusCode::OK,
+            json!({
+                "id": "resp_from_slow_primary",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from slow primary" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+            300,
+        )
+        .await;
+        let fast_secondary = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_from_fast_secondary",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from fast secondary" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+        )
+        .await;
+
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-primary",
+                slow_primary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-secondary",
+                fast_secondary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Hedged {
+                delay: std::time::Duration::from_millis(50),
+                max_parallel: 2,
+            },
+        };
+
+        let data_dir = next_test_data_dir("responses_hedged_request");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+
+        let (status, json) = send_responses_request(state).await;
+        let primary_requests = slow_primary.requests();
+        let secondary_requests = fast_secondary.requests();
+
+        slow_primary.abort();
+        fast_secondary.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["output"][0]["content"][0]["text"].as_str(),
+            Some("from fast secondary")
+        );
+        assert_eq!(primary_requests.len(), 1);
+        assert_eq!(secondary_requests.len(), 1);
+    });
+}
+
+#[test]
+fn responses_request_race_prefers_faster_same_priority_upstream() {
+    run_async(async {
+        let slow_primary = spawn_mock_upstream_with_delay(
+            StatusCode::OK,
+            json!({
+                "id": "resp_from_slow_primary",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from slow primary" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+            300,
+        )
+        .await;
+        let fast_secondary = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_from_fast_secondary",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from fast secondary" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+        )
+        .await;
+
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-primary",
+                slow_primary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-secondary",
+                fast_secondary.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::RoundRobin,
+            dispatch: UpstreamDispatchRuntime::Race { max_parallel: 2 },
+        };
+
+        let data_dir = next_test_data_dir("responses_race_request");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+
+        let (status, json) = send_responses_request(state).await;
+        let primary_requests = slow_primary.requests();
+        let secondary_requests = fast_secondary.requests();
+
+        slow_primary.abort();
+        fast_secondary.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["output"][0]["content"][0]["text"].as_str(),
+            Some("from fast secondary")
+        );
+        assert_eq!(primary_requests.len(), 1);
+        assert_eq!(secondary_requests.len(), 1);
+    });
 }
 
 fn next_test_data_dir(label: &str) -> PathBuf {
@@ -410,6 +615,42 @@ async fn send_responses_request(state: ProxyStateHandle) -> (StatusCode, Value) 
     (status, json)
 }
 
+async fn send_anthropic_messages_request(
+    state: ProxyStateHandle,
+    stream: bool,
+) -> (StatusCode, Value) {
+    let response = proxy_request(
+        State(state),
+        Method::POST,
+        Uri::from_static("/v1/messages"),
+        axum::http::HeaderMap::new(),
+        Body::from(
+            json!({
+                "model": "claude-sonnet-4-5",
+                "max_tokens": 64,
+                "stream": stream,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            { "type": "text", "text": "hi from claude" }
+                        ]
+                    }
+                ]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("proxy response bytes");
+    let json = serde_json::from_slice(&body).expect("proxy response json");
+    (status, json)
+}
+
 #[test]
 fn responses_request_uses_chat_compat_for_coding_plan_runtime_upstream() {
     run_async(async {
@@ -552,6 +793,141 @@ fn responses_request_falls_back_from_524_to_codex() {
 }
 
 #[test]
+fn anthropic_messages_request_routes_to_codex() {
+    run_async(async {
+        let codex = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_from_codex",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5-codex",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from codex for claude" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+        )
+        .await;
+
+        let config = config_with_runtime_upstreams(&[(
+            PROVIDER_CODEX,
+            10,
+            "codex-primary",
+            codex.base_url.as_str(),
+            FORMATS_ALL,
+        )]);
+        let data_dir = next_test_data_dir("anthropic_messages_codex_direct");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+
+        let (status, json) = send_anthropic_messages_request(state, false).await;
+        let requests = codex.requests();
+
+        codex.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["type"], json!("message"));
+        assert_eq!(json["role"], json!("assistant"));
+        assert_eq!(json["content"][0]["type"], json!("text"));
+        assert_eq!(json["content"][0]["text"], json!("from codex for claude"));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, CODEX_RESPONSES_PATH);
+        assert_eq!(requests[0].body["input"][0]["role"].as_str(), Some("user"));
+        assert_eq!(
+            requests[0].body["input"][0]["content"][0]["type"].as_str(),
+            Some("input_text")
+        );
+        assert_eq!(
+            requests[0].body["input"][0]["content"][0]["text"].as_str(),
+            Some("hi from claude")
+        );
+    });
+}
+
+#[test]
+fn anthropic_messages_request_falls_back_from_responses_to_codex() {
+    run_async(async {
+        let responses = spawn_mock_upstream(
+            StatusCode::BAD_REQUEST,
+            json!({
+                "error": { "message": "responses upstream rejected request" }
+            }),
+        )
+        .await;
+        let codex = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_from_codex",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5-codex",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "fallback from codex for claude" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+        )
+        .await;
+
+        let config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "responses-primary",
+                responses.base_url.as_str(),
+                FORMATS_ALL,
+            ),
+            (
+                PROVIDER_CODEX,
+                5,
+                "codex-fallback",
+                codex.base_url.as_str(),
+                FORMATS_ALL,
+            ),
+        ]);
+        let data_dir = next_test_data_dir("anthropic_messages_responses_to_codex_fallback");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+
+        let (status, json) = send_anthropic_messages_request(state, false).await;
+        let responses_requests = responses.requests();
+        let codex_requests = codex.requests();
+
+        responses.abort();
+        codex.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["content"][0]["text"].as_str(),
+            Some("fallback from codex for claude")
+        );
+        assert_eq!(responses_requests.len(), 1);
+        assert_eq!(responses_requests[0].path, RESPONSES_PATH);
+        assert_eq!(codex_requests.len(), 1);
+        assert_eq!(codex_requests[0].path, CODEX_RESPONSES_PATH);
+    });
+}
+
+#[test]
 fn responses_request_skips_recently_failed_same_provider_upstream() {
     run_async(async {
         let primary = spawn_mock_upstream(
@@ -601,7 +977,10 @@ fn responses_request_skips_recently_failed_same_provider_upstream() {
                 FORMATS_RESPONSES,
             ),
         ]);
-        config.upstream_strategy = UpstreamStrategy::PriorityFillFirst;
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
 
         let data_dir = next_test_data_dir("responses_same_provider_cooldown");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -685,7 +1064,10 @@ fn responses_request_cooldowns_same_provider_upstream_after_401() {
                 FORMATS_RESPONSES,
             ),
         ]);
-        config.upstream_strategy = UpstreamStrategy::PriorityFillFirst;
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
 
         let data_dir = next_test_data_dir("responses_same_provider_cooldown_401");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -769,7 +1151,10 @@ fn responses_request_does_not_cooldown_same_provider_upstream_after_400() {
                 FORMATS_RESPONSES,
             ),
         ]);
-        config.upstream_strategy = UpstreamStrategy::PriorityFillFirst;
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
 
         let data_dir = next_test_data_dir("responses_same_provider_no_cooldown_400");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -853,7 +1238,10 @@ fn responses_request_reload_resets_existing_cooldown_and_applies_new_duration() 
                 FORMATS_RESPONSES,
             ),
         ]);
-        config.upstream_strategy = UpstreamStrategy::PriorityFillFirst;
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
         config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
 
         let data_dir = next_test_data_dir("responses_same_provider_reload_resets_cooldown");

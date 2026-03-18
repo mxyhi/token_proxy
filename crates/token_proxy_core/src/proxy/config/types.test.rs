@@ -196,3 +196,17 @@ fn proxy_config_file_defaults_retryable_failure_cooldown_to_15_seconds() {
 
     assert_eq!(config.retryable_failure_cooldown_secs, 15);
 }
+
+#[test]
+fn proxy_config_file_defaults_upstream_strategy_to_fill_first_serial() {
+    let config = ProxyConfigFile::default();
+
+    assert_eq!(
+        config.upstream_strategy.order,
+        UpstreamOrderStrategy::FillFirst
+    );
+    assert_eq!(
+        config.upstream_strategy.dispatch,
+        UpstreamDispatchStrategy::Serial
+    );
+}

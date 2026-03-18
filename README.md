@@ -103,7 +103,7 @@ Notes:
 | `retryable_failure_cooldown_secs` | `15` | Cooldown window after retryable failures that should temporarily sideline an upstream. `0` disables cooldown. Reloading or restarting the running proxy resets current cooldown state. |
 | `tray_token_rate.enabled` | `true` | macOS tray live rate; harmless elsewhere. |
 | `tray_token_rate.format` | `split` | `combined` (`total`), `split` (`↑in ↓out`), `both` (`total | ↑in ↓out`). |
-| `upstream_strategy` | `priority_fill_first` | `priority_fill_first` (default) keeps trying the highest-priority group in list order; `priority_round_robin` rotates within each priority group. |
+| `upstream_strategy` | `{ "order": "fill_first", "dispatch": { "type": "serial" } }` | Structured strategy object. `order` controls candidate ordering inside one priority group; `dispatch` controls serial / hedged / race execution. |
 
 ### Upstream entries (`upstreams[]`)
 | Field | Default | Notes |
@@ -147,7 +147,14 @@ Notes:
   - **Gemini**: `upstream.api_key` → `x-goog-api-key` → query `?key=...` → error.
 
 ## Load balancing & retries
-- Priorities: higher `priority` groups first; inside a group use list order (fill-first) or round-robin (if `priority_round_robin`).
+- Priorities: higher `priority` groups first.
+- `upstream_strategy.order` controls selection inside the same priority group:
+  - `fill_first`: keep the configured list order.
+  - `round_robin`: rotate the starting point across requests.
+- `upstream_strategy.dispatch` controls how requests are launched inside one priority group:
+  - `{"type":"serial"}`: try one candidate at a time.
+  - `{"type":"hedged","delay_ms":2000,"max_parallel":2}`: launch the first candidate immediately, then add one more attempt after `delay_ms` if the prior attempt is still unresolved, up to `max_parallel`.
+  - `{"type":"race","max_parallel":3}`: launch up to `max_parallel` candidates immediately and take the first successful result.
 - Retryable conditions: network timeout/connect errors, or status 400/401/403/404/408/422/429/307/5xx (including 504/524). Retries stay within the same provider's priority groups.
 - Cooldown conditions: `401/403/408/429/5xx` will temporarily move the failed upstream behind ready peers for `retryable_failure_cooldown_secs` (default `15`); `400/404/422/307` stay retryable but do not trigger cross-request cooldown.
 - `/v1/messages` only: after the chosen native provider is exhausted (retryable errors), the proxy can fall back to the other native provider (`anthropic` ↔ `kiro`) if it is configured.

@@ -6,7 +6,9 @@ import {
   type ProxyConfigFile,
   type ProxyConfigFileBase,
   type TrayTokenRateConfig,
+  type UpstreamDispatchStrategy,
   type UpstreamForm,
+  type UpstreamStrategy,
   TRAY_TOKEN_RATE_FORMATS,
 } from "@/features/config/types";
 import { createNativeInboundFormatSet, removeInboundFormatsInSet } from "@/features/config/inbound-formats";
@@ -19,8 +21,12 @@ const DEFAULT_TRAY_TOKEN_RATE: TrayTokenRateConfig = {
 
 const MIN_UPSTREAM_NO_DATA_TIMEOUT_SECS = 3;
 const DEFAULT_UPSTREAM_NO_DATA_TIMEOUT_SECS = 120;
+const DEFAULT_HEDGE_DELAY_MS = 2000;
+const DEFAULT_MAX_PARALLEL = 2;
+const MIN_PARALLEL_ATTEMPTS = 2;
 const INTEGER_PATTERN = /^-?\d+$/;
 const NON_NEGATIVE_INTEGER_PATTERN = /^\d+$/;
+const POSITIVE_INTEGER_PATTERN = /^[1-9]\d*$/;
 let modelMappingCounter = 0;
 
 const TRAY_TOKEN_RATE_FORMAT_VALUES: ReadonlySet<string> = new Set(
@@ -96,7 +102,12 @@ export const EMPTY_FORM: ConfigForm = {
   retryableFailureCooldownSecs: "15",
   upstreamNoDataTimeoutSecs: String(DEFAULT_UPSTREAM_NO_DATA_TIMEOUT_SECS),
   trayTokenRate: { ...DEFAULT_TRAY_TOKEN_RATE },
-  upstreamStrategy: "priority_fill_first",
+  upstreamStrategy: {
+    order: "fill_first",
+    dispatchType: "serial",
+    hedgeDelayMs: String(DEFAULT_HEDGE_DELAY_MS),
+    maxParallel: String(DEFAULT_MAX_PARALLEL),
+  },
   upstreams: [],
 };
 
@@ -171,7 +182,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
       config.upstream_no_data_timeout_secs ?? DEFAULT_UPSTREAM_NO_DATA_TIMEOUT_SECS,
     ),
     trayTokenRate: normalizeTrayTokenRate(config.tray_token_rate),
-    upstreamStrategy: config.upstream_strategy,
+    upstreamStrategy: toUpstreamStrategyForm(config.upstream_strategy),
     upstreams: config.upstreams.map((upstream) => ({
       id: upstream.id,
       providers: upstream.providers ?? [],
@@ -219,7 +230,7 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       form.upstreamNoDataTimeoutSecs,
     ),
     tray_token_rate: form.trayTokenRate,
-    upstream_strategy: form.upstreamStrategy,
+    upstream_strategy: toUpstreamStrategyPayload(form.upstreamStrategy),
     upstreams: form.upstreams.map((upstream) => {
       const providers = normalizeProviders(upstream.providers);
       const apiKeys = parseApiKeysInput(upstream.apiKeys);
@@ -275,6 +286,10 @@ export function validate(form: ConfigForm) {
       valid: false,
       message: m.error_upstream_no_data_timeout_secs_integer(),
     };
+  }
+  const upstreamStrategyError = validateUpstreamStrategy(form.upstreamStrategy);
+  if (upstreamStrategyError) {
+    return { valid: false, message: upstreamStrategyError };
   }
 
   const ids = new Set<string>();
@@ -428,6 +443,76 @@ function normalizeTrayTokenRate(value: TrayTokenRateConfig) {
     return { ...value, format: DEFAULT_TRAY_TOKEN_RATE.format };
   }
   return value;
+}
+
+function toUpstreamStrategyForm(strategy: UpstreamStrategy): ConfigForm["upstreamStrategy"] {
+  switch (strategy.dispatch.type) {
+    case "serial":
+      return {
+        order: strategy.order,
+        dispatchType: "serial",
+        hedgeDelayMs: String(DEFAULT_HEDGE_DELAY_MS),
+        maxParallel: String(DEFAULT_MAX_PARALLEL),
+      };
+    case "hedged":
+      return {
+        order: strategy.order,
+        dispatchType: "hedged",
+        hedgeDelayMs: String(strategy.dispatch.delay_ms),
+        maxParallel: String(strategy.dispatch.max_parallel),
+      };
+    case "race":
+      return {
+        order: strategy.order,
+        dispatchType: "race",
+        hedgeDelayMs: String(DEFAULT_HEDGE_DELAY_MS),
+        maxParallel: String(strategy.dispatch.max_parallel),
+      };
+  }
+}
+
+function toUpstreamStrategyPayload(
+  strategy: ConfigForm["upstreamStrategy"],
+): UpstreamStrategy {
+  return {
+    order: strategy.order,
+    dispatch: toUpstreamDispatchPayload(strategy),
+  };
+}
+
+function toUpstreamDispatchPayload(
+  strategy: ConfigForm["upstreamStrategy"],
+): UpstreamDispatchStrategy {
+  switch (strategy.dispatchType) {
+    case "serial":
+      return { type: "serial" };
+    case "hedged":
+      return {
+        type: "hedged",
+        delay_ms: parsePositiveInteger(strategy.hedgeDelayMs, DEFAULT_HEDGE_DELAY_MS),
+        max_parallel: parseMinParallel(strategy.maxParallel, DEFAULT_MAX_PARALLEL),
+      };
+    case "race":
+      return {
+        type: "race",
+        max_parallel: parseMinParallel(strategy.maxParallel, DEFAULT_MAX_PARALLEL),
+      };
+  }
+}
+
+function validateUpstreamStrategy(strategy: ConfigForm["upstreamStrategy"]) {
+  if (strategy.dispatchType === "serial") {
+    return "";
+  }
+  if (strategy.dispatchType === "hedged" && !isPositiveInteger(strategy.hedgeDelayMs)) {
+    return m.error_upstream_strategy_delay_ms_positive_integer();
+  }
+  if (!isValidMinParallel(strategy.maxParallel)) {
+    return m.error_upstream_strategy_max_parallel_min({
+      min: String(MIN_PARALLEL_ATTEMPTS),
+    });
+  }
+  return "";
 }
 
 function normalizeProviders(values: readonly string[]) {
@@ -602,4 +687,27 @@ function parseUpstreamNoDataTimeoutSecs(value: string) {
   }
   const number = Number.parseInt(trimmed, 10);
   return Number.isFinite(number) ? number : DEFAULT_UPSTREAM_NO_DATA_TIMEOUT_SECS;
+}
+
+function isPositiveInteger(value: string) {
+  return POSITIVE_INTEGER_PATTERN.test(value.trim());
+}
+
+function parsePositiveInteger(value: string, fallback: number) {
+  const trimmed = value.trim();
+  if (!POSITIVE_INTEGER_PATTERN.test(trimmed)) {
+    return fallback;
+  }
+  const number = Number.parseInt(trimmed, 10);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function isValidMinParallel(value: string) {
+  const parsed = parsePositiveInteger(value, 0);
+  return parsed >= MIN_PARALLEL_ATTEMPTS;
+}
+
+function parseMinParallel(value: string, fallback: number) {
+  const parsed = parsePositiveInteger(value, fallback);
+  return parsed >= MIN_PARALLEL_ATTEMPTS ? parsed : fallback;
 }

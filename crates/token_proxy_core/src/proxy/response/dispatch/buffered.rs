@@ -139,6 +139,9 @@ fn convert_success_body(
         FormatTransform::CodexToResponses => {
             convert_codex_to_responses_body(bytes, context, usage, log, request_body)
         }
+        FormatTransform::CodexToAnthropic => {
+            convert_codex_to_anthropic_body(bytes, context, usage, log, request_body)
+        }
         _ if transform != FormatTransform::None => {
             convert_generic_body(transform, bytes, context, usage, log)
         }
@@ -223,6 +226,35 @@ fn convert_codex_to_responses_body(
     };
     Ok(ConvertedBody {
         output: converted,
+        usage,
+    })
+}
+
+fn convert_codex_to_anthropic_body(
+    bytes: &Bytes,
+    context: &mut LogContext,
+    usage: UsageSnapshot,
+    log: Arc<LogWriter>,
+    request_body: Option<&str>,
+) -> Result<ConvertedBody, Response> {
+    let responses = match codex_compat::codex_response_to_responses(bytes, request_body) {
+        Ok(converted) => converted,
+        Err(message) => {
+            return Err(respond_transform_error(context, usage, log, message));
+        }
+    };
+    let anthropic = match transform_response_body(
+        FormatTransform::ResponsesToAnthropic,
+        &responses,
+        context.model.as_deref(),
+    ) {
+        Ok(converted) => converted,
+        Err(message) => {
+            return Err(respond_transform_error(context, usage, log, message));
+        }
+    };
+    Ok(ConvertedBody {
+        output: anthropic,
         usage,
     })
 }
@@ -355,6 +387,7 @@ fn provider_for_tokens(transform: FormatTransform, provider: &str) -> &str {
         FormatTransform::KiroToAnthropic => "anthropic",
         FormatTransform::CodexToChat => "openai",
         FormatTransform::CodexToResponses => "openai-response",
+        FormatTransform::CodexToAnthropic => "anthropic",
         _ if provider == PROVIDER_ANTIGRAVITY => PROVIDER_GEMINI,
         _ => provider,
     }

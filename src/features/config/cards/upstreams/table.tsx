@@ -5,6 +5,7 @@ import { Ban, Check, Columns3, Copy, Eye, EyeOff, Pencil, Trash2 } from "lucide-
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -24,27 +25,41 @@ import type { UpstreamColumnDefinition, UpstreamColumnId } from "@/features/conf
 import type { CodexAccountSummary } from "@/features/codex/types";
 import type { KiroAccountSummary } from "@/features/kiro/types";
 import type { AntigravityAccountSummary } from "@/features/antigravity/types";
-import { UPSTREAM_STRATEGIES, type UpstreamForm, type UpstreamStrategy } from "@/features/config/types";
+import {
+  UPSTREAM_DISPATCH_STRATEGIES,
+  UPSTREAM_ORDER_STRATEGIES,
+  type ConfigForm,
+  type UpstreamDispatchType,
+  type UpstreamForm,
+  type UpstreamOrderStrategy,
+} from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
 type UpstreamsToolbarProps = {
   apiKeyVisible: boolean;
   showApiKeys: boolean;
-  strategy: UpstreamStrategy;
+  strategy: ConfigForm["upstreamStrategy"];
   onToggleApiKeys: () => void;
-  onStrategyChange: (value: UpstreamStrategy) => void;
+  onStrategyChange: (value: ConfigForm["upstreamStrategy"]) => void;
   onAddClick: () => void;
   onColumnsClick: () => void;
 };
 
-const UPSTREAM_STRATEGY_VALUES: ReadonlySet<string> = new Set(
-  UPSTREAM_STRATEGIES.map((strategy) => strategy.value)
+const UPSTREAM_ORDER_VALUES: ReadonlySet<string> = new Set(
+  UPSTREAM_ORDER_STRATEGIES.map((strategy) => strategy.value)
+);
+const UPSTREAM_DISPATCH_VALUES: ReadonlySet<string> = new Set(
+  UPSTREAM_DISPATCH_STRATEGIES.map((strategy) => strategy.value)
 );
 const CELL_PLACEHOLDER = "—";
 const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 
-function toUpstreamStrategy(value: string): UpstreamStrategy | null {
-  return UPSTREAM_STRATEGY_VALUES.has(value) ? (value as UpstreamStrategy) : null;
+function toUpstreamOrderStrategy(value: string): UpstreamOrderStrategy | null {
+  return UPSTREAM_ORDER_VALUES.has(value) ? (value as UpstreamOrderStrategy) : null;
+}
+
+function toUpstreamDispatchType(value: string): UpstreamDispatchType | null {
+  return UPSTREAM_DISPATCH_VALUES.has(value) ? (value as UpstreamDispatchType) : null;
 }
 
 type CellTooltipProps = {
@@ -81,46 +96,26 @@ export function UpstreamsToolbar({
   onAddClick,
   onColumnsClick,
 }: UpstreamsToolbarProps) {
+  const updateStrategy = (patch: Partial<ConfigForm["upstreamStrategy"]>) => {
+    onStrategyChange({
+      ...strategy,
+      ...patch,
+    });
+  };
+  const showsHedgeDelay = strategy.dispatchType === "hedged";
+  const showsMaxParallel = strategy.dispatchType !== "serial";
+
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" onClick={onAddClick}>
-          {m.upstreams_add()}
-        </Button>
-        <Button type="button" variant="outline" onClick={onColumnsClick}>
-          <Columns3 className="size-4" aria-hidden="true" />
-          {m.common_columns()}
-        </Button>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-2">
-          <Label
-            htmlFor="upstreams-strategy"
-            className="text-xs text-muted-foreground"
-            title={m.strategy_help()}
-          >
-            {m.strategy_label()}
-          </Label>
-          <Select
-            value={strategy}
-            onValueChange={(value) => {
-              const nextStrategy = toUpstreamStrategy(value);
-              if (nextStrategy) {
-                onStrategyChange(nextStrategy);
-              }
-            }}
-          >
-            <SelectTrigger id="upstreams-strategy" className="min-w-[180px]">
-              <SelectValue placeholder={m.strategy_placeholder()} />
-            </SelectTrigger>
-            <SelectContent>
-              {UPSTREAM_STRATEGIES.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label()}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="button" variant="outline" onClick={onAddClick}>
+            {m.upstreams_add()}
+          </Button>
+          <Button type="button" variant="outline" onClick={onColumnsClick}>
+            <Columns3 className="size-4" aria-hidden="true" />
+            {m.common_columns()}
+          </Button>
         </div>
         {apiKeyVisible ? (
           <Button
@@ -130,10 +125,97 @@ export function UpstreamsToolbar({
             onClick={onToggleApiKeys}
             aria-label={showApiKeys ? m.upstreams_hide_api_keys() : m.upstreams_show_api_keys()}
           >
-            {showApiKeys ? <EyeOff className="size-4" aria-hidden="true" /> : <Eye className="size-4" aria-hidden="true" />}
+            {showApiKeys ? (
+              <EyeOff className="size-4" aria-hidden="true" />
+            ) : (
+              <Eye className="size-4" aria-hidden="true" />
+            )}
           </Button>
         ) : null}
       </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="grid gap-1">
+          <Label htmlFor="upstreams-order" className="text-xs text-muted-foreground">
+            {m.upstream_strategy_order_label()}
+          </Label>
+          <Select
+            value={strategy.order}
+            onValueChange={(value) => {
+              const nextOrder = toUpstreamOrderStrategy(value);
+              if (nextOrder) {
+                updateStrategy({ order: nextOrder });
+              }
+            }}
+          >
+            <SelectTrigger id="upstreams-order" className="min-w-[180px]">
+              <SelectValue placeholder={m.upstream_strategy_order_placeholder()} />
+            </SelectTrigger>
+            <SelectContent>
+              {UPSTREAM_ORDER_STRATEGIES.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label()}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label htmlFor="upstreams-dispatch" className="text-xs text-muted-foreground">
+            {m.upstream_strategy_dispatch_label()}
+          </Label>
+          <Select
+            value={strategy.dispatchType}
+            onValueChange={(value) => {
+              const nextDispatchType = toUpstreamDispatchType(value);
+              if (nextDispatchType) {
+                updateStrategy({ dispatchType: nextDispatchType });
+              }
+            }}
+          >
+            <SelectTrigger id="upstreams-dispatch" className="min-w-[180px]">
+              <SelectValue placeholder={m.upstream_strategy_dispatch_placeholder()} />
+            </SelectTrigger>
+            <SelectContent>
+              {UPSTREAM_DISPATCH_STRATEGIES.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label()}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {showsHedgeDelay ? (
+          <div className="grid gap-1">
+            <Label htmlFor="upstreams-hedge-delay" className="text-xs text-muted-foreground">
+              {m.upstream_strategy_delay_ms_label()}
+            </Label>
+            <Input
+              id="upstreams-hedge-delay"
+              value={strategy.hedgeDelayMs}
+              onChange={(event) => updateStrategy({ hedgeDelayMs: event.target.value })}
+              placeholder="2000"
+              inputMode="numeric"
+              className="w-[120px]"
+            />
+          </div>
+        ) : null}
+        {showsMaxParallel ? (
+          <div className="grid gap-1">
+            <Label htmlFor="upstreams-max-parallel" className="text-xs text-muted-foreground">
+              {m.upstream_strategy_max_parallel_label()}
+            </Label>
+            <Input
+              id="upstreams-max-parallel"
+              value={strategy.maxParallel}
+              onChange={(event) => updateStrategy({ maxParallel: event.target.value })}
+              placeholder="2"
+              inputMode="numeric"
+              className="w-[96px]"
+            />
+          </div>
+        ) : null}
+      </div>
+      <p className="text-xs text-muted-foreground">{m.upstream_strategy_help()}</p>
     </div>
   );
 }

@@ -37,17 +37,17 @@ import { createEmptyUpstream } from "@/features/config/form";
 import { useCodexAccounts } from "@/features/codex/use-codex-accounts";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
 import { useAntigravityAccounts } from "@/features/antigravity/use-antigravity-accounts";
-import type { UpstreamForm, UpstreamStrategy } from "@/features/config/types";
+import type { ConfigForm, UpstreamForm } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
 type UpstreamsCardProps = {
   upstreams: UpstreamForm[];
   appProxyUrl: string;
-  strategy: UpstreamStrategy;
+  strategy: ConfigForm["upstreamStrategy"];
   showApiKeys: boolean;
   providerOptions: string[];
   onToggleApiKeys: () => void;
-  onStrategyChange: (value: UpstreamStrategy) => void;
+  onStrategyChange: (value: ConfigForm["upstreamStrategy"]) => void;
   onAdd: (upstream: UpstreamForm) => void;
   onRemove: (index: number) => void;
   onChange: (index: number, patch: Partial<UpstreamForm>) => void;

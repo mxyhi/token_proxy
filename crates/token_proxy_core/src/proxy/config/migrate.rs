@@ -32,7 +32,16 @@ pub(super) fn migrate_config_json(root: &mut Value) -> bool {
                     .is_some_and(|obj| obj.contains_key("api_key"))
             })
         });
-    let is_legacy_config = had_legacy_enable || had_legacy_provider || had_legacy_api_key;
+    let had_legacy_upstream_strategy = root_obj
+        .get("upstream_strategy")
+        .and_then(Value::as_str)
+        .is_some_and(|value| {
+            matches!(value.trim(), "priority_fill_first" | "priority_round_robin")
+        });
+    let is_legacy_config = had_legacy_enable
+        || had_legacy_provider
+        || had_legacy_api_key
+        || had_legacy_upstream_strategy;
 
     // 仅当检测到旧字段时才进行迁移；否则避免对新配置做“默认填充”，改变用户语义。
     if !is_legacy_config {
@@ -45,6 +54,7 @@ pub(super) fn migrate_config_json(root: &mut Value) -> bool {
 
     let mut changed = false;
     changed |= had_legacy_enable;
+    changed |= migrate_legacy_upstream_strategy(root_obj);
 
     let Some(upstreams_value) = root_obj.get_mut("upstreams") else {
         return changed;
@@ -58,6 +68,32 @@ pub(super) fn migrate_config_json(root: &mut Value) -> bool {
     }
 
     changed
+}
+
+fn migrate_legacy_upstream_strategy(root_obj: &mut Map<String, Value>) -> bool {
+    let Some(value) = root_obj.get("upstream_strategy").and_then(Value::as_str) else {
+        return false;
+    };
+    let order = match value.trim() {
+        "priority_fill_first" => "fill_first",
+        "priority_round_robin" => "round_robin",
+        _ => return false,
+    };
+
+    root_obj.insert(
+        "upstream_strategy".to_string(),
+        Value::Object(Map::from_iter([
+            ("order".to_string(), Value::String(order.to_string())),
+            (
+                "dispatch".to_string(),
+                Value::Object(Map::from_iter([(
+                    "type".to_string(),
+                    Value::String("serial".to_string()),
+                )])),
+            ),
+        ])),
+    );
+    true
 }
 
 fn migrate_single_upstream(upstream: &mut Value, legacy_enable_conversion: bool) -> bool {

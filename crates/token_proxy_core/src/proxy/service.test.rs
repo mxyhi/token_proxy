@@ -20,7 +20,7 @@ fn config_with_addr_and_body_limit(
         max_request_body_bytes,
         retryable_failure_cooldown: Duration::from_secs(15),
         upstream_no_data_timeout: Duration::from_secs(120),
-        upstream_strategy: crate::proxy::config::UpstreamStrategy::PriorityFillFirst,
+        upstream_strategy: crate::proxy::config::UpstreamStrategyRuntime::default(),
         upstreams: HashMap::new(),
         kiro_preferred_endpoint: None,
         antigravity_user_agent: None,

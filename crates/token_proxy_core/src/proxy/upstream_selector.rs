@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{config::UpstreamRuntime, config::UpstreamStrategy};
+use super::{config::UpstreamOrderStrategy, config::UpstreamRuntime};
 
 #[derive(Hash, PartialEq, Eq)]
 struct CooldownKey {
@@ -36,14 +36,14 @@ impl UpstreamSelectorRuntime {
 
     pub(crate) fn order_group(
         &self,
-        strategy: UpstreamStrategy,
+        order: UpstreamOrderStrategy,
         provider: &str,
         items: &[UpstreamRuntime],
         cursor_start: usize,
     ) -> Vec<usize> {
-        let base_order = match strategy {
-            UpstreamStrategy::PriorityFillFirst => (0..items.len()).collect(),
-            UpstreamStrategy::PriorityRoundRobin => (0..items.len())
+        let base_order = match order {
+            UpstreamOrderStrategy::FillFirst => (0..items.len()).collect(),
+            UpstreamOrderStrategy::RoundRobin => (0..items.len())
                 .map(|offset| (cursor_start + offset) % items.len())
                 .collect(),
         };

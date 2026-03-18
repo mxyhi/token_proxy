@@ -32,6 +32,7 @@ pub(crate) enum FormatTransform {
     ResponsesToChat,
     ResponsesToAnthropic,
     AnthropicToResponses,
+    AnthropicToCodex,
     ChatToAnthropic,
     AnthropicToChat,
     GeminiToAnthropic,
@@ -45,6 +46,7 @@ pub(crate) enum FormatTransform {
     ResponsesToCodex,
     CodexToChat,
     CodexToResponses,
+    CodexToAnthropic,
 }
 
 pub(crate) fn inbound_format(path: &str) -> Option<ApiFormat> {
@@ -71,6 +73,11 @@ pub(crate) async fn transform_request_body(
         FormatTransform::AnthropicToResponses => {
             anthropic_compat::anthropic_request_to_responses(body, http_clients).await
         }
+        FormatTransform::AnthropicToCodex => {
+            let intermediate =
+                anthropic_compat::anthropic_request_to_responses(body, http_clients).await?;
+            codex_compat::responses_request_to_codex(&intermediate, model_hint)
+        }
         FormatTransform::ChatToAnthropic => {
             let intermediate = chat_request_to_responses(body)?;
             anthropic_compat::responses_request_to_anthropic(&intermediate, http_clients).await
@@ -93,7 +100,9 @@ pub(crate) async fn transform_request_body(
         FormatTransform::ResponsesToCodex => {
             codex_compat::responses_request_to_codex(body, model_hint)
         }
-        FormatTransform::CodexToChat | FormatTransform::CodexToResponses => Ok(body.clone()),
+        FormatTransform::CodexToChat
+        | FormatTransform::CodexToResponses
+        | FormatTransform::CodexToAnthropic => Ok(body.clone()),
     }
 }
 
@@ -112,6 +121,9 @@ pub(crate) fn transform_response_body(
         FormatTransform::AnthropicToResponses => {
             anthropic_compat::anthropic_response_to_responses(bytes)
         }
+        FormatTransform::AnthropicToCodex => {
+            Err("Codex response conversion is handled upstream.".to_string())
+        }
         FormatTransform::ChatToAnthropic => {
             let intermediate = chat_response_to_responses(bytes)?;
             anthropic_compat::responses_response_to_anthropic(&intermediate, model_hint)
@@ -128,6 +140,10 @@ pub(crate) fn transform_response_body(
         FormatTransform::GeminiToResponses => gemini_response_to_responses(bytes, model_hint),
         FormatTransform::KiroToAnthropic => {
             Err("Kiro response conversion is handled upstream.".to_string())
+        }
+        FormatTransform::CodexToAnthropic => {
+            let intermediate = codex_compat::codex_response_to_responses(bytes, None)?;
+            anthropic_compat::responses_response_to_anthropic(&intermediate, model_hint)
         }
         FormatTransform::CodexToChat | FormatTransform::CodexToResponses => {
             Err("Codex response conversion is handled upstream.".to_string())

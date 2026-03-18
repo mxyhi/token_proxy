@@ -1,7 +1,7 @@
 use axum::http::StatusCode;
 use std::sync::atomic::Ordering;
 
-use super::super::{config::UpstreamStrategy, ProxyState};
+use super::super::{config::UpstreamOrderStrategy, ProxyState};
 use crate::proxy::redact::redact_query_param_value;
 
 pub(super) fn extract_query_param(path_with_query: &str, name: &str) -> Option<String> {
@@ -47,9 +47,9 @@ pub(super) fn resolve_group_start(
     group_index: usize,
     group_len: usize,
 ) -> usize {
-    match state.config.upstream_strategy {
-        UpstreamStrategy::PriorityFillFirst => 0,
-        UpstreamStrategy::PriorityRoundRobin => state
+    match state.config.upstream_strategy.order {
+        UpstreamOrderStrategy::FillFirst => 0,
+        UpstreamOrderStrategy::RoundRobin => state
             .cursors
             .get(provider)
             .and_then(|cursors| cursors.get(group_index))

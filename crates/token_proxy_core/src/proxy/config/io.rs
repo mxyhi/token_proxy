@@ -10,6 +10,8 @@ const DEFAULT_CONFIG_HEADER: &str = concat!(
     "// Token Proxy config (JSONC). Comments and trailing commas are supported.\n",
     "// log_level (optional): silent|error|warn|info|debug|trace. Default: silent.\n",
     "// upstream_no_data_timeout_secs (optional): upstream no-data timeout in seconds. Minimum: 3. Default: 120.\n",
+    "// upstream_strategy (optional): { order: \"fill_first\"|\"round_robin\", dispatch: { type: \"serial\"|\"hedged\"|\"race\", ... } }.\n",
+    "//   Example hedged: { \"order\": \"round_robin\", \"dispatch\": { \"type\": \"hedged\", \"delay_ms\": 2000, \"max_parallel\": 2 } }\n",
     "// upstreams[].api_keys (optional): one or more API keys for the same upstream. Example: [\"key-a\", \"key-b\"].\n",
     "// app_proxy_url (optional): http(s)://... | socks5(h)://... (used for app updates and upstream proxy reuse).\n",
     "// upstreams[].proxy_url (optional): empty => direct; \"$app_proxy_url\" => use app_proxy_url; or an explicit proxy URL.\n",
@@ -218,3 +220,7 @@ async fn ensure_parent_dir(path: &Path) -> Result<(), String> {
     );
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "io.test.rs"]
+mod tests;

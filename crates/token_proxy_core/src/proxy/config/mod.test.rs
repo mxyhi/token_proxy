@@ -102,6 +102,97 @@ fn build_runtime_config_maps_upstream_no_data_timeout_secs() {
 }
 
 #[test]
+fn build_runtime_config_maps_hedged_strategy() {
+    let mut config = ProxyConfigFile::default();
+    config.upstream_strategy = UpstreamStrategy {
+        order: UpstreamOrderStrategy::RoundRobin,
+        dispatch: UpstreamDispatchStrategy::Hedged {
+            delay_ms: 250,
+            max_parallel: 3,
+        },
+    };
+
+    let runtime = build_runtime_config(config).expect("runtime config");
+
+    assert_eq!(
+        runtime.upstream_strategy.order,
+        UpstreamOrderStrategy::RoundRobin
+    );
+    assert_eq!(
+        runtime.upstream_strategy.dispatch,
+        UpstreamDispatchRuntime::Hedged {
+            delay: Duration::from_millis(250),
+            max_parallel: 3,
+        }
+    );
+}
+
+#[test]
+fn build_runtime_config_maps_race_strategy() {
+    let mut config = ProxyConfigFile::default();
+    config.upstream_strategy = UpstreamStrategy {
+        order: UpstreamOrderStrategy::RoundRobin,
+        dispatch: UpstreamDispatchStrategy::Race { max_parallel: 4 },
+    };
+
+    let runtime = build_runtime_config(config).expect("runtime config");
+
+    assert_eq!(
+        runtime.upstream_strategy.order,
+        UpstreamOrderStrategy::RoundRobin
+    );
+    assert_eq!(
+        runtime.upstream_strategy.dispatch,
+        UpstreamDispatchRuntime::Race { max_parallel: 4 }
+    );
+}
+
+#[test]
+fn build_runtime_config_rejects_hedged_strategy_with_zero_delay() {
+    let mut config = ProxyConfigFile::default();
+    config.upstream_strategy = UpstreamStrategy {
+        order: UpstreamOrderStrategy::FillFirst,
+        dispatch: UpstreamDispatchStrategy::Hedged {
+            delay_ms: 0,
+            max_parallel: 2,
+        },
+    };
+
+    let result = build_runtime_config(config);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn build_runtime_config_rejects_hedged_strategy_with_max_parallel_below_two() {
+    let mut config = ProxyConfigFile::default();
+    config.upstream_strategy = UpstreamStrategy {
+        order: UpstreamOrderStrategy::FillFirst,
+        dispatch: UpstreamDispatchStrategy::Hedged {
+            delay_ms: 250,
+            max_parallel: 1,
+        },
+    };
+
+    let result = build_runtime_config(config);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn build_runtime_config_rejects_race_strategy_with_max_parallel_below_two() {
+    let mut config = ProxyConfigFile::default();
+    config.upstream_strategy = UpstreamStrategy {
+        order: UpstreamOrderStrategy::FillFirst,
+        dispatch: UpstreamDispatchStrategy::Race { max_parallel: 1 },
+    };
+
+    let result = build_runtime_config(config);
+
+    assert!(result.is_err());
+}
+
+#[test]
 fn build_runtime_config_rejects_upstream_no_data_timeout_below_minimum() {
     let mut config = ProxyConfigFile::default();
     config.upstream_no_data_timeout_secs = 2;

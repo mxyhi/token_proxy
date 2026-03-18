@@ -13,7 +13,8 @@ const MIN_UPSTREAM_NO_DATA_TIMEOUT_SECS: u64 = 3;
 pub use types::{
     ConfigResponse, HeaderOverride, InboundApiFormat, KiroPreferredEndpoint, ProviderUpstreams,
     ProxyConfig, ProxyConfigFile, TrayTokenRateConfig, TrayTokenRateFormat, UpstreamConfig,
-    UpstreamGroup, UpstreamOverrides, UpstreamRuntime, UpstreamStrategy,
+    UpstreamDispatchRuntime, UpstreamDispatchStrategy, UpstreamGroup, UpstreamOrderStrategy,
+    UpstreamOverrides, UpstreamRuntime, UpstreamStrategy, UpstreamStrategyRuntime,
 };
 
 pub async fn read_config(paths: &TokenProxyPaths) -> Result<ConfigResponse, String> {
@@ -75,7 +76,7 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
         upstream_no_data_timeout: resolve_upstream_no_data_timeout(
             config.upstream_no_data_timeout_secs,
         )?,
-        upstream_strategy: config.upstream_strategy,
+        upstream_strategy: resolve_upstream_strategy(config.upstream_strategy)?,
         upstreams,
         kiro_preferred_endpoint: config.kiro_preferred_endpoint,
         antigravity_user_agent: config.antigravity_user_agent,
@@ -101,6 +102,47 @@ fn resolve_upstream_no_data_timeout(value: u64) -> Result<Duration, String> {
         return Err("upstream_no_data_timeout_secs is too large.".to_string());
     }
     Ok(duration)
+}
+
+fn resolve_upstream_strategy(value: UpstreamStrategy) -> Result<UpstreamStrategyRuntime, String> {
+    let dispatch = match value.dispatch {
+        UpstreamDispatchStrategy::Serial => UpstreamDispatchRuntime::Serial,
+        UpstreamDispatchStrategy::Hedged {
+            delay_ms,
+            max_parallel,
+        } => UpstreamDispatchRuntime::Hedged {
+            delay: resolve_hedged_delay(delay_ms)?,
+            max_parallel: resolve_parallel_attempts("hedged", max_parallel)?,
+        },
+        UpstreamDispatchStrategy::Race { max_parallel } => UpstreamDispatchRuntime::Race {
+            max_parallel: resolve_parallel_attempts("race", max_parallel)?,
+        },
+    };
+    Ok(UpstreamStrategyRuntime {
+        order: value.order,
+        dispatch,
+    })
+}
+
+fn resolve_hedged_delay(value: u64) -> Result<Duration, String> {
+    if value == 0 {
+        return Err("upstream_strategy.dispatch.delay_ms must be at least 1.".to_string());
+    }
+    let duration = Duration::from_millis(value);
+    if Instant::now().checked_add(duration).is_none() {
+        return Err("upstream_strategy.dispatch.delay_ms is too large.".to_string());
+    }
+    Ok(duration)
+}
+
+fn resolve_parallel_attempts(dispatch: &str, value: u64) -> Result<usize, String> {
+    if value < 2 {
+        return Err(format!(
+            "upstream_strategy.dispatch.max_parallel must be at least 2 for {dispatch}."
+        ));
+    }
+    usize::try_from(value)
+        .map_err(|_| "upstream_strategy.dispatch.max_parallel is too large.".to_string())
 }
 
 fn resolve_max_request_body_bytes(value: Option<u64>) -> usize {

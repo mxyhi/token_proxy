@@ -1,11 +1,29 @@
 import { m } from "@/paraglide/messages.js";
 
-export const UPSTREAM_STRATEGIES = [
-  { value: "priority_fill_first", label: () => m.upstream_strategy_priority_fill_first() },
-  { value: "priority_round_robin", label: () => m.upstream_strategy_priority_round_robin() },
+export const UPSTREAM_ORDER_STRATEGIES = [
+  { value: "fill_first", label: () => m.upstream_strategy_order_fill_first() },
+  { value: "round_robin", label: () => m.upstream_strategy_order_round_robin() },
 ] as const;
 
-export type UpstreamStrategy = (typeof UPSTREAM_STRATEGIES)[number]["value"];
+export type UpstreamOrderStrategy = (typeof UPSTREAM_ORDER_STRATEGIES)[number]["value"];
+
+export const UPSTREAM_DISPATCH_STRATEGIES = [
+  { value: "serial", label: () => m.upstream_strategy_dispatch_serial() },
+  { value: "hedged", label: () => m.upstream_strategy_dispatch_hedged() },
+  { value: "race", label: () => m.upstream_strategy_dispatch_race() },
+] as const;
+
+export type UpstreamDispatchType = (typeof UPSTREAM_DISPATCH_STRATEGIES)[number]["value"];
+
+export type UpstreamDispatchStrategy =
+  | { type: "serial" }
+  | { type: "hedged"; delay_ms: number; max_parallel: number }
+  | { type: "race"; max_parallel: number };
+
+export type UpstreamStrategy = {
+  order: UpstreamOrderStrategy;
+  dispatch: UpstreamDispatchStrategy;
+};
 
 export const TRAY_TOKEN_RATE_FORMATS = [
   { value: "combined", label: () => m.proxy_core_tray_token_rate_format_combined() },
@@ -174,6 +192,11 @@ export type ConfigForm = {
   retryableFailureCooldownSecs: string;
   upstreamNoDataTimeoutSecs: string;
   trayTokenRate: TrayTokenRateConfig;
-  upstreamStrategy: UpstreamStrategy;
+  upstreamStrategy: {
+    order: UpstreamOrderStrategy;
+    dispatchType: UpstreamDispatchType;
+    hedgeDelayMs: string;
+    maxParallel: string;
+  };
   upstreams: UpstreamForm[];
 };

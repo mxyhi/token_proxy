@@ -103,7 +103,7 @@ pnpm exec tsc --noEmit
 | `retryable_failure_cooldown_secs` | `15` | 对适合短时降级的可重试失败施加冷却窗口；`0` 表示关闭冷却。重载或重启运行中的代理会重置当前冷却状态 |
 | `tray_token_rate.enabled` | `true` | macOS 托盘实时速率；其他平台无害 |
 | `tray_token_rate.format` | `split` | `combined`(总数) / `split`(↑入 ↓出) / `both`(总数 | ↑入 ↓出) |
-| `upstream_strategy` | `priority_fill_first` | `priority_fill_first` 默认先填满高优先级；`priority_round_robin` 在同组内轮询 |
+| `upstream_strategy` | `{ "order": "fill_first", "dispatch": { "type": "serial" } }` | 结构化策略对象。`order` 控制同一优先级组内的候选顺序；`dispatch` 控制串行 / hedged / race 派发方式 |
 
 ### 上游条目（`upstreams[]`）
 | 字段 | 默认值 | 说明 |
@@ -147,7 +147,14 @@ pnpm exec tsc --noEmit
   - **Gemini**：`upstream.api_key` → `x-goog-api-key` → 查询参数 `?key=` → 报错
 
 ## 负载均衡与重试
-- 优先级：高优先级组先尝试；组内按列表顺序（fill-first）或轮询（round-robin）
+- 优先级：高优先级组先尝试。
+- `upstream_strategy.order` 控制同一优先级组内的选择顺序：
+  - `fill_first`：保持配置列表顺序。
+  - `round_robin`：跨请求轮换起点。
+- `upstream_strategy.dispatch` 控制同一优先级组内的发起方式：
+  - `{"type":"serial"}`：一次只尝试一个候选。
+  - `{"type":"hedged","delay_ms":2000,"max_parallel":2}`：先立即发第一个；若 `delay_ms` 后仍未决，再补发下一个，最多并发到 `max_parallel`。
+  - `{"type":"race","max_parallel":3}`：立即并发发起最多 `max_parallel` 个候选，谁先成功就返回谁。
 - 可重试条件：网络超时/连接错误，或状态码 400/401/403/404/408/422/429/307/5xx（包含 504/524）；重试只在同一 provider 的优先级组内进行
 - 冷却条件：`401/403/408/429/5xx` 会让失败 upstream 在 `retryable_failure_cooldown_secs`（默认 `15`）内被暂时后置；`400/404/422/307` 仍可重试，但不会触发跨请求冷却
 - 仅 `/v1/messages`：当命中的 native provider（`anthropic`/`kiro`）被耗尽（仍是可重试错误）时，若另一个 native provider 已配置，会自动 fallback（Anthropic ↔ Kiro）

@@ -1,8 +1,17 @@
 use axum::body::Bytes;
+use futures_util::StreamExt;
 use serde_json::json;
+use std::{sync::Arc, time::Instant};
 
+use super::super::{
+    log::{LogContext, LogWriter},
+    token_rate::TokenRateTracker,
+};
 use super::tool_names::shorten_name_if_needed;
-use super::{chat_request_to_codex, codex_response_to_chat, responses_request_to_codex};
+use super::{
+    chat_request_to_codex, codex_response_to_chat, codex_response_to_responses,
+    responses_request_to_codex, stream_codex_to_chat, stream_codex_to_responses,
+};
 
 #[test]
 fn chat_request_to_codex_sets_model_and_stream() {
@@ -55,6 +64,105 @@ fn codex_response_to_chat_restores_tool_name() {
         .as_str()
         .expect("tool name");
     assert_eq!(name, original);
+}
+
+#[test]
+fn codex_response_to_responses_rejects_json_error_payload() {
+    let bytes = Bytes::from(
+        json!({
+            "error": {
+                "message": "rate limit exceeded",
+                "type": "rate_limit_error"
+            }
+        })
+        .to_string(),
+    );
+
+    let error = codex_response_to_responses(&bytes, None).expect_err("should fail");
+    assert!(
+        error.contains("rate limit exceeded"),
+        "unexpected error: {error}"
+    );
+    assert!(error.contains("error payload"), "unexpected error: {error}");
+}
+
+#[test]
+fn codex_response_to_responses_rejects_non_json_success_payload_with_raw_text() {
+    let bytes = Bytes::from("upstream gateway said nope");
+
+    let error = codex_response_to_responses(&bytes, None).expect_err("should fail");
+    assert!(
+        error.contains("non-JSON success payload"),
+        "unexpected error: {error}"
+    );
+    assert!(
+        error.contains("upstream gateway said nope"),
+        "unexpected error: {error}"
+    );
+}
+
+#[tokio::test]
+async fn stream_codex_to_responses_emits_error_event_for_invalid_json_event() {
+    let upstream = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
+        "data: not-json\n\n",
+    ))]);
+    let tracker = TokenRateTracker::new().register(None, None).await;
+    let context = test_log_context();
+    let log = Arc::new(LogWriter::new(None));
+
+    let chunks = stream_codex_to_responses(upstream, context, log, tracker)
+        .collect::<Vec<_>>()
+        .await;
+    let text = join_stream_chunks(&chunks);
+
+    assert!(text.contains("\"type\":\"error\""), "chunks: {text}");
+    assert!(text.contains("invalid JSON stream event"), "chunks: {text}");
+    assert!(text.contains("data: [DONE]"), "chunks: {text}");
+}
+
+#[tokio::test]
+async fn stream_codex_to_chat_emits_error_event_for_invalid_json_event() {
+    let upstream = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
+        "data: not-json\n\n",
+    ))]);
+    let tracker = TokenRateTracker::new().register(None, None).await;
+    let context = test_log_context();
+    let log = Arc::new(LogWriter::new(None));
+
+    let chunks = stream_codex_to_chat(upstream, context, log, tracker)
+        .collect::<Vec<_>>()
+        .await;
+    let text = join_stream_chunks(&chunks);
+
+    assert!(text.contains("\"error\":{"), "chunks: {text}");
+    assert!(text.contains("invalid JSON stream event"), "chunks: {text}");
+    assert!(text.contains("data: [DONE]"), "chunks: {text}");
+}
+
+fn test_log_context() -> LogContext {
+    LogContext {
+        path: "/v1/responses".to_string(),
+        provider: "codex".to_string(),
+        upstream_id: "test".to_string(),
+        model: Some("gpt-5-codex".to_string()),
+        mapped_model: None,
+        stream: true,
+        status: 200,
+        upstream_request_id: None,
+        request_headers: None,
+        request_body: None,
+        ttfb_ms: None,
+        start: Instant::now(),
+    }
+}
+
+fn join_stream_chunks(chunks: &[Result<Bytes, std::io::Error>]) -> String {
+    chunks
+        .iter()
+        .map(|chunk| chunk.as_ref().expect("stream chunk"))
+        .map(|chunk| String::from_utf8_lossy(chunk).to_string())
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 #[test]

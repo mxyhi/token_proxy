@@ -12,6 +12,8 @@ use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 use super::extract_tool_name_map_from_request_body;
 
+const CODEX_STREAM_INVALID_EVENT_LIMIT: usize = 1024;
+
 pub(crate) fn stream_codex_to_chat<E>(
     upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
@@ -163,9 +165,11 @@ where
             return;
         }
         let Ok(value) = serde_json::from_str::<Value>(data) else {
+            self.fail_stream(invalid_event_message(data));
             return;
         };
         let Some(event_type) = value.get("type").and_then(Value::as_str) else {
+            self.fail_stream(malformed_event_message(&value));
             return;
         };
 
@@ -193,6 +197,9 @@ where
             }
             "response.completed" => {
                 self.finish_reason = Some(self.resolve_finish_reason());
+            }
+            "response.failed" | "error" => {
+                self.fail_stream(stream_error_message(&value));
             }
             _ => {}
         }
@@ -267,6 +274,13 @@ where
         self.out.push_back(done);
         self.out.push_back(Bytes::from("data: [DONE]\n\n"));
         self.sent_done = true;
+    }
+
+    fn fail_stream(&mut self, message: String) {
+        self.context.status = 502;
+        self.out.push_back(chat_error_sse(&message));
+        self.push_done();
+        self.write_log_once(Some(message));
     }
 
     fn resolve_finish_reason(&self) -> &'static str {
@@ -418,8 +432,20 @@ where
             return;
         }
         let Ok(mut value) = serde_json::from_str::<Value>(data) else {
+            self.fail_stream(invalid_event_message(data));
             return;
         };
+        if matches!(
+            value.get("type").and_then(Value::as_str),
+            Some("response.failed" | "error")
+        ) {
+            self.fail_stream(stream_error_message(&value));
+            return;
+        }
+        if value.get("type").and_then(Value::as_str).is_none() {
+            self.fail_stream(malformed_event_message(&value));
+            return;
+        }
         restore_tool_names_in_event(&mut value, &self.tool_name_map);
         if let Some(delta) = extract_output_text_delta(&value) {
             token_texts.push(delta.to_string());
@@ -431,6 +457,94 @@ where
     fn log_usage_once(&mut self) {
         self.write_log_once(None);
     }
+
+    fn fail_stream(&mut self, message: String) {
+        self.context.status = 502;
+        self.out.push_back(responses_error_sse(&message));
+        self.out.push_back(Bytes::from("data: [DONE]\n\n"));
+        self.sent_done = true;
+        self.write_log_once(Some(message));
+    }
+}
+
+fn invalid_event_message(data: &str) -> String {
+    format!(
+        "Codex upstream emitted invalid JSON stream event: {}",
+        truncate_event_text(data)
+    )
+}
+
+fn malformed_event_message(value: &Value) -> String {
+    format!(
+        "Codex upstream emitted malformed stream event: {}",
+        truncate_event_text(&value.to_string())
+    )
+}
+
+fn stream_error_message(value: &Value) -> String {
+    if let Some(error) = value.get("error") {
+        return format!(
+            "Codex upstream stream failed: {}",
+            error_value_message(error)
+        );
+    }
+    if let Some(message) = value.get("message") {
+        return format!(
+            "Codex upstream stream failed: {}",
+            error_value_message(message)
+        );
+    }
+    format!(
+        "Codex upstream stream failed: {}",
+        truncate_event_text(&value.to_string())
+    )
+}
+
+fn error_value_message(value: &Value) -> String {
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| value.as_str().map(ToString::to_string))
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn truncate_event_text(text: &str) -> String {
+    if text.len() <= CODEX_STREAM_INVALID_EVENT_LIMIT {
+        return text.trim().to_string();
+    }
+    let end = text
+        .char_indices()
+        .map(|(index, _)| index)
+        .take_while(|index| *index <= CODEX_STREAM_INVALID_EVENT_LIMIT)
+        .last()
+        .unwrap_or(CODEX_STREAM_INVALID_EVENT_LIMIT);
+    format!("{}... (truncated)", text[..end].trim())
+}
+
+fn chat_error_sse(message: &str) -> Bytes {
+    Bytes::from(format!(
+        "data: {}\n\n",
+        json!({
+            "error": {
+                "message": message,
+                "type": "proxy_error"
+            }
+        })
+    ))
+}
+
+fn responses_error_sse(message: &str) -> Bytes {
+    Bytes::from(format!(
+        "data: {}\n\n",
+        json!({
+            "type": "error",
+            "error": {
+                "message": message,
+                "type": "proxy_error"
+            }
+        })
+    ))
 }
 
 fn restore_tool_names_in_event(value: &mut Value, tool_name_map: &HashMap<String, String>) {

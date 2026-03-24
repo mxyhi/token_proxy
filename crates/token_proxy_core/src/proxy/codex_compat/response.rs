@@ -9,11 +9,7 @@ pub(crate) fn codex_response_to_chat(
     bytes: &Bytes,
     request_body: Option<&str>,
 ) -> Result<Bytes, String> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| "Response body must be JSON.".to_string())?;
-    let Some(response) = extract_response_object(&value) else {
-        return Err("Codex response missing response object.".to_string());
-    };
+    let response = parse_codex_response(bytes)?;
     let tool_name_map = extract_tool_name_map_from_request_body(request_body);
     let output = build_chat_completion_value(&response, &tool_name_map);
 
@@ -26,11 +22,7 @@ pub(crate) fn codex_response_to_responses(
     bytes: &Bytes,
     request_body: Option<&str>,
 ) -> Result<Bytes, String> {
-    let value: Value =
-        serde_json::from_slice(bytes).map_err(|_| "Response body must be JSON.".to_string())?;
-    let Some(mut response) = extract_response_object(&value) else {
-        return Err("Codex response missing response object.".to_string());
-    };
+    let mut response = parse_codex_response(bytes)?;
     let tool_name_map = extract_tool_name_map_from_request_body(request_body);
     restore_tool_names_in_response(&mut response, &tool_name_map);
 
@@ -39,14 +31,91 @@ pub(crate) fn codex_response_to_responses(
         .map_err(|err| format!("Failed to serialize response: {err}"))
 }
 
+fn parse_codex_response(bytes: &Bytes) -> Result<Map<String, Value>, String> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| {
+        format!(
+            "Codex upstream returned non-JSON success payload: {}",
+            response_text(bytes)
+        )
+    })?;
+    if let Some(message) = extract_error_message(&value) {
+        return Err(message);
+    }
+    extract_response_object(&value)
+        .ok_or_else(|| "Codex success response missing response object.".to_string())
+}
+
 fn extract_response_object(value: &Value) -> Option<Map<String, Value>> {
     if value.get("type").and_then(Value::as_str) == Some("response.completed") {
-        return value.get("response").and_then(Value::as_object).cloned();
+        return value
+            .get("response")
+            .and_then(Value::as_object)
+            .filter(|response| is_success_response_object(response))
+            .cloned();
     }
-    if let Some(response) = value.get("response").and_then(Value::as_object) {
+    if let Some(response) = value
+        .get("response")
+        .and_then(Value::as_object)
+        .filter(|response| is_success_response_object(response))
+    {
         return Some(response.clone());
     }
-    value.as_object().cloned()
+    value
+        .as_object()
+        .filter(|response| is_success_response_object(response))
+        .cloned()
+}
+
+fn is_success_response_object(response: &Map<String, Value>) -> bool {
+    response.get("object").and_then(Value::as_str) == Some("response")
+        || (response.get("id").and_then(Value::as_str).is_some() && response.contains_key("output"))
+}
+
+fn extract_error_message(value: &Value) -> Option<String> {
+    let root = value.as_object()?;
+    if let Some(error) = root.get("error") {
+        return Some(format!(
+            "Codex upstream returned error payload: {}",
+            error_message(error)
+        ));
+    }
+    if root.get("type").and_then(Value::as_str) == Some("error") {
+        if let Some(error) = root.get("error") {
+            return Some(format!(
+                "Codex upstream returned error payload: {}",
+                error_message(error)
+            ));
+        }
+        if let Some(message) = root.get("message") {
+            return Some(format!(
+                "Codex upstream returned error payload: {}",
+                error_message(message)
+            ));
+        }
+    }
+    None
+}
+
+fn error_message(value: &Value) -> String {
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .map(ToString::to_string)
+        .or_else(|| value.as_str().map(ToString::to_string))
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn response_text(bytes: &Bytes) -> String {
+    const LIMIT: usize = 4 * 1024;
+    let slice = bytes.as_ref();
+    if slice.len() <= LIMIT {
+        return String::from_utf8_lossy(slice).trim().to_string();
+    }
+    let truncated = &slice[..LIMIT];
+    format!(
+        "{}... (truncated)",
+        String::from_utf8_lossy(truncated).trim()
+    )
 }
 
 fn build_chat_completion_value(

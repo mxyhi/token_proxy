@@ -358,7 +358,6 @@ fn chat_request_to_responses_preserves_structured_tool_output() {
         json!("https://example.com/result.png")
     );
 }
-
 #[test]
 fn responses_request_to_chat_accepts_additional_tool_output_item_types() {
     let http_clients = ProxyHttpClients::new().expect("http clients");

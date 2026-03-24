@@ -197,7 +197,7 @@ fn stream_responses_to_anthropic_emits_thinking_from_reasoning_summary_events() 
         };
 
         let upstream = futures_util::stream::iter(vec![
-            Ok::<Bytes, reqwest::Error>(Bytes::from(
+            Ok::<Bytes, std::io::Error>(Bytes::from(
                 "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\"}}\n\n",
             )),
             Ok(Bytes::from(

@@ -241,6 +241,14 @@ fn chat_request_to_responses(body: &Bytes) -> Result<Bytes, String> {
     if object.get("web_search_options").is_some() {
         append_responses_web_search_tool(&mut output, object.get("web_search_options"));
     }
+    if let Some(reasoning) =
+        map_chat_reasoning_effort_to_responses_reasoning(object.get("reasoning_effort"))
+    {
+        output.insert("reasoning".to_string(), reasoning);
+    }
+    if object.get("web_search_options").is_some() {
+        append_responses_web_search_tool(&mut output, object.get("web_search_options"));
+    }
 
     serde_json::to_vec(&Value::Object(output))
         .map(Bytes::from)

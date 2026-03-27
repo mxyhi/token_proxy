@@ -45,6 +45,17 @@ describe("config/form", () => {
     expect(result.message).not.toBe("");
   });
 
+  it("rejects unsupported provider in enabled upstreams", () => {
+    const upstream = createEmptyUpstream();
+    upstream.id = "legacy-1";
+    upstream.enabled = true;
+    upstream.providers = ["legacy-provider"];
+
+    const result = validate({ ...EMPTY_FORM, upstreams: [upstream] });
+
+    expect(result.valid).toBe(false);
+  });
+
   it("treats disabled upstream as draft (still requires id)", () => {
     const upstream = createEmptyUpstream();
     upstream.id = "u1";

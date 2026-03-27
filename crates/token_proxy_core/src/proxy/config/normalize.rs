@@ -9,7 +9,6 @@ use axum::http::header::{HeaderName, HeaderValue};
 
 const APP_PROXY_URL_PLACEHOLDER: &str = "$app_proxy_url";
 const DEFAULT_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
-const DEFAULT_ANTIGRAVITY_BASE_URL: &str = "https://daily-cloudcode-pa.googleapis.com";
 
 #[derive(Clone)]
 pub(super) struct NormalizedUpstream {
@@ -108,12 +107,6 @@ fn normalize_single_upstream(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(|value| value.to_string());
-    let antigravity_account_id = upstream
-        .antigravity_account_id
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
     let proxy_url =
         normalize_upstream_proxy_url(upstream.proxy_url.as_deref(), app_proxy_url, &upstream.id)?;
     let model_mappings = compile_model_mappings(&upstream.id, &upstream.model_mappings)?;
@@ -131,7 +124,6 @@ fn normalize_single_upstream(
             runtime_provider.as_str(),
             kiro_account_id.as_deref(),
             codex_account_id.as_deref(),
-            antigravity_account_id.as_deref(),
         )?;
 
         let mut allowed_inbound_formats =
@@ -151,7 +143,6 @@ fn normalize_single_upstream(
                 rewrite_developer_role_to_system: upstream.rewrite_developer_role_to_system,
                 kiro_account_id: kiro_account_id.clone(),
                 codex_account_id: codex_account_id.clone(),
-                antigravity_account_id: antigravity_account_id.clone(),
                 kiro_preferred_endpoint: upstream.preferred_endpoint.clone(),
                 proxy_url: proxy_url.clone(),
                 priority: upstream.priority.unwrap_or(0),
@@ -215,7 +206,7 @@ fn validate_api_key_mode(
     }
     if providers
         .iter()
-        .any(|provider| matches!(provider.as_str(), "kiro" | "codex" | "antigravity"))
+        .any(|provider| matches!(provider.as_str(), "kiro" | "codex"))
     {
         return Err(format!(
             "Upstream {upstream_id} does not support multiple api_keys for account-based providers."
@@ -242,6 +233,13 @@ fn runtime_provider_for_upstream<'a>(
     provider
 }
 
+fn is_supported_provider(provider: &str) -> bool {
+    matches!(
+        provider,
+        "openai" | "openai-response" | "anthropic" | "gemini" | "kiro" | "codex"
+    )
+}
+
 fn normalize_providers(upstream: &UpstreamConfig) -> Result<Vec<String>, String> {
     if upstream.providers.is_empty() {
         return Err(format!(
@@ -261,6 +259,12 @@ fn normalize_providers(upstream: &UpstreamConfig) -> Result<Vec<String>, String>
             ));
         }
         let normalized = trimmed.to_string();
+        if !is_supported_provider(&normalized) {
+            return Err(format!(
+                "Upstream {} provider {} is not supported.",
+                upstream.id, normalized
+            ));
+        }
         if !seen.insert(normalized.clone()) {
             return Err(format!(
                 "Upstream {} providers contains duplicate: {trimmed}.",
@@ -277,7 +281,7 @@ fn normalize_providers(upstream: &UpstreamConfig) -> Result<Vec<String>, String>
 fn validate_provider_mix(upstream_id: &str, providers: &[String]) -> Result<(), String> {
     let specials = providers
         .iter()
-        .filter(|provider| matches!(provider.as_str(), "kiro" | "codex" | "antigravity"))
+        .filter(|provider| matches!(provider.as_str(), "kiro" | "codex"))
         .collect::<Vec<_>>();
     if specials.is_empty() {
         return Ok(());
@@ -330,9 +334,6 @@ fn resolve_base_url(upstream_id: &str, base_url: &str, provider: &str) -> Result
     if provider == "codex" {
         return Ok(DEFAULT_CODEX_BASE_URL.to_string());
     }
-    if provider == "antigravity" {
-        return Ok(DEFAULT_ANTIGRAVITY_BASE_URL.to_string());
-    }
     if provider == "kiro" {
         return Ok(String::new());
     }
@@ -345,7 +346,6 @@ fn validate_provider_account_binding(
     provider: &str,
     kiro_account_id: Option<&str>,
     codex_account_id: Option<&str>,
-    antigravity_account_id: Option<&str>,
 ) -> Result<(), String> {
     if provider == "kiro" && kiro_account_id.is_none() {
         return Err(format!(
@@ -355,11 +355,6 @@ fn validate_provider_account_binding(
     if provider == "codex" && codex_account_id.is_none() {
         return Err(format!(
             "Upstream {upstream_id} requires a Codex account binding."
-        ));
-    }
-    if provider == "antigravity" && antigravity_account_id.is_none() {
-        return Err(format!(
-            "Upstream {upstream_id} requires an Antigravity account binding."
         ));
     }
     Ok(())
@@ -390,15 +385,6 @@ fn native_inbound_formats_for_provider(provider: &str) -> InboundApiFormatMask {
         "kiro" => mask.insert(InboundApiFormat::AnthropicMessages),
         // Codex 的“native”更接近 OpenAI Responses；Chat 通常需要显式允许转换。
         "codex" => mask.insert(InboundApiFormat::OpenaiResponses),
-        // Align with CLIProxyAPIPlus:
-        // - Antigravity natively supports Gemini routes.
-        // - It also supports Claude Code /v1/messages (Anthropic format) out-of-the-box via
-        //   Anthropic->Gemini request conversion + Antigravity wrapping. Do not gate this behind
-        //   convert_from_map, otherwise users must "enable conversion" manually.
-        "antigravity" => {
-            mask.insert(InboundApiFormat::Gemini);
-            mask.insert(InboundApiFormat::AnthropicMessages);
-        }
         _ => {}
     }
     mask

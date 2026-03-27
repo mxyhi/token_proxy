@@ -10,7 +10,6 @@ pub mod logging;
 pub mod oauth_util;
 pub mod paths;
 
-pub mod antigravity;
 pub mod codex;
 pub mod kiro;
 pub mod proxy;

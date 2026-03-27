@@ -14,7 +14,6 @@ import {
   coerceProviderSelection,
   createAutoUpstreamId,
   createCopiedUpstreamId,
-  findIdleAntigravityAccount,
   findIdleCodexAccount,
   findIdleKiroAccount,
   hasProvider,
@@ -36,7 +35,6 @@ import type {
 import { createEmptyUpstream } from "@/features/config/form";
 import { useCodexAccounts } from "@/features/codex/use-codex-accounts";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
-import { useAntigravityAccounts } from "@/features/antigravity/use-antigravity-accounts";
 import type { ConfigForm, UpstreamForm } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
@@ -87,13 +85,6 @@ export function UpstreamsCard({
     error: codexAccountsError,
     refresh: refreshCodexAccounts,
   } = useCodexAccounts();
-  const {
-    accounts: antigravityAccounts,
-    loading: antigravityAccountsLoading,
-    error: antigravityAccountsError,
-    refresh: refreshAntigravityAccounts,
-  } = useAntigravityAccounts();
-
   const columns = useMemo(
     () => UPSTREAM_COLUMNS.filter((column) => columnVisibility[column.id]),
     [columnVisibility]
@@ -107,10 +98,6 @@ export function UpstreamsCard({
     const map = new Map(codexAccounts.map((account) => [account.account_id, account]));
     return map;
   }, [codexAccounts]);
-  const antigravityAccountMap = useMemo(() => {
-    const map = new Map(antigravityAccounts.map((account) => [account.account_id, account]));
-    return map;
-  }, [antigravityAccounts]);
 
   // 更新 draft，处理 provider 变化时的自动逻辑
   const updateDraft = useCallback(
@@ -131,11 +118,10 @@ export function UpstreamsCard({
 
         // 如果 provider 变化，处理账户绑定 + ID 自动逻辑：
         // - 新增：根据 provider 自动生成 ID
-        // - 编辑：普通 provider 不自动改 ID（避免统计/引用被拆分），仅 kiro/codex/antigravity 会随账户同步
+        // - 编辑：普通 provider 不自动改 ID（避免统计/引用被拆分），仅 kiro/codex 会随账户同步
         if (providersChanged) {
           let kiroAccountId = prev.draft.kiroAccountId;
           let codexAccountId = prev.draft.codexAccountId;
-          let antigravityAccountId = prev.draft.antigravityAccountId;
           // openai-response 专属开关：切换到其它 provider 时清零，避免把无效字段写进配置。
           let filterPromptCacheRetention = prev.draft.filterPromptCacheRetention;
           let filterSafetyIdentifier = prev.draft.filterSafetyIdentifier;
@@ -147,30 +133,16 @@ export function UpstreamsCard({
             const idleAccount = findIdleKiroAccount(kiroAccounts, upstreams, editingIndex);
             kiroAccountId = idleAccount?.account_id ?? "";
             codexAccountId = "";
-            antigravityAccountId = "";
           } else if (nextPrimary === "codex") {
             const idleAccount = findIdleCodexAccount(codexAccounts, upstreams, editingIndex);
             codexAccountId = idleAccount?.account_id ?? "";
             kiroAccountId = "";
-            antigravityAccountId = "";
-          } else if (nextPrimary === "antigravity") {
-            const idleAccount = findIdleAntigravityAccount(
-              antigravityAccounts,
-              upstreams,
-              editingIndex
-            );
-            antigravityAccountId = idleAccount?.account_id ?? "";
-            kiroAccountId = "";
-            codexAccountId = "";
           } else {
             if (currentProviders.includes("kiro")) {
               kiroAccountId = "";
             }
             if (currentProviders.includes("codex")) {
               codexAccountId = "";
-            }
-            if (currentProviders.includes("antigravity")) {
-              antigravityAccountId = "";
             }
           }
 
@@ -206,7 +178,6 @@ export function UpstreamsCard({
             editingIndex,
             kiroAccountId,
             codexAccountId,
-            antigravityAccountId,
           });
 
           return {
@@ -218,7 +189,6 @@ export function UpstreamsCard({
               id,
               kiroAccountId,
               codexAccountId,
-              antigravityAccountId,
               filterPromptCacheRetention,
               filterSafetyIdentifier,
               useChatCompletionsForResponses,
@@ -251,24 +221,10 @@ export function UpstreamsCard({
             draft: { ...prev.draft, ...patch, id: newId },
           };
         }
-        if (
-          hasProvider(prev.draft, "antigravity") &&
-          patch.antigravityAccountId !== undefined &&
-          patch.antigravityAccountId !== prev.draft.antigravityAccountId
-        ) {
-          const newId = patch.antigravityAccountId
-            ? stripJsonSuffix(patch.antigravityAccountId)
-            : prev.draft.id;
-          return {
-            ...prev,
-            draft: { ...prev.draft, ...patch, id: newId },
-          };
-        }
-
         return { ...prev, draft: { ...prev.draft, ...patch } };
       });
     },
-    [upstreams, kiroAccounts, codexAccounts, antigravityAccounts],
+    [upstreams, kiroAccounts, codexAccounts],
   );
 
   const openCreateDialog = () => {
@@ -352,7 +308,6 @@ export function UpstreamsCard({
             showApiKeys={showApiKeys}
             kiroAccounts={kiroAccountMap}
             codexAccounts={codexAccountMap}
-            antigravityAccounts={antigravityAccountMap}
             disableDelete={false}
             onEdit={openEditDialog}
             onCopy={openCopyDialog}
@@ -396,10 +351,6 @@ export function UpstreamsCard({
         codexAccountsLoading={codexAccountsLoading}
         codexAccountsError={codexAccountsError}
         onRefreshCodexAccounts={refreshCodexAccounts}
-        antigravityAccounts={antigravityAccounts}
-        antigravityAccountsLoading={antigravityAccountsLoading}
-        antigravityAccountsError={antigravityAccountsError}
-        onRefreshAntigravityAccounts={refreshAntigravityAccounts}
       />
       <DeleteUpstreamDialog
         dialog={deleteDialog}

@@ -25,7 +25,6 @@ function buildUpstream(): UpstreamForm {
     rewriteDeveloperRoleToSystem: false,
     kiroAccountId: "",
     codexAccountId: "codex-1.json",
-    antigravityAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "10",
@@ -59,7 +58,6 @@ describe("upstreams/table", () => {
             ],
           ])
         }
-        antigravityAccounts={new Map()}
         disableDelete={false}
         onEdit={() => undefined}
         onCopy={() => undefined}
@@ -95,7 +93,6 @@ describe("upstreams/table", () => {
             ],
           ])
         }
-        antigravityAccounts={new Map()}
         disableDelete={false}
         onEdit={() => undefined}
         onCopy={() => undefined}

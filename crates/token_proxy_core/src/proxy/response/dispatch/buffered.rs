@@ -7,23 +7,22 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::super::super::{
-    antigravity_compat, codex_compat, http,
+    codex_compat, http,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     model,
     openai_compat::{transform_response_body, FormatTransform},
     redact::redact_query_param_value,
     request_body::ReplayableBody,
-    server_helpers::{log_debug_headers_body, truncate_for_log},
+    server_helpers::log_debug_headers_body,
     token_rate::RequestTokenTracker,
     usage::extract_usage_from_response,
 };
 use super::super::{
     kiro_to_anthropic, kiro_to_responses, token_count, upstream_read, upstream_stream,
-    PROVIDER_ANTIGRAVITY, PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
+    PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
 };
 
 const DEBUG_BODY_LOG_LIMIT_BYTES: usize = usize::MAX;
-const ANTIGRAVITY_ERROR_LOG_LIMIT_BYTES: usize = 8 * 1024;
 
 pub(super) async fn build_buffered_response(
     status: StatusCode,
@@ -52,28 +51,6 @@ pub(super) async fn build_buffered_response(
         DEBUG_BODY_LOG_LIMIT_BYTES,
     )
     .await;
-    if context.provider == PROVIDER_ANTIGRAVITY && !status.is_success() {
-        log_antigravity_error_body(status, &bytes);
-    }
-    let bytes = if context.provider == PROVIDER_ANTIGRAVITY && status.is_success() {
-        match antigravity_compat::unwrap_response(&bytes) {
-            Ok(unwrapped) => unwrapped,
-            Err(message) => {
-                return http::error_response(StatusCode::BAD_GATEWAY, message);
-            }
-        }
-    } else {
-        bytes
-    };
-    if context.provider == PROVIDER_ANTIGRAVITY {
-        log_debug_headers_body(
-            "upstream.response.unwrapped",
-            Some(&response_headers),
-            Some(&ReplayableBody::from_bytes(bytes.clone())),
-            DEBUG_BODY_LOG_LIMIT_BYTES,
-        )
-        .await;
-    }
     let mut usage = extract_usage_from_response(&bytes);
     let response_error = response_error_for_status(status, &bytes);
     let request_body = context.request_body.clone();
@@ -150,17 +127,6 @@ fn convert_success_body(
             usage,
         }),
     }
-}
-
-fn log_antigravity_error_body(status: StatusCode, bytes: &Bytes) {
-    let body_text = String::from_utf8_lossy(bytes);
-    let truncated = truncate_for_log(&body_text, ANTIGRAVITY_ERROR_LOG_LIMIT_BYTES);
-    // 仅在错误时记录，避免日志噪音与性能影响。
-    tracing::warn!(
-        status = %status,
-        body = %truncated,
-        "antigravity upstream error body"
-    );
 }
 
 fn convert_kiro_to_anthropic_body(
@@ -388,7 +354,6 @@ fn provider_for_tokens(transform: FormatTransform, provider: &str) -> &str {
         FormatTransform::CodexToChat => "openai",
         FormatTransform::CodexToResponses => "openai-response",
         FormatTransform::CodexToAnthropic => "anthropic",
-        _ if provider == PROVIDER_ANTIGRAVITY => PROVIDER_GEMINI,
         _ => provider,
     }
 }

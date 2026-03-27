@@ -29,7 +29,6 @@ use super::{
 use crate::logging::LogLevel;
 
 const PROVIDER_ANTHROPIC: &str = "anthropic";
-const PROVIDER_ANTIGRAVITY: &str = "antigravity";
 const PROVIDER_GEMINI: &str = "gemini";
 const PROVIDER_KIRO: &str = "kiro";
 const PROVIDER_CODEX: &str = "codex";
@@ -170,7 +169,7 @@ fn resolve_gemini_plan(config: &ProxyConfig, path: &str) -> Option<Result<Dispat
     if let Some(selected) = choose_provider_by_priority(
         config,
         inbound_format,
-        &[PROVIDER_GEMINI, PROVIDER_ANTIGRAVITY],
+        &[PROVIDER_GEMINI],
     ) {
         return Some(Ok(base_plan(selected)));
     }
@@ -239,7 +238,6 @@ fn resolve_anthropic_plan(
                 PROVIDER_CODEX,
                 PROVIDER_CHAT,
                 PROVIDER_GEMINI,
-                PROVIDER_ANTIGRAVITY,
             ],
         );
         let Some(fallback) = fallback else {
@@ -266,12 +264,6 @@ fn resolve_anthropic_plan(
             },
             PROVIDER_GEMINI => DispatchPlan {
                 provider: PROVIDER_GEMINI,
-                outbound_path: None,
-                request_transform: FormatTransform::AnthropicToGemini,
-                response_transform: FormatTransform::GeminiToAnthropic,
-            },
-            PROVIDER_ANTIGRAVITY => DispatchPlan {
-                provider: PROVIDER_ANTIGRAVITY,
                 outbound_path: None,
                 request_transform: FormatTransform::AnthropicToGemini,
                 response_transform: FormatTransform::GeminiToAnthropic,
@@ -411,7 +403,6 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
             PROVIDER_CODEX,
             PROVIDER_ANTHROPIC,
             PROVIDER_GEMINI,
-            PROVIDER_ANTIGRAVITY,
         ],
     )
     .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
@@ -438,12 +429,6 @@ fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
         PROVIDER_GEMINI => DispatchPlan {
             provider: PROVIDER_GEMINI,
             outbound_path: None, // Gemini 路径需要在 upstream 层根据 model 动态构建
-            request_transform: FormatTransform::ChatToGemini,
-            response_transform: FormatTransform::GeminiToChat,
-        },
-        PROVIDER_ANTIGRAVITY => DispatchPlan {
-            provider: PROVIDER_ANTIGRAVITY,
-            outbound_path: None,
             request_transform: FormatTransform::ChatToGemini,
             response_transform: FormatTransform::GeminiToChat,
         },
@@ -478,7 +463,6 @@ fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> 
             PROVIDER_CHAT,
             PROVIDER_ANTHROPIC,
             PROVIDER_GEMINI,
-            PROVIDER_ANTIGRAVITY,
         ],
     )
     .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
@@ -497,12 +481,6 @@ fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> 
         },
         PROVIDER_GEMINI => DispatchPlan {
             provider: PROVIDER_GEMINI,
-            outbound_path: None,
-            request_transform: FormatTransform::ResponsesToGemini,
-            response_transform: FormatTransform::GeminiToResponses,
-        },
-        PROVIDER_ANTIGRAVITY => DispatchPlan {
-            provider: PROVIDER_ANTIGRAVITY,
             outbound_path: None,
             request_transform: FormatTransform::ResponsesToGemini,
             response_transform: FormatTransform::GeminiToResponses,

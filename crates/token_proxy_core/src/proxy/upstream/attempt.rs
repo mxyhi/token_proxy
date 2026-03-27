@@ -1,9 +1,6 @@
 use std::time::{Duration, Instant};
 
-use axum::http::{
-    header::{ACCEPT, ACCEPT_ENCODING, AUTHORIZATION, CONTENT_TYPE, USER_AGENT},
-    HeaderMap, HeaderValue, Method, StatusCode,
-};
+use axum::http::{HeaderMap, Method, StatusCode};
 use reqwest::{Client, Proxy};
 use tokio::time::timeout;
 
@@ -11,7 +8,6 @@ use super::request;
 use super::result;
 use super::utils::{is_retryable_error, sanitize_upstream_error};
 use super::{AttemptOutcome, PreparedUpstreamRequest};
-use crate::antigravity::endpoints as antigravity_endpoints;
 use crate::proxy::http;
 use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_body::ReplayableBody;
@@ -211,7 +207,6 @@ async fn attempt_send(
         upstream_url,
         request_headers,
         meta,
-        antigravity,
     } = prepared;
     let start_time = Instant::now();
     let response = send_upstream_request(
@@ -225,7 +220,6 @@ async fn attempt_send(
         &request_headers,
         body,
         &meta,
-        antigravity.as_ref(),
         request_detail,
         start_time,
     )
@@ -248,7 +242,6 @@ async fn send_upstream_request(
     request_headers: &HeaderMap,
     body: &ReplayableBody,
     meta: &RequestMeta,
-    antigravity: Option<&super::AntigravityRequestInfo>,
     request_detail: Option<&RequestDetailSnapshot>,
     start_time: Instant,
 ) -> Result<reqwest::Response, AttemptOutcome> {
@@ -264,24 +257,6 @@ async fn send_upstream_request(
             request_headers,
             body,
             meta,
-            antigravity,
-            request_detail,
-            start_time,
-        )
-        .await;
-    }
-    if provider == "antigravity" {
-        return send_antigravity_with_fallback(
-            state,
-            method,
-            provider,
-            upstream,
-            inbound_path,
-            upstream_path_with_query,
-            request_headers,
-            body,
-            meta,
-            antigravity,
             request_detail,
             start_time,
         )
@@ -298,106 +273,10 @@ async fn send_upstream_request(
         request_headers,
         body,
         meta,
-        antigravity,
         request_detail,
         start_time,
     )
     .await
-}
-
-async fn send_antigravity_with_fallback(
-    state: &ProxyState,
-    method: Method,
-    provider: &str,
-    upstream: &UpstreamRuntime,
-    inbound_path: &str,
-    upstream_path_with_query: &str,
-    request_headers: &HeaderMap,
-    body: &ReplayableBody,
-    meta: &RequestMeta,
-    antigravity: Option<&super::AntigravityRequestInfo>,
-    request_detail: Option<&RequestDetailSnapshot>,
-    start_time: Instant,
-) -> Result<reqwest::Response, AttemptOutcome> {
-    let urls = antigravity_fallback_urls(&upstream.base_url, upstream_path_with_query);
-    let request_headers = antigravity_request_headers(request_headers, meta, antigravity);
-    log_debug_headers_body(
-        "upstream.request",
-        Some(&request_headers),
-        Some(body),
-        DEBUG_UPSTREAM_LOG_LIMIT_BYTES,
-    )
-    .await;
-    let mut last_transport: Option<reqwest::Error> = None;
-    let mut saw_timeout = false;
-    for (idx, url) in urls.iter().enumerate() {
-        let upstream_body = request::build_upstream_body(
-            provider,
-            upstream,
-            upstream_path_with_query,
-            body,
-            meta,
-            antigravity,
-        )
-        .await?;
-        match send_request_once(
-            state
-                .http_clients
-                .client_for_proxy_url(upstream.proxy_url.as_deref())
-                .map_err(|message| {
-                    AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
-                })?,
-            &method,
-            url,
-            &request_headers,
-            upstream_body,
-            state.config.upstream_no_data_timeout,
-        )
-        .await
-        {
-            Ok(response) => {
-                let status = response.status();
-                // Align with CLIProxyAPIPlus: Antigravity endpoints may return 404 on one base URL
-                // while succeeding on another; try fallbacks on 404 as well.
-                if (super::utils::is_retryable_status(status) || status == StatusCode::NOT_FOUND)
-                    && idx + 1 < urls.len()
-                {
-                    let _ = response.bytes().await;
-                    continue;
-                }
-                return Ok(response);
-            }
-            Err(SendFailure::Timeout) => saw_timeout = true,
-            Err(SendFailure::Transport(err)) => last_transport = Some(err),
-        }
-    }
-    if saw_timeout {
-        return Err(handle_upstream_timeout(
-            state,
-            provider,
-            upstream,
-            inbound_path,
-            meta,
-            request_detail,
-            start_time,
-        ));
-    }
-    if let Some(err) = last_transport {
-        return Err(map_upstream_error(
-            state,
-            provider,
-            upstream,
-            inbound_path,
-            meta,
-            request_detail,
-            err,
-            start_time,
-        ));
-    }
-    Err(AttemptOutcome::Fatal(http::error_response(
-        StatusCode::BAD_GATEWAY,
-        "Antigravity upstream request failed.".to_string(),
-    )))
 }
 
 async fn send_codex_request(
@@ -411,7 +290,6 @@ async fn send_codex_request(
     request_headers: &HeaderMap,
     body: &ReplayableBody,
     meta: &RequestMeta,
-    antigravity: Option<&super::AntigravityRequestInfo>,
     request_detail: Option<&RequestDetailSnapshot>,
     start_time: Instant,
 ) -> Result<reqwest::Response, AttemptOutcome> {
@@ -427,7 +305,6 @@ async fn send_codex_request(
             request_headers,
             body,
             meta,
-            antigravity,
             request_detail,
             start_time,
         )
@@ -462,7 +339,6 @@ async fn send_upstream_request_once(
     request_headers: &HeaderMap,
     body: &ReplayableBody,
     meta: &RequestMeta,
-    antigravity: Option<&super::AntigravityRequestInfo>,
     request_detail: Option<&RequestDetailSnapshot>,
     start_time: Instant,
 ) -> Result<reqwest::Response, AttemptOutcome> {
@@ -485,7 +361,6 @@ async fn send_upstream_request_once(
         upstream_path_with_query,
         body,
         meta,
-        antigravity,
     )
     .await?;
     match send_request_once(
@@ -610,7 +485,6 @@ async fn send_codex_attempt(
         upstream_path_with_query,
         body,
         meta,
-        None,
     )
     .await
     .map_err(CodexAttemptError::Fatal)?;
@@ -747,58 +621,6 @@ fn upgrade_socks5(proxy_url: &str) -> Option<String> {
         return Some(value.replacen("socks5://", "socks5h://", 1));
     }
     None
-}
-
-fn antigravity_fallback_urls(base_url: &str, path: &str) -> Vec<String> {
-    let mut urls = Vec::new();
-    let path = if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{path}")
-    };
-    let base_url = base_url.trim_end_matches('/');
-    let bases = if base_url.is_empty() || base_url == antigravity_endpoints::BASE_URL_PROD {
-        antigravity_endpoints::BASE_URLS
-            .iter()
-            .map(|base| base.to_string())
-            .collect::<Vec<_>>()
-    } else {
-        antigravity_endpoints::build_base_url_list(base_url)
-    };
-    for base in bases {
-        let base = base.trim_end_matches('/');
-        urls.push(format!("{base}{path}"));
-    }
-    urls
-}
-
-fn antigravity_request_headers(
-    base: &HeaderMap,
-    meta: &RequestMeta,
-    antigravity: Option<&super::AntigravityRequestInfo>,
-) -> HeaderMap {
-    // Align with CLIProxyAPIPlus: only forward essential headers to Antigravity.
-    // Do NOT pass through inbound headers (e.g. anthropic-beta/x-stainless), as they can
-    // trigger upstream validation errors.
-    let mut headers = HeaderMap::new();
-    if let Some(value) = base.get(AUTHORIZATION).cloned() {
-        headers.insert(AUTHORIZATION, value);
-    }
-    let user_agent = antigravity
-        .map(|info| info.user_agent.clone())
-        .unwrap_or_else(antigravity_endpoints::default_user_agent);
-    if let Ok(value) = HeaderValue::from_str(&user_agent) {
-        headers.insert(USER_AGENT, value);
-    }
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-    headers.insert(ACCEPT_ENCODING, HeaderValue::from_static("identity"));
-    let accept = if meta.stream {
-        "text/event-stream"
-    } else {
-        "application/json"
-    };
-    headers.insert(ACCEPT, HeaderValue::from_static(accept));
-    headers
 }
 
 fn build_codex_client(proxy_url: Option<&str>, http1_only: bool) -> Result<Client, String> {

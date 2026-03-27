@@ -15,7 +15,6 @@ fn config_with_local(key: &str) -> ProxyConfig {
         upstream_strategy: crate::proxy::config::UpstreamStrategyRuntime::default(),
         upstreams: HashMap::new(),
         kiro_preferred_endpoint: None,
-        antigravity_user_agent: None,
     }
 }
 
@@ -31,7 +30,6 @@ fn config_without_local() -> ProxyConfig {
         upstream_strategy: crate::proxy::config::UpstreamStrategyRuntime::default(),
         upstreams: HashMap::new(),
         kiro_preferred_endpoint: None,
-        antigravity_user_agent: None,
     }
 }
 
@@ -46,7 +44,6 @@ fn upstream_without_key() -> UpstreamRuntime {
         rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
-        antigravity_account_id: None,
         kiro_preferred_endpoint: None,
         proxy_url: None,
         priority: 0,

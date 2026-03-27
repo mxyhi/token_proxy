@@ -10,7 +10,7 @@ fn stream_gemini_to_anthropic_emits_single_input_json_delta_for_tool_calls() {
     super::run_async(async {
         let context = LogContext {
             path: "/v1/messages".to_string(),
-            provider: "antigravity".to_string(),
+            provider: "gemini".to_string(),
             upstream_id: "unit-test".to_string(),
             model: Some("unit-model".to_string()),
             mapped_model: Some("unit-model".to_string()),

@@ -8,57 +8,26 @@ import { m } from "@/paraglide/messages.js";
 const providerMocks = vi.hoisted(() => {
   const refreshKiroAccounts = vi.fn(async () => undefined);
   const refreshCodexAccounts = vi.fn(async () => undefined);
-  const refreshAntigravityAccounts = vi.fn(async () => undefined);
   const refreshKiroQuotas = vi.fn(async () => undefined);
   const refreshCodexQuotas = vi.fn(async () => undefined);
-  const refreshAntigravityQuotas = vi.fn(async () => undefined);
-  const refreshAntigravityIde = vi.fn(async () => undefined);
-  const refreshAntigravityWarmup = vi.fn(async () => undefined);
   const logoutKiro = vi.fn(async () => undefined);
   const logoutCodex = vi.fn(async () => undefined);
-  const logoutAntigravity = vi.fn(async () => undefined);
   const beginKiroLogin = vi.fn();
   const beginCodexLogin = vi.fn();
-  const beginAntigravityLogin = vi.fn();
   const importKiroIde = vi.fn(async () => undefined);
   const importKiroKam = vi.fn(async () => undefined);
-  const importAntigravityIde = vi.fn(async () => undefined);
-  const switchAntigravityIdeAccount = vi.fn(async () => ({
-    database_available: true,
-    ide_running: true,
-    active_email: "antigravity@example.com",
-  }));
-  const runWarmup = vi.fn(async () => undefined);
-  const setWarmupSchedule = vi.fn(async () => ({
-    account_id: "ag-1",
-    model: "sonnet",
-    interval_minutes: 60,
-    enabled: true,
-  }));
-  const toggleWarmupSchedule = vi.fn(async () => undefined);
 
   return {
     refreshKiroAccounts,
     refreshCodexAccounts,
-    refreshAntigravityAccounts,
     refreshKiroQuotas,
     refreshCodexQuotas,
-    refreshAntigravityQuotas,
-    refreshAntigravityIde,
-    refreshAntigravityWarmup,
     logoutKiro,
     logoutCodex,
-    logoutAntigravity,
     beginKiroLogin,
     beginCodexLogin,
-    beginAntigravityLogin,
     importKiroIde,
     importKiroKam,
-    importAntigravityIde,
-    switchAntigravityIdeAccount,
-    runWarmup,
-    setWarmupSchedule,
-    toggleWarmupSchedule,
   };
 });
 
@@ -106,24 +75,6 @@ vi.mock("@/features/codex/use-codex-accounts", () => ({
     error: "",
     refresh: providerMocks.refreshCodexAccounts,
     logout: providerMocks.logoutCodex,
-  }),
-}));
-
-vi.mock("@/features/antigravity/use-antigravity-accounts", () => ({
-  useAntigravityAccounts: () => ({
-    accounts: [
-      {
-        account_id: "ag-1",
-        email: "antigravity@example.com",
-        expires_at: "2026-06-01T00:00:00Z",
-        status: "active",
-        source: "ide",
-      },
-    ],
-    loading: false,
-    error: "",
-    refresh: providerMocks.refreshAntigravityAccounts,
-    logout: providerMocks.logoutAntigravity,
   }),
 }));
 
@@ -177,28 +128,6 @@ vi.mock("@/features/codex/use-codex-quotas", () => ({
   }),
 }));
 
-vi.mock("@/features/antigravity/use-antigravity-quotas", () => ({
-  useAntigravityQuotas: () => ({
-    quotas: [
-      {
-        account_id: "ag-1",
-        plan_type: "Team",
-        error: null,
-        quotas: [
-          {
-            name: "sonnet",
-            percentage: 75,
-            reset_at: "2026-04-20T00:00:00Z",
-          },
-        ],
-      },
-    ],
-    loading: false,
-    error: "",
-    refresh: providerMocks.refreshAntigravityQuotas,
-  }),
-}));
-
 vi.mock("@/features/kiro/use-kiro-login", () => ({
   useKiroLogin: () => ({
     login: { status: "idle" },
@@ -210,41 +139,6 @@ vi.mock("@/features/codex/use-codex-login", () => ({
   useCodexLogin: () => ({
     login: { status: "idle" },
     beginLogin: providerMocks.beginCodexLogin,
-  }),
-}));
-
-vi.mock("@/features/antigravity/use-antigravity-login", () => ({
-  useAntigravityLogin: () => ({
-    login: { status: "idle" },
-    beginLogin: providerMocks.beginAntigravityLogin,
-  }),
-}));
-
-vi.mock("@/features/antigravity/use-antigravity-ide", () => ({
-  useAntigravityIde: () => ({
-    status: {
-      database_available: true,
-      ide_running: true,
-      active_email: "antigravity@example.com",
-    },
-    loading: false,
-    error: "",
-    refresh: providerMocks.refreshAntigravityIde,
-    importIde: providerMocks.importAntigravityIde,
-    switchAccount: providerMocks.switchAntigravityIdeAccount,
-  }),
-}));
-
-vi.mock("@/features/antigravity/use-antigravity-warmup", () => ({
-  useAntigravityWarmup: () => ({
-    schedules: [],
-    loading: false,
-    error: "",
-    running: false,
-    refresh: providerMocks.refreshAntigravityWarmup,
-    runWarmup: providerMocks.runWarmup,
-    setSchedule: providerMocks.setWarmupSchedule,
-    toggleSchedule: providerMocks.toggleWarmupSchedule,
   }),
 }));
 
@@ -285,7 +179,12 @@ describe("providers/ProvidersPanel", () => {
     expect(screen.getByRole("columnheader", { name: m.providers_table_account() })).toBeInTheDocument();
     expect(within(getAccountsTable()).getByText("alice@example.com")).toBeInTheDocument();
     expect(within(getAccountsTable()).getByText("bob@example.com")).toBeInTheDocument();
-    expect(within(getAccountsTable()).getByText("antigravity@example.com")).toBeInTheDocument();
+  });
+
+  it("does not render extra provider group panels below the accounts table", () => {
+    render(<ProvidersPanel />);
+
+    expect(document.querySelector('[data-slot="provider-group"]')).toBeNull();
   });
 
   it("filters rows by search keyword", async () => {
@@ -299,7 +198,6 @@ describe("providers/ProvidersPanel", () => {
 
     expect(within(getAccountsTable()).getByText("alice@example.com")).toBeInTheDocument();
     expect(within(getAccountsTable()).queryByText("bob@example.com")).not.toBeInTheDocument();
-    expect(within(getAccountsTable()).queryByText("antigravity@example.com")).not.toBeInTheDocument();
   });
 
   it("filters rows by provider and status", async () => {
@@ -311,7 +209,6 @@ describe("providers/ProvidersPanel", () => {
 
     expect(within(getAccountsTable()).queryByText("alice@example.com")).not.toBeInTheDocument();
     expect(within(getAccountsTable()).getByText("bob@example.com")).toBeInTheDocument();
-    expect(within(getAccountsTable()).queryByText("antigravity@example.com")).not.toBeInTheDocument();
 
     await user.click(within(getToolbar()).getByLabelText(m.providers_filter_status_label()));
     await user.click(screen.getByRole("option", { name: m.codex_account_status_expired() }));
@@ -342,9 +239,5 @@ describe("providers/ProvidersPanel", () => {
     expect(providerMocks.refreshKiroQuotas).toHaveBeenCalledTimes(1);
     expect(providerMocks.refreshCodexAccounts).toHaveBeenCalledTimes(1);
     expect(providerMocks.refreshCodexQuotas).toHaveBeenCalledTimes(1);
-    expect(providerMocks.refreshAntigravityAccounts).toHaveBeenCalledTimes(1);
-    expect(providerMocks.refreshAntigravityQuotas).toHaveBeenCalledTimes(1);
-    expect(providerMocks.refreshAntigravityIde).toHaveBeenCalledTimes(1);
-    expect(providerMocks.refreshAntigravityWarmup).toHaveBeenCalledTimes(1);
   });
 });

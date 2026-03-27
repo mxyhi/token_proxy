@@ -83,7 +83,6 @@ export type UpstreamConfig = {
   rewrite_developer_role_to_system?: boolean;
   kiro_account_id?: string | null;
   codex_account_id?: string | null;
-  antigravity_account_id?: string | null;
   preferred_endpoint?: KiroPreferredEndpoint | null;
   proxy_url: string | null;
   priority: number | null;
@@ -108,10 +107,6 @@ export type ProxyConfigFileBase = {
   local_api_key: string | null;
   app_proxy_url: string | null;
   kiro_preferred_endpoint?: KiroPreferredEndpoint | null;
-  antigravity_ide_db_path?: string | null;
-  antigravity_app_paths?: string[];
-  antigravity_process_names?: string[];
-  antigravity_user_agent?: string | null;
   log_level?: LogLevel;
   retryable_failure_cooldown_secs?: number;
   upstream_no_data_timeout_secs?: number;
@@ -153,7 +148,6 @@ export type UpstreamForm = {
   rewriteDeveloperRoleToSystem: boolean;
   kiroAccountId: string;
   codexAccountId: string;
-  antigravityAccountId: string;
   preferredEndpoint: "" | KiroPreferredEndpoint;
   proxyUrl: string;
   priority: string;
@@ -184,10 +178,6 @@ export type ConfigForm = {
   localApiKey: string;
   appProxyUrl: string;
   kiroPreferredEndpoint: "" | KiroPreferredEndpoint;
-  antigravityIdeDbPath: string;
-  antigravityAppPaths: string;
-  antigravityProcessNames: string;
-  antigravityUserAgent: string;
   logLevel: LogLevel;
   retryableFailureCooldownSecs: string;
   upstreamNoDataTimeoutSecs: string;

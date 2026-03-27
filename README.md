@@ -9,7 +9,7 @@ Local AI API gateway for OpenAI / Gemini / Anthropic. Runs on your machine, keep
 ---
 
 ## What you get
-- Multiple providers: `openai`, `openai-response`, `anthropic`, `gemini`, `kiro`, `codex`, `antigravity`
+- Multiple providers: `openai`, `openai-response`, `anthropic`, `gemini`, `kiro`, `codex`
 - Built-in routing + optional format conversion (OpenAI Chat ⇄ Responses; Anthropic Messages ↔ OpenAI; Gemini ↔ OpenAI/Anthropic; SSE supported)
 - Per-upstream priority + two balancing strategies (fill-first / round-robin)
 - Model alias mapping (exact / prefix* / wildcard*) and response model rewrite
@@ -109,8 +109,8 @@ Notes:
 | Field | Default | Notes |
 | --- | --- | --- |
 | `id` | required | Unique per upstream. |
-| `providers` | required | One upstream can serve multiple providers. Special providers `kiro/codex/antigravity` cannot be mixed with others. |
-| `base_url` | required | Full base; overlapping path parts are de-duplicated. (`providers=["kiro"]` / `["codex"]` / `["antigravity"]` can be empty.) |
+| `providers` | required | One upstream can serve multiple providers. Special providers `kiro/codex` cannot be mixed with others. |
+| `base_url` | required | Full base; overlapping path parts are de-duplicated. (`providers=["kiro"]` / `["codex"]` can be empty.) |
 | `api_key` | `null` | Provider-specific bearer/key; overrides request headers. |
 | `kiro_account_id` | `null` | Required when `providers=["kiro"]`. |
 | `preferred_endpoint` | `null` | `kiro` only (`providers=["kiro"]`): `ide` or `cli`. |
@@ -129,9 +129,7 @@ Notes:
 - Cross-format fallback/conversion is controlled by `upstreams[].convert_from_map` (no global switch). If a provider has no eligible upstream for the inbound format, it won't be selected.
 - If `openai` is missing for `/v1/chat/completions`: fallback can be `openai-response`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai-response`).
 - For `/v1/messages`: choose between `anthropic` and `kiro` by priority; tie-break uses upstream id. If the chosen provider returns a retryable error, the proxy will fall back to the other native provider (Anthropic ↔ Kiro) when configured.
-- If neither `anthropic` nor `kiro` exists for `/v1/messages`:
-  - `antigravity` is supported by default (no `convert_from_map` needed; aligned with CLIProxyAPIPlus Antigravity/Claude Code behavior).
-  - Other providers can be selected only when allowed for `anthropic_messages` via `convert_from_map` (e.g. `openai-response`, `openai`, `gemini`).
+- If neither `anthropic` nor `kiro` exists for `/v1/messages`: other providers can be selected only when allowed for `anthropic_messages` via `convert_from_map` (e.g. `openai-response`, `openai`, `gemini`).
 - If `openai-response` is missing for `/v1/responses`: fallback can be `openai`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai`).
 - If `gemini` is missing for `/v1beta/models/*:generateContent`: fallback can be `openai-response`, `openai`, or `anthropic` (priority-based; tie-break prefers `openai-response`).
 

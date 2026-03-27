@@ -157,20 +157,6 @@ fn migrate_single_upstream(upstream: &mut Value, legacy_enable_conversion: bool)
                 changed = true;
             }
         }
-    } else {
-        // 旧开关 false：默认禁用跨格式转换。
-        // 但旧逻辑里 `/v1/messages` 在 conversion disabled 时仍允许 antigravity 兜底。
-        // 为了迁移后行为一致：当 upstream 配置了 provider=antigravity 时，显式允许从 anthropic_messages 转入。
-        if let Some(providers) = read_providers(obj) {
-            let has_antigravity = providers.iter().any(|provider| provider == "antigravity");
-            if has_antigravity {
-                changed |= ensure_convert_from_map_contains(
-                    obj,
-                    "antigravity",
-                    &[InboundApiFormat::AnthropicMessages],
-                );
-            }
-        }
     }
 
     changed
@@ -204,37 +190,6 @@ fn merge_api_key_into_api_keys(obj: &mut Map<String, Value>, api_key: &str) {
             );
         }
     }
-}
-
-fn ensure_convert_from_map_contains(
-    obj: &mut Map<String, Value>,
-    provider: &str,
-    formats: &[InboundApiFormat],
-) -> bool {
-    let entry = obj
-        .entry("convert_from_map".to_string())
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Value::Object(map) = entry else {
-        // 用户写错类型：不擅自覆盖，交给反序列化/normalize 给出错误。
-        return false;
-    };
-
-    let value = map
-        .entry(provider.to_string())
-        .or_insert_with(|| Value::Array(Vec::new()));
-    let Value::Array(list) = value else {
-        return false;
-    };
-
-    let mut changed = false;
-    for format in formats {
-        let name = inbound_format_name(*format);
-        if !list.iter().any(|v| v.as_str() == Some(name)) {
-            list.push(Value::String(name.to_string()));
-            changed = true;
-        }
-    }
-    changed
 }
 
 fn all_inbound_formats_value() -> Value {

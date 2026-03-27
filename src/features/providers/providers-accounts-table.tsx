@@ -33,7 +33,7 @@ export type ProviderAccountQuotaDetailItem = {
 
 export type ProviderAccountTableRow = {
   id: string;
-  provider: "kiro" | "codex" | "antigravity";
+  provider: "kiro" | "codex";
   providerLabel: string;
   displayName: string;
   accountId: string;
@@ -51,7 +51,6 @@ export type ProviderAccountTableRow = {
   quotaError: string;
   quotaItems: ProviderAccountQuotaDetailItem[];
   logoutLabel: string;
-  canSwitchIde: boolean;
 };
 
 type ProviderAccountDialogProps = {
@@ -60,7 +59,6 @@ type ProviderAccountDialogProps = {
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onLogout: (row: ProviderAccountTableRow) => Promise<void>;
-  onSwitchIde: (row: ProviderAccountTableRow) => Promise<void>;
 };
 
 function AccountFieldGrid({ fields }: { fields: ProviderAccountTableRow["detailFields"] }) {
@@ -128,20 +126,12 @@ function ProviderAccountDialog({
   busy,
   onOpenChange,
   onLogout,
-  onSwitchIde,
 }: ProviderAccountDialogProps) {
   const handleLogout = () => {
     if (!row) {
       return;
     }
     void onLogout(row).finally(() => onOpenChange(false));
-  };
-
-  const handleSwitchIde = () => {
-    if (!row) {
-      return;
-    }
-    void onSwitchIde(row);
   };
 
   return (
@@ -164,17 +154,6 @@ function ProviderAccountDialog({
                 <QuotaDetailSection quotaError={row.quotaError} quotaItems={row.quotaItems} />
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 pt-4">
-                {row.canSwitchIde ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={handleSwitchIde}
-                    disabled={busy}
-                  >
-                    {m.antigravity_switch_ide_button()}
-                  </Button>
-                ) : null}
                 <AccountDeleteAction
                   accountLabel={row.displayName}
                   buttonLabel={row.logoutLabel}
@@ -196,7 +175,6 @@ type ProvidersAccountsTableSectionProps = {
   loading: boolean;
   error: string;
   onLogout: (row: ProviderAccountTableRow) => Promise<void>;
-  onSwitchIde: (row: ProviderAccountTableRow) => Promise<void>;
 };
 
 export function ProvidersAccountsTableSection({
@@ -205,7 +183,6 @@ export function ProvidersAccountsTableSection({
   loading,
   error,
   onLogout,
-  onSwitchIde,
 }: ProvidersAccountsTableSectionProps) {
   const [selectedRow, setSelectedRow] = useState<ProviderAccountTableRow | null>(null);
 
@@ -294,7 +271,6 @@ export function ProvidersAccountsTableSection({
           }
         }}
         onLogout={onLogout}
-        onSwitchIde={onSwitchIde}
       />
     </section>
   );

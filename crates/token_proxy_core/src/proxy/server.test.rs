@@ -87,7 +87,6 @@ fn config_with_runtime_upstreams(
             rewrite_developer_role_to_system: false,
             kiro_account_id: None,
             codex_account_id: (*provider == PROVIDER_CODEX).then(|| format!("codex-{id}.json")),
-            antigravity_account_id: None,
             kiro_preferred_endpoint: None,
             proxy_url: None,
             priority: *priority,
@@ -133,7 +132,6 @@ fn config_with_runtime_upstreams(
         },
         upstreams: provider_map,
         kiro_preferred_endpoint: None,
-        antigravity_user_agent: None,
     }
 }
 
@@ -436,10 +434,7 @@ async fn build_test_state_handle(config: ProxyConfig, data_dir: PathBuf) -> Prox
     let codex_accounts = Arc::new(
         crate::codex::CodexAccountStore::new(&paths, app_proxy.clone()).expect("codex store"),
     );
-    let antigravity_accounts = Arc::new(
-        crate::antigravity::AntigravityAccountStore::new(&paths, app_proxy)
-            .expect("antigravity store"),
-    );
+    let _ = app_proxy;
     let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
         .format(&time::format_description::well_known::Rfc3339)
         .expect("format expires_at");
@@ -488,7 +483,6 @@ async fn build_test_state_handle(config: ProxyConfig, data_dir: PathBuf) -> Prox
         token_rate: super::super::token_rate::TokenRateTracker::new(),
         kiro_accounts,
         codex_accounts,
-        antigravity_accounts,
     });
     Arc::new(RwLock::new(state))
 }
@@ -1514,16 +1508,6 @@ fn anthropic_beta_query_is_preserved_for_native_anthropic() {
     let uri = Uri::from_static("/v1/messages?beta=true");
     let outbound_with_query = build_outbound_path_with_query(&outbound, &uri);
     assert_eq!(outbound_with_query, "/v1/messages?beta=true");
-}
-
-#[test]
-fn anthropic_messages_allows_antigravity_without_conversion() {
-    let config = config_with_providers(&[(PROVIDER_ANTIGRAVITY, FORMATS_ALL)]);
-    let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should fallback");
-    assert_eq!(plan.provider, PROVIDER_ANTIGRAVITY);
-    assert_eq!(plan.outbound_path, None);
-    assert_eq!(plan.request_transform, FormatTransform::AnthropicToGemini);
-    assert_eq!(plan.response_transform, FormatTransform::GeminiToAnthropic);
 }
 
 #[test]

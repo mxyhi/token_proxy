@@ -9,7 +9,7 @@
 ---
 
 ## 你能得到什么
-- 多提供商：`openai`、`openai-response`、`anthropic`、`gemini`、`kiro`、`codex`、`antigravity`
+- 多提供商：`openai`、`openai-response`、`anthropic`、`gemini`、`kiro`、`codex`
 - 内置路由，支持可选的 API 格式互转（OpenAI Chat ⇄ Responses；Anthropic Messages ↔ OpenAI；Gemini ↔ OpenAI/Anthropic，含 SSE）
 - 上游优先级 + 两种策略（填满优先级组 / 轮询）
 - 模型别名映射（精确 / 前缀* / 通配*），响应会回写原始别名
@@ -109,8 +109,8 @@ pnpm exec tsc --noEmit
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `id` | 必填 | 唯一 |
-| `providers` | 必填 | 一个上游可同时服务多个 provider。特殊 provider（`kiro/codex/antigravity`）不可与其它 provider 混用。 |
-| `base_url` | 必填 | 完整基址，重复路径段会去重（`providers=["kiro"]` / `["codex"]` / `["antigravity"]` 可为空） |
+| `providers` | 必填 | 一个上游可同时服务多个 provider。特殊 provider（`kiro/codex`）不可与其它 provider 混用。 |
+| `base_url` | 必填 | 完整基址，重复路径段会去重（`providers=["kiro"]` / `["codex"]` 可为空） |
 | `api_key` | `null` | 该 provider 的密钥；优先于请求头 |
 | `kiro_account_id` | `null` | `providers=["kiro"]` 时必填 |
 | `preferred_endpoint` | `null` | `kiro` 专用：`ide` 或 `cli` |
@@ -129,9 +129,7 @@ pnpm exec tsc --noEmit
 - 跨格式 fallback/转换由 `upstreams[].convert_from_map` 控制（不再有全局开关）；若某个 provider 在该入站格式下没有任何可用 upstream，则不会被选中。
 - `/v1/chat/completions` 缺少 `openai`：可 fallback 到 `openai-response` / `anthropic` / `gemini`（按优先级选择，平级优先 `openai-response`）
 - `/v1/messages`：在 `anthropic` 与 `kiro` 间按优先级选择；平级按 upstream id 排序。若命中 provider 返回“可重试错误”，且另一个 native provider 已配置，则会自动 fallback（Anthropic ↔ Kiro）
-- 当 `/v1/messages` 缺少 `anthropic` 且 `kiro` 也不存在时：
-  - `antigravity`：默认支持（无需 `convert_from_map`，对齐 CLIProxyAPIPlus 的 Antigravity/Claude Code 体验）
-  - 其它 provider：若在 `convert_from_map` 中允许 `anthropic_messages`，则可 fallback 到 `openai-response` / `openai` / `gemini`（按优先级选择，平级优先 `openai-response`）
+- 当 `/v1/messages` 缺少 `anthropic` 且 `kiro` 也不存在时：其它 provider 若在 `convert_from_map` 中允许 `anthropic_messages`，则可 fallback 到 `openai-response` / `openai` / `gemini`（按优先级选择，平级优先 `openai-response`）
 - `/v1/responses` 缺少 `openai-response`：可 fallback 到 `openai` / `anthropic` / `gemini`（按优先级选择，平级优先 `openai`）
 - `/v1beta/models/*:generateContent` 缺少 `gemini`：可 fallback 到 `openai-response` / `openai` / `anthropic`（按优先级选择，平级优先 `openai-response`）
 

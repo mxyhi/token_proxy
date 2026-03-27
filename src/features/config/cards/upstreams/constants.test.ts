@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { UPSTREAM_COLUMNS } from "@/features/config/cards/upstreams/constants";
+import {
+  UPSTREAM_COLUMNS,
+  mergeProviderOptions,
+} from "@/features/config/cards/upstreams/constants";
 
 describe("upstreams/constants", () => {
   it("adjusts id, provider, account, and priority column widths", () => {
@@ -17,5 +20,17 @@ describe("upstreams/constants", () => {
     expect(accountColumn?.cellClassName).toBe("w-[7.5rem] max-w-[7.5rem]");
     expect(priorityColumn?.headerClassName).toBe("w-[6rem]");
     expect(priorityColumn?.cellClassName).toBe("w-[6rem]");
+  });
+
+  it("exposes only supported provider options by default", () => {
+    expect(mergeProviderOptions(["legacy-provider"])).toEqual([
+      "openai",
+      "openai-response",
+      "anthropic",
+      "gemini",
+      "kiro",
+      "codex",
+      "legacy-provider",
+    ]);
   });
 });

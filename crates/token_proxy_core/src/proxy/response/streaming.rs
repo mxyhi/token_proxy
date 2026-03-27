@@ -9,8 +9,7 @@ use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 use super::{
-    PROVIDER_ANTHROPIC, PROVIDER_ANTIGRAVITY, PROVIDER_CODEX, PROVIDER_GEMINI, PROVIDER_OPENAI,
-    PROVIDER_OPENAI_RESPONSES,
+    PROVIDER_ANTHROPIC, PROVIDER_CODEX, PROVIDER_GEMINI, PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES,
 };
 
 pub(crate) const STREAM_DROPPED_ERROR: &str = "stream dropped before completion";
@@ -283,7 +282,7 @@ fn extract_stream_text(provider: &str, data: &str) -> Option<String> {
             extract_openai_stream_text(&value)
         }
         PROVIDER_ANTHROPIC => extract_anthropic_stream_text(&value),
-        PROVIDER_GEMINI | PROVIDER_ANTIGRAVITY => extract_gemini_stream_text(&value),
+        PROVIDER_GEMINI => extract_gemini_stream_text(&value),
         _ => None,
     }
     .or_else(|| extract_fallback_stream_text(&value))

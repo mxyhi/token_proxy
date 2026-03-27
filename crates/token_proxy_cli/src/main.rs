@@ -85,9 +85,6 @@ async fn serve(paths: token_proxy_core::paths::TokenProxyPaths) -> Result<(), St
         &paths,
         app_proxy.clone(),
     )?);
-    let antigravity_accounts = Arc::new(
-        token_proxy_core::antigravity::AntigravityAccountStore::new(&paths, app_proxy.clone())?,
-    );
 
     let ctx = token_proxy_core::proxy::service::ProxyContext {
         paths: Arc::new(paths),
@@ -96,7 +93,6 @@ async fn serve(paths: token_proxy_core::paths::TokenProxyPaths) -> Result<(), St
         token_rate,
         kiro_accounts,
         codex_accounts,
-        antigravity_accounts,
     };
 
     let proxy = token_proxy_core::proxy::service::ProxyServiceHandle::new();

@@ -183,8 +183,6 @@ pub struct UpstreamConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub antigravity_account_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_endpoint: Option<KiroPreferredEndpoint>,
     pub proxy_url: Option<String>,
     pub priority: Option<i32>,
@@ -212,14 +210,6 @@ pub struct ProxyConfigFile {
     pub app_proxy_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub antigravity_ide_db_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub antigravity_app_paths: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub antigravity_process_names: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub antigravity_user_agent: Option<String>,
     #[serde(
         default = "default_log_level",
         deserialize_with = "deserialize_log_level"
@@ -253,10 +243,6 @@ impl Default for ProxyConfigFile {
             local_api_key: None,
             app_proxy_url: None,
             kiro_preferred_endpoint: None,
-            antigravity_ide_db_path: None,
-            antigravity_app_paths: Vec::new(),
-            antigravity_process_names: Vec::new(),
-            antigravity_user_agent: None,
             log_level: LogLevel::default(),
             max_request_body_bytes: None,
             retryable_failure_cooldown_secs: default_retryable_failure_cooldown_secs(),
@@ -308,7 +294,6 @@ pub struct ProxyConfig {
     pub upstream_strategy: UpstreamStrategyRuntime,
     pub upstreams: HashMap<String, ProviderUpstreams>,
     pub kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
-    pub antigravity_user_agent: Option<String>,
 }
 
 fn deserialize_log_level<'de, D>(deserializer: D) -> Result<LogLevel, D::Error>
@@ -353,7 +338,6 @@ pub struct UpstreamRuntime {
     pub(crate) rewrite_developer_role_to_system: bool,
     pub(crate) kiro_account_id: Option<String>,
     pub(crate) codex_account_id: Option<String>,
-    pub(crate) antigravity_account_id: Option<String>,
     pub(crate) kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
     pub(crate) proxy_url: Option<String>,
     pub(crate) priority: i32,

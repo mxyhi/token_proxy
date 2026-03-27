@@ -36,7 +36,6 @@ pub struct ProxyContext {
     pub token_rate: Arc<super::token_rate::TokenRateTracker>,
     pub kiro_accounts: Arc<crate::kiro::KiroAccountStore>,
     pub codex_accounts: Arc<crate::codex::CodexAccountStore>,
-    pub antigravity_accounts: Arc<crate::antigravity::AntigravityAccountStore>,
 }
 
 #[derive(Clone)]
@@ -465,7 +464,6 @@ async fn build_proxy_state(
     let token_rate = ctx.token_rate.clone();
     let kiro_accounts = ctx.kiro_accounts.clone();
     let codex_accounts = ctx.codex_accounts.clone();
-    let antigravity_accounts = ctx.antigravity_accounts.clone();
     Ok(Arc::new(ProxyState {
         upstream_selector: super::upstream_selector::UpstreamSelectorRuntime::new_with_cooldown(
             config.retryable_failure_cooldown,
@@ -478,7 +476,6 @@ async fn build_proxy_state(
         token_rate,
         kiro_accounts,
         codex_accounts,
-        antigravity_accounts,
     }))
 }
 

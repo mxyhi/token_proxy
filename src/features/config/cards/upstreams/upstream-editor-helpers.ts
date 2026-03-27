@@ -1,6 +1,5 @@
 import { createNativeInboundFormatSet, removeInboundFormatsInSet } from "@/features/config/inbound-formats";
 import type { UpstreamForm } from "@/features/config/types";
-import type { AntigravityAccountSummary } from "@/features/antigravity/types";
 import type { CodexAccountSummary } from "@/features/codex/types";
 import type { KiroAccountSummary } from "@/features/kiro/types";
 
@@ -82,7 +81,7 @@ export function providersEqual(left: readonly string[], right: readonly string[]
 export function coerceProviderSelection(next: readonly string[]) {
   const normalized = normalizeProviders(next);
   const special = normalized.find((provider) =>
-    provider === "kiro" || provider === "codex" || provider === "antigravity",
+    provider === "kiro" || provider === "codex",
   );
   if (!special) {
     return normalized;
@@ -127,7 +126,7 @@ export function stripJsonSuffix(accountId: string) {
 /**
  * 编辑时 ID 的期望：
  * - 普通 provider：切换 provider 不自动改 ID（避免统计/引用被“拆分”）
- * - kiro/codex/antigravity：ID 与账户绑定，允许自动同步为 account_id（去掉 .json）
+ * - kiro/codex：ID 与账户绑定，允许自动同步为 account_id（去掉 .json）
  */
 export function resolveUpstreamIdForProviderChange(args: {
   mode: "create" | "edit";
@@ -138,7 +137,6 @@ export function resolveUpstreamIdForProviderChange(args: {
   editingIndex?: number;
   kiroAccountId: string;
   codexAccountId: string;
-  antigravityAccountId: string;
 }) {
   const currentPrimary = args.currentProviders[0]?.trim() ?? "";
   const nextPrimary = args.nextProviders[0]?.trim() ?? "";
@@ -148,9 +146,7 @@ export function resolveUpstreamIdForProviderChange(args: {
       ? stripJsonSuffix(args.kiroAccountId.trim())
       : nextPrimary === "codex" && args.codexAccountId.trim()
         ? stripJsonSuffix(args.codexAccountId.trim())
-        : nextPrimary === "antigravity" && args.antigravityAccountId.trim()
-          ? stripJsonSuffix(args.antigravityAccountId.trim())
-          : null;
+        : null;
   if (specialId) {
     return specialId;
   }
@@ -222,32 +218,6 @@ export function findIdleCodexAccount(
   return accounts.find((account) => !usedAccountIds.has(account.account_id));
 }
 
-/**
- * 找到第一个未被其他上游使用的空闲 antigravity 账户
- * 优先返回 active 状态的账户
- */
-export function findIdleAntigravityAccount(
-  accounts: AntigravityAccountSummary[],
-  upstreams: readonly UpstreamForm[],
-  editingIndex?: number,
-): AntigravityAccountSummary | undefined {
-  const usedAccountIds = new Set(
-    upstreams
-      .filter((upstream, index) => {
-        if (index === editingIndex) return false;
-        return hasProvider(upstream, "antigravity") && upstream.antigravityAccountId.trim();
-      })
-      .map((upstream) => upstream.antigravityAccountId.trim()),
-  );
-
-  const activeIdle = accounts.find(
-    (account) => account.status === "active" && !usedAccountIds.has(account.account_id),
-  );
-  if (activeIdle) return activeIdle;
-
-  return accounts.find((account) => !usedAccountIds.has(account.account_id));
-}
-
 export function cloneUpstreamDraft(upstream: UpstreamForm) {
   const providers = normalizeProviders(upstream.providers);
   return {
@@ -260,4 +230,3 @@ export function cloneUpstreamDraft(upstream: UpstreamForm) {
     },
   };
 }
-

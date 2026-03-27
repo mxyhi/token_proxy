@@ -32,7 +32,7 @@ function normalizeProviders(values: readonly string[]) {
 }
 
 function isSpecialProvider(provider: string) {
-  return provider === "kiro" || provider === "codex" || provider === "antigravity";
+  return provider === "kiro" || provider === "codex";
 }
 
 function orderProviders(values: readonly string[], providerOptions: readonly string[]) {

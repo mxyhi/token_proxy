@@ -26,7 +26,6 @@ fn build_runtime_config_routes_openai_responses_via_chat_when_enabled() {
         rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
-        antigravity_account_id: None,
         preferred_endpoint: None,
         proxy_url: None,
         priority: Some(0),
@@ -66,7 +65,6 @@ fn build_runtime_config_keeps_openai_responses_provider_when_chat_compat_disable
         rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
-        antigravity_account_id: None,
         preferred_endpoint: None,
         proxy_url: None,
         priority: Some(0),
@@ -226,7 +224,6 @@ fn build_runtime_config_expands_multiple_api_keys_into_multiple_runtime_upstream
         rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
-        antigravity_account_id: None,
         preferred_endpoint: None,
         proxy_url: None,
         priority: Some(0),
@@ -251,6 +248,34 @@ fn build_runtime_config_expands_multiple_api_keys_into_multiple_runtime_upstream
 }
 
 #[test]
+fn build_runtime_config_rejects_unsupported_provider() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![UpstreamConfig {
+        id: "removed-provider".to_string(),
+        providers: vec!["legacy-provider".to_string()],
+        base_url: String::new(),
+        api_keys: Vec::new(),
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        use_chat_completions_for_responses: false,
+        rewrite_developer_role_to_system: false,
+        kiro_account_id: None,
+        codex_account_id: None,
+        preferred_endpoint: None,
+        proxy_url: None,
+        priority: Some(0),
+        enabled: true,
+        model_mappings: HashMap::new(),
+        convert_from_map: HashMap::new(),
+        overrides: None,
+    }];
+
+    let result = build_runtime_config(config);
+
+    assert!(result.is_err());
+}
+
+#[test]
 fn build_runtime_config_rejects_multiple_api_keys_for_account_based_provider() {
     let mut config = ProxyConfigFile::default();
     config.upstreams = vec![UpstreamConfig {
@@ -264,7 +289,6 @@ fn build_runtime_config_rejects_multiple_api_keys_for_account_based_provider() {
         rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: Some("codex-account.json".to_string()),
-        antigravity_account_id: None,
         preferred_endpoint: None,
         proxy_url: None,
         priority: Some(0),

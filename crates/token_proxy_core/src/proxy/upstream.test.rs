@@ -148,16 +148,3 @@ fn mapped_model_reasoning_suffix_does_not_override_existing_effort() {
     assert_eq!(model.as_deref(), Some("gpt-4.1"));
     assert_eq!(effort.as_deref(), Some("low"));
 }
-
-#[test]
-fn antigravity_stream_path_defaults_to_alt_sse() {
-    let meta = RequestMeta {
-        stream: true,
-        original_model: None,
-        mapped_model: None,
-        reasoning_effort: None,
-        estimated_input_tokens: None,
-    };
-    let path = resolve_upstream_path_with_query("antigravity", "/v1/chat/completions", &meta);
-    assert_eq!(path, format!("{ANTIGRAVITY_STREAM_PATH}?alt=sse"));
-}

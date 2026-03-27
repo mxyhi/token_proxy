@@ -23,7 +23,6 @@ fn config_with_addr_and_body_limit(
         upstream_strategy: crate::proxy::config::UpstreamStrategyRuntime::default(),
         upstreams: HashMap::new(),
         kiro_preferred_endpoint: None,
-        antigravity_user_agent: None,
     }
 }
 
@@ -120,10 +119,6 @@ fn create_test_context() -> (ProxyContext, std::path::PathBuf) {
         codex_accounts: Arc::new(
             crate::codex::CodexAccountStore::new(paths.as_ref(), app_proxy.clone())
                 .expect("codex store"),
-        ),
-        antigravity_accounts: Arc::new(
-            crate::antigravity::AntigravityAccountStore::new(paths.as_ref(), app_proxy)
-                .expect("antigravity store"),
         ),
     };
     (context, data_dir)

@@ -12,7 +12,6 @@ fn runtime(id: &str, selector_key: &str) -> UpstreamRuntime {
         rewrite_developer_role_to_system: false,
         kiro_account_id: None,
         codex_account_id: None,
-        antigravity_account_id: None,
         kiro_preferred_endpoint: None,
         proxy_url: None,
         priority: 0,

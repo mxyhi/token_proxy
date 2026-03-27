@@ -5,7 +5,7 @@ use axum::{
 use serde_json::{Map, Value};
 
 use super::{
-    antigravity_compat, gemini,
+    gemini,
     http_client::ProxyHttpClients,
     openai_compat::{
         transform_request_body, FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES,
@@ -17,7 +17,6 @@ use super::{
 
 const ANTHROPIC_MESSAGES_PREFIX: &str = "/v1/messages";
 const ANTHROPIC_COMPLETE_PATH: &str = "/v1/complete";
-const PROVIDER_ANTIGRAVITY: &str = "antigravity";
 const REQUEST_META_LIMIT_BYTES: usize = 2 * 1024 * 1024;
 // Format conversion needs the full JSON body; allow up to the default max_request_body_bytes (20 MiB).
 const REQUEST_TRANSFORM_LIMIT_BYTES: usize = 20 * 1024 * 1024;
@@ -204,15 +203,6 @@ pub(crate) async fn log_debug_headers_body(
     }
 }
 
-pub(crate) fn truncate_for_log(value: &str, max_bytes: usize) -> String {
-    if value.len() <= max_bytes {
-        return value.to_string();
-    }
-    let mut out = value.chars().take(max_bytes).collect::<String>();
-    let _ = out.push_str("...[truncated]");
-    out
-}
-
 fn snapshot_headers_raw(headers: &HeaderMap) -> Vec<(String, String)> {
     headers
         .iter()
@@ -225,8 +215,8 @@ fn snapshot_headers_raw(headers: &HeaderMap) -> Vec<(String, String)> {
 
 pub(crate) async fn maybe_transform_request_body(
     http_clients: &ProxyHttpClients,
-    provider: &str,
-    path: &str,
+    _provider: &str,
+    _path: &str,
     transform: FormatTransform,
     model_hint: Option<&str>,
     body: ReplayableBody,
@@ -259,14 +249,9 @@ pub(crate) async fn maybe_transform_request_body(
     )
     .await;
 
-    let outbound_bytes = if should_use_antigravity_claude(provider, path, transform) {
-        antigravity_compat::claude_request_to_antigravity(&bytes, model_hint)
-            .map_err(|message| RequestError::new(StatusCode::BAD_REQUEST, message))?
-    } else {
-        transform_request_body(transform, &bytes, http_clients, model_hint)
-            .await
-            .map_err(|message| RequestError::new(StatusCode::BAD_REQUEST, message))?
-    };
+    let outbound_bytes = transform_request_body(transform, &bytes, http_clients, model_hint)
+        .await
+        .map_err(|message| RequestError::new(StatusCode::BAD_REQUEST, message))?;
     let outbound_body = ReplayableBody::from_bytes(outbound_bytes);
     log_debug_headers_body(
         "transform.output",
@@ -276,13 +261,6 @@ pub(crate) async fn maybe_transform_request_body(
     )
     .await;
     Ok(outbound_body)
-}
-
-fn should_use_antigravity_claude(provider: &str, path: &str, transform: FormatTransform) -> bool {
-    // Align Antigravity with CLIProxyAPIPlus for Claude /v1/messages.
-    provider == PROVIDER_ANTIGRAVITY
-        && path == ANTHROPIC_MESSAGES_PREFIX
-        && transform == FormatTransform::AnthropicToGemini
 }
 
 pub(crate) async fn maybe_force_openai_stream_options_include_usage(

@@ -66,7 +66,6 @@ const DEFAULT_PROVIDER_OPTIONS = [
   "gemini",
   "kiro",
   "codex",
-  "antigravity",
 ] as const;
 
 export function mergeProviderOptions(values: readonly string[]) {

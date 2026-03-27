@@ -18,13 +18,12 @@ describe("upstreams/upstream-editor-helpers", () => {
       editingIndex: 0,
       kiroAccountId: "",
       codexAccountId: "",
-      antigravityAccountId: "",
     });
 
     expect(id).toBe("custom-1");
   });
 
-  it("updates id to account_id when editing and switching to kiro/codex/antigravity", () => {
+  it("updates id to account_id when editing and switching to kiro/codex", () => {
     const upstream = createEmptyUpstream();
     upstream.id = "custom-1";
     upstream.providers = ["openai"];
@@ -38,7 +37,6 @@ describe("upstreams/upstream-editor-helpers", () => {
       editingIndex: 0,
       kiroAccountId: "foo.json",
       codexAccountId: "",
-      antigravityAccountId: "",
     });
     expect(kiroId).toBe("foo");
 
@@ -51,22 +49,8 @@ describe("upstreams/upstream-editor-helpers", () => {
       editingIndex: 0,
       kiroAccountId: "",
       codexAccountId: "bar.json",
-      antigravityAccountId: "",
     });
     expect(codexId).toBe("bar");
-
-    const antigravityId = resolveUpstreamIdForProviderChange({
-      mode: "edit",
-      currentId: upstream.id,
-      currentProviders: ["openai"],
-      nextProviders: ["antigravity"],
-      upstreams: [upstream],
-      editingIndex: 0,
-      kiroAccountId: "",
-      codexAccountId: "",
-      antigravityAccountId: "baz.json",
-    });
-    expect(antigravityId).toBe("baz");
   });
 
   it("keeps id when editing and switching away from special provider", () => {
@@ -83,7 +67,6 @@ describe("upstreams/upstream-editor-helpers", () => {
       editingIndex: 0,
       kiroAccountId: "",
       codexAccountId: "",
-      antigravityAccountId: "",
     });
 
     expect(id).toBe("foo");
@@ -102,10 +85,8 @@ describe("upstreams/upstream-editor-helpers", () => {
       upstreams: [upstream],
       kiroAccountId: "",
       codexAccountId: "",
-      antigravityAccountId: "",
     });
 
     expect(id).toBe("gemini-1");
   });
 });
-

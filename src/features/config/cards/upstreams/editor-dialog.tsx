@@ -14,7 +14,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { getUpstreamLabel } from "@/features/config/cards/upstreams/constants";
 import { UpstreamEditorFields } from "@/features/config/cards/upstreams/editor-dialog-form";
 import type { UpstreamEditorState } from "@/features/config/cards/upstreams/types";
-import type { AntigravityAccountSummary } from "@/features/antigravity/types";
 import type { CodexAccountSummary } from "@/features/codex/types";
 import type { KiroAccountSummary } from "@/features/kiro/types";
 import type { UpstreamForm } from "@/features/config/types";
@@ -37,10 +36,6 @@ type UpstreamEditorDialogProps = {
   codexAccountsLoading: boolean;
   codexAccountsError: string;
   onRefreshCodexAccounts: () => void;
-  antigravityAccounts: AntigravityAccountSummary[];
-  antigravityAccountsLoading: boolean;
-  antigravityAccountsError: string;
-  onRefreshAntigravityAccounts: () => void;
 };
 
 export function UpstreamEditorDialog({
@@ -60,10 +55,6 @@ export function UpstreamEditorDialog({
   codexAccountsLoading,
   codexAccountsError,
   onRefreshCodexAccounts,
-  antigravityAccounts,
-  antigravityAccountsLoading,
-  antigravityAccountsError,
-  onRefreshAntigravityAccounts,
 }: UpstreamEditorDialogProps) {
   const title = editor.open
     ? editor.mode === "create"
@@ -110,10 +101,6 @@ export function UpstreamEditorDialog({
               codexAccountsLoading={codexAccountsLoading}
               codexAccountsError={codexAccountsError}
               onRefreshCodexAccounts={onRefreshCodexAccounts}
-              antigravityAccounts={antigravityAccounts}
-              antigravityAccountsLoading={antigravityAccountsLoading}
-              antigravityAccountsError={antigravityAccountsError}
-              onRefreshAntigravityAccounts={onRefreshAntigravityAccounts}
             />
           ) : null}
         </AlertDialogBody>
@@ -127,4 +114,3 @@ export function UpstreamEditorDialog({
     </AlertDialog>
   );
 }
-

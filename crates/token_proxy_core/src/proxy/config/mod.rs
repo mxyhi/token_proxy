@@ -79,7 +79,6 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
         upstream_strategy: resolve_upstream_strategy(config.upstream_strategy)?,
         upstreams,
         kiro_preferred_endpoint: config.kiro_preferred_endpoint,
-        antigravity_user_agent: config.antigravity_user_agent,
     })
 }
 

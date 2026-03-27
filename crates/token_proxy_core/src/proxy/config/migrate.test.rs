@@ -76,41 +76,6 @@ fn migrate_default_legacy_enable_true_when_missing() {
 }
 
 #[test]
-fn migrate_legacy_enable_false_keeps_conversion_disabled_except_antigravity_messages() {
-    let mut value = parse_json(
-        r#"
-        {
-          "enable_api_format_conversion": false,
-          "upstreams": [
-            { "id": "u1", "provider": "openai", "base_url": "https://example.com", "enabled": true },
-            { "id": "u2", "provider": "antigravity", "base_url": "", "enabled": true }
-          ]
-        }
-        "#,
-    );
-
-    let changed = migrate_config_json(&mut value);
-    assert!(changed);
-
-    let obj = value.as_object().expect("root must be object");
-    let u1 = obj["upstreams"][0].as_object().expect("u1 must be object");
-    assert!(!u1.contains_key("convert_from_map"));
-
-    let u2 = obj["upstreams"][1].as_object().expect("u2 must be object");
-    let map = u2
-        .get("convert_from_map")
-        .and_then(|v| v.as_object())
-        .expect("antigravity upstream must have convert_from_map");
-    let list = map
-        .get("antigravity")
-        .and_then(|v| v.as_array())
-        .expect("antigravity list must be array");
-    assert!(list
-        .iter()
-        .any(|v| v.as_str() == Some("anthropic_messages")));
-}
-
-#[test]
 fn migrate_api_key_to_api_keys() {
     let mut value = parse_json(
         r#"

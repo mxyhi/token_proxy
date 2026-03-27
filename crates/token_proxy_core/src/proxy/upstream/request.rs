@@ -19,7 +19,7 @@ use super::{
     utils::{ensure_query_param, extract_query_param},
     AttemptOutcome,
 };
-use crate::proxy::server_helpers::{is_anthropic_path, log_debug_headers_body, truncate_for_log};
+use crate::proxy::server_helpers::is_anthropic_path;
 
 const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -29,9 +29,6 @@ const OPENAI_CHAT_PATH: &str = "/v1/chat/completions";
 const OPENAI_RESPONSES_PATH: &str = "/v1/responses";
 // Keep in sync with server_helpers request transform limit (20 MiB).
 const REQUEST_FILTER_LIMIT_BYTES: usize = 20 * 1024 * 1024;
-const DEBUG_UPSTREAM_LOG_LIMIT_BYTES: usize = usize::MAX;
-const ANTIGRAVITY_WRAPPED_LOG_LIMIT_BYTES: usize = 8 * 1024;
-
 pub(super) fn split_path_query(path_with_query: &str) -> (&str, Option<&str>) {
     match path_with_query.split_once('?') {
         Some((path, query)) => (path, Some(query)),
@@ -123,11 +120,7 @@ pub(super) async fn build_upstream_body(
     upstream_path_with_query: &str,
     body: &ReplayableBody,
     meta: &RequestMeta,
-    antigravity: Option<&super::AntigravityRequestInfo>,
 ) -> Result<reqwest::Body, AttemptOutcome> {
-    if provider == "antigravity" {
-        return build_antigravity_body(body, meta, antigravity).await;
-    }
     let mapped_body = maybe_rewrite_request_body_model(body, meta).await?;
     let mapped_source = mapped_body.as_ref().unwrap_or(body);
     let upstream_path = split_path_query(upstream_path_with_query).0;
@@ -327,67 +320,6 @@ async fn maybe_filter_openai_responses_request_fields(
         ))
     })?;
     Ok(Some(ReplayableBody::from_bytes(outbound_bytes)))
-}
-
-async fn build_antigravity_body(
-    body: &ReplayableBody,
-    meta: &RequestMeta,
-    antigravity: Option<&super::AntigravityRequestInfo>,
-) -> Result<reqwest::Body, AttemptOutcome> {
-    let Some(info) = antigravity else {
-        return Err(AttemptOutcome::Fatal(http::error_response(
-            StatusCode::UNAUTHORIZED,
-            "Antigravity account is not configured.",
-        )));
-    };
-    let Some(bytes) = body
-        .read_bytes_if_small(super::REQUEST_MODEL_MAPPING_LIMIT_BYTES)
-        .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(
-                StatusCode::BAD_GATEWAY,
-                format!("Failed to read request body: {err}"),
-            ))
-        })?
-    else {
-        return Err(AttemptOutcome::Fatal(http::error_response(
-            StatusCode::BAD_GATEWAY,
-            "Antigravity request body is too large.",
-        )));
-    };
-    let model = meta
-        .mapped_model
-        .as_deref()
-        .or(meta.original_model.as_deref());
-    let wrapped = super::super::antigravity_compat::wrap_gemini_request(
-        &bytes,
-        model,
-        info.project_id.as_deref(),
-        &info.user_agent,
-    )
-    .map_err(|message| {
-        AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
-    })?;
-    let wrapped_body = ReplayableBody::from_bytes(wrapped.clone());
-    log_debug_headers_body(
-        "antigravity.wrapped",
-        None,
-        Some(&wrapped_body),
-        DEBUG_UPSTREAM_LOG_LIMIT_BYTES,
-    )
-    .await;
-    log_antigravity_wrapped_body(&wrapped);
-    Ok(reqwest::Body::from(wrapped))
-}
-
-fn log_antigravity_wrapped_body(bytes: &[u8]) {
-    if !tracing::enabled!(tracing::Level::WARN) {
-        return;
-    }
-    let body_text = String::from_utf8_lossy(bytes);
-    let truncated = truncate_for_log(&body_text, ANTIGRAVITY_WRAPPED_LOG_LIMIT_BYTES);
-    // 仅在 antigravity 请求阶段记录，便于复现上游校验错误。
-    tracing::warn!(body = %truncated, "antigravity wrapped request payload");
 }
 
 async fn maybe_rewrite_request_body_model(

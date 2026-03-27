@@ -24,7 +24,6 @@ import {
 import type { UpstreamColumnDefinition, UpstreamColumnId } from "@/features/config/cards/upstreams/types";
 import type { CodexAccountSummary } from "@/features/codex/types";
 import type { KiroAccountSummary } from "@/features/kiro/types";
-import type { AntigravityAccountSummary } from "@/features/antigravity/types";
 import {
   UPSTREAM_DISPATCH_STRATEGIES,
   UPSTREAM_ORDER_STRATEGIES,
@@ -251,7 +250,6 @@ function UpstreamsTableHeader({ columns }: UpstreamsTableHeaderProps) {
 
 type KiroAccountMap = Map<string, KiroAccountSummary>;
 type CodexAccountMap = Map<string, CodexAccountSummary>;
-type AntigravityAccountMap = Map<string, AntigravityAccountSummary>;
 
 function renderTextCell(value: string, placeholder: string) {
   const trimmed = value.trim();
@@ -276,7 +274,6 @@ function renderAccountCell(
   upstream: UpstreamForm,
   kiroAccounts: KiroAccountMap,
   codexAccounts: CodexAccountMap,
-  antigravityAccounts: AntigravityAccountMap,
 ) {
   const provider =
     upstream.providers.map((value) => value.trim()).filter(Boolean)[0] ?? "";
@@ -303,18 +300,6 @@ function renderAccountCell(
     const label = account.email?.trim() ? account.email : account.account_id;
     return renderTextCell(label, m.codex_account_unset());
   }
-  if (provider === "antigravity") {
-    const accountId = upstream.antigravityAccountId.trim();
-    if (!accountId) {
-      return renderTextCell("", m.antigravity_account_unset());
-    }
-    const account = antigravityAccounts.get(accountId);
-    if (!account) {
-      return renderTextCell("", m.antigravity_account_missing());
-    }
-    const label = account.email?.trim() ? account.email : account.account_id;
-    return renderTextCell(label, m.antigravity_account_unset());
-  }
   return renderTextCell("", CELL_PLACEHOLDER);
 }
 
@@ -335,7 +320,6 @@ function renderUpstreamCell(
   showApiKeys: boolean,
   kiroAccounts: KiroAccountMap,
   codexAccounts: CodexAccountMap,
-  antigravityAccounts: AntigravityAccountMap,
 ) {
   const providerLabel = upstream.providers
     .map((value) => value.trim())
@@ -347,7 +331,7 @@ function renderUpstreamCell(
     case "provider":
       return renderTextCell(providerLabel, "openai");
     case "account":
-      return renderAccountCell(upstream, kiroAccounts, codexAccounts, antigravityAccounts);
+      return renderAccountCell(upstream, kiroAccounts, codexAccounts);
     case "baseUrl":
       return renderTextCell(upstream.baseUrl, "https://api.openai.com");
     case "apiKeys":
@@ -441,7 +425,6 @@ type UpstreamsTableRowProps = {
   showApiKeys: boolean;
   kiroAccounts: KiroAccountMap;
   codexAccounts: CodexAccountMap;
-  antigravityAccounts: AntigravityAccountMap;
   disableDelete: boolean;
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
@@ -457,7 +440,6 @@ function UpstreamsTableRow({
   showApiKeys,
   kiroAccounts,
   codexAccounts,
-  antigravityAccounts,
   disableDelete,
   onEdit,
   onCopy,
@@ -478,8 +460,7 @@ function UpstreamsTableRow({
               upstream,
               showApiKeys,
               kiroAccounts,
-              codexAccounts,
-              antigravityAccounts
+              codexAccounts
             )}
           </div>
         </td>
@@ -503,7 +484,6 @@ export type UpstreamsTableProps = {
   showApiKeys: boolean;
   kiroAccounts: KiroAccountMap;
   codexAccounts: CodexAccountMap;
-  antigravityAccounts: AntigravityAccountMap;
   disableDelete: boolean;
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
@@ -548,7 +528,6 @@ export function UpstreamsTable({
   showApiKeys,
   kiroAccounts,
   codexAccounts,
-  antigravityAccounts,
   disableDelete,
   onEdit,
   onCopy,
@@ -572,7 +551,6 @@ export function UpstreamsTable({
                 showApiKeys={showApiKeys}
                 kiroAccounts={kiroAccounts}
                 codexAccounts={codexAccounts}
-                antigravityAccounts={antigravityAccounts}
                 disableDelete={disableDelete}
                 onEdit={onEdit}
                 onCopy={onCopy}

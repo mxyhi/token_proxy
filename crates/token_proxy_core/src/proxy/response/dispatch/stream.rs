@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::super::super::{
-    antigravity_compat, codex_compat, gemini_compat, http,
+    codex_compat, gemini_compat, http,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     openai_compat::FormatTransform,
     redact::redact_query_param_value,
@@ -17,8 +17,8 @@ use super::super::super::{
 };
 use super::super::{
     anthropic_to_responses, chat_to_responses, kiro_to_anthropic, responses_to_anthropic,
-    responses_to_chat, streaming, upstream_stream, PROVIDER_ANTIGRAVITY, PROVIDER_CODEX,
-    PROVIDER_GEMINI, PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES,
+    responses_to_chat, streaming, upstream_stream, PROVIDER_CODEX, PROVIDER_GEMINI,
+    PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES,
 };
 
 type UpstreamBytesStream = futures_util::stream::BoxStream<
@@ -61,11 +61,6 @@ pub(super) async fn build_stream_response(
         DEBUG_BODY_LOG_LIMIT_BYTES,
     )
     .await;
-    let upstream = if context.provider == PROVIDER_ANTIGRAVITY {
-        antigravity_compat::stream_antigravity_to_gemini(upstream).boxed()
-    } else {
-        upstream
-    };
     let upstream = log_upstream_stream_if_debug(upstream);
 
     let stream = stream_for_transform(
@@ -595,6 +590,5 @@ fn should_rewrite_sse_model(provider: &str) -> bool {
     provider == PROVIDER_OPENAI
         || provider == PROVIDER_OPENAI_RESPONSES
         || provider == PROVIDER_GEMINI
-        || provider == PROVIDER_ANTIGRAVITY
         || provider == PROVIDER_CODEX
 }

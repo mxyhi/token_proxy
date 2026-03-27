@@ -13,7 +13,6 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AntigravityAccountSelect } from "@/features/config/cards/upstreams/antigravity-account-select";
 import { CodexAccountSelect } from "@/features/config/cards/upstreams/codex-account-select";
 import { ConvertFromMapEditor } from "@/features/config/cards/upstreams/convert-from-map-editor";
 import {
@@ -24,7 +23,6 @@ import {
 import { KiroAccountSelect } from "@/features/config/cards/upstreams/kiro-account-select";
 import { ProviderMultiSelect } from "@/features/config/cards/upstreams/provider-multi-select";
 import { createModelMapping } from "@/features/config/form";
-import type { AntigravityAccountSummary } from "@/features/antigravity/types";
 import type { CodexAccountSummary } from "@/features/codex/types";
 import type { KiroAccountSummary } from "@/features/kiro/types";
 import type {
@@ -64,10 +62,6 @@ export type UpstreamEditorFieldsProps = {
   codexAccountsLoading: boolean;
   codexAccountsError: string;
   onRefreshCodexAccounts: () => void;
-  antigravityAccounts: AntigravityAccountSummary[];
-  antigravityAccountsLoading: boolean;
-  antigravityAccountsError: string;
-  onRefreshAntigravityAccounts: () => void;
 };
 
 type UpstreamIdentityFieldsProps = {
@@ -86,11 +80,6 @@ type UpstreamIdentityFieldsProps = {
   codexAccountsLoading: boolean;
   codexAccountsError: string;
   onRefreshCodexAccounts: () => void;
-  /** antigravity 账户相关 props，仅 provider=antigravity 时使用 */
-  antigravityAccounts: AntigravityAccountSummary[];
-  antigravityAccountsLoading: boolean;
-  antigravityAccountsError: string;
-  onRefreshAntigravityAccounts: () => void;
 };
 
 function UpstreamIdentityFields({
@@ -107,16 +96,11 @@ function UpstreamIdentityFields({
   codexAccountsLoading,
   codexAccountsError,
   onRefreshCodexAccounts,
-  antigravityAccounts,
-  antigravityAccountsLoading,
-  antigravityAccountsError,
-  onRefreshAntigravityAccounts,
 }: UpstreamIdentityFieldsProps) {
   const canUseAppProxy = !!appProxyUrl.trim();
   const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
   const isKiro = providers.includes("kiro");
   const isCodex = providers.includes("codex");
-  const isAntigravity = providers.includes("antigravity");
   const kiroEndpointValue = draft.preferredEndpoint.trim()
     ? draft.preferredEndpoint
     : KIRO_ENDPOINT_INHERIT;
@@ -187,16 +171,6 @@ function UpstreamIdentityFields({
           error={codexAccountsError}
           onRefresh={onRefreshCodexAccounts}
           onSelect={(accountId) => onChangeDraft({ codexAccountId: accountId })}
-        />
-      ) : null}
-      {isAntigravity ? (
-        <AntigravityAccountSelect
-          accountId={draft.antigravityAccountId}
-          accounts={antigravityAccounts}
-          loading={antigravityAccountsLoading}
-          error={antigravityAccountsError}
-          onRefresh={onRefreshAntigravityAccounts}
-          onSelect={(accountId) => onChangeDraft({ antigravityAccountId: accountId })}
         />
       ) : null}
       {isKiro ? (
@@ -562,15 +536,10 @@ export function UpstreamEditorFields({
   codexAccountsLoading,
   codexAccountsError,
   onRefreshCodexAccounts,
-  antigravityAccounts,
-  antigravityAccountsLoading,
-  antigravityAccountsError,
-  onRefreshAntigravityAccounts,
 }: UpstreamEditorFieldsProps) {
   const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
   const isKiro = providers.includes("kiro");
   const isCodex = providers.includes("codex");
-  const isAntigravity = providers.includes("antigravity");
   return (
     <div
       data-slot="upstream-editor-fields"
@@ -590,12 +559,8 @@ export function UpstreamEditorFields({
         codexAccountsLoading={codexAccountsLoading}
         codexAccountsError={codexAccountsError}
         onRefreshCodexAccounts={onRefreshCodexAccounts}
-        antigravityAccounts={antigravityAccounts}
-        antigravityAccountsLoading={antigravityAccountsLoading}
-        antigravityAccountsError={antigravityAccountsError}
-        onRefreshAntigravityAccounts={onRefreshAntigravityAccounts}
       />
-      {isKiro || isCodex || isAntigravity ? null : (
+      {isKiro || isCodex ? null : (
         <UpstreamAuthFields
           draft={draft}
           showApiKeys={showApiKeys}

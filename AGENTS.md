@@ -14,5 +14,5 @@
 
 - 代理转发/转换参考[litellm](.reference/litellm)
 - 代理转发/转换参考[new-api](.reference/new-api)
-- kiro、codex、antigravity等2api参考[CLIProxyAPIPlus](.reference/CLIProxyAPIPlus)
+- kiro、codex 等 2api 参考[CLIProxyAPIPlus](.reference/CLIProxyAPIPlus)
 - CLIProxyAPIPlus的可视化app参考[quotio](.reference/quotio)

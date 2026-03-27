@@ -344,6 +344,7 @@ type CodexProviderBodyProps = {
   quotasError: string;
   emptyMessage: string;
   onLogout: (accountId: string) => Promise<void>;
+  showAccounts: boolean;
 };
 
 function CodexProviderBody({
@@ -355,6 +356,7 @@ function CodexProviderBody({
   quotasError,
   emptyMessage,
   onLogout,
+  showAccounts,
 }: CodexProviderBodyProps) {
   return (
     <div data-slot="codex-provider-body" className="border-t border-border/60 px-4 py-4">
@@ -370,22 +372,26 @@ function CodexProviderBody({
           </div>
         </Alert>
       ) : null}
-      {accountsLoading ? null : filteredAccounts.length ? (
-        <div className="mt-4 space-y-3">
-          {filteredAccounts.map((account) => (
-            <CodexAccountRow
-              key={account.account_id}
-              account={account}
-              quota={quotaMap.get(account.account_id) ?? null}
-              loading={accountsLoading}
-              quotaLoading={quotasLoading}
-              onLogout={onLogout}
-            />
-          ))}
-        </div>
-      ) : (
-        <p className="mt-3 text-sm text-muted-foreground">{emptyMessage}</p>
-      )}
+      {showAccounts
+        ? accountsLoading
+          ? null
+          : filteredAccounts.length ? (
+            <div className="mt-4 space-y-3">
+              {filteredAccounts.map((account) => (
+                <CodexAccountRow
+                  key={account.account_id}
+                  account={account}
+                  quota={quotaMap.get(account.account_id) ?? null}
+                  loading={accountsLoading}
+                  quotaLoading={quotasLoading}
+                  onLogout={onLogout}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-muted-foreground">{emptyMessage}</p>
+          )
+        : null}
     </div>
   );
 }
@@ -428,6 +434,7 @@ export type CodexProviderGroupProps = {
   loginUrl: string;
   loginBusy: boolean;
   loginStatus: LoginStatus;
+  showAccounts?: boolean;
 };
 
 export function CodexProviderGroup({
@@ -445,6 +452,7 @@ export function CodexProviderGroup({
   loginUrl,
   loginBusy,
   loginStatus,
+  showAccounts = true,
 }: CodexProviderGroupProps) {
   const [loginOpen, setLoginOpen] = useState(false);
   const [isOpen, setIsOpen] = useState(accounts.length > 0);
@@ -468,6 +476,7 @@ export function CodexProviderGroup({
     quotasError,
     emptyMessage,
     onLogout,
+    showAccounts,
   };
   const headerProps: CodexProviderHeaderProps = {
     accountsCount: accounts.length,

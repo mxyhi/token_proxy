@@ -3,7 +3,6 @@ import { useCallback, useMemo, useState } from "react";
 import { RefreshCw, Search } from "lucide-react";
 import { homeDir, join } from "@tauri-apps/api/path";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -24,7 +23,13 @@ import { useCodexLogin } from "@/features/codex/use-codex-login";
 import { useCodexQuotas } from "@/features/codex/use-codex-quotas";
 import { AntigravityProviderGroup } from "@/features/providers/antigravity-group";
 import { CodexProviderGroup } from "@/features/providers/codex-group";
+import { formatDateLabel } from "@/features/providers/date";
 import { KiroProviderGroup } from "@/features/providers/kiro-group";
+import {
+  ProvidersAccountsTableSection,
+  type ProviderAccountQuotaDetailItem,
+  type ProviderAccountTableRow,
+} from "@/features/providers/providers-accounts-table";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
 import { useKiroLogin } from "@/features/kiro/use-kiro-login";
 import { useKiroQuotas } from "@/features/kiro/use-kiro-quotas";
@@ -56,6 +61,24 @@ type CodexQuotaEntry = ReturnType<typeof useCodexQuotas>["quotas"][number];
 
 type AntigravityQuotaEntry = ReturnType<typeof useAntigravityQuotas>["quotas"][number];
 
+type KiroQuotaView = {
+  planType: string | null;
+  quotas: QuotaEntry["quotas"];
+  error: string | null;
+};
+
+type CodexQuotaView = {
+  planType: string | null;
+  quotas: CodexQuotaEntry["quotas"];
+  error: string | null;
+};
+
+type AntigravityQuotaView = {
+  planType: string | null;
+  quotas: AntigravityQuotaEntry["quotas"];
+  error: string | null;
+};
+
 type KiroGroupProps = Parameters<typeof KiroProviderGroup>[0];
 
 type CodexGroupProps = Parameters<typeof CodexProviderGroup>[0];
@@ -73,14 +96,19 @@ type ProvidersToolbarProps = {
   refreshing: boolean;
 };
 
-type ProvidersAccountsSectionProps = {
+type ProvidersSectionsProps = {
   visibleCount: number;
+  rows: ProviderAccountTableRow[];
+  loading: boolean;
+  error: string;
   showKiro: boolean;
   showCodex: boolean;
   showAntigravity: boolean;
   kiroGroupProps: KiroGroupProps;
   codexGroupProps: CodexGroupProps;
   antigravityGroupProps: AntigravityGroupProps;
+  onLogout: (row: ProviderAccountTableRow) => Promise<void>;
+  onSwitchIde: (row: ProviderAccountTableRow) => Promise<void>;
 };
 
 async function resolveKiroIdeDir() {
@@ -140,7 +168,7 @@ function ProviderFilterSelect({
   return (
     <div data-slot="providers-filter-provider">
       <Select value={value} onValueChange={(nextValue) => onChange(nextValue as ProviderFilterValue)}>
-        <SelectTrigger size="sm">
+        <SelectTrigger size="sm" aria-label={m.providers_filter_provider_label()}>
           <SelectValue placeholder={m.providers_filter_provider_label()} />
         </SelectTrigger>
         <SelectContent>
@@ -164,7 +192,7 @@ function StatusFilterSelect({
   return (
     <div data-slot="providers-filter-status">
       <Select value={value} onValueChange={(nextValue) => onChange(nextValue as StatusFilterValue)}>
-        <SelectTrigger size="sm">
+        <SelectTrigger size="sm" aria-label={m.providers_filter_status_label()}>
           <SelectValue placeholder={m.providers_filter_status_label()} />
         </SelectTrigger>
         <SelectContent>
@@ -195,26 +223,20 @@ function ProvidersToolbar({
       <ProvidersSearchInput search={search} onSearchChange={onSearchChange} />
       <ProviderFilterSelect value={providerFilter} onChange={onProviderFilterChange} />
       <StatusFilterSelect value={statusFilter} onChange={onStatusFilterChange} />
-      <Button type="button" variant="outline" size="icon" onClick={onRefresh} disabled={refreshing}>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        onClick={onRefresh}
+        disabled={refreshing}
+        data-slot="providers-toolbar-refresh"
+        aria-label={m.common_refresh()}
+      >
         <RefreshCw
           className={["size-4", refreshing ? "animate-spin" : ""].filter(Boolean).join(" ")}
           aria-hidden="true"
         />
-        <span className="sr-only">{m.common_refresh()}</span>
       </Button>
-    </div>
-  );
-}
-
-function ProvidersSectionHeader({ title, count }: { title: string; count: number }) {
-  return (
-    <div data-slot="providers-section-header" className="flex flex-wrap items-start gap-2">
-      <div className="flex-1">
-        <div className="flex items-center gap-2">
-          <p className="text-sm font-semibold text-foreground">{title}</p>
-          <Badge variant="secondary">{count}</Badge>
-        </div>
-      </div>
     </div>
   );
 }
@@ -279,7 +301,7 @@ function useFilteredAccounts<T extends AccountBase>(
   }, [accounts, searchKeyword, statusFilter]);
 }
 
-function buildQuotaMap(quotas: QuotaEntry[]) {
+function buildQuotaMap(quotas: QuotaEntry[]): Map<string, KiroQuotaView> {
   return new Map(
     quotas.map((item) => [
       item.account_id,
@@ -292,7 +314,7 @@ function buildQuotaMap(quotas: QuotaEntry[]) {
   );
 }
 
-function buildCodexQuotaMap(quotas: CodexQuotaEntry[]) {
+function buildCodexQuotaMap(quotas: CodexQuotaEntry[]): Map<string, CodexQuotaView> {
   return new Map(
     quotas.map((item) => [
       item.account_id,
@@ -305,7 +327,7 @@ function buildCodexQuotaMap(quotas: CodexQuotaEntry[]) {
   );
 }
 
-function buildAntigravityQuotaMap(quotas: AntigravityQuotaEntry[]) {
+function buildAntigravityQuotaMap(quotas: AntigravityQuotaEntry[]): Map<string, AntigravityQuotaView> {
   return new Map(
     quotas.map((item) => [
       item.account_id,
@@ -538,25 +560,368 @@ function buildAntigravityGroupProps({
   };
 }
 
-function ProvidersAccountsSection({
+const PLACEHOLDER = "—";
+const NUMBER_FORMATTER = new Intl.NumberFormat(undefined, {
+  maximumFractionDigits: 2,
+});
+
+function formatNumber(value: number | null) {
+  if (value === null || Number.isNaN(value)) {
+    return PLACEHOLDER;
+  }
+  return NUMBER_FORMATTER.format(value);
+}
+
+function formatPercentage(value: number) {
+  if (!Number.isFinite(value)) {
+    return "0%";
+  }
+  return `${NUMBER_FORMATTER.format(value)}%`;
+}
+
+function formatDateValue(value: string | null | undefined) {
+  if (!value) {
+    return PLACEHOLDER;
+  }
+  const label = formatDateLabel(value);
+  return label || value;
+}
+
+function formatDisplayName(account: AccountBase) {
+  const email = account.email?.trim();
+  return email || account.account_id;
+}
+
+function formatStatusVariant(status: AccountBase["status"]) {
+  return status === "expired" ? "destructive" : "secondary";
+}
+
+function formatKiroStatus(status: AccountBase["status"]) {
+  return status === "expired"
+    ? m.kiro_account_status_expired()
+    : m.kiro_account_status_active();
+}
+
+function formatCodexStatus(status: AccountBase["status"]) {
+  return status === "expired"
+    ? m.codex_account_status_expired()
+    : m.codex_account_status_active();
+}
+
+function formatAntigravityStatus(status: AccountBase["status"]) {
+  return status === "expired"
+    ? m.antigravity_account_status_expired()
+    : m.antigravity_account_status_active();
+}
+
+function formatKiroAuthMethod(method: string | null | undefined) {
+  if (method === "aws") {
+    return m.kiro_login_method_aws();
+  }
+  if (method === "aws_authcode") {
+    return m.kiro_login_method_aws_authcode();
+  }
+  if (method === "google") {
+    return m.kiro_login_method_google();
+  }
+  return method?.trim() || PLACEHOLDER;
+}
+
+function formatAntigravitySource(source: string | null | undefined) {
+  if (source === "ide") {
+    return m.antigravity_account_source_ide();
+  }
+  if (source === "oauth") {
+    return m.antigravity_account_source_oauth();
+  }
+  return source?.trim() || PLACEHOLDER;
+}
+
+function summarizeQuota(summary: string, count: number) {
+  if (!summary) {
+    return PLACEHOLDER;
+  }
+  if (count > 1) {
+    return m.providers_table_quota_items({ count });
+  }
+  return summary;
+}
+
+function joinSummaryParts(parts: Array<string>) {
+  return parts.filter(Boolean).join(" · ");
+}
+
+function buildKiroQuotaDetails(quota: KiroQuotaView | null) {
+  if (quota?.error) {
+    return {
+      planType: quota.planType ?? PLACEHOLDER,
+      quotaSummary: m.providers_quota_failed_title(),
+      quotaError: quota.error,
+      quotaItems: [] as ProviderAccountQuotaDetailItem[],
+    };
+  }
+  if (!quota || quota.quotas.length === 0) {
+    return {
+      planType: quota?.planType ?? PLACEHOLDER,
+      quotaSummary: PLACEHOLDER,
+      quotaError: "",
+      quotaItems: [] as ProviderAccountQuotaDetailItem[],
+    };
+  }
+  const quotaItems = quota.quotas.map((item) => {
+    const resetLabel = item.reset_at
+      ? item.is_trial
+        ? m.providers_quota_expires({ date: formatDateValue(item.reset_at) })
+        : m.providers_quota_resets({ date: formatDateValue(item.reset_at) })
+      : "";
+    return {
+      name: item.name,
+      summary: m.providers_quota_usage({
+        used: formatNumber(item.used),
+        limit: formatNumber(item.limit),
+      }),
+      secondary: joinSummaryParts([formatPercentage(item.percentage), resetLabel]),
+    };
+  });
+  return {
+    planType: quota.planType ?? PLACEHOLDER,
+    quotaSummary: summarizeQuota(
+      `${quotaItems[0]?.name} · ${quotaItems[0]?.summary ?? PLACEHOLDER}`,
+      quotaItems.length
+    ),
+    quotaError: "",
+    quotaItems,
+  };
+}
+
+function buildCodexQuotaDetails(quota: CodexQuotaView | null) {
+  if (quota?.error) {
+    return {
+      planType: quota.planType ?? PLACEHOLDER,
+      quotaSummary: m.providers_quota_failed_title(),
+      quotaError: quota.error,
+      quotaItems: [] as ProviderAccountQuotaDetailItem[],
+    };
+  }
+  if (!quota || quota.quotas.length === 0) {
+    return {
+      planType: quota?.planType ?? PLACEHOLDER,
+      quotaSummary: PLACEHOLDER,
+      quotaError: "",
+      quotaItems: [] as ProviderAccountQuotaDetailItem[],
+    };
+  }
+  const quotaItems = quota.quotas.map((item) => {
+    const usageLabel =
+      item.used !== null || item.limit !== null
+        ? m.providers_quota_usage({
+            used: formatNumber(item.used),
+            limit: formatNumber(item.limit),
+          })
+        : formatPercentage(item.percentage);
+    const resetLabel = item.reset_at
+      ? m.providers_quota_resets({ date: formatDateValue(item.reset_at) })
+      : "";
+    const quotaName =
+      item.name === "codex-session"
+        ? m.codex_quota_session()
+        : item.name === "codex-weekly"
+          ? m.codex_quota_weekly()
+          : item.name;
+    return {
+      name: quotaName,
+      summary: usageLabel,
+      secondary: joinSummaryParts([formatPercentage(item.percentage), resetLabel]),
+    };
+  });
+  return {
+    planType: quota.planType ?? PLACEHOLDER,
+    quotaSummary: summarizeQuota(
+      `${quotaItems[0]?.name} · ${quotaItems[0]?.summary ?? PLACEHOLDER}`,
+      quotaItems.length
+    ),
+    quotaError: "",
+    quotaItems,
+  };
+}
+
+function buildAntigravityQuotaDetails(quota: AntigravityQuotaView | null) {
+  if (quota?.error) {
+    return {
+      planType: quota.planType ?? PLACEHOLDER,
+      quotaSummary: m.providers_quota_failed_title(),
+      quotaError: quota.error,
+      quotaItems: [] as ProviderAccountQuotaDetailItem[],
+    };
+  }
+  if (!quota || quota.quotas.length === 0) {
+    return {
+      planType: quota?.planType ?? PLACEHOLDER,
+      quotaSummary: PLACEHOLDER,
+      quotaError: "",
+      quotaItems: [] as ProviderAccountQuotaDetailItem[],
+    };
+  }
+  const quotaItems = quota.quotas.map((item) => ({
+    name: item.name,
+    summary: formatPercentage(item.percentage),
+    secondary: item.reset_at ? m.providers_quota_resets({ date: formatDateValue(item.reset_at) }) : "",
+  }));
+  return {
+    planType: quota.planType ?? PLACEHOLDER,
+    quotaSummary: summarizeQuota(
+      `${quotaItems[0]?.name} · ${quotaItems[0]?.summary ?? PLACEHOLDER}`,
+      quotaItems.length
+    ),
+    quotaError: "",
+    quotaItems,
+  };
+}
+
+function buildKiroRows(
+  accounts: KiroGroupProps["filteredAccounts"],
+  quotaMap: KiroGroupProps["quotaMap"]
+): ProviderAccountTableRow[] {
+  return accounts.map((account) => {
+    const quota = buildKiroQuotaDetails(quotaMap.get(account.account_id) ?? null);
+    return {
+      id: `kiro:${account.account_id}`,
+      provider: "kiro",
+      providerLabel: m.providers_kiro_title(),
+      displayName: formatDisplayName(account),
+      accountId: account.account_id,
+      statusLabel: formatKiroStatus(account.status),
+      statusVariant: formatStatusVariant(account.status),
+      expiresAtLabel: formatDateValue(account.expires_at),
+      planType: quota.planType,
+      quotaSummary: quota.quotaSummary,
+      sourceOrMethodLabel: formatKiroAuthMethod(account.auth_method),
+      detailDescription: `${m.providers_kiro_title()} · ${account.account_id}`,
+      detailFields: [
+        { label: m.providers_table_provider(), value: m.providers_kiro_title() },
+        { label: m.providers_table_account(), value: formatDisplayName(account) },
+        { label: m.providers_table_account_id(), value: account.account_id },
+        { label: m.providers_table_status(), value: formatKiroStatus(account.status) },
+        { label: m.providers_table_expires(), value: formatDateValue(account.expires_at) },
+        { label: m.providers_table_plan(), value: quota.planType },
+        { label: m.providers_table_source(), value: formatKiroAuthMethod(account.auth_method) },
+      ],
+      quotaError: quota.quotaError,
+      quotaItems: quota.quotaItems,
+      logoutLabel: m.kiro_account_logout(),
+      canSwitchIde: false,
+    };
+  });
+}
+
+function buildCodexRows(
+  accounts: CodexGroupProps["filteredAccounts"],
+  quotaMap: CodexGroupProps["quotaMap"]
+): ProviderAccountTableRow[] {
+  return accounts.map((account) => {
+    const quota = buildCodexQuotaDetails(quotaMap.get(account.account_id) ?? null);
+    return {
+      id: `codex:${account.account_id}`,
+      provider: "codex",
+      providerLabel: m.providers_codex_title(),
+      displayName: formatDisplayName(account),
+      accountId: account.account_id,
+      statusLabel: formatCodexStatus(account.status),
+      statusVariant: formatStatusVariant(account.status),
+      expiresAtLabel: formatDateValue(account.expires_at ?? null),
+      planType: quota.planType,
+      quotaSummary: quota.quotaSummary,
+      sourceOrMethodLabel: PLACEHOLDER,
+      detailDescription: `${m.providers_codex_title()} · ${account.account_id}`,
+      detailFields: [
+        { label: m.providers_table_provider(), value: m.providers_codex_title() },
+        { label: m.providers_table_account(), value: formatDisplayName(account) },
+        { label: m.providers_table_account_id(), value: account.account_id },
+        { label: m.providers_table_status(), value: formatCodexStatus(account.status) },
+        { label: m.providers_table_expires(), value: formatDateValue(account.expires_at ?? null) },
+        { label: m.providers_table_plan(), value: quota.planType },
+      ],
+      quotaError: quota.quotaError,
+      quotaItems: quota.quotaItems,
+      logoutLabel: m.codex_account_logout(),
+      canSwitchIde: false,
+    };
+  });
+}
+
+function buildAntigravityRows(
+  accounts: AntigravityGroupProps["filteredAccounts"],
+  quotaMap: AntigravityGroupProps["quotaMap"],
+  canSwitchIde: boolean
+): ProviderAccountTableRow[] {
+  return accounts.map((account) => {
+    const quota = buildAntigravityQuotaDetails(quotaMap.get(account.account_id) ?? null);
+    return {
+      id: `antigravity:${account.account_id}`,
+      provider: "antigravity",
+      providerLabel: m.providers_antigravity_title(),
+      displayName: formatDisplayName(account),
+      accountId: account.account_id,
+      statusLabel: formatAntigravityStatus(account.status),
+      statusVariant: formatStatusVariant(account.status),
+      expiresAtLabel: formatDateValue(account.expires_at ?? null),
+      planType: quota.planType,
+      quotaSummary: quota.quotaSummary,
+      sourceOrMethodLabel: formatAntigravitySource(account.source ?? null),
+      detailDescription: `${m.providers_antigravity_title()} · ${account.account_id}`,
+      detailFields: [
+        { label: m.providers_table_provider(), value: m.providers_antigravity_title() },
+        { label: m.providers_table_account(), value: formatDisplayName(account) },
+        { label: m.providers_table_account_id(), value: account.account_id },
+        { label: m.providers_table_status(), value: formatAntigravityStatus(account.status) },
+        { label: m.providers_table_expires(), value: formatDateValue(account.expires_at ?? null) },
+        { label: m.providers_table_plan(), value: quota.planType },
+        { label: m.providers_table_source(), value: formatAntigravitySource(account.source ?? null) },
+      ],
+      quotaError: quota.quotaError,
+      quotaItems: quota.quotaItems,
+      logoutLabel: m.antigravity_account_logout(),
+      canSwitchIde,
+    };
+  });
+}
+
+function collectErrorMessages(parts: string[]) {
+  return parts.filter(Boolean).join(" · ");
+}
+
+function ProvidersSections({
   visibleCount,
+  rows,
+  loading,
+  error,
   showKiro,
   showCodex,
   showAntigravity,
   kiroGroupProps,
   codexGroupProps,
   antigravityGroupProps,
-}: ProvidersAccountsSectionProps) {
+  onLogout,
+  onSwitchIde,
+}: ProvidersSectionsProps) {
   return (
-    <section className="space-y-3">
-      <ProvidersSectionHeader title={m.providers_section_accounts_title()} count={visibleCount} />
-      {showAntigravity ? <AntigravityProviderGroup {...antigravityGroupProps} /> : null}
-      {showKiro ? <KiroProviderGroup {...kiroGroupProps} /> : null}
-      {showCodex ? <CodexProviderGroup {...codexGroupProps} /> : null}
-      {!showKiro && !showCodex && !showAntigravity ? (
-        <p className="text-sm text-muted-foreground">{m.providers_accounts_empty_filtered()}</p>
-      ) : null}
-    </section>
+    <>
+      <ProvidersAccountsTableSection
+        count={visibleCount}
+        rows={rows}
+        loading={loading}
+        error={error}
+        onLogout={onLogout}
+        onSwitchIde={onSwitchIde}
+      />
+      <section className="space-y-3">
+        {showKiro ? <KiroProviderGroup {...kiroGroupProps} showAccounts={false} /> : null}
+        {showCodex ? <CodexProviderGroup {...codexGroupProps} showAccounts={false} /> : null}
+        {showAntigravity ? (
+          <AntigravityProviderGroup {...antigravityGroupProps} showAccounts={false} />
+        ) : null}
+      </section>
+    </>
   );
 }
 
@@ -711,14 +1076,88 @@ function useProvidersPanelState() {
     onImport: handleAntigravityImport,
     onSwitchIdeAccount: antigravityIde.switchAccount,
   });
-  const sectionProps: ProvidersAccountsSectionProps = {
+  const rows = useMemo(() => {
+    return [
+      ...(showKiro ? buildKiroRows(filteredAccounts, quotaMap) : []),
+      ...(showCodex ? buildCodexRows(filteredCodexAccounts, codexQuotaMap) : []),
+      ...(
+        showAntigravity
+          ? buildAntigravityRows(
+              filteredAntigravityAccounts,
+              antigravityQuotaMap,
+              antigravityIde.status?.database_available ?? false
+            )
+          : []
+      ),
+    ];
+  }, [
+    showKiro,
+    showCodex,
+    showAntigravity,
+    filteredAccounts,
+    filteredCodexAccounts,
+    filteredAntigravityAccounts,
+    quotaMap,
+    codexQuotaMap,
+    antigravityQuotaMap,
+    antigravityIde.status,
+  ]);
+  const tableError = collectErrorMessages([
+    showKiro ? kiroAccounts.error : "",
+    showKiro ? kiroQuotas.error : "",
+    showCodex ? codexAccounts.error : "",
+    showCodex ? codexQuotas.error : "",
+    showAntigravity ? antigravityAccounts.error : "",
+    showAntigravity ? antigravityQuotas.error : "",
+  ]);
+  const handleRowLogout = useCallback(
+    async (row: ProviderAccountTableRow) => {
+      if (row.provider === "kiro") {
+        await kiroAccounts.logout(row.accountId);
+        await kiroQuotas.refresh();
+        return;
+      }
+      if (row.provider === "codex") {
+        await codexAccounts.logout(row.accountId);
+        await codexQuotas.refresh();
+        return;
+      }
+      await antigravityAccounts.logout(row.accountId);
+      await antigravityQuotas.refresh();
+      await antigravityIde.refresh();
+    },
+    [
+      kiroAccounts,
+      kiroQuotas,
+      codexAccounts,
+      codexQuotas,
+      antigravityAccounts,
+      antigravityQuotas,
+      antigravityIde,
+    ]
+  );
+  const handleRowSwitchIde = useCallback(
+    async (row: ProviderAccountTableRow) => {
+      if (row.provider !== "antigravity") {
+        return;
+      }
+      await antigravityIde.switchAccount(row.accountId);
+    },
+    [antigravityIde]
+  );
+  const sectionProps: ProvidersSectionsProps = {
     visibleCount,
+    rows,
+    loading: refreshBusy,
+    error: tableError,
     showKiro,
     showCodex,
     showAntigravity,
     kiroGroupProps,
     codexGroupProps,
     antigravityGroupProps,
+    onLogout: handleRowLogout,
+    onSwitchIde: handleRowSwitchIde,
   };
 
   return { toolbarProps, sectionProps };
@@ -730,7 +1169,7 @@ export function ProvidersPanel() {
   return (
     <div className="flex flex-col gap-4 px-4 lg:px-6">
       <ProvidersToolbar {...toolbarProps} />
-      <ProvidersAccountsSection {...sectionProps} />
+      <ProvidersSections {...sectionProps} />
     </div>
   );
 }

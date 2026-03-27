@@ -647,6 +647,7 @@ type AntigravityProviderBodyProps = {
   onSwitchIdeAccount: (accountId: string) => Promise<AntigravityIdeStatus>;
   onLogout: (accountId: string) => Promise<void>;
   warmupProps: WarmupPanelProps;
+  showAccounts: boolean;
 };
 
 function AntigravityProviderBody({
@@ -665,6 +666,7 @@ function AntigravityProviderBody({
   onSwitchIdeAccount,
   onLogout,
   warmupProps,
+  showAccounts,
 }: AntigravityProviderBodyProps) {
   return (
     <div data-slot="antigravity-provider-body" className="border-t border-border/60 px-4 py-4 space-y-4">
@@ -685,24 +687,28 @@ function AntigravityProviderBody({
 
       <WarmupPanel {...warmupProps} />
 
-      {accountsLoading ? null : filteredAccounts.length ? (
-        <div className="space-y-3">
-          {filteredAccounts.map((account) => (
-            <AntigravityAccountRow
-              key={account.account_id}
-              account={account}
-              quota={quotaMap.get(account.account_id) ?? null}
-              loading={accountsLoading}
-              quotaLoading={quotasLoading}
-              canSwitchIde={canSwitchIde}
-              onSwitchIde={onSwitchIdeAccount}
-              onLogout={onLogout}
-            />
-          ))}
-        </div>
-      ) : (
-        <p className="text-sm text-muted-foreground">{emptyMessage}</p>
-      )}
+      {showAccounts
+        ? accountsLoading
+          ? null
+          : filteredAccounts.length ? (
+            <div className="space-y-3">
+              {filteredAccounts.map((account) => (
+                <AntigravityAccountRow
+                  key={account.account_id}
+                  account={account}
+                  quota={quotaMap.get(account.account_id) ?? null}
+                  loading={accountsLoading}
+                  quotaLoading={quotasLoading}
+                  canSwitchIde={canSwitchIde}
+                  onSwitchIde={onSwitchIdeAccount}
+                  onLogout={onLogout}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">{emptyMessage}</p>
+          )
+        : null}
     </div>
   );
 }
@@ -757,6 +763,7 @@ export type AntigravityProviderGroupProps = {
   loginBusy: boolean;
   loginStatus: LoginStatus;
   onSwitchIdeAccount: (accountId: string) => Promise<AntigravityIdeStatus>;
+  showAccounts?: boolean;
 };
 
 export function AntigravityProviderGroup({
@@ -781,6 +788,7 @@ export function AntigravityProviderGroup({
   loginBusy,
   loginStatus,
   onSwitchIdeAccount,
+  showAccounts = true,
 }: AntigravityProviderGroupProps) {
   const [loginOpen, setLoginOpen] = useState(false);
   const [isOpen, setIsOpen] = useState(accounts.length > 0);
@@ -811,6 +819,7 @@ export function AntigravityProviderGroup({
     onSwitchIdeAccount,
     onLogout,
     warmupProps,
+    showAccounts,
   };
   const headerProps: AntigravityProviderHeaderProps = {
     accountsCount: accounts.length,

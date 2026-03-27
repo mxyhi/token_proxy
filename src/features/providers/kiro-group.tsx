@@ -323,6 +323,7 @@ export type KiroProviderGroupProps = {
   deviceCode: string;
   loginBusy: boolean;
   loginStatus: LoginStatus;
+  showAccounts?: boolean;
 };
 
 type KiroProviderHeaderProps = {
@@ -399,6 +400,7 @@ type KiroProviderBodyProps = {
   quotasError: string;
   emptyMessage: string;
   onLogout: (accountId: string) => Promise<void>;
+  showAccounts: boolean;
 };
 
 function KiroProviderBody({
@@ -410,6 +412,7 @@ function KiroProviderBody({
   quotasError,
   emptyMessage,
   onLogout,
+  showAccounts,
 }: KiroProviderBodyProps) {
   return (
     <div className="border-t border-border/60 px-4 py-4">
@@ -425,22 +428,26 @@ function KiroProviderBody({
           </div>
         </Alert>
       ) : null}
-      {accountsLoading ? null : filteredAccounts.length ? (
-        <div className="mt-4 space-y-3">
-          {filteredAccounts.map((account) => (
-            <ProviderAccountRow
-              key={account.account_id}
-              account={account}
-              quota={quotaMap.get(account.account_id) ?? null}
-              loading={accountsLoading || quotasLoading}
-              quotaLoading={quotasLoading}
-              onLogout={onLogout}
-            />
-          ))}
-        </div>
-      ) : (
-        <p className="mt-3 text-sm text-muted-foreground">{emptyMessage}</p>
-      )}
+      {showAccounts
+        ? accountsLoading
+          ? null
+          : filteredAccounts.length ? (
+            <div className="mt-4 space-y-3">
+              {filteredAccounts.map((account) => (
+                <ProviderAccountRow
+                  key={account.account_id}
+                  account={account}
+                  quota={quotaMap.get(account.account_id) ?? null}
+                  loading={accountsLoading || quotasLoading}
+                  quotaLoading={quotasLoading}
+                  onLogout={onLogout}
+                />
+              ))}
+            </div>
+          ) : (
+            <p className="mt-3 text-sm text-muted-foreground">{emptyMessage}</p>
+          )
+        : null}
     </div>
   );
 }
@@ -504,6 +511,7 @@ export function KiroProviderGroup({
   deviceCode,
   loginBusy,
   loginStatus,
+  showAccounts = true,
 }: KiroProviderGroupProps) {
   const [loginOpen, setLoginOpen] = useState(false);
   const [isOpen, setIsOpen] = useState(accounts.length > 0);
@@ -536,7 +544,17 @@ export function KiroProviderGroup({
   };
 
   const emptyMessage = accounts.length ? m.providers_accounts_empty_filtered() : m.providers_accounts_empty();
-  const bodyProps: KiroProviderBodyProps = { filteredAccounts, quotaMap, accountsLoading, quotasLoading, accountsError, quotasError, emptyMessage, onLogout };
+  const bodyProps: KiroProviderBodyProps = {
+    filteredAccounts,
+    quotaMap,
+    accountsLoading,
+    quotasLoading,
+    accountsError,
+    quotasError,
+    emptyMessage,
+    onLogout,
+    showAccounts,
+  };
   const handleToggle = (nextOpen: boolean) => { setHasToggled(true); setIsOpen(nextOpen); };
 
   return (

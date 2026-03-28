@@ -166,11 +166,8 @@ fn resolve_gemini_plan(config: &ProxyConfig, path: &str) -> Option<Result<Dispat
         return None;
     }
     let inbound_format = Some(InboundApiFormat::Gemini);
-    if let Some(selected) = choose_provider_by_priority(
-        config,
-        inbound_format,
-        &[PROVIDER_GEMINI],
-    ) {
+    if let Some(selected) = choose_provider_by_priority(config, inbound_format, &[PROVIDER_GEMINI])
+    {
         return Some(Ok(base_plan(selected)));
     }
     let fallback = choose_provider_by_priority(
@@ -459,11 +456,7 @@ fn resolve_responses_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> 
     let selected = choose_provider_by_priority(
         config,
         inbound_format,
-        &[
-            PROVIDER_CHAT,
-            PROVIDER_ANTHROPIC,
-            PROVIDER_GEMINI,
-        ],
+        &[PROVIDER_CHAT, PROVIDER_ANTHROPIC, PROVIDER_GEMINI],
     )
     .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
     Ok(match selected {

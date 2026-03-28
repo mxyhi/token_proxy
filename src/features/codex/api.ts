@@ -11,6 +11,10 @@ export async function listCodexAccounts() {
   return await invoke<CodexAccountSummary[]>("codex_list_accounts");
 }
 
+export async function importCodexFile(path: string) {
+  return await invoke<CodexAccountSummary[]>("codex_import_file", { path });
+}
+
 export async function startCodexLogin() {
   return await invoke<CodexLoginStartResponse>("codex_start_login");
 }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { ProvidersPanel } from "@/features/providers/ProvidersPanel";
 import { m } from "@/paraglide/messages.js";
@@ -16,6 +17,7 @@ const providerMocks = vi.hoisted(() => {
   const beginCodexLogin = vi.fn();
   const importKiroIde = vi.fn(async () => undefined);
   const importKiroKam = vi.fn(async () => undefined);
+  const importCodexFile = vi.fn(async () => undefined);
 
   return {
     refreshKiroAccounts,
@@ -28,6 +30,7 @@ const providerMocks = vi.hoisted(() => {
     beginCodexLogin,
     importKiroIde,
     importKiroKam,
+    importCodexFile,
   };
 });
 
@@ -75,6 +78,7 @@ vi.mock("@/features/codex/use-codex-accounts", () => ({
     error: "",
     refresh: providerMocks.refreshCodexAccounts,
     logout: providerMocks.logoutCodex,
+    importFile: providerMocks.importCodexFile,
   }),
 }));
 
@@ -238,6 +242,24 @@ describe("providers/ProvidersPanel", () => {
     expect(providerMocks.refreshKiroAccounts).toHaveBeenCalledTimes(1);
     expect(providerMocks.refreshKiroQuotas).toHaveBeenCalledTimes(1);
     expect(providerMocks.refreshCodexAccounts).toHaveBeenCalledTimes(1);
+    expect(providerMocks.refreshCodexQuotas).toHaveBeenCalledTimes(1);
+  });
+
+  it("imports codex account file from toolbar action", async () => {
+    const user = userEvent.setup();
+    vi.mocked(open).mockResolvedValueOnce("/tmp/codex-account.json");
+
+    render(<ProvidersPanel />);
+
+    const importButton = document.querySelector('[data-slot="providers-toolbar-codex-import"]');
+    if (!(importButton instanceof HTMLButtonElement)) {
+      throw new Error("Missing codex import button");
+    }
+
+    await user.click(importButton);
+
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(providerMocks.importCodexFile).toHaveBeenCalledWith("/tmp/codex-account.json");
     expect(providerMocks.refreshCodexQuotas).toHaveBeenCalledTimes(1);
   });
 });

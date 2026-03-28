@@ -166,6 +166,8 @@
   "codex_account_status_expired": "已过期",
   "codex_account_logout": "删除",
   "codex_account_manage": "前往 Providers 管理",
+  "codex_import_button": "导入 Codex 文件",
+  "codex_import_success": "已导入 Codex 账号。",
   "codex_login_button": "登录 Codex",
   "codex_login_url_title": "授权地址",
   "codex_login_open_hint": "如果未自动打开，请手动在浏览器访问以下地址。",

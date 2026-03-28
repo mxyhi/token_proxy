@@ -30,12 +30,12 @@ mod upstream;
 mod upstream_selector;
 mod usage;
 
+use crate::codex::CodexAccountStore;
+use crate::kiro::KiroAccountStore;
 use std::{
     collections::HashMap,
     sync::{atomic::AtomicUsize, Arc},
 };
-use crate::codex::CodexAccountStore;
-use crate::kiro::KiroAccountStore;
 
 struct ProxyState {
     config: config::ProxyConfig,

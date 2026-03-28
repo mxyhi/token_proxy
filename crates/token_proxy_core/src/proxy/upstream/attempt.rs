@@ -355,14 +355,9 @@ async fn send_upstream_request_once(
         .map_err(|message| {
             AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
         })?;
-    let upstream_body = request::build_upstream_body(
-        provider,
-        upstream,
-        upstream_path_with_query,
-        body,
-        meta,
-    )
-    .await?;
+    let upstream_body =
+        request::build_upstream_body(provider, upstream, upstream_path_with_query, body, meta)
+            .await?;
     match send_request_once(
         client,
         &method,
@@ -479,15 +474,10 @@ async fn send_codex_attempt(
             )))
         },
     )?;
-    let upstream_body = request::build_upstream_body(
-        provider,
-        upstream,
-        upstream_path_with_query,
-        body,
-        meta,
-    )
-    .await
-    .map_err(CodexAttemptError::Fatal)?;
+    let upstream_body =
+        request::build_upstream_body(provider, upstream, upstream_path_with_query, body, meta)
+            .await
+            .map_err(CodexAttemptError::Fatal)?;
     match send_request_once(
         client,
         method,

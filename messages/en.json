@@ -166,6 +166,8 @@
   "codex_account_status_expired": "Expired",
   "codex_account_logout": "Delete",
   "codex_account_manage": "Manage in Providers",
+  "codex_import_button": "Import Codex File",
+  "codex_import_success": "Codex account imported.",
   "codex_login_button": "Sign in to Codex",
   "codex_login_url_title": "Authorization URL",
   "codex_login_open_hint": "Open the login URL in a browser if it didn't open automatically.",

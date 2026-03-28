@@ -319,6 +319,18 @@ async fn codex_list_accounts(
 }
 
 #[tauri::command]
+async fn codex_import_file(
+    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    path: String,
+) -> Result<Vec<codex::CodexAccountSummary>, String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err("File path is required.".to_string());
+    }
+    codex_store.import_file(PathBuf::from(trimmed)).await
+}
+
+#[tauri::command]
 async fn codex_fetch_quotas(
     codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
 ) -> Result<Vec<codex::CodexQuotaSummary>, String> {
@@ -636,6 +648,7 @@ pub fn run() {
             kiro_handle_callback,
             kiro_fetch_quotas,
             codex_list_accounts,
+            codex_import_file,
             codex_fetch_quotas,
             codex_start_login,
             codex_poll_login,

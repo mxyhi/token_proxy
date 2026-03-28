@@ -1,8 +1,5 @@
 use axum::{
-    http::{
-        header::AUTHORIZATION,
-        HeaderMap, Method, StatusCode,
-    },
+    http::{header::AUTHORIZATION, HeaderMap, Method, StatusCode},
     response::Response,
 };
 use futures_util::stream::{FuturesUnordered, StreamExt};
@@ -899,10 +896,7 @@ async fn resolve_codex_upstream(
     })
 }
 
-fn build_mapped_meta(
-    meta: &RequestMeta,
-    upstream: &UpstreamRuntime,
-) -> RequestMeta {
+fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestMeta {
     // 只有当实际发生映射时才设置 mapped_model，避免与 original_model 重复
     let mapped_model = meta
         .original_model

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { listCodexAccounts, logoutCodexAccount } from "@/features/codex/api";
+import {
+  importCodexFile,
+  listCodexAccounts,
+  logoutCodexAccount,
+} from "@/features/codex/api";
 import type { CodexAccountSummary } from "@/features/codex/types";
 import { parseError } from "@/lib/error";
 
@@ -27,9 +31,26 @@ export function useCodexAccounts() {
     await refresh();
   }, [refresh]);
 
+  const importFile = useCallback(async (path: string) => {
+    setLoading(true);
+    try {
+      const imported = await importCodexFile(path);
+      const next = await listCodexAccounts();
+      setAccounts(next);
+      setError("");
+      return imported;
+    } catch (err) {
+      const message = parseError(err);
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  return { accounts, loading, error, refresh, logout };
+  return { accounts, loading, error, refresh, logout, importFile };
 }

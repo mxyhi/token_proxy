@@ -1,6 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 
 import { RefreshCw, Search } from "lucide-react";
+import { open } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -20,6 +22,7 @@ import {
 } from "@/features/providers/providers-accounts-table";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
 import { useKiroQuotas } from "@/features/kiro/use-kiro-quotas";
+import { parseError } from "@/lib/error";
 import { m } from "@/paraglide/messages.js";
 
 const PROVIDER_FILTER_ALL = "all";
@@ -63,7 +66,9 @@ type ProvidersToolbarProps = {
   onProviderFilterChange: (value: ProviderFilterValue) => void;
   onStatusFilterChange: (value: StatusFilterValue) => void;
   onRefresh: () => void;
+  onImportCodex: () => Promise<void>;
   refreshing: boolean;
+  codexImporting: boolean;
 };
 
 type ProvidersSectionsProps = {
@@ -149,7 +154,9 @@ function ProvidersToolbar({
   onProviderFilterChange,
   onStatusFilterChange,
   onRefresh,
+  onImportCodex,
   refreshing,
+  codexImporting,
 }: ProvidersToolbarProps) {
   return (
     <div
@@ -159,6 +166,16 @@ function ProvidersToolbar({
       <ProvidersSearchInput search={search} onSearchChange={onSearchChange} />
       <ProviderFilterSelect value={providerFilter} onChange={onProviderFilterChange} />
       <StatusFilterSelect value={statusFilter} onChange={onStatusFilterChange} />
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => { void onImportCodex(); }}
+        disabled={refreshing || codexImporting}
+        data-slot="providers-toolbar-codex-import"
+      >
+        {m.codex_import_button()}
+      </Button>
       <Button
         type="button"
         variant="outline"
@@ -244,8 +261,10 @@ function buildCodexQuotaMap(quotas: CodexQuotaEntry[]): Map<string, CodexQuotaVi
 
 function buildToolbarProps(
   filters: ReturnType<typeof useProviderFilters>,
+  onImportCodex: () => Promise<void>,
   onRefresh: () => void,
-  refreshing: boolean
+  refreshing: boolean,
+  codexImporting: boolean,
 ) {
   return {
     search: filters.search,
@@ -254,8 +273,10 @@ function buildToolbarProps(
     onSearchChange: filters.setSearch,
     onProviderFilterChange: filters.setProviderFilter,
     onStatusFilterChange: filters.setStatusFilter,
+    onImportCodex,
     onRefresh,
     refreshing,
+    codexImporting,
   };
 }
 
@@ -520,12 +541,33 @@ function useProvidersPanelState() {
   const codexAccounts = useCodexAccounts();
   const kiroQuotas = useKiroQuotas();
   const codexQuotas = useCodexQuotas();
+  const [codexImporting, setCodexImporting] = useState(false);
   const refreshAll = useCallback(async () => {
     await kiroAccounts.refresh();
     await kiroQuotas.refresh();
     await codexAccounts.refresh();
     await codexQuotas.refresh();
   }, [kiroAccounts, kiroQuotas, codexAccounts, codexQuotas]);
+  const importCodex = useCallback(async () => {
+    const selection = await open({
+      directory: false,
+      multiple: false,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (typeof selection !== "string" || !selection.trim()) {
+      return;
+    }
+    setCodexImporting(true);
+    try {
+      await codexAccounts.importFile(selection);
+      await codexQuotas.refresh();
+      toast.success(m.codex_import_success());
+    } catch (error) {
+      toast.error(parseError(error));
+    } finally {
+      setCodexImporting(false);
+    }
+  }, [codexAccounts, codexQuotas]);
   const quotaMap = useMemo(() => buildQuotaMap(kiroQuotas.quotas), [kiroQuotas.quotas]);
   const codexQuotaMap = useMemo(() => buildCodexQuotaMap(codexQuotas.quotas), [codexQuotas.quotas]);
   const filteredAccounts = useFilteredAccounts(kiroAccounts.accounts, filters.searchKeyword, filters.statusFilter);
@@ -543,7 +585,7 @@ function useProvidersPanelState() {
     codexAccounts.loading ||
     codexQuotas.loading;
 
-  const toolbarProps = buildToolbarProps(filters, refreshAll, refreshBusy);
+  const toolbarProps = buildToolbarProps(filters, importCodex, refreshAll, refreshBusy, codexImporting);
   const rows = useMemo(() => {
     return [
       ...(showKiro ? buildKiroRows(filteredAccounts, quotaMap) : []),

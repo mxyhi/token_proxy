@@ -9,6 +9,7 @@ pub mod jsonc;
 pub mod logging;
 pub mod oauth_util;
 pub mod paths;
+pub mod provider_accounts;
 
 pub mod codex;
 pub mod kiro;

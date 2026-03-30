@@ -338,6 +338,23 @@ async fn codex_fetch_quotas(
 }
 
 #[tauri::command]
+async fn codex_refresh_account(
+    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    account_id: String,
+) -> Result<(), String> {
+    codex_store.refresh_account(&account_id).await
+}
+
+#[tauri::command]
+async fn codex_set_auto_refresh(
+    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    account_id: String,
+    enabled: bool,
+) -> Result<codex::CodexAccountSummary, String> {
+    codex_store.set_auto_refresh(&account_id, enabled).await
+}
+
+#[tauri::command]
 async fn codex_start_login(
     codex_login: tauri::State<'_, Arc<codex::CodexLoginManager>>,
 ) -> Result<codex::CodexLoginStartResponse, String> {
@@ -358,6 +375,45 @@ async fn codex_logout(
     account_id: String,
 ) -> Result<(), String> {
     codex_login.logout(&account_id).await
+}
+
+#[tauri::command]
+async fn providers_list_accounts_page(
+    paths: tauri::State<'_, Arc<token_proxy_core::paths::TokenProxyPaths>>,
+    page: u32,
+    page_size: u32,
+    provider_kind: Option<String>,
+    status: Option<String>,
+    search: Option<String>,
+) -> Result<token_proxy_core::provider_accounts::ProviderAccountsPage, String> {
+    let provider_kind = provider_kind
+        .as_deref()
+        .map(token_proxy_core::provider_accounts::ProviderAccountKind::parse)
+        .transpose()?;
+    let status = status
+        .as_deref()
+        .map(token_proxy_core::provider_accounts::ProviderAccountStatus::parse)
+        .transpose()?;
+
+    token_proxy_core::provider_accounts::list_accounts_page(
+        paths.inner().as_ref(),
+        token_proxy_core::provider_accounts::ProviderAccountsPageParams {
+            page,
+            page_size,
+            provider_kind,
+            status,
+            search: search.unwrap_or_default(),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+async fn providers_delete_accounts(
+    paths: tauri::State<'_, Arc<token_proxy_core::paths::TokenProxyPaths>>,
+    account_ids: Vec<String>,
+) -> Result<(), String> {
+    token_proxy_core::provider_accounts::delete_accounts(paths.inner().as_ref(), &account_ids).await
 }
 
 #[tauri::command]
@@ -650,9 +706,13 @@ pub fn run() {
             codex_list_accounts,
             codex_import_file,
             codex_fetch_quotas,
+            codex_refresh_account,
+            codex_set_auto_refresh,
             codex_start_login,
             codex_poll_login,
             codex_logout,
+            providers_list_accounts_page,
+            providers_delete_accounts,
             proxy_status,
             proxy_start,
             proxy_stop,

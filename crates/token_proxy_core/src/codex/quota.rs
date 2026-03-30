@@ -8,6 +8,7 @@ use reqwest::{Client, Proxy};
 
 use crate::oauth_util::build_reqwest_client;
 
+use super::error::format_usage_status_error;
 use super::store::CodexAccountStore;
 use super::types::CodexAccountSummary;
 
@@ -229,9 +230,7 @@ fn format_usage_error(err: UsageRequestError) -> String {
     match err {
         UsageRequestError::Build(message) => message,
         UsageRequestError::Send(err) => format_reqwest_error(&err),
-        UsageRequestError::Status(status, body) => {
-            format!("status {status}: {body}")
-        }
+        UsageRequestError::Status(status, body) => format_usage_status_error(status, &body),
         UsageRequestError::Decode(message) => message,
     }
 }

@@ -1,3 +1,4 @@
+mod error;
 mod login;
 mod oauth;
 mod quota;
@@ -7,4 +8,6 @@ mod types;
 pub use login::CodexLoginManager;
 pub use quota::{fetch_quotas, CodexQuotaSummary};
 pub use store::CodexAccountStore;
-pub use types::{CodexAccountSummary, CodexLoginPollResponse, CodexLoginStartResponse};
+pub use types::{
+    CodexAccountSummary, CodexLoginPollResponse, CodexLoginStartResponse, CodexTokenRecord,
+};

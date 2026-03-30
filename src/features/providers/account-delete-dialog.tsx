@@ -88,3 +88,77 @@ export function AccountDeleteAction({
     </div>
   );
 }
+
+type AccountsBatchDeleteDialogProps = {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+  count: number;
+};
+
+export function AccountsBatchDeleteDialog({
+  open,
+  onOpenChange,
+  onConfirm,
+  count,
+}: AccountsBatchDeleteDialogProps) {
+  const description = open ? m.providers_accounts_delete_description({ count }) : "";
+  return (
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
+      <AlertDialogContent data-slot="accounts-batch-delete-dialog">
+        <AlertDialogHeader>
+          <AlertDialogTitle>{m.providers_accounts_delete_title()}</AlertDialogTitle>
+          <AlertDialogDescription>{description}</AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>{m.common_cancel()}</AlertDialogCancel>
+          <AlertDialogAction
+            onClick={onConfirm}
+            className="bg-destructive text-white hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60"
+          >
+            {m.common_delete()}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+type AccountsBatchDeleteActionProps = {
+  count: number;
+  disabled: boolean;
+  onConfirm: () => void;
+};
+
+export function AccountsBatchDeleteAction({
+  count,
+  disabled,
+  onConfirm,
+}: AccountsBatchDeleteActionProps) {
+  const [open, setOpen] = useState(false);
+
+  const handleConfirm = () => {
+    setOpen(false);
+    onConfirm();
+  };
+
+  return (
+    <div data-slot="accounts-batch-delete-action" className="contents">
+      <Button
+        type="button"
+        variant="destructive"
+        size="sm"
+        onClick={() => setOpen(true)}
+        disabled={disabled}
+      >
+        {m.common_delete()}({count})
+      </Button>
+      <AccountsBatchDeleteDialog
+        open={open}
+        onOpenChange={setOpen}
+        onConfirm={handleConfirm}
+        count={count}
+      />
+    </div>
+  );
+}

@@ -224,6 +224,7 @@ async fn run_auth_code_login(
         access_token: token.access_token,
         refresh_token: token.refresh_token,
         id_token: token.id_token,
+        auto_refresh_enabled: true,
         account_id: None,
         email: None,
         expires_at: expires_at_from_seconds(token.expires_in),

@@ -424,5 +424,8 @@
   "providers_status_summary": "Active {active} · Expired {expired}",
   "providers_quota_loading": "Loading quota...",
   "providers_account_delete_title": "Delete account?",
-  "providers_account_delete_description": "This will delete account {label}."
+  "providers_account_delete_description": "This will delete account {label}.",
+  "providers_accounts_delete_title": "Delete accounts?",
+  "providers_accounts_delete_description": "This will delete {count} accounts.",
+  "providers_accounts_delete_success": "Successfully deleted {count} accounts."
 }

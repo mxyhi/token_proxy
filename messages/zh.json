@@ -424,5 +424,8 @@
   "providers_status_summary": "正常 {active} · 过期 {expired}",
   "providers_quota_loading": "正在加载额度…",
   "providers_account_delete_title": "删除账户？",
-  "providers_account_delete_description": "将删除账户 {label}。"
+  "providers_account_delete_description": "将删除账户 {label}。",
+  "providers_accounts_delete_title": "删除多个账户？",
+  "providers_accounts_delete_description": "将删除 {count} 个账户。",
+  "providers_accounts_delete_success": "成功删除 {count} 个账户。"
 }

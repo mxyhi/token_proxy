@@ -444,22 +444,22 @@ async fn build_test_state_handle(config: ProxyConfig, data_dir: PathBuf) -> Prox
                 let Some(account_id) = upstream.codex_account_id.as_deref() else {
                     continue;
                 };
-                let auth_dir = paths.data_dir().join("codex-auth");
-                std::fs::create_dir_all(&auth_dir).expect("create codex auth dir");
-                let record = json!({
-                    "access_token": "codex-access-token",
-                    "refresh_token": "codex-refresh-token",
-                    "id_token": "codex-id-token",
-                    "account_id": "chatgpt-account",
-                    "email": "codex@example.com",
-                    "expires_at": expires_at,
-                    "last_refresh": null
-                });
-                std::fs::write(
-                    auth_dir.join(account_id),
-                    serde_json::to_vec_pretty(&record).expect("serialize codex record"),
-                )
-                .expect("write codex account");
+                codex_accounts
+                    .save_record(
+                        account_id.to_string(),
+                        crate::codex::CodexTokenRecord {
+                            access_token: "codex-access-token".to_string(),
+                            refresh_token: "codex-refresh-token".to_string(),
+                            id_token: "codex-id-token".to_string(),
+                            auto_refresh_enabled: true,
+                            account_id: Some("chatgpt-account".to_string()),
+                            email: Some("codex@example.com".to_string()),
+                            expires_at: expires_at.clone(),
+                            last_refresh: None,
+                        },
+                    )
+                    .await
+                    .expect("seed codex account");
                 codex_accounts
                     .list_accounts()
                     .await

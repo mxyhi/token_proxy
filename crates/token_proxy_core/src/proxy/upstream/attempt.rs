@@ -65,7 +65,7 @@ pub(super) async fn attempt_upstream(
     };
     if let Some(outcome) = retry_after_kiro_refresh(
         state,
-        method,
+        method.clone(),
         provider,
         upstream,
         inbound_path,

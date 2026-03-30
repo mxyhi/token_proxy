@@ -105,4 +105,43 @@ describe("upstreams/table", () => {
     await user.hover(accountCell);
     expect(await screen.findByRole("tooltip")).toHaveTextContent(LONG_EMAIL);
   });
+
+  it("keeps the actions column pinned to the right", () => {
+    render(
+      <UpstreamsTable
+        upstreams={[buildUpstream()]}
+        columns={UPSTREAM_COLUMNS}
+        showApiKeys={false}
+        kiroAccounts={new Map()}
+        codexAccounts={
+          new Map([
+            [
+              "codex-1.json",
+              {
+                account_id: "codex-1.json",
+                email: LONG_EMAIL,
+                expires_at: null,
+                status: "active",
+              },
+            ],
+          ])
+        }
+        disableDelete={false}
+        onEdit={() => undefined}
+        onCopy={() => undefined}
+        onToggleEnabled={() => undefined}
+        onDelete={() => undefined}
+      />
+    );
+
+    const header = screen.getByRole("columnheader", { name: "Actions" });
+    const actionButton = screen.getByRole("button", {
+      name: /edit upstream/i,
+    });
+    const actionCell = actionButton.closest("td");
+
+    expect(header).toHaveClass("sticky", "right-0");
+    expect(actionCell).not.toBeNull();
+    expect(actionCell).toHaveClass("sticky", "right-0");
+  });
 });

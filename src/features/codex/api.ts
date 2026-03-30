@@ -30,3 +30,14 @@ export async function logoutCodexAccount(accountId: string) {
 export async function fetchCodexQuotas() {
   return await invoke<CodexQuotaSummary[]>("codex_fetch_quotas");
 }
+
+export async function refreshCodexAccount(accountId: string) {
+  return await invoke<void>("codex_refresh_account", { accountId });
+}
+
+export async function setCodexAutoRefresh(accountId: string, enabled: boolean) {
+  return await invoke<CodexAccountSummary>("codex_set_auto_refresh", {
+    accountId,
+    enabled,
+  });
+}

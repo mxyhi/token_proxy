@@ -240,7 +240,7 @@ function UpstreamsTableHeader({ columns }: UpstreamsTableHeaderProps) {
             {column.label()}
           </th>
         ))}
-        <th className="w-[9rem] px-3 py-2 text-right text-xs font-medium text-muted-foreground">
+        <th className="sticky right-0 z-20 w-[9rem] border-l border-border/40 bg-background/95 px-3 py-2 text-right text-xs font-medium text-muted-foreground">
           {m.common_actions()}
         </th>
       </tr>
@@ -369,7 +369,7 @@ function UpstreamRowActions({
   onDelete,
 }: UpstreamRowActionsProps) {
   return (
-    <td className="w-[9rem] px-3 py-2 align-top">
+    <td className="sticky right-0 z-10 w-[9rem] border-l border-border/40 bg-background/95 px-3 py-2 align-top backdrop-blur-xs group-hover:bg-muted/50">
       <div className="flex justify-end gap-1">
         <Button
           type="button"
@@ -448,7 +448,7 @@ function UpstreamsTableRow({
 }: UpstreamsTableRowProps) {
   const rowLabel = getUpstreamLabel(displayIndex);
   return (
-    <tr className="border-b border-border/40 last:border-b-0">
+    <tr className="group border-b border-border/40 last:border-b-0">
       {columns.map((column) => (
         <td
           key={column.id}

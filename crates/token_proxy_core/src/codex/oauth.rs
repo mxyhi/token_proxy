@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::oauth_util::build_reqwest_client;
 
+use super::error::format_oauth_status_error;
+
 const OPENAI_AUTH_URL: &str = "https://auth.openai.com/oauth/authorize";
 const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
 const OPENAI_CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -112,11 +114,7 @@ impl CodexOAuthClient {
             .map_err(|err| format!("Failed to read Codex OAuth response: {err}"))?;
         if !status.is_success() {
             let body = String::from_utf8_lossy(&bytes);
-            return Err(format!(
-                "Codex OAuth request failed (status {}): {}",
-                status.as_u16(),
-                body
-            ));
+            return Err(format_oauth_status_error(status.as_u16(), body.as_ref()));
         }
         serde_json::from_slice(&bytes)
             .map_err(|err| format!("Failed to parse Codex OAuth response: {err}"))

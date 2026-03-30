@@ -11,23 +11,21 @@ use crate::oauth_util::{
     now_rfc3339, sanitize_id_part,
 };
 use crate::paths::TokenProxyPaths;
+use crate::provider_accounts;
 
 use super::oauth::CodexOAuthClient;
 use super::types::{CodexAccountStatus, CodexAccountSummary, CodexTokenRecord};
 
-const CODEX_AUTH_DIR_NAME: &str = "codex-auth";
-
 pub struct CodexAccountStore {
-    dir: PathBuf,
+    paths: TokenProxyPaths,
     cache: RwLock<HashMap<String, CodexTokenRecord>>,
     app_proxy: AppProxyState,
 }
 
 impl CodexAccountStore {
     pub fn new(paths: &TokenProxyPaths, app_proxy: AppProxyState) -> Result<Self, String> {
-        let dir = paths.data_dir().join(CODEX_AUTH_DIR_NAME);
         Ok(Self {
-            dir,
+            paths: paths.clone(),
             cache: RwLock::new(HashMap::new()),
             app_proxy,
         })
@@ -47,6 +45,7 @@ impl CodexAccountStore {
                         .unwrap_or_else(|_| record.expires_at.clone())
                 }),
                 status: record.status(),
+                auto_refresh_enabled: record.auto_refresh_enabled,
             })
             .collect();
         items.sort_by(|left, right| left.account_id.cmp(&right.account_id));
@@ -84,18 +83,35 @@ impl CodexAccountStore {
         self.refresh_if_needed(account_id, record).await
     }
 
+    pub async fn refresh_account(&self, account_id: &str) -> Result<(), String> {
+        let record = self.load_account(account_id).await?;
+        if record.refresh_token.trim().is_empty() {
+            return Err("Codex account has no refresh token. Please sign in again.".to_string());
+        }
+        let refreshed = self.refresh_record(account_id, record).await?;
+        let summary = self.save_record(account_id.to_string(), refreshed).await?;
+        if matches!(summary.status, CodexAccountStatus::Expired) {
+            return Err("Codex token refresh failed.".to_string());
+        }
+        Ok(())
+    }
+
+    pub async fn set_auto_refresh(
+        &self,
+        account_id: &str,
+        enabled: bool,
+    ) -> Result<CodexAccountSummary, String> {
+        let mut record = self.load_account(account_id).await?;
+        record.auto_refresh_enabled = enabled;
+        self.save_record(account_id.to_string(), record).await
+    }
+
     pub(crate) async fn save_record(
         &self,
         account_id: String,
         record: CodexTokenRecord,
     ) -> Result<CodexAccountSummary, String> {
-        self.ensure_dir().await?;
-        let path = self.account_path(&account_id);
-        let payload = serde_json::to_string_pretty(&record)
-            .map_err(|err| format!("Failed to serialize token record: {err}"))?;
-        tokio::fs::write(&path, payload)
-            .await
-            .map_err(|err| format!("Failed to write token record: {err}"))?;
+        provider_accounts::upsert_codex_account(&self.paths, &account_id, &record).await?;
         let mut cache = self.cache.write().await;
         cache.insert(account_id.clone(), record.clone());
         Ok(CodexAccountSummary {
@@ -107,6 +123,7 @@ impl CodexAccountStore {
                     .unwrap_or_else(|_| record.expires_at.clone())
             }),
             status: record.status(),
+            auto_refresh_enabled: record.auto_refresh_enabled,
         })
     }
 
@@ -129,12 +146,7 @@ impl CodexAccountStore {
     }
 
     pub(crate) async fn delete_account(&self, account_id: &str) -> Result<(), String> {
-        let path = self.account_path(account_id);
-        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            tokio::fs::remove_file(&path)
-                .await
-                .map_err(|err| format!("Failed to delete token record: {err}"))?;
-        }
+        provider_accounts::delete_account(&self.paths, account_id).await?;
         let mut cache = self.cache.write().await;
         cache.remove(account_id);
         Ok(())
@@ -146,6 +158,14 @@ impl CodexAccountStore {
         record: CodexTokenRecord,
     ) -> Result<CodexTokenRecord, String> {
         if !record.is_expired() {
+            return Ok(record);
+        }
+        if !record.auto_refresh_enabled {
+            return Ok(record);
+        }
+        // Allow imported access-token-only records to stay usable until expiry.
+        // When refresh_token is missing we should not fail reads/listing by forcing refresh.
+        if record.refresh_token.trim().is_empty() {
             return Ok(record);
         }
         self.refresh_record(account_id, record).await
@@ -171,6 +191,7 @@ impl CodexAccountStore {
             } else {
                 response.id_token
             },
+            auto_refresh_enabled: record.auto_refresh_enabled,
             account_id: record.account_id.clone(),
             email: record.email.clone(),
             expires_at: expires_at_from_seconds(response.expires_in),
@@ -204,55 +225,15 @@ impl CodexAccountStore {
     }
 
     async fn refresh_cache(&self) -> Result<(), String> {
-        let mut cache = HashMap::new();
-        let dir = self.dir.clone();
-        let mut entries = match tokio::fs::read_dir(&dir).await {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                let mut guard = self.cache.write().await;
-                guard.clear();
-                return Ok(());
-            }
-            Err(err) => return Err(format!("Failed to read Codex auth directory: {err}")),
-        };
-
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|err| format!("Failed to read Codex auth entry: {err}"))?
-        {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let file_name = match path.file_name().and_then(|name| name.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
-            };
-            let contents = match tokio::fs::read_to_string(&path).await {
-                Ok(contents) => contents,
-                Err(_) => continue,
-            };
-            let record: CodexTokenRecord = match serde_json::from_str(&contents) {
-                Ok(record) => record,
-                Err(_) => continue,
-            };
-            cache.insert(file_name, record);
-        }
-
+        let cache = provider_accounts::list_codex_records(&self.paths).await?;
         let mut guard = self.cache.write().await;
         *guard = cache;
         Ok(())
     }
 
-    async fn ensure_dir(&self) -> Result<(), String> {
-        tokio::fs::create_dir_all(&self.dir)
-            .await
-            .map_err(|err| format!("Failed to create Codex auth dir: {err}"))
-    }
-
     async fn unique_account_id(&self, id_part: &str) -> Result<String, String> {
-        self.ensure_dir().await?;
+        self.refresh_cache().await?;
+        let cache = self.cache.read().await;
         let mut suffix = 0u32;
         loop {
             let candidate = if suffix == 0 {
@@ -260,19 +241,13 @@ impl CodexAccountStore {
             } else {
                 format!("codex-{id_part}-{suffix}.json")
             };
-            if !tokio::fs::try_exists(self.account_path(&candidate))
-                .await
-                .unwrap_or(false)
-            {
+            if !cache.contains_key(&candidate) {
                 return Ok(candidate);
             }
             suffix += 1;
         }
     }
 
-    fn account_path(&self, account_id: &str) -> PathBuf {
-        self.dir.join(account_id)
-    }
 }
 
 fn fill_record_from_jwt(record: &mut CodexTokenRecord) {
@@ -296,6 +271,24 @@ fn collect_import_records(value: &Value, records: &mut Vec<CodexTokenRecord>) {
     if let Some(record) = parse_import_record(value) {
         records.push(record);
         return;
+    }
+
+    if let Some(object) = value.as_object() {
+        if let Some(data) = object.get("data") {
+            if data.is_object() {
+                collect_import_records(data, records);
+            }
+        }
+
+        for key in ["key", "credential", "credentials"] {
+            let Some(text) = object.get(key).and_then(Value::as_str) else {
+                continue;
+            };
+            let Ok(parsed) = serde_json::from_str::<Value>(text) else {
+                continue;
+            };
+            collect_import_records(&parsed, records);
+        }
     }
 
     if let Some(items) = value.as_array() {
@@ -323,9 +316,41 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
         }
     }
 
-    let access_token = find_string(value, &[&["access_token"], &["token", "access_token"]])?;
-    let refresh_token = find_string(value, &[&["refresh_token"], &["token", "refresh_token"]])?;
-    let id_token = find_string(value, &[&["id_token"], &["token", "id_token"]])?;
+    let access_token = find_string(
+        value,
+        &[
+            &["access_token"],
+            &["token", "access_token"],
+            &["token_data", "access_token"],
+        ],
+    )?;
+    let refresh_token = find_string(
+        value,
+        &[
+            &["refresh_token"],
+            &["token", "refresh_token"],
+            &["token_data", "refresh_token"],
+        ],
+    )
+    .unwrap_or_default();
+    let id_token = find_string(
+        value,
+        &[
+            &["id_token"],
+            &["token", "id_token"],
+            &["token_data", "id_token"],
+        ],
+    )
+    .unwrap_or_default();
+    let auto_refresh_enabled = find_bool(
+        value,
+        &[
+            &["auto_refresh_enabled"],
+            &["auto_refresh"],
+            &["token_data", "auto_refresh_enabled"],
+        ],
+    )
+    .unwrap_or(false);
     let expires_at = find_rfc3339_or_unix_timestamp(
         value,
         &[
@@ -333,10 +358,20 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
             &["expired"],
             &["token", "expires_at"],
             &["token", "expired"],
+            &["token_data", "expires_at"],
+            &["token_data", "expired"],
         ],
     )
     .or_else(|| {
-        find_i64(value, &[&["expires_in"], &["token", "expires_in"]]).map(expires_at_from_seconds)
+        find_i64(
+            value,
+            &[
+                &["expires_in"],
+                &["token", "expires_in"],
+                &["token_data", "expires_in"],
+            ],
+        )
+        .map(expires_at_from_seconds)
     })?;
 
     let account_id = find_string(
@@ -346,6 +381,8 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
             &["chatgpt_account_id"],
             &["account", "uuid"],
             &["account", "id"],
+            &["token_data", "account_id"],
+            &["data", "account_id"],
         ],
     );
     let email = find_string(
@@ -355,6 +392,8 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
             &["account", "email_address"],
             &["account", "email"],
             &["user", "email"],
+            &["token_data", "email"],
+            &["data", "email"],
         ],
     );
     let last_refresh = find_string(
@@ -364,6 +403,8 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
             &["lastRefresh"],
             &["last_refreshed_at"],
             &["lastRefreshedAt"],
+            &["data", "last_refresh"],
+            &["token_data", "last_refresh"],
         ],
     )
     .or_else(|| Some(now_rfc3339()));
@@ -372,6 +413,7 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
         access_token,
         refresh_token,
         id_token,
+        auto_refresh_enabled,
         account_id,
         email,
         expires_at,
@@ -406,6 +448,26 @@ fn find_i64(value: &Value, paths: &[&[&str]]) -> Option<i64> {
         if let Some(text) = candidate.as_str() {
             if let Ok(number) = text.trim().parse::<i64>() {
                 return Some(number);
+            }
+        }
+    }
+    None
+}
+
+fn find_bool(value: &Value, paths: &[&[&str]]) -> Option<bool> {
+    for path in paths {
+        let Some(candidate) = value_at_path(value, path) else {
+            continue;
+        };
+        if let Some(flag) = candidate.as_bool() {
+            return Some(flag);
+        }
+        if let Some(text) = candidate.as_str() {
+            let normalized = text.trim().to_ascii_lowercase();
+            match normalized.as_str() {
+                "true" | "1" => return Some(true),
+                "false" | "0" => return Some(false),
+                _ => {}
             }
         }
     }
@@ -609,6 +671,258 @@ mod tests {
             assert_eq!(record.email.as_deref(), Some("carol@example.com"));
             assert!(record.expires_at().is_some());
             assert!(!record.is_expired());
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_parses_new_api_generated_response_without_id_token() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let expires_at = future_rfc3339(12);
+            let input_path = data_dir.join("new-api-codex-response.json");
+            tokio::fs::write(
+                &input_path,
+                serde_json::to_string_pretty(&json!({
+                    "success": true,
+                    "message": "generated",
+                    "data": {
+                        "key": serde_json::to_string(&json!({
+                            "type": "codex",
+                            "access_token": "access-token",
+                            "refresh_token": "refresh-token",
+                            "account_id": "acct-new-api",
+                            "email": "dave@example.com",
+                            "expired": expires_at,
+                            "last_refresh": "2026-03-30T01:02:03Z",
+                        }))
+                        .expect("serialize nested key"),
+                        "account_id": "acct-new-api",
+                        "email": "dave@example.com",
+                        "expires_at": expires_at,
+                        "last_refresh": "2026-03-30T01:02:03Z",
+                    }
+                }))
+                .expect("serialize test json"),
+            )
+            .await
+            .expect("write input");
+
+            let imported = store
+                .import_file(input_path)
+                .await
+                .expect("import should succeed");
+
+            assert_eq!(imported.len(), 1);
+            assert_eq!(imported[0].email.as_deref(), Some("dave@example.com"));
+            assert_eq!(imported[0].expires_at.as_deref(), Some(expires_at.as_str()));
+
+            let record = store
+                .get_account_record(&imported[0].account_id)
+                .await
+                .expect("record should exist");
+            assert_eq!(record.account_id.as_deref(), Some("acct-new-api"));
+            assert_eq!(record.email.as_deref(), Some("dave@example.com"));
+            assert_eq!(record.id_token, "");
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_accepts_record_without_refresh_token() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let expires_at = future_rfc3339(6);
+            let input_path = data_dir.join("codex-without-refresh-token.json");
+            tokio::fs::write(
+                &input_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "access-token",
+                    "refresh_token": "",
+                    "account_id": "acct-no-refresh",
+                    "email": "norefresh@example.com",
+                    "expired": expires_at,
+                }))
+                .expect("serialize test json"),
+            )
+            .await
+            .expect("write input");
+
+            let imported = store
+                .import_file(input_path)
+                .await
+                .expect("import should succeed");
+            assert_eq!(imported.len(), 1);
+            assert_eq!(imported[0].email.as_deref(), Some("norefresh@example.com"));
+
+            let record = store
+                .get_account_record(&imported[0].account_id)
+                .await
+                .expect("record should exist");
+            assert_eq!(record.refresh_token, "");
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn refresh_account_without_refresh_token_requires_relogin() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let input_path = data_dir.join("codex-refresh-missing.json");
+            tokio::fs::write(
+                &input_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "access-token",
+                    "refresh_token": "",
+                    "account_id": "acct-refresh-missing",
+                    "email": "expired@example.com",
+                    "expired": "2020-01-01T00:00:00Z",
+                }))
+                .expect("serialize test json"),
+            )
+            .await
+            .expect("write input");
+
+            let imported = store
+                .import_file(input_path)
+                .await
+                .expect("import should succeed");
+            let err = store
+                .refresh_account(&imported[0].account_id)
+                .await
+                .expect_err("refresh should fail without refresh token");
+            assert_eq!(
+                err,
+                "Codex account has no refresh token. Please sign in again."
+            );
+
+            let record = store
+                .get_account_record(&imported[0].account_id)
+                .await
+                .expect("record should still be readable");
+            assert!(record.is_expired());
+            assert_eq!(record.refresh_token, "");
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn set_auto_refresh_updates_record_flag() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let input_path = data_dir.join("codex-set-auto-refresh.json");
+            tokio::fs::write(
+                &input_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "account_id": "acct-toggle-auto-refresh",
+                    "email": "toggle@example.com",
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize test json"),
+            )
+            .await
+            .expect("write input");
+
+            let imported = store
+                .import_file(input_path)
+                .await
+                .expect("import should succeed");
+            assert!(!imported[0].auto_refresh_enabled);
+
+            let updated = store
+                .set_auto_refresh(&imported[0].account_id, true)
+                .await
+                .expect("set auto refresh should succeed");
+            assert!(updated.auto_refresh_enabled);
+
+            let record = store
+                .get_account_record(&imported[0].account_id)
+                .await
+                .expect("record should exist");
+            assert!(record.auto_refresh_enabled);
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn list_accounts_reads_from_sqlite_after_legacy_files_are_removed() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let input_path = data_dir.join("sqlite-backed-codex.json");
+            tokio::fs::write(
+                &input_path,
+                serde_json::to_string_pretty(&json!({
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "id_token": build_id_token("db@example.com", "acct-sqlite"),
+                    "expires_at": future_rfc3339(6),
+                }))
+                .expect("serialize test json"),
+            )
+            .await
+            .expect("write input");
+
+            let imported = store
+                .import_file(input_path)
+                .await
+                .expect("import should succeed");
+            let legacy_dir = data_dir.join("codex-auth");
+            if legacy_dir.exists() {
+                std::fs::remove_dir_all(&legacy_dir).expect("remove legacy auth dir");
+            }
+
+            let paths = TokenProxyPaths::from_app_data_dir(data_dir.clone()).expect("test paths");
+            let reloaded_store =
+                CodexAccountStore::new(&paths, app_proxy::new_state()).expect("codex store");
+            let accounts = reloaded_store
+                .list_accounts()
+                .await
+                .expect("list accounts should read sqlite data");
+
+            assert_eq!(accounts.len(), 1);
+            assert_eq!(accounts[0].account_id, imported[0].account_id);
+            assert_eq!(accounts[0].email.as_deref(), Some("db@example.com"));
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn list_accounts_does_not_load_legacy_directory_records() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let legacy_dir = data_dir.join("codex-auth");
+            tokio::fs::create_dir_all(&legacy_dir)
+                .await
+                .expect("create legacy codex dir");
+            tokio::fs::write(
+                legacy_dir.join("codex-legacy.json"),
+                serde_json::to_string_pretty(&json!({
+                    "access_token": "legacy-access-token",
+                    "refresh_token": "legacy-refresh-token",
+                    "id_token": build_id_token("legacy@example.com", "acct-legacy"),
+                    "expires_at": future_rfc3339(6),
+                }))
+                .expect("serialize legacy codex json"),
+            )
+            .await
+            .expect("write legacy codex json");
+
+            let accounts = store
+                .list_accounts()
+                .await
+                .expect("list accounts should only use sqlite");
+            assert!(accounts.is_empty());
 
             let _ = std::fs::remove_dir_all(data_dir);
         });

@@ -8,6 +8,7 @@ use tokio::sync::RwLock;
 
 use crate::app_proxy::AppProxyState;
 use crate::paths::TokenProxyPaths;
+use crate::provider_accounts;
 
 use super::oauth;
 use super::sso_oidc;
@@ -18,6 +19,7 @@ const KIRO_AUTH_DIR_NAME: &str = "kiro-auth";
 
 pub struct KiroAccountStore {
     dir: PathBuf,
+    paths: TokenProxyPaths,
     cache: RwLock<HashMap<String, KiroTokenRecord>>,
     app_proxy: AppProxyState,
 }
@@ -27,6 +29,7 @@ impl KiroAccountStore {
         let dir = paths.data_dir().join(KIRO_AUTH_DIR_NAME);
         Ok(Self {
             dir,
+            paths: paths.clone(),
             cache: RwLock::new(HashMap::new()),
             app_proxy,
         })
@@ -161,13 +164,7 @@ impl KiroAccountStore {
         account_id: String,
         record: KiroTokenRecord,
     ) -> Result<KiroAccountSummary, String> {
-        self.ensure_dir().await?;
-        let path = self.account_path(&account_id);
-        let payload = serde_json::to_string_pretty(&record)
-            .map_err(|err| format!("Failed to serialize token record: {err}"))?;
-        tokio::fs::write(&path, payload)
-            .await
-            .map_err(|err| format!("Failed to write token record: {err}"))?;
+        provider_accounts::upsert_kiro_account(&self.paths, &account_id, &record).await?;
         let mut cache = self.cache.write().await;
         cache.insert(account_id.clone(), record.clone());
         Ok(KiroAccountSummary {
@@ -206,12 +203,7 @@ impl KiroAccountStore {
     }
 
     pub(crate) async fn delete_account(&self, account_id: &str) -> Result<(), String> {
-        let path = self.account_path(account_id);
-        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            tokio::fs::remove_file(&path)
-                .await
-                .map_err(|err| format!("Failed to delete token record: {err}"))?;
-        }
+        provider_accounts::delete_account(&self.paths, account_id).await?;
         let mut cache = self.cache.write().await;
         cache.remove(account_id);
         Ok(())
@@ -267,55 +259,15 @@ impl KiroAccountStore {
     }
 
     async fn refresh_cache(&self) -> Result<(), String> {
-        let mut cache = HashMap::new();
-        let dir = self.dir.clone();
-        let mut entries = match tokio::fs::read_dir(&dir).await {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                let mut guard = self.cache.write().await;
-                guard.clear();
-                return Ok(());
-            }
-            Err(err) => return Err(format!("Failed to read Kiro auth directory: {err}")),
-        };
-
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|err| format!("Failed to read Kiro auth entry: {err}"))?
-        {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let file_name = match path.file_name().and_then(|name| name.to_str()) {
-                Some(name) => name.to_string(),
-                None => continue,
-            };
-            let contents = match tokio::fs::read_to_string(&path).await {
-                Ok(contents) => contents,
-                Err(_) => continue,
-            };
-            let record: KiroTokenRecord = match serde_json::from_str(&contents) {
-                Ok(record) => record,
-                Err(_) => continue,
-            };
-            cache.insert(file_name, record);
-        }
-
+        let cache = provider_accounts::list_kiro_records(&self.paths).await?;
         let mut guard = self.cache.write().await;
         *guard = cache;
         Ok(())
     }
 
-    async fn ensure_dir(&self) -> Result<(), String> {
-        tokio::fs::create_dir_all(&self.dir)
-            .await
-            .map_err(|err| format!("Failed to create Kiro auth dir: {err}"))
-    }
-
     async fn unique_account_id(&self, provider: &str, id_part: &str) -> Result<String, String> {
-        self.ensure_dir().await?;
+        self.refresh_cache().await?;
+        let cache = self.cache.read().await;
         let mut suffix = 0u32;
         loop {
             let candidate = if suffix == 0 {
@@ -323,19 +275,13 @@ impl KiroAccountStore {
             } else {
                 format!("kiro-{provider}-{id_part}-{suffix}.json")
             };
-            if !tokio::fs::try_exists(self.account_path(&candidate))
-                .await
-                .unwrap_or(false)
-            {
+            if !cache.contains_key(&candidate) {
                 return Ok(candidate);
             }
             suffix += 1;
         }
     }
 
-    fn account_path(&self, account_id: &str) -> PathBuf {
-        self.dir.join(account_id)
-    }
 }
 
 fn is_json_file(path: &Path) -> bool {
@@ -515,5 +461,118 @@ impl KiroIdeTokenFile {
             start_url: self.start_url,
             region: self.region,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_proxy;
+    use crate::paths::TokenProxyPaths;
+    use rand::random;
+    use serde_json::json;
+    use std::future::Future;
+    use time::Duration;
+
+    fn run_async(test: impl Future<Output = ()>) {
+        tokio::runtime::Runtime::new()
+            .expect("runtime")
+            .block_on(test);
+    }
+
+    fn create_test_store() -> (KiroAccountStore, PathBuf) {
+        let data_dir =
+            std::env::temp_dir().join(format!("token-proxy-kiro-store-test-{}", random::<u64>()));
+        std::fs::create_dir_all(&data_dir).expect("create test data dir");
+        let paths = TokenProxyPaths::from_app_data_dir(data_dir.clone()).expect("test paths");
+        let store = KiroAccountStore::new(&paths, app_proxy::new_state()).expect("kiro store");
+        (store, data_dir)
+    }
+
+    fn future_rfc3339(hours: i64) -> String {
+        (OffsetDateTime::now_utc() + Duration::hours(hours))
+            .format(&Rfc3339)
+            .expect("format expires_at")
+    }
+
+    #[test]
+    fn list_accounts_reads_from_sqlite_after_legacy_files_are_removed() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let saved = store
+                .save_new_account(KiroTokenRecord {
+                    access_token: "access-token".to_string(),
+                    refresh_token: "refresh-token".to_string(),
+                    profile_arn: Some("arn:aws:iam::123456789012:user/test".to_string()),
+                    expires_at: future_rfc3339(6),
+                    auth_method: "google".to_string(),
+                    provider: "kiro".to_string(),
+                    client_id: None,
+                    client_secret: None,
+                    email: Some("kiro-db@example.com".to_string()),
+                    last_refresh: None,
+                    start_url: None,
+                    region: None,
+                })
+                .await
+                .expect("save kiro account");
+            let legacy_dir = data_dir.join("kiro-auth");
+            if legacy_dir.exists() {
+                std::fs::remove_dir_all(&legacy_dir).expect("remove legacy auth dir");
+            }
+
+            let paths = TokenProxyPaths::from_app_data_dir(data_dir.clone()).expect("test paths");
+            let reloaded_store =
+                KiroAccountStore::new(&paths, app_proxy::new_state()).expect("kiro store");
+            let accounts = reloaded_store
+                .list_accounts()
+                .await
+                .expect("list accounts should read sqlite data");
+
+            assert_eq!(accounts.len(), 1);
+            assert_eq!(accounts[0].account_id, saved.account_id);
+            assert_eq!(accounts[0].email.as_deref(), Some("kiro-db@example.com"));
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn list_accounts_does_not_load_legacy_directory_records() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let legacy_dir = data_dir.join("kiro-auth");
+            tokio::fs::create_dir_all(&legacy_dir)
+                .await
+                .expect("create legacy kiro dir");
+            tokio::fs::write(
+                legacy_dir.join("kiro-legacy.json"),
+                serde_json::to_string_pretty(&json!({
+                    "access_token": "legacy-access-token",
+                    "refresh_token": "legacy-refresh-token",
+                    "profile_arn": "arn:aws:iam::123456789012:user/legacy",
+                    "expires_at": future_rfc3339(6),
+                    "auth_method": "google",
+                    "provider": "kiro",
+                    "client_id": null,
+                    "client_secret": null,
+                    "email": "legacy-kiro@example.com",
+                    "last_refresh": null,
+                    "start_url": null,
+                    "region": null
+                }))
+                .expect("serialize legacy kiro json"),
+            )
+            .await
+            .expect("write legacy kiro json");
+
+            let accounts = store
+                .list_accounts()
+                .await
+                .expect("list accounts should only use sqlite");
+            assert!(accounts.is_empty());
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
     }
 }

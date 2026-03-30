@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 
 import { AlertCircle, Eye } from "lucide-react";
 import type { CheckedState } from "@radix-ui/react-checkbox";
@@ -25,6 +25,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Table,
   TableBody,
@@ -38,6 +40,7 @@ import { AccountDeleteAction, AccountsBatchDeleteAction } from "@/features/provi
 import { m } from "@/paraglide/messages.js";
 
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
+const DIALOG_PLACEHOLDER = "—";
 
 export type ProviderAccountQuotaDetailItem = {
   name: string;
@@ -64,6 +67,7 @@ export type ProviderAccountTableRow = {
   }>;
   quotaError: string;
   quotaItems: ProviderAccountQuotaDetailItem[];
+  proxyUrlValue: string;
   canRefresh: boolean;
   logoutLabel: string;
   autoRefreshEnabled: boolean | null;
@@ -76,64 +80,124 @@ type ProviderAccountDialogProps = {
   onOpenChange: (open: boolean) => void;
   onRefresh: (row: ProviderAccountTableRow) => Promise<void>;
   onLogout: (row: ProviderAccountTableRow) => Promise<void>;
+  onSaveProxyUrl: (row: ProviderAccountTableRow, proxyUrl: string) => Promise<void>;
   onToggleAutoRefresh: (row: ProviderAccountTableRow, enabled: boolean) => Promise<void>;
 };
 
-function AccountFieldGrid({ fields }: { fields: ProviderAccountTableRow["detailFields"] }) {
+function AccountSummaryBand({ row }: { row: ProviderAccountTableRow }) {
+  const metaItems: string[] = [];
+  if (row.displayName.trim() !== row.accountId.trim()) {
+    metaItems.push(row.accountId);
+  }
+  if (row.sourceOrMethodLabel.trim() && row.sourceOrMethodLabel.trim() !== DIALOG_PLACEHOLDER) {
+    metaItems.push(row.sourceOrMethodLabel);
+  }
+  if (row.planType.trim() && row.planType.trim() !== DIALOG_PLACEHOLDER) {
+    metaItems.push(`${m.providers_table_plan()}: ${row.planType}`);
+  }
+  if (row.expiresAtLabel.trim() && row.expiresAtLabel.trim() !== DIALOG_PLACEHOLDER) {
+    metaItems.push(`${m.providers_table_expires()}: ${row.expiresAtLabel}`);
+  }
+
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
+    <section
+      data-slot="provider-account-summary-band"
+      className="border-b border-border/60"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3 px-1 py-2.5">
+        <div className="min-w-0 space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-muted-foreground">
+              {row.providerLabel}
+            </p>
+            <Badge variant={row.statusVariant} className="h-5 px-1.5 text-[11px]">
+              {row.statusLabel}
+            </Badge>
+          </div>
+          <p className="text-base font-semibold text-foreground break-all">{row.displayName}</p>
+          {metaItems.length ? (
+            <p className="text-xs text-muted-foreground">{metaItems.join(" · ")}</p>
+          ) : null}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function AccountDetailList({ fields }: { fields: ProviderAccountTableRow["detailFields"] }) {
+  if (!fields.length) {
+    return (
+      <div
+        data-slot="provider-account-detail-list"
+        className="px-1 py-3 text-sm text-muted-foreground"
+      >
+        —
+      </div>
+    );
+  }
+
+  return (
+    <div
+      data-slot="provider-account-detail-list"
+      className="divide-y divide-border/60"
+    >
       {fields.map((field) => (
         <div
           key={field.label}
-          className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2"
+          className="grid gap-1 px-1 py-2 sm:grid-cols-[7rem_minmax(0,1fr)] sm:items-center sm:gap-3"
         >
-          <p className="text-xs text-muted-foreground">{field.label}</p>
-          <p className="mt-1 text-sm font-medium text-foreground break-all">{field.value}</p>
+          <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
+            {field.label}
+          </p>
+          <p className="text-sm font-medium text-foreground break-all">{field.value}</p>
         </div>
       ))}
     </div>
   );
 }
 
-function QuotaDetailSection({
+function QuotaDetailList({
   quotaError,
   quotaItems,
 }: {
   quotaError: string;
   quotaItems: ProviderAccountQuotaDetailItem[];
 }) {
-  if (quotaError) {
-    return (
-      <Alert variant="destructive">
-        <AlertCircle className="size-4" aria-hidden="true" />
-        <div>
-          <AlertTitle>{m.providers_quota_failed_title()}</AlertTitle>
-          <AlertDescription>{quotaError}</AlertDescription>
-        </div>
-      </Alert>
-    );
-  }
-
-  if (!quotaItems.length) {
-    return <p className="text-sm text-muted-foreground">{m.providers_quota_empty()}</p>;
-  }
-
   return (
-    <div className="space-y-2">
-      {quotaItems.map((item) => (
-        <div
-          key={item.name}
-          className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2"
-        >
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <p className="text-sm font-medium text-foreground">{item.name}</p>
-            <p className="text-xs text-muted-foreground">{item.summary}</p>
-          </div>
-          {item.secondary ? (
-            <p className="mt-1 text-xs text-muted-foreground">{item.secondary}</p>
-          ) : null}
+    <div
+      data-slot="provider-account-quota-list"
+      className="divide-y divide-border/60"
+    >
+      {quotaError ? (
+        <div className="px-1 py-3">
+          <Alert variant="destructive">
+            <AlertCircle className="size-4" aria-hidden="true" />
+            <div>
+              <AlertTitle>{m.providers_quota_failed_title()}</AlertTitle>
+              <AlertDescription>{quotaError}</AlertDescription>
+            </div>
+          </Alert>
         </div>
-      ))}
+      ) : quotaItems.length ? (
+        quotaItems.map((item) => (
+          <div
+            key={item.name}
+            className="grid gap-1 px-1 py-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-3"
+          >
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">{item.name}</p>
+              {item.secondary ? (
+                <p className="text-[11px] text-muted-foreground">{item.secondary}</p>
+              ) : null}
+            </div>
+            <p className="text-sm text-muted-foreground sm:text-right">{item.summary}</p>
+          </div>
+        ))
+      ) : (
+        <div className="px-1 py-6 text-sm text-muted-foreground">
+          {m.providers_quota_empty()}
+        </div>
+      )}
     </div>
   );
 }
@@ -145,9 +209,15 @@ function ProviderAccountDialog({
   onOpenChange,
   onRefresh,
   onLogout,
+  onSaveProxyUrl,
   onToggleAutoRefresh,
 }: ProviderAccountDialogProps) {
   const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);
+  const [proxyUrlDraft, setProxyUrlDraft] = useState<string | null>(null);
+
+  useLayoutEffect(() => {
+    setProxyUrlDraft(null);
+  }, [open, row]);
 
   const handleRefresh = () => {
     if (!row) {
@@ -170,26 +240,86 @@ function ProviderAccountDialog({
     void onToggleAutoRefresh(row, enabled);
   };
 
+  const handleSaveProxyUrl = () => {
+    if (!row) {
+      return;
+    }
+    const nextProxyUrl = (proxyUrlDraft ?? row.proxyUrlValue).trim();
+    void onSaveProxyUrl(row, nextProxyUrl);
+  };
+
+  const proxyUrlValue = proxyUrlDraft ?? row?.proxyUrlValue ?? "";
+  const detailFields = row?.detailFields.filter((field) => {
+    const label = field.label.trim();
+    const value = field.value.trim();
+    if (!value || value === DIALOG_PLACEHOLDER) {
+      return false;
+    }
+    if (
+      label === m.providers_table_provider() ||
+      label === m.providers_table_account() ||
+      label === m.providers_table_status() ||
+      label === m.providers_table_expires() ||
+      label === m.providers_table_plan() ||
+      label === m.providers_table_source()
+    ) {
+      return false;
+    }
+    if (label === m.providers_table_account_id() && value === row?.accountId) {
+      return false;
+    }
+    return true;
+  }) ?? [];
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-slot="provider-account-dialog">
         <DialogHeader>
           <DialogTitle>{m.providers_account_dialog_title()}</DialogTitle>
-          {row ? (
-            <DialogDescription>{row.detailDescription}</DialogDescription>
-          ) : null}
+          <DialogDescription className="sr-only">
+            查看账户状态、配额与代理设置，并执行刷新或退出操作。
+          </DialogDescription>
         </DialogHeader>
-        <DialogBody className="space-y-4">
+        <DialogBody className="space-y-3.5">
           {row ? (
             <>
-              <AccountFieldGrid fields={row.detailFields} />
-              <div className="space-y-2">
-                <p className="text-sm font-semibold text-foreground">
+              <AccountSummaryBand row={row} />
+              {detailFields.length ? (
+                <div className="space-y-1.5">
+                  <AccountDetailList fields={detailFields} />
+                </div>
+              ) : null}
+              <div className="space-y-2 border-t border-border/60 pt-3">
+                <Label
+                  htmlFor="provider-account-proxy-url"
+                  className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground"
+                >
+                  {m.field_proxy_url()}
+                </Label>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Input
+                    id="provider-account-proxy-url"
+                    value={proxyUrlValue}
+                    onChange={(event) => setProxyUrlDraft(event.target.value)}
+                    placeholder="http://127.0.0.1:7890"
+                    disabled={busy}
+                    className="flex-1"
+                  />
+                  <Button type="button" size="sm" onClick={handleSaveProxyUrl} disabled={busy}>
+                    {m.common_save()}
+                  </Button>
+                </div>
+              </div>
+              <div className="space-y-1.5 border-t border-border/60 pt-3">
+                <p className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground">
                   {m.providers_table_quota()}
                 </p>
-                <QuotaDetailSection quotaError={row.quotaError} quotaItems={row.quotaItems} />
+                <QuotaDetailList quotaError={row.quotaError} quotaItems={row.quotaItems} />
               </div>
-              <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 pt-4">
+              <div
+                data-slot="provider-account-action-bar"
+                className="flex flex-wrap items-center justify-end gap-2 border-t border-border/60 pt-3"
+              >
                 {row.provider === "codex" && row.autoRefreshEnabled !== null ? (
                   <div className="mr-auto flex items-center gap-2">
                     <Switch
@@ -198,13 +328,14 @@ function ProviderAccountDialog({
                       disabled={busy}
                       aria-label="Codex 自动置换 Token"
                     />
-                    <p className="text-xs text-muted-foreground">Codex 自动置换 Token</p>
+                    <p className="text-[11px] text-muted-foreground">Codex 自动置换 Token</p>
                   </div>
                 ) : null}
                 {row.canRefresh ? (
                   <>
                     <Button
                       type="button"
+                      size="sm"
                       variant="outline"
                       onClick={() => setRefreshConfirmOpen(true)}
                       disabled={busy}
@@ -256,6 +387,7 @@ type ProvidersAccountsTableSectionProps = {
   onRefresh: (row: ProviderAccountTableRow) => Promise<void>;
   onLogout: (row: ProviderAccountTableRow) => Promise<void>;
   onBatchDelete: (rows: ProviderAccountTableRow[]) => Promise<void>;
+  onSaveProxyUrl: (row: ProviderAccountTableRow, proxyUrl: string) => Promise<void>;
   onToggleAutoRefresh: (row: ProviderAccountTableRow, enabled: boolean) => Promise<void>;
 };
 
@@ -301,6 +433,7 @@ export function ProvidersAccountsTableSection({
   onRefresh,
   onLogout,
   onBatchDelete,
+  onSaveProxyUrl,
   onToggleAutoRefresh,
 }: ProvidersAccountsTableSectionProps) {
   const [selectedRow, setSelectedRow] = useState<ProviderAccountTableRow | null>(null);
@@ -516,6 +649,7 @@ export function ProvidersAccountsTableSection({
         }}
         onRefresh={onRefresh}
         onLogout={onLogout}
+        onSaveProxyUrl={onSaveProxyUrl}
         onToggleAutoRefresh={onToggleAutoRefresh}
       />
     </section>

@@ -53,6 +53,13 @@ function normalizeKiroPreferredEndpoint(value: string) {
   return null;
 }
 
+function isAccountBackedProviderSet(providers: readonly string[]) {
+  return (
+    providers.length === 1 &&
+    (providers[0] === "kiro" || providers[0] === "codex")
+  );
+}
+
 function joinListInput(values: string[] | null | undefined) {
   return values && values.length ? values.join(", ") : "";
 }
@@ -114,8 +121,6 @@ export function createEmptyUpstream(): UpstreamForm {
     filterSafetyIdentifier: false,
     useChatCompletionsForResponses: false,
     rewriteDeveloperRoleToSystem: false,
-    kiroAccountId: "",
-    codexAccountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "",
@@ -124,6 +129,15 @@ export function createEmptyUpstream(): UpstreamForm {
     modelMappings: [],
     convertFromMap: {},
     overrides: { header: [] },
+  };
+}
+
+function createAccountBackedUpstream(provider: "kiro" | "codex"): UpstreamForm {
+  return {
+    ...createEmptyUpstream(),
+    id: `${provider}-default`,
+    providers: [provider],
+    enabled: true,
   };
 }
 
@@ -171,25 +185,27 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     ),
     trayTokenRate: normalizeTrayTokenRate(config.tray_token_rate),
     upstreamStrategy: toUpstreamStrategyForm(config.upstream_strategy),
-    upstreams: config.upstreams.map((upstream) => ({
-      id: upstream.id,
-      providers: upstream.providers ?? [],
-      baseUrl: upstream.base_url,
-      apiKeys: joinListInput(upstream.api_keys),
-      filterPromptCacheRetention: upstream.filter_prompt_cache_retention ?? false,
-      filterSafetyIdentifier: upstream.filter_safety_identifier ?? false,
-      useChatCompletionsForResponses: upstream.use_chat_completions_for_responses ?? false,
-      rewriteDeveloperRoleToSystem: upstream.rewrite_developer_role_to_system ?? false,
-      kiroAccountId: upstream.kiro_account_id ?? "",
-      codexAccountId: upstream.codex_account_id ?? "",
-      preferredEndpoint: upstream.preferred_endpoint ?? "",
-      proxyUrl: upstream.proxy_url ?? "",
-      priority: upstream.priority === null ? "" : String(upstream.priority),
-      enabled: upstream.enabled,
-      modelMappings: toModelMappingForm(upstream.model_mappings),
-      convertFromMap: upstream.convert_from_map ?? {},
-      overrides: normalizeOverrides(upstream.overrides),
-    })),
+    upstreams: config.upstreams.map((upstream) => {
+      const providers = upstream.providers ?? [];
+      const omitNetworkFields = isAccountBackedProviderSet(providers);
+      return {
+        id: upstream.id,
+        providers,
+        baseUrl: omitNetworkFields ? "" : upstream.base_url,
+        apiKeys: joinListInput(upstream.api_keys),
+        filterPromptCacheRetention: upstream.filter_prompt_cache_retention ?? false,
+        filterSafetyIdentifier: upstream.filter_safety_identifier ?? false,
+        useChatCompletionsForResponses: upstream.use_chat_completions_for_responses ?? false,
+        rewriteDeveloperRoleToSystem: upstream.rewrite_developer_role_to_system ?? false,
+        preferredEndpoint: upstream.preferred_endpoint ?? "",
+        proxyUrl: omitNetworkFields ? "" : upstream.proxy_url ?? "",
+        priority: upstream.priority === null ? "" : String(upstream.priority),
+        enabled: upstream.enabled,
+        modelMappings: toModelMappingForm(upstream.model_mappings),
+        convertFromMap: upstream.convert_from_map ?? {},
+        overrides: normalizeOverrides(upstream.overrides),
+      };
+    }),
   };
 }
 
@@ -213,23 +229,24 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     upstreams: form.upstreams.map((upstream) => {
       const providers = normalizeProviders(upstream.providers);
       const apiKeys = parseApiKeysInput(upstream.apiKeys);
+      const omitNetworkFields = isAccountBackedProviderSet(providers);
       return {
         id: upstream.id.trim(),
         providers,
-        base_url: upstream.baseUrl.trim(),
+        base_url: omitNetworkFields ? "" : upstream.baseUrl.trim(),
         api_keys: apiKeys.length ? apiKeys : undefined,
+        kiro_account_id: null,
+        codex_account_id: null,
         filter_prompt_cache_retention: upstream.filterPromptCacheRetention,
         filter_safety_identifier: upstream.filterSafetyIdentifier,
         use_chat_completions_for_responses: upstream.useChatCompletionsForResponses,
         rewrite_developer_role_to_system: upstream.rewriteDeveloperRoleToSystem,
-        kiro_account_id: upstream.kiroAccountId.trim()
-          ? upstream.kiroAccountId.trim()
-          : null,
-        codex_account_id: upstream.codexAccountId.trim()
-          ? upstream.codexAccountId.trim()
-          : null,
         preferred_endpoint: normalizeKiroPreferredEndpoint(upstream.preferredEndpoint),
-        proxy_url: upstream.proxyUrl.trim() ? upstream.proxyUrl.trim() : null,
+        proxy_url: omitNetworkFields
+          ? null
+          : upstream.proxyUrl.trim()
+            ? upstream.proxyUrl.trim()
+            : null,
         priority: parseOptionalInt(upstream.priority),
         enabled: upstream.enabled,
         model_mappings: toModelMappingPayload(upstream.modelMappings),
@@ -238,6 +255,41 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       };
     }),
   };
+}
+
+function isSingleProvider(upstream: UpstreamForm, provider: "kiro" | "codex") {
+  const providers = normalizeProviders(upstream.providers);
+  return providers.length === 1 && providers[0] === provider;
+}
+
+export function syncAccountBackedUpstreams(
+  upstreams: UpstreamForm[],
+  accountState: { hasKiroAccount: boolean; hasCodexAccount: boolean },
+) {
+  const filtered = upstreams.filter((upstream) => {
+    if (isSingleProvider(upstream, "kiro")) {
+      return accountState.hasKiroAccount;
+    }
+    if (isSingleProvider(upstream, "codex")) {
+      return accountState.hasCodexAccount;
+    }
+    return true;
+  });
+
+  const next = [...filtered];
+  if (accountState.hasKiroAccount && !next.some((upstream) => isSingleProvider(upstream, "kiro"))) {
+    next.push(createAccountBackedUpstream("kiro"));
+  }
+  if (accountState.hasCodexAccount && !next.some((upstream) => isSingleProvider(upstream, "codex"))) {
+    next.push(createAccountBackedUpstream("codex"));
+  }
+  if (
+    next.length === upstreams.length &&
+    next.every((upstream, index) => upstream === upstreams[index])
+  ) {
+    return upstreams;
+  }
+  return next;
 }
 
 export function validate(form: ConfigForm) {
@@ -302,12 +354,6 @@ export function validate(form: ConfigForm) {
         valid: false,
         message: m.error_upstream_multiple_api_keys_unsupported({ id }),
       };
-    }
-    if (providers.includes("kiro") && !upstream.kiroAccountId.trim()) {
-      return { valid: false, message: m.error_upstream_kiro_account_required({ id }) };
-    }
-    if (providers.includes("codex") && !upstream.codexAccountId.trim()) {
-      return { valid: false, message: m.error_upstream_codex_account_required({ id }) };
     }
     if (providers.some((provider) => !SUPPORTED_PROVIDERS.has(provider))) {
       return { valid: false, message: m.error_upstream_provider_required({ id }) };

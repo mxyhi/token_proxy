@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 use crate::app_proxy::AppProxyState;
 use crate::oauth_util::{
     expires_at_from_seconds, extract_chatgpt_account_id_from_jwt, extract_email_from_jwt,
-    now_rfc3339, sanitize_id_part,
+    normalize_proxy_url, now_rfc3339, sanitize_id_part,
 };
 use crate::paths::TokenProxyPaths;
 use crate::provider_accounts;
@@ -46,6 +46,7 @@ impl CodexAccountStore {
                 }),
                 status: record.status(),
                 auto_refresh_enabled: record.auto_refresh_enabled,
+                proxy_url: record.proxy_url.clone(),
             })
             .collect();
         items.sort_by(|left, right| left.account_id.cmp(&right.account_id));
@@ -106,6 +107,16 @@ impl CodexAccountStore {
         self.save_record(account_id.to_string(), record).await
     }
 
+    pub async fn set_proxy_url(
+        &self,
+        account_id: &str,
+        proxy_url: Option<&str>,
+    ) -> Result<CodexAccountSummary, String> {
+        let mut record = self.load_account(account_id).await?;
+        record.proxy_url = normalize_proxy_url(proxy_url)?;
+        self.save_record(account_id.to_string(), record).await
+    }
+
     pub(crate) async fn save_record(
         &self,
         account_id: String,
@@ -124,6 +135,7 @@ impl CodexAccountStore {
             }),
             status: record.status(),
             auto_refresh_enabled: record.auto_refresh_enabled,
+            proxy_url: record.proxy_url.clone(),
         })
     }
 
@@ -176,7 +188,7 @@ impl CodexAccountStore {
         account_id: &str,
         record: CodexTokenRecord,
     ) -> Result<CodexTokenRecord, String> {
-        let proxy_url = self.app_proxy_url().await;
+        let proxy_url = self.effective_proxy_url(record.proxy_url.as_deref()).await;
         let client = CodexOAuthClient::new(proxy_url.as_deref())?;
         let response = client.refresh_token(&record.refresh_token).await?;
         let mut refreshed = CodexTokenRecord {
@@ -196,6 +208,7 @@ impl CodexAccountStore {
             email: record.email.clone(),
             expires_at: expires_at_from_seconds(response.expires_in),
             last_refresh: Some(now_rfc3339()),
+            proxy_url: record.proxy_url.clone(),
         };
         fill_record_from_jwt(&mut refreshed);
         let summary = self
@@ -222,6 +235,51 @@ impl CodexAccountStore {
 
     pub(crate) async fn app_proxy_url(&self) -> Option<String> {
         self.app_proxy.read().await.clone()
+    }
+
+    pub(crate) async fn resolve_account_record(
+        &self,
+        account_id: Option<&str>,
+    ) -> Result<(String, CodexTokenRecord), String> {
+        if let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) {
+            let record = self.get_account_record(account_id).await?;
+            if matches!(record.status(), CodexAccountStatus::Expired) {
+                return Err(format!("Codex account is expired: {account_id}"));
+            }
+            return Ok((account_id.to_string(), record));
+        }
+
+        self.refresh_cache().await?;
+        let account_ids = {
+            let cache = self.cache.read().await;
+            let mut account_ids = cache.keys().cloned().collect::<Vec<_>>();
+            account_ids.sort();
+            account_ids
+        };
+
+        let mut last_error = None;
+        for account_id in account_ids {
+            match self.get_account_record(&account_id).await {
+                Ok(record) if !matches!(record.status(), CodexAccountStatus::Expired) => {
+                    return Ok((account_id, record));
+                }
+                Ok(_) => {
+                    last_error = Some(format!("Codex account is expired: {account_id}"));
+                }
+                Err(err) => {
+                    last_error = Some(err);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| "Codex account is not configured.".to_string()))
+    }
+
+    pub(crate) async fn effective_proxy_url(&self, proxy_url: Option<&str>) -> Option<String> {
+        match normalize_proxy_url(proxy_url) {
+            Ok(Some(proxy_url)) => Some(proxy_url),
+            Ok(None) | Err(_) => self.app_proxy_url().await,
+        }
     }
 
     async fn refresh_cache(&self) -> Result<(), String> {
@@ -418,6 +476,7 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
         email,
         expires_at,
         last_refresh,
+        proxy_url: None,
     })
 }
 
@@ -849,6 +908,59 @@ mod tests {
                 .await
                 .expect("record should exist");
             assert!(record.auto_refresh_enabled);
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn set_proxy_url_updates_record_value() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let input_path = data_dir.join("codex-set-proxy-url.json");
+            tokio::fs::write(
+                &input_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "account_id": "acct-set-proxy-url",
+                    "email": "proxy@example.com",
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize test json"),
+            )
+            .await
+            .expect("write input");
+
+            let imported = store
+                .import_file(input_path)
+                .await
+                .expect("import should succeed");
+
+            let updated = store
+                .set_proxy_url(&imported[0].account_id, Some("socks5://127.0.0.1:1080"))
+                .await
+                .expect("set proxy url should succeed");
+            assert_eq!(updated.proxy_url.as_deref(), Some("socks5://127.0.0.1:1080"));
+
+            let record = store
+                .get_account_record(&imported[0].account_id)
+                .await
+                .expect("record should exist");
+            assert_eq!(record.proxy_url.as_deref(), Some("socks5://127.0.0.1:1080"));
+
+            let cleared = store
+                .set_proxy_url(&imported[0].account_id, None::<&str>)
+                .await
+                .expect("clear proxy url should succeed");
+            assert_eq!(cleared.proxy_url, None);
+
+            let cleared_record = store
+                .get_account_record(&imported[0].account_id)
+                .await
+                .expect("record should still exist");
+            assert_eq!(cleared_record.proxy_url, None);
 
             let _ = std::fs::remove_dir_all(data_dir);
         });

@@ -22,8 +22,6 @@ import {
   toStatusLabel,
 } from "@/features/config/cards/upstreams/constants";
 import type { UpstreamColumnDefinition, UpstreamColumnId } from "@/features/config/cards/upstreams/types";
-import type { CodexAccountSummary } from "@/features/codex/types";
-import type { KiroAccountSummary } from "@/features/kiro/types";
 import {
   UPSTREAM_DISPATCH_STRATEGIES,
   UPSTREAM_ORDER_STRATEGIES,
@@ -248,9 +246,6 @@ function UpstreamsTableHeader({ columns }: UpstreamsTableHeaderProps) {
   );
 }
 
-type KiroAccountMap = Map<string, KiroAccountSummary>;
-type CodexAccountMap = Map<string, CodexAccountSummary>;
-
 function renderTextCell(value: string, placeholder: string) {
   const trimmed = value.trim();
   return (
@@ -270,39 +265,6 @@ function renderPriorityCell(value: string) {
   );
 }
 
-function renderAccountCell(
-  upstream: UpstreamForm,
-  kiroAccounts: KiroAccountMap,
-  codexAccounts: CodexAccountMap,
-) {
-  const provider =
-    upstream.providers.map((value) => value.trim()).filter(Boolean)[0] ?? "";
-  if (provider === "kiro") {
-    const accountId = upstream.kiroAccountId.trim();
-    if (!accountId) {
-      return renderTextCell("", m.kiro_account_unset());
-    }
-    const account = kiroAccounts.get(accountId);
-    if (!account) {
-      return renderTextCell("", m.kiro_account_missing());
-    }
-    return renderTextCell(account.account_id, m.kiro_account_unset());
-  }
-  if (provider === "codex") {
-    const accountId = upstream.codexAccountId.trim();
-    if (!accountId) {
-      return renderTextCell("", m.codex_account_unset());
-    }
-    const account = codexAccounts.get(accountId);
-    if (!account) {
-      return renderTextCell("", m.codex_account_missing());
-    }
-    const label = account.email?.trim() ? account.email : account.account_id;
-    return renderTextCell(label, m.codex_account_unset());
-  }
-  return renderTextCell("", CELL_PLACEHOLDER);
-}
-
 function renderApiKeyCell(upstream: UpstreamForm, showApiKeys: boolean) {
   const value = showApiKeys ? upstream.apiKeys : toMaskedApiKey(upstream.apiKeys);
   return renderTextCell(value, m.common_optional());
@@ -318,8 +280,6 @@ function renderUpstreamCell(
   columnId: UpstreamColumnId,
   upstream: UpstreamForm,
   showApiKeys: boolean,
-  kiroAccounts: KiroAccountMap,
-  codexAccounts: CodexAccountMap,
 ) {
   const providerLabel = upstream.providers
     .map((value) => value.trim())
@@ -330,8 +290,6 @@ function renderUpstreamCell(
       return renderTextCell(upstream.id, "openai-default");
     case "provider":
       return renderTextCell(providerLabel, "openai");
-    case "account":
-      return renderAccountCell(upstream, kiroAccounts, codexAccounts);
     case "baseUrl":
       return renderTextCell(upstream.baseUrl, "https://api.openai.com");
     case "apiKeys":
@@ -352,6 +310,7 @@ function renderUpstreamCell(
 type UpstreamRowActionsProps = {
   rowLabel: string;
   enabled: boolean;
+  disableCopy: boolean;
   disableDelete: boolean;
   onEdit: () => void;
   onCopy: () => void;
@@ -362,6 +321,7 @@ type UpstreamRowActionsProps = {
 function UpstreamRowActions({
   rowLabel,
   enabled,
+  disableCopy,
   disableDelete,
   onEdit,
   onCopy,
@@ -385,6 +345,7 @@ function UpstreamRowActions({
           variant="ghost"
           size="icon-sm"
           onClick={onCopy}
+          disabled={disableCopy}
           aria-label={m.upstreams_row_copy({ rowLabel })}
         >
           <Copy className="size-4" aria-hidden="true" />
@@ -423,9 +384,9 @@ type UpstreamsTableRowProps = {
   displayIndex: number;
   columns: readonly UpstreamColumnDefinition[];
   showApiKeys: boolean;
-  kiroAccounts: KiroAccountMap;
-  codexAccounts: CodexAccountMap;
   disableDelete: boolean;
+  isCopyDisabled?: (upstream: UpstreamForm) => boolean;
+  isDeleteDisabled?: (upstream: UpstreamForm) => boolean;
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
   onToggleEnabled: (index: number) => void;
@@ -438,15 +399,17 @@ function UpstreamsTableRow({
   displayIndex,
   columns,
   showApiKeys,
-  kiroAccounts,
-  codexAccounts,
   disableDelete,
+  isCopyDisabled,
+  isDeleteDisabled,
   onEdit,
   onCopy,
   onToggleEnabled,
   onDelete,
 }: UpstreamsTableRowProps) {
   const rowLabel = getUpstreamLabel(displayIndex);
+  const copyDisabled = isCopyDisabled?.(upstream) === true;
+  const deleteDisabled = disableDelete || isDeleteDisabled?.(upstream) === true;
   return (
     <tr className="group border-b border-border/40 last:border-b-0">
       {columns.map((column) => (
@@ -455,20 +418,15 @@ function UpstreamsTableRow({
           className={["px-3 py-2 align-top", column.cellClassName].filter(Boolean).join(" ")}
         >
           <div className="flex h-8 min-w-0 items-center">
-            {renderUpstreamCell(
-              column.id,
-              upstream,
-              showApiKeys,
-              kiroAccounts,
-              codexAccounts
-            )}
+            {renderUpstreamCell(column.id, upstream, showApiKeys)}
           </div>
         </td>
       ))}
       <UpstreamRowActions
         rowLabel={rowLabel}
         enabled={upstream.enabled}
-        disableDelete={disableDelete}
+        disableCopy={copyDisabled}
+        disableDelete={deleteDisabled}
         onEdit={() => onEdit(upstreamIndex)}
         onCopy={() => onCopy(upstreamIndex)}
         onToggleEnabled={() => onToggleEnabled(upstreamIndex)}
@@ -482,9 +440,9 @@ export type UpstreamsTableProps = {
   upstreams: UpstreamForm[];
   columns: readonly UpstreamColumnDefinition[];
   showApiKeys: boolean;
-  kiroAccounts: KiroAccountMap;
-  codexAccounts: CodexAccountMap;
   disableDelete: boolean;
+  isCopyDisabled?: (upstream: UpstreamForm) => boolean;
+  isDeleteDisabled?: (upstream: UpstreamForm) => boolean;
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
   onToggleEnabled: (index: number) => void;
@@ -526,9 +484,9 @@ export function UpstreamsTable({
   upstreams,
   columns,
   showApiKeys,
-  kiroAccounts,
-  codexAccounts,
   disableDelete,
+  isCopyDisabled,
+  isDeleteDisabled,
   onEdit,
   onCopy,
   onToggleEnabled,
@@ -549,9 +507,9 @@ export function UpstreamsTable({
                 displayIndex={displayIndex}
                 columns={columns}
                 showApiKeys={showApiKeys}
-                kiroAccounts={kiroAccounts}
-                codexAccounts={codexAccounts}
                 disableDelete={disableDelete}
+                isCopyDisabled={isCopyDisabled}
+                isDeleteDisabled={isDeleteDisabled}
                 onEdit={onEdit}
                 onCopy={onCopy}
                 onToggleEnabled={onToggleEnabled}

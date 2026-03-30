@@ -111,6 +111,7 @@ type ProvidersSectionsProps = {
   onRefresh: (row: ProviderAccountTableRow) => Promise<void>;
   onLogout: (row: ProviderAccountTableRow) => Promise<void>;
   onBatchDelete: (rows: ProviderAccountTableRow[]) => Promise<void>;
+  onSaveProxyUrl: (row: ProviderAccountTableRow, proxyUrl: string) => Promise<void>;
   onToggleAutoRefresh: (row: ProviderAccountTableRow, enabled: boolean) => Promise<void>;
 };
 
@@ -793,6 +794,7 @@ function buildKiroRows(
       ],
       quotaError: quota.quotaError,
       quotaItems: quota.quotaItems,
+      proxyUrlValue: account.proxy_url ?? "",
       canRefresh: false,
       logoutLabel: m.kiro_account_logout(),
       autoRefreshEnabled: null,
@@ -829,6 +831,7 @@ function buildCodexRows(
       ],
       quotaError: quota.quotaError,
       quotaItems: quota.quotaItems,
+      proxyUrlValue: account.proxy_url ?? "",
       canRefresh: true,
       logoutLabel: m.codex_account_logout(),
       autoRefreshEnabled: account.auto_refresh_enabled ?? true,
@@ -852,6 +855,7 @@ function ProvidersSections({
   onRefresh,
   onLogout,
   onBatchDelete,
+  onSaveProxyUrl,
   onToggleAutoRefresh,
 }: ProvidersSectionsProps) {
   return (
@@ -867,6 +871,7 @@ function ProvidersSections({
       onRefresh={onRefresh}
       onLogout={onLogout}
       onBatchDelete={onBatchDelete}
+      onSaveProxyUrl={onSaveProxyUrl}
       onToggleAutoRefresh={onToggleAutoRefresh}
     />
   );
@@ -1086,6 +1091,23 @@ function useProvidersPanelState() {
     },
     [codexAccounts, providerAccounts]
   );
+  const handleSaveProxyUrl = useCallback(
+    async (row: ProviderAccountTableRow, proxyUrl: string) => {
+      try {
+        if (row.provider === "kiro") {
+          await kiroAccounts.setProxyUrl(row.accountId, proxyUrl || null);
+          await kiroQuotas.refresh();
+        } else {
+          await codexAccounts.setProxyUrl(row.accountId, proxyUrl || null);
+          await codexQuotas.refresh();
+        }
+        await providerAccounts.refresh();
+      } catch (error) {
+        toast.error(parseError(error));
+      }
+    },
+    [kiroAccounts, kiroQuotas, codexAccounts, codexQuotas, providerAccounts]
+  );
 
   const handleBatchDelete = useCallback(
     async (rowsToDelete: ProviderAccountTableRow[]) => {
@@ -1129,6 +1151,7 @@ function useProvidersPanelState() {
     onRefresh: handleRowRefresh,
     onLogout: handleRowLogout,
     onBatchDelete: handleBatchDelete,
+    onSaveProxyUrl: handleSaveProxyUrl,
     onToggleAutoRefresh: handleCodexAutoRefreshToggle,
   };
 }
@@ -1151,6 +1174,7 @@ export function ProvidersPanel() {
         onRefresh={state.onRefresh}
         onLogout={state.onLogout}
         onBatchDelete={state.onBatchDelete}
+        onSaveProxyUrl={state.onSaveProxyUrl}
         onToggleAutoRefresh={state.onToggleAutoRefresh}
       />
     </div>

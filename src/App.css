@@ -173,6 +173,13 @@
   pointer-events: none;
 }
 
+.toaster[data-sonner-toaster],
+.toaster [data-sonner-toast],
+.toaster [data-sonner-toast] [data-close-button],
+.toaster [data-sonner-toast] [data-button] {
+  pointer-events: auto !important;
+}
+
 .title-font {
   font-family: "Iowan Old Style", "Palatino", "Georgia", serif;
   letter-spacing: -0.02em;

@@ -13,18 +13,14 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { CodexAccountSelect } from "@/features/config/cards/upstreams/codex-account-select";
 import { ConvertFromMapEditor } from "@/features/config/cards/upstreams/convert-from-map-editor";
 import {
   EditorField,
   HeaderOverridesEditor,
   ModelMappingsEditor,
 } from "@/features/config/cards/upstreams/editor-fields";
-import { KiroAccountSelect } from "@/features/config/cards/upstreams/kiro-account-select";
 import { ProviderMultiSelect } from "@/features/config/cards/upstreams/provider-multi-select";
 import { createModelMapping } from "@/features/config/form";
-import type { CodexAccountSummary } from "@/features/codex/types";
-import type { KiroAccountSummary } from "@/features/kiro/types";
 import type {
   HeaderOverrideForm,
   KiroPreferredEndpoint,
@@ -47,6 +43,15 @@ function isKiroPreferredEndpoint(value: string): value is KiroPreferredEndpoint 
   return value === "ide" || value === "cli";
 }
 
+function isLockedAccountBackedUpstream(draft: UpstreamForm) {
+  const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
+  return (
+    providers.length === 1 &&
+    ((providers[0] === "kiro" && draft.id.trim() === "kiro-default") ||
+      (providers[0] === "codex" && draft.id.trim() === "codex-default"))
+  );
+}
+
 export type UpstreamEditorFieldsProps = {
   draft: UpstreamForm;
   providerOptions: readonly string[];
@@ -54,14 +59,6 @@ export type UpstreamEditorFieldsProps = {
   showApiKeys: boolean;
   onToggleApiKeys: () => void;
   onChangeDraft: (patch: Partial<UpstreamForm>) => void;
-  kiroAccounts: KiroAccountSummary[];
-  kiroAccountsLoading: boolean;
-  kiroAccountsError: string;
-  onRefreshKiroAccounts: () => void;
-  codexAccounts: CodexAccountSummary[];
-  codexAccountsLoading: boolean;
-  codexAccountsError: string;
-  onRefreshCodexAccounts: () => void;
 };
 
 type UpstreamIdentityFieldsProps = {
@@ -70,16 +67,7 @@ type UpstreamIdentityFieldsProps = {
   appProxyUrl: string;
   onChangeDraft: (patch: Partial<UpstreamForm>) => void;
   showBaseUrl: boolean;
-  /** kiro 账户相关 props，仅 provider=kiro 时使用 */
-  kiroAccounts: KiroAccountSummary[];
-  kiroAccountsLoading: boolean;
-  kiroAccountsError: string;
-  onRefreshKiroAccounts: () => void;
-  /** codex 账户相关 props，仅 provider=codex 时使用 */
-  codexAccounts: CodexAccountSummary[];
-  codexAccountsLoading: boolean;
-  codexAccountsError: string;
-  onRefreshCodexAccounts: () => void;
+  showProxyUrl: boolean;
 };
 
 function UpstreamIdentityFields({
@@ -88,19 +76,12 @@ function UpstreamIdentityFields({
   appProxyUrl,
   onChangeDraft,
   showBaseUrl,
-  kiroAccounts,
-  kiroAccountsLoading,
-  kiroAccountsError,
-  onRefreshKiroAccounts,
-  codexAccounts,
-  codexAccountsLoading,
-  codexAccountsError,
-  onRefreshCodexAccounts,
+  showProxyUrl,
 }: UpstreamIdentityFieldsProps) {
   const canUseAppProxy = !!appProxyUrl.trim();
   const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
   const isKiro = providers.includes("kiro");
-  const isCodex = providers.includes("codex");
+  const isLocked = isLockedAccountBackedUpstream(draft);
   const kiroEndpointValue = draft.preferredEndpoint.trim()
     ? draft.preferredEndpoint
     : KIRO_ENDPOINT_INHERIT;
@@ -123,6 +104,7 @@ function UpstreamIdentityFields({
         <ProviderMultiSelect
           providerOptions={providerOptions}
           value={draft.providers}
+          disabled={isLocked}
           onChange={(next) => onChangeDraft({ providers: next })}
         />
         <Label className="inline-flex items-center gap-1">
@@ -152,27 +134,6 @@ function UpstreamIdentityFields({
         </Select>
       </div>
 
-      {/* 第二行：kiro / codex 账户选择器 */}
-      {isKiro ? (
-        <KiroAccountSelect
-          accountId={draft.kiroAccountId}
-          accounts={kiroAccounts}
-          loading={kiroAccountsLoading}
-          error={kiroAccountsError}
-          onRefresh={onRefreshKiroAccounts}
-          onSelect={(accountId) => onChangeDraft({ kiroAccountId: accountId })}
-        />
-      ) : null}
-      {isCodex ? (
-        <CodexAccountSelect
-          accountId={draft.codexAccountId}
-          accounts={codexAccounts}
-          loading={codexAccountsLoading}
-          error={codexAccountsError}
-          onRefresh={onRefreshCodexAccounts}
-          onSelect={(accountId) => onChangeDraft({ codexAccountId: accountId })}
-        />
-      ) : null}
       {isKiro ? (
         <EditorField
           label={m.field_kiro_preferred_endpoint()}
@@ -210,6 +171,7 @@ function UpstreamIdentityFields({
         <Input
           id="upstream-editor-id"
           value={draft.id}
+          disabled={isLocked}
           onChange={(e) => onChangeDraft({ id: e.target.value })}
           placeholder="openai-default"
         />
@@ -230,31 +192,33 @@ function UpstreamIdentityFields({
         </EditorField>
       ) : null}
 
-      <EditorField
-        label={m.field_proxy_url()}
-        tooltip={m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
-        htmlFor="upstream-editor-proxyUrl"
-      >
-        <div className="flex items-center gap-2">
-          <Input
-            id="upstream-editor-proxyUrl"
-            value={draft.proxyUrl}
-            onChange={(e) => onChangeDraft({ proxyUrl: e.target.value })}
-            placeholder="http://127.0.0.1:7890"
-            className="flex-1"
-          />
-          {canUseAppProxy ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              onClick={() => onChangeDraft({ proxyUrl: "$app_proxy_url" })}
-            >
-              {m.upstreams_proxy_use_app()}
-            </Button>
-          ) : null}
-        </div>
-      </EditorField>
+      {showProxyUrl ? (
+        <EditorField
+          label={m.field_proxy_url()}
+          tooltip={m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
+          htmlFor="upstream-editor-proxyUrl"
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              id="upstream-editor-proxyUrl"
+              value={draft.proxyUrl}
+              onChange={(e) => onChangeDraft({ proxyUrl: e.target.value })}
+              placeholder="http://127.0.0.1:7890"
+              className="flex-1"
+            />
+            {canUseAppProxy ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => onChangeDraft({ proxyUrl: "$app_proxy_url" })}
+              >
+                {m.upstreams_proxy_use_app()}
+              </Button>
+            ) : null}
+          </div>
+        </EditorField>
+      ) : null}
     </div>
   );
 }
@@ -528,18 +492,11 @@ export function UpstreamEditorFields({
   showApiKeys,
   onToggleApiKeys,
   onChangeDraft,
-  kiroAccounts,
-  kiroAccountsLoading,
-  kiroAccountsError,
-  onRefreshKiroAccounts,
-  codexAccounts,
-  codexAccountsLoading,
-  codexAccountsError,
-  onRefreshCodexAccounts,
 }: UpstreamEditorFieldsProps) {
   const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
   const isKiro = providers.includes("kiro");
   const isCodex = providers.includes("codex");
+  const isAccountBackedProvider = isKiro || isCodex;
   return (
     <div
       data-slot="upstream-editor-fields"
@@ -549,16 +506,9 @@ export function UpstreamEditorFields({
         draft={draft}
         providerOptions={providerOptions}
         appProxyUrl={appProxyUrl}
-        showBaseUrl={!isKiro}
+        showBaseUrl={!isAccountBackedProvider}
+        showProxyUrl={!isAccountBackedProvider}
         onChangeDraft={onChangeDraft}
-        kiroAccounts={kiroAccounts}
-        kiroAccountsLoading={kiroAccountsLoading}
-        kiroAccountsError={kiroAccountsError}
-        onRefreshKiroAccounts={onRefreshKiroAccounts}
-        codexAccounts={codexAccounts}
-        codexAccountsLoading={codexAccountsLoading}
-        codexAccountsError={codexAccountsError}
-        onRefreshCodexAccounts={onRefreshCodexAccounts}
       />
       {isKiro || isCodex ? null : (
         <UpstreamAuthFields

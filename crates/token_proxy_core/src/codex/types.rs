@@ -14,6 +14,8 @@ pub struct CodexTokenRecord {
     pub email: Option<String>,
     pub expires_at: String,
     pub last_refresh: Option<String>,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
 }
 
 impl CodexTokenRecord {
@@ -55,6 +57,7 @@ pub struct CodexAccountSummary {
     pub expires_at: Option<String>,
     pub status: CodexAccountStatus,
     pub auto_refresh_enabled: bool,
+    pub proxy_url: Option<String>,
 }
 
 fn default_auto_refresh_enabled() -> bool {

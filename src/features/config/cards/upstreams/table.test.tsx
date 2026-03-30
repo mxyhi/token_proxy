@@ -7,7 +7,6 @@ import { UpstreamsTable } from "@/features/config/cards/upstreams/table";
 import type { UpstreamForm } from "@/features/config/types";
 
 const LONG_ID = "codex-account-with-a-very-long-upstream-id-for-tooltip";
-const LONG_EMAIL = "very.long.codex.account.email.for.tooltip@example.com";
 
 afterEach(() => {
   cleanup();
@@ -23,8 +22,6 @@ function buildUpstream(): UpstreamForm {
     filterSafetyIdentifier: false,
     useChatCompletionsForResponses: false,
     rewriteDeveloperRoleToSystem: false,
-    kiroAccountId: "",
-    codexAccountId: "codex-1.json",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "10",
@@ -44,20 +41,6 @@ describe("upstreams/table", () => {
         upstreams={[buildUpstream()]}
         columns={UPSTREAM_COLUMNS}
         showApiKeys={false}
-        kiroAccounts={new Map()}
-        codexAccounts={
-          new Map([
-            [
-              "codex-1.json",
-              {
-                account_id: "codex-1.json",
-                email: LONG_EMAIL,
-                expires_at: null,
-                status: "active",
-              },
-            ],
-          ])
-        }
         disableDelete={false}
         onEdit={() => undefined}
         onCopy={() => undefined}
@@ -71,61 +54,12 @@ describe("upstreams/table", () => {
     expect(await screen.findByRole("tooltip")).toHaveTextContent(LONG_ID);
   });
 
-  it("shows tooltip for truncated account cells on hover", async () => {
-    const user = userEvent.setup();
-
-    render(
-      <UpstreamsTable
-        upstreams={[buildUpstream()]}
-        columns={UPSTREAM_COLUMNS}
-        showApiKeys={false}
-        kiroAccounts={new Map()}
-        codexAccounts={
-          new Map([
-            [
-              "codex-1.json",
-              {
-                account_id: "codex-1.json",
-                email: LONG_EMAIL,
-                expires_at: null,
-                status: "active",
-              },
-            ],
-          ])
-        }
-        disableDelete={false}
-        onEdit={() => undefined}
-        onCopy={() => undefined}
-        onToggleEnabled={() => undefined}
-        onDelete={() => undefined}
-      />
-    );
-
-    const accountCell = screen.getByText(LONG_EMAIL);
-    await user.hover(accountCell);
-    expect(await screen.findByRole("tooltip")).toHaveTextContent(LONG_EMAIL);
-  });
-
   it("keeps the actions column pinned to the right", () => {
     render(
       <UpstreamsTable
         upstreams={[buildUpstream()]}
         columns={UPSTREAM_COLUMNS}
         showApiKeys={false}
-        kiroAccounts={new Map()}
-        codexAccounts={
-          new Map([
-            [
-              "codex-1.json",
-              {
-                account_id: "codex-1.json",
-                email: LONG_EMAIL,
-                expires_at: null,
-                status: "active",
-              },
-            ],
-          ])
-        }
         disableDelete={false}
         onEdit={() => undefined}
         onCopy={() => undefined}
@@ -143,5 +77,49 @@ describe("upstreams/table", () => {
     expect(header).toHaveClass("sticky", "right-0");
     expect(actionCell).not.toBeNull();
     expect(actionCell).toHaveClass("sticky", "right-0");
+  });
+
+  it("disables delete for account-backed special upstream rows", () => {
+    render(
+      <UpstreamsTable
+        upstreams={[buildUpstream()]}
+        columns={UPSTREAM_COLUMNS}
+        showApiKeys={false}
+        disableDelete={false}
+        isDeleteDisabled={(upstream) =>
+          upstream.providers.length === 1 && upstream.providers[0] === "codex"
+        }
+        onEdit={() => undefined}
+        onCopy={() => undefined}
+        onToggleEnabled={() => undefined}
+        onDelete={() => undefined}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /delete upstream/i })
+    ).toBeDisabled();
+  });
+
+  it("disables copy for account-backed special upstream rows", () => {
+    render(
+      <UpstreamsTable
+        upstreams={[buildUpstream()]}
+        columns={UPSTREAM_COLUMNS}
+        showApiKeys={false}
+        disableDelete={false}
+        isCopyDisabled={(upstream) =>
+          upstream.providers.length === 1 && upstream.providers[0] === "codex"
+        }
+        onEdit={() => undefined}
+        onCopy={() => undefined}
+        onToggleEnabled={() => undefined}
+        onDelete={() => undefined}
+      />
+    );
+
+    expect(
+      screen.getByRole("button", { name: /copy upstream/i })
+    ).toBeDisabled();
   });
 });

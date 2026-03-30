@@ -256,6 +256,7 @@ impl SsoOidcClient {
             last_refresh: Some(now_rfc3339()),
             start_url: None,
             region: None,
+            proxy_url: None,
         })
     }
 
@@ -369,6 +370,7 @@ pub(crate) async fn refresh_idc_token(
         last_refresh: Some(now_rfc3339()),
         start_url: record.start_url.clone(),
         region: Some(region.to_string()),
+        proxy_url: record.proxy_url.clone(),
     })
 }
 

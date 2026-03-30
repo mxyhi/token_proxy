@@ -206,6 +206,7 @@ async fn attempt_send(
         upstream_path_with_query,
         upstream_url,
         request_headers,
+        proxy_url,
         meta,
     } = prepared;
     let start_time = Instant::now();
@@ -217,6 +218,7 @@ async fn attempt_send(
         inbound_path,
         &upstream_path_with_query,
         &upstream_url,
+        proxy_url.as_deref(),
         &request_headers,
         body,
         &meta,
@@ -239,6 +241,7 @@ async fn send_upstream_request(
     inbound_path: &str,
     upstream_path_with_query: &str,
     upstream_url: &str,
+    proxy_url: Option<&str>,
     request_headers: &HeaderMap,
     body: &ReplayableBody,
     meta: &RequestMeta,
@@ -254,6 +257,7 @@ async fn send_upstream_request(
             inbound_path,
             upstream_path_with_query,
             upstream_url,
+            proxy_url,
             request_headers,
             body,
             meta,
@@ -270,6 +274,7 @@ async fn send_upstream_request(
         inbound_path,
         upstream_path_with_query,
         upstream_url,
+        proxy_url,
         request_headers,
         body,
         meta,
@@ -287,13 +292,14 @@ async fn send_codex_request(
     inbound_path: &str,
     upstream_path_with_query: &str,
     upstream_url: &str,
+    proxy_url: Option<&str>,
     request_headers: &HeaderMap,
     body: &ReplayableBody,
     meta: &RequestMeta,
     request_detail: Option<&RequestDetailSnapshot>,
     start_time: Instant,
 ) -> Result<reqwest::Response, AttemptOutcome> {
-    let Some(proxy_url) = upstream.proxy_url.as_deref() else {
+    let Some(proxy_url) = proxy_url else {
         return send_upstream_request_once(
             state,
             method,
@@ -302,6 +308,7 @@ async fn send_codex_request(
             inbound_path,
             upstream_path_with_query,
             upstream_url,
+            proxy_url,
             request_headers,
             body,
             meta,
@@ -336,6 +343,7 @@ async fn send_upstream_request_once(
     inbound_path: &str,
     upstream_path_with_query: &str,
     upstream_url: &str,
+    proxy_url: Option<&str>,
     request_headers: &HeaderMap,
     body: &ReplayableBody,
     meta: &RequestMeta,
@@ -351,7 +359,7 @@ async fn send_upstream_request_once(
     .await;
     let client = state
         .http_clients
-        .client_for_proxy_url(upstream.proxy_url.as_deref())
+        .client_for_proxy_url(proxy_url)
         .map_err(|message| {
             AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
         })?;

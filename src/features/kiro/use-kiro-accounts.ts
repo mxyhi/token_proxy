@@ -5,6 +5,7 @@ import {
   importKiroKamTokens,
   listKiroAccounts,
   logoutKiroAccount,
+  setKiroProxyUrl,
 } from "@/features/kiro/api";
 import type { KiroAccountSummary } from "@/features/kiro/types";
 import { parseError } from "@/lib/error";
@@ -69,9 +70,27 @@ export function useKiroAccounts() {
     }
   }, []);
 
+  const setProxyUrl = useCallback(async (accountId: string, proxyUrl: string | null) => {
+    setLoading(true);
+    try {
+      const updated = await setKiroProxyUrl(accountId, proxyUrl);
+      setAccounts((prev) =>
+        prev.map((item) => (item.account_id === accountId ? { ...item, ...updated } : item))
+      );
+      setError("");
+      return updated;
+    } catch (err) {
+      const message = parseError(err);
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
   }, [refresh]);
 
-  return { accounts, loading, error, refresh, logout, importIde, importKam };
+  return { accounts, loading, error, refresh, logout, importIde, importKam, setProxyUrl };
 }

@@ -39,3 +39,10 @@ export async function handleKiroCallback(url: string) {
 export async function fetchKiroQuotas() {
   return await invoke<KiroQuotaSummary[]>("kiro_fetch_quotas");
 }
+
+export async function setKiroProxyUrl(accountId: string, proxyUrl: string | null) {
+  return await invoke<KiroAccountSummary>("kiro_set_proxy_url", {
+    accountId,
+    proxyUrl,
+  });
+}

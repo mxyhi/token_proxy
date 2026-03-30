@@ -44,44 +44,48 @@ const IDLE_PROXY_STATUS: ProxyServiceStatus = {
   last_error: null,
 };
 
+const BASE_APP_VIEW_PROPS = {
+  form: EMPTY_FORM,
+  statusBadge: { id: "saved" as const, label: "saved", variant: "default" as const },
+  showLocalKey: false,
+  showUpstreamKeys: false,
+  providerOptions: [],
+  configPath: "/tmp/config.json",
+  savedAt: "",
+  autoStartEnabled: false,
+  autoStartStatus: "idle" as const,
+  autoStartMessage: "",
+  proxyServiceStatus: IDLE_PROXY_STATUS,
+  proxyServiceRequestState: "idle" as const,
+  proxyServiceMessage: "",
+  onToggleLocalKey: () => undefined,
+  onToggleUpstreamKeys: () => undefined,
+  onFormChange: () => undefined,
+  onStrategyChange: () => undefined,
+  onAutoStartChange: () => undefined,
+  onAddUpstream: () => undefined,
+  onRemoveUpstream: () => undefined,
+  onChangeUpstream: () => undefined,
+  onReload: () => undefined,
+  onSave: () => undefined,
+  onProxyServiceRefresh: () => undefined,
+  onProxyServiceStart: () => undefined,
+  onProxyServiceStop: () => undefined,
+  onProxyServiceRestart: () => undefined,
+  onProxyServiceReload: () => undefined,
+};
+
 describe("config/AppView", () => {
   it("does not show a persistent save button when there are pending edits", () => {
     render(
       <AppView
         activeSectionId="core"
-        form={EMPTY_FORM}
-        statusBadge={{ id: "saved", label: "saved", variant: "default" }}
-        showLocalKey={false}
-        showUpstreamKeys={false}
-        providerOptions={[]}
-        configPath="/tmp/config.json"
-        savedAt=""
-        autoStartEnabled={false}
-        autoStartStatus="idle"
-        autoStartMessage=""
-        proxyServiceStatus={IDLE_PROXY_STATUS}
-        proxyServiceRequestState="idle"
-        proxyServiceMessage=""
+        {...BASE_APP_VIEW_PROPS}
         status="idle"
         statusMessage=""
         canSave
         isDirty
         validation={{ valid: true, message: "" }}
-        onToggleLocalKey={() => undefined}
-        onToggleUpstreamKeys={() => undefined}
-        onFormChange={() => undefined}
-        onStrategyChange={() => undefined}
-        onAutoStartChange={() => undefined}
-        onAddUpstream={() => undefined}
-        onRemoveUpstream={() => undefined}
-        onChangeUpstream={() => undefined}
-        onReload={() => undefined}
-        onSave={() => undefined}
-        onProxyServiceRefresh={() => undefined}
-        onProxyServiceStart={() => undefined}
-        onProxyServiceStop={() => undefined}
-        onProxyServiceRestart={() => undefined}
-        onProxyServiceReload={() => undefined}
       />
     );
 
@@ -95,39 +99,13 @@ describe("config/AppView", () => {
     render(
       <AppView
         activeSectionId="core"
-        form={EMPTY_FORM}
-        statusBadge={{ id: "saved", label: "saved", variant: "default" }}
-        showLocalKey={false}
-        showUpstreamKeys={false}
-        providerOptions={[]}
-        configPath="/tmp/config.json"
-        savedAt=""
-        autoStartEnabled={false}
-        autoStartStatus="idle"
-        autoStartMessage=""
-        proxyServiceStatus={IDLE_PROXY_STATUS}
-        proxyServiceRequestState="idle"
-        proxyServiceMessage=""
+        {...BASE_APP_VIEW_PROPS}
         status="error"
         statusMessage="disk full"
         canSave
         isDirty
         validation={{ valid: true, message: "" }}
-        onToggleLocalKey={() => undefined}
-        onToggleUpstreamKeys={() => undefined}
-        onFormChange={() => undefined}
-        onStrategyChange={() => undefined}
-        onAutoStartChange={() => undefined}
-        onAddUpstream={() => undefined}
-        onRemoveUpstream={() => undefined}
-        onChangeUpstream={() => undefined}
-        onReload={() => undefined}
         onSave={onSave}
-        onProxyServiceRefresh={() => undefined}
-        onProxyServiceStart={() => undefined}
-        onProxyServiceStop={() => undefined}
-        onProxyServiceRestart={() => undefined}
-        onProxyServiceReload={() => undefined}
       />
     );
 
@@ -140,39 +118,12 @@ describe("config/AppView", () => {
     render(
       <AppView
         activeSectionId="core"
-        form={EMPTY_FORM}
-        statusBadge={{ id: "saved", label: "saved", variant: "default" }}
-        showLocalKey={false}
-        showUpstreamKeys={false}
-        providerOptions={[]}
-        configPath="/tmp/config.json"
-        savedAt=""
-        autoStartEnabled={false}
-        autoStartStatus="idle"
-        autoStartMessage=""
-        proxyServiceStatus={IDLE_PROXY_STATUS}
-        proxyServiceRequestState="idle"
-        proxyServiceMessage=""
+        {...BASE_APP_VIEW_PROPS}
         status="saved"
         statusMessage="should not be shown"
         canSave={false}
         isDirty={false}
         validation={{ valid: true, message: "" }}
-        onToggleLocalKey={() => undefined}
-        onToggleUpstreamKeys={() => undefined}
-        onFormChange={() => undefined}
-        onStrategyChange={() => undefined}
-        onAutoStartChange={() => undefined}
-        onAddUpstream={() => undefined}
-        onRemoveUpstream={() => undefined}
-        onChangeUpstream={() => undefined}
-        onReload={() => undefined}
-        onSave={() => undefined}
-        onProxyServiceRefresh={() => undefined}
-        onProxyServiceStart={() => undefined}
-        onProxyServiceStop={() => undefined}
-        onProxyServiceRestart={() => undefined}
-        onProxyServiceReload={() => undefined}
       />
     );
 
@@ -183,19 +134,7 @@ describe("config/AppView", () => {
     render(
       <AppView
         activeSectionId="core"
-        form={EMPTY_FORM}
-        statusBadge={{ id: "saved", label: "saved", variant: "default" }}
-        showLocalKey={false}
-        showUpstreamKeys={false}
-        providerOptions={[]}
-        configPath="/tmp/config.json"
-        savedAt=""
-        autoStartEnabled={false}
-        autoStartStatus="idle"
-        autoStartMessage=""
-        proxyServiceStatus={IDLE_PROXY_STATUS}
-        proxyServiceRequestState="idle"
-        proxyServiceMessage=""
+        {...BASE_APP_VIEW_PROPS}
         status="idle"
         statusMessage=""
         canSave={false}
@@ -204,21 +143,6 @@ describe("config/AppView", () => {
           valid: false,
           message: m.error_upstream_no_data_timeout_secs_integer(),
         }}
-        onToggleLocalKey={() => undefined}
-        onToggleUpstreamKeys={() => undefined}
-        onFormChange={() => undefined}
-        onStrategyChange={() => undefined}
-        onAutoStartChange={() => undefined}
-        onAddUpstream={() => undefined}
-        onRemoveUpstream={() => undefined}
-        onChangeUpstream={() => undefined}
-        onReload={() => undefined}
-        onSave={() => undefined}
-        onProxyServiceRefresh={() => undefined}
-        onProxyServiceStart={() => undefined}
-        onProxyServiceStop={() => undefined}
-        onProxyServiceRestart={() => undefined}
-        onProxyServiceReload={() => undefined}
       />
     );
 

@@ -105,14 +105,22 @@ async fn prepare_kiro_context<'a>(
 ) -> Result<KiroContext<'a>, AttemptOutcome> {
     let mapped_meta = super::build_mapped_meta(meta, upstream);
     let request_value = read_request_json(state, body).await?;
-    let account_id = resolve_account_id(upstream)?;
-    let record = load_account_record(state, &account_id).await?;
+    let (account_id, record) = state
+        .kiro_accounts
+        .resolve_account_record(upstream.kiro_account_id.as_deref())
+        .await
+        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
     let is_idc = record.auth_method.trim().eq_ignore_ascii_case("idc");
     let profile_arn = resolve_profile_arn(&record);
     let endpoints = resolve_endpoints(state, upstream, is_idc);
     let (model_id, is_agentic, is_chat_only) = resolve_model(&mapped_meta);
     let source_format = resolve_source_format(response_transform);
-    let client = build_client(state, upstream)?;
+    let client_proxy_url = record
+        .proxy_url
+        .clone()
+        .or_else(|| upstream.proxy_url.clone())
+        .or(state.kiro_accounts.app_proxy_url().await);
+    let client = build_client(state, client_proxy_url.as_deref())?;
 
     Ok(KiroContext {
         state,
@@ -430,19 +438,6 @@ async fn send_endpoint_request(
         }
     };
     Ok((response, start_time))
-}
-
-fn resolve_account_id(upstream: &UpstreamRuntime) -> Result<String, AttemptOutcome> {
-    upstream
-        .kiro_account_id
-        .as_ref()
-        .map(|value| value.to_string())
-        .ok_or_else(|| {
-            AttemptOutcome::Fatal(http::error_response(
-                StatusCode::UNAUTHORIZED,
-                "Kiro account is not configured.",
-            ))
-        })
 }
 
 fn resolve_profile_arn(record: &KiroTokenRecord) -> Option<String> {

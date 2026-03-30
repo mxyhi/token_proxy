@@ -342,21 +342,11 @@ fn resolve_base_url(upstream_id: &str, base_url: &str, provider: &str) -> Result
 }
 
 fn validate_provider_account_binding(
-    upstream_id: &str,
-    provider: &str,
-    kiro_account_id: Option<&str>,
-    codex_account_id: Option<&str>,
+    _upstream_id: &str,
+    _provider: &str,
+    _kiro_account_id: Option<&str>,
+    _codex_account_id: Option<&str>,
 ) -> Result<(), String> {
-    if provider == "kiro" && kiro_account_id.is_none() {
-        return Err(format!(
-            "Upstream {upstream_id} requires a Kiro account binding."
-        ));
-    }
-    if provider == "codex" && codex_account_id.is_none() {
-        return Err(format!(
-            "Upstream {upstream_id} requires a Codex account binding."
-        ));
-    }
     Ok(())
 }
 

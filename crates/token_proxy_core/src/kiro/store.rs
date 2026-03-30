@@ -7,6 +7,7 @@ use time::OffsetDateTime;
 use tokio::sync::RwLock;
 
 use crate::app_proxy::AppProxyState;
+use crate::oauth_util::normalize_proxy_url;
 use crate::paths::TokenProxyPaths;
 use crate::provider_accounts;
 
@@ -129,16 +130,11 @@ impl KiroAccountStore {
                         .unwrap_or_else(|_| record.expires_at.clone())
                 }),
                 status: record.status(),
+                proxy_url: record.proxy_url.clone(),
             })
             .collect();
         items.sort_by(|left, right| left.account_id.cmp(&right.account_id));
         Ok(items)
-    }
-
-    pub(crate) async fn get_access_token(&self, account_id: &str) -> Result<String, String> {
-        let record = self.load_account(account_id).await?;
-        let refreshed = self.refresh_if_needed(account_id, record).await?;
-        Ok(refreshed.access_token)
     }
 
     pub(crate) async fn get_account_record(
@@ -157,6 +153,16 @@ impl KiroAccountStore {
             return Err("Kiro token refresh failed.".to_string());
         }
         Ok(())
+    }
+
+    pub async fn set_proxy_url(
+        &self,
+        account_id: &str,
+        proxy_url: Option<&str>,
+    ) -> Result<KiroAccountSummary, String> {
+        let mut record = self.load_account(account_id).await?;
+        record.proxy_url = normalize_proxy_url(proxy_url)?;
+        self.save_record(account_id.to_string(), record).await
     }
 
     pub(crate) async fn save_record(
@@ -178,6 +184,7 @@ impl KiroAccountStore {
                     .unwrap_or_else(|_| record.expires_at.clone())
             }),
             status: record.status(),
+            proxy_url: record.proxy_url.clone(),
         })
     }
 
@@ -225,7 +232,7 @@ impl KiroAccountStore {
         account_id: &str,
         record: KiroTokenRecord,
     ) -> Result<KiroTokenRecord, String> {
-        let proxy_url = self.app_proxy_url().await;
+        let proxy_url = self.effective_proxy_url(record.proxy_url.as_deref()).await;
         let refreshed = match record.auth_method.as_str() {
             "builder-id" => sso_oidc::refresh_builder_token(&record, proxy_url.as_deref()).await?,
             "idc" => sso_oidc::refresh_idc_token(&record, proxy_url.as_deref()).await?,
@@ -256,6 +263,51 @@ impl KiroAccountStore {
 
     pub(crate) async fn app_proxy_url(&self) -> Option<String> {
         self.app_proxy.read().await.clone()
+    }
+
+    pub(crate) async fn resolve_account_record(
+        &self,
+        account_id: Option<&str>,
+    ) -> Result<(String, KiroTokenRecord), String> {
+        if let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) {
+            let record = self.get_account_record(account_id).await?;
+            if matches!(record.status(), KiroAccountStatus::Expired) {
+                return Err(format!("Kiro account is expired: {account_id}"));
+            }
+            return Ok((account_id.to_string(), record));
+        }
+
+        self.refresh_cache().await?;
+        let account_ids = {
+            let cache = self.cache.read().await;
+            let mut account_ids = cache.keys().cloned().collect::<Vec<_>>();
+            account_ids.sort();
+            account_ids
+        };
+
+        let mut last_error = None;
+        for account_id in account_ids {
+            match self.get_account_record(&account_id).await {
+                Ok(record) if !matches!(record.status(), KiroAccountStatus::Expired) => {
+                    return Ok((account_id, record));
+                }
+                Ok(_) => {
+                    last_error = Some(format!("Kiro account is expired: {account_id}"));
+                }
+                Err(err) => {
+                    last_error = Some(err);
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| "Kiro account is not configured.".to_string()))
+    }
+
+    pub(crate) async fn effective_proxy_url(&self, proxy_url: Option<&str>) -> Option<String> {
+        match normalize_proxy_url(proxy_url) {
+            Ok(Some(proxy_url)) => Some(proxy_url),
+            Ok(None) | Err(_) => self.app_proxy_url().await,
+        }
     }
 
     async fn refresh_cache(&self) -> Result<(), String> {
@@ -355,6 +407,7 @@ fn kam_account_to_record(account: KamAccount) -> Option<KiroTokenRecord> {
         last_refresh: Some(now_rfc3339()),
         start_url: credentials.start_url,
         region: credentials.region,
+        proxy_url: None,
     })
 }
 
@@ -460,6 +513,7 @@ impl KiroIdeTokenFile {
             last_refresh: Some(last_refresh),
             start_url: self.start_url,
             region: self.region,
+            proxy_url: None,
         })
     }
 }
@@ -513,6 +567,7 @@ mod tests {
                     last_refresh: None,
                     start_url: None,
                     region: None,
+                    proxy_url: None,
                 })
                 .await
                 .expect("save kiro account");
@@ -532,6 +587,57 @@ mod tests {
             assert_eq!(accounts.len(), 1);
             assert_eq!(accounts[0].account_id, saved.account_id);
             assert_eq!(accounts[0].email.as_deref(), Some("kiro-db@example.com"));
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn set_proxy_url_updates_record_value() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let saved = store
+                .save_new_account(KiroTokenRecord {
+                    access_token: "access-token".to_string(),
+                    refresh_token: "refresh-token".to_string(),
+                    profile_arn: Some("arn:aws:iam::123456789012:user/test".to_string()),
+                    expires_at: future_rfc3339(6),
+                    auth_method: "google".to_string(),
+                    provider: "kiro".to_string(),
+                    client_id: None,
+                    client_secret: None,
+                    email: Some("proxy-kiro@example.com".to_string()),
+                    last_refresh: None,
+                    start_url: None,
+                    region: None,
+                    proxy_url: None,
+                })
+                .await
+                .expect("save kiro account");
+
+            let updated = store
+                .set_proxy_url(&saved.account_id, Some("http://127.0.0.1:7890"))
+                .await
+                .expect("set proxy url should succeed");
+            assert_eq!(updated.proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
+
+            let record = store
+                .get_account_record(&saved.account_id)
+                .await
+                .expect("record should exist");
+            assert_eq!(record.proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
+
+            let cleared = store
+                .set_proxy_url(&saved.account_id, None::<&str>)
+                .await
+                .expect("clear proxy url should succeed");
+            assert_eq!(cleared.proxy_url, None);
+
+            let cleared_record = store
+                .get_account_record(&saved.account_id)
+                .await
+                .expect("record should exist");
+            assert_eq!(cleared_record.proxy_url, None);
 
             let _ = std::fs::remove_dir_all(data_dir);
         });

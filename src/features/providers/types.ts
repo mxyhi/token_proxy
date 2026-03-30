@@ -7,6 +7,7 @@ export type ProviderAccountPageItem = {
   auth_method?: string | null;
   provider_name?: string | null;
   auto_refresh_enabled?: boolean | null;
+  proxy_url?: string | null;
 };
 
 export type ProviderAccountsPage = {

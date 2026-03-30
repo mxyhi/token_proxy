@@ -139,6 +139,8 @@ fn config_with_runtime_upstreams(
 struct RecordedRequest {
     path: String,
     body: Value,
+    authorization: Option<String>,
+    chatgpt_account_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -167,6 +169,7 @@ impl MockUpstream {
 
 async fn mock_upstream_handler(
     State(state): State<Arc<MockUpstreamState>>,
+    headers: HeaderMap,
     uri: Uri,
     body: Body,
 ) -> axum::response::Response {
@@ -179,6 +182,14 @@ async fn mock_upstream_handler(
         .push(RecordedRequest {
             path: uri.path().to_string(),
             body: json_body,
+            authorization: headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
+            chatgpt_account_id: headers
+                .get("chatgpt-account-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
         });
     if state.delay_ms > 0 {
         tokio::time::sleep(std::time::Duration::from_millis(state.delay_ms)).await;
@@ -456,6 +467,7 @@ async fn build_test_state_handle(config: ProxyConfig, data_dir: PathBuf) -> Prox
                             email: Some("codex@example.com".to_string()),
                             expires_at: expires_at.clone(),
                             last_refresh: None,
+                            proxy_url: None,
                         },
                     )
                     .await
@@ -485,6 +497,34 @@ async fn build_test_state_handle(config: ProxyConfig, data_dir: PathBuf) -> Prox
         codex_accounts,
     });
     Arc::new(RwLock::new(state))
+}
+
+async fn seed_codex_account(
+    state: &ProxyStateHandle,
+    storage_account_id: &str,
+    access_token: &str,
+    chatgpt_account_id: &str,
+    expires_at: &str,
+) {
+    let state_guard = state.read().await;
+    state_guard
+        .codex_accounts
+        .save_record(
+            storage_account_id.to_string(),
+            crate::codex::CodexTokenRecord {
+                access_token: access_token.to_string(),
+                refresh_token: "codex-refresh-token".to_string(),
+                id_token: "codex-id-token".to_string(),
+                auto_refresh_enabled: true,
+                account_id: Some(chatgpt_account_id.to_string()),
+                email: Some(format!("{storage_account_id}@example.com")),
+                expires_at: expires_at.to_string(),
+                last_refresh: None,
+                proxy_url: None,
+            },
+        )
+        .await
+        .expect("seed codex account");
 }
 
 async fn assert_responses_retry_fallback_status(status: StatusCode) {
@@ -607,6 +647,71 @@ async fn send_responses_request(state: ProxyStateHandle) -> (StatusCode, Value) 
         .expect("proxy response bytes");
     let json = serde_json::from_slice(&body).expect("proxy response json");
     (status, json)
+}
+
+#[test]
+fn responses_request_auto_selects_first_available_codex_account_when_unbound() {
+    run_async(async {
+        let codex = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_auto_codex",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5-codex",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from auto codex" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+        )
+        .await;
+
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_CODEX,
+            0,
+            "codex-auto",
+            codex.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        let provider_upstreams = config
+            .upstreams
+            .get_mut(PROVIDER_CODEX)
+            .expect("codex upstreams");
+        provider_upstreams.groups[0].items[0].codex_account_id = None;
+
+        let data_dir = next_test_data_dir("responses_codex_auto_select");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("format expires_at");
+        seed_codex_account(&state, "codex-z.json", "codex-access-z", "chatgpt-z", &expires_at).await;
+        seed_codex_account(&state, "codex-a.json", "codex-access-a", "chatgpt-a", &expires_at).await;
+
+        let (status, json) = send_responses_request(state).await;
+        let requests = codex.requests();
+
+        codex.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["output"][0]["content"][0]["text"].as_str(),
+            Some("from auto codex")
+        );
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].authorization.as_deref(), Some("Bearer codex-access-a"));
+        assert_eq!(requests[0].chatgpt_account_id.as_deref(), Some("chatgpt-a"));
+    });
 }
 
 async fn send_anthropic_messages_request(

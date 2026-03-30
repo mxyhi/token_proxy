@@ -229,6 +229,7 @@ async fn run_auth_code_login(
         email: None,
         expires_at: expires_at_from_seconds(token.expires_in),
         last_refresh: Some(now_rfc3339()),
+        proxy_url: None,
     };
     match manager.store.save_new_account(record).await {
         Ok(account) => manager.complete_session(&state, account).await,

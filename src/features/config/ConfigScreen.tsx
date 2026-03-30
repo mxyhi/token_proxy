@@ -8,9 +8,12 @@ import {
   useProxyServiceState,
 } from "@/features/config/config-screen-state";
 import { useConfigActions } from "@/features/config/config-screen-actions";
+import { syncAccountBackedUpstreams } from "@/features/config/form";
 import { useConfigListActions } from "@/features/config/list-actions";
 import type { ConfigSectionId } from "@/features/config/sections";
 import type { ConfigForm } from "@/features/config/types";
+import { useCodexAccounts } from "@/features/codex/use-codex-accounts";
+import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
 import { useUpdater } from "@/features/update/updater";
 
 type ConfigScreenProps = {
@@ -126,6 +129,8 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
   });
   const { loadConfig, saveConfig } = configActions;
   const listActions = useConfigListActions(state.setForm);
+  const kiroAccounts = useKiroAccounts();
+  const codexAccounts = useCodexAccounts();
   const {
     actions: { setAppProxyUrl },
   } = useUpdater();
@@ -145,6 +150,31 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
   useEffect(() => {
     void refreshProxyStatus();
   }, [refreshProxyStatus]);
+
+  useEffect(() => {
+    if (kiroAccounts.loading || codexAccounts.loading) {
+      return;
+    }
+    state.setForm((prev) => {
+      const nextUpstreams = syncAccountBackedUpstreams(prev.upstreams, {
+        hasKiroAccount: kiroAccounts.accounts.length > 0,
+        hasCodexAccount: codexAccounts.accounts.length > 0,
+      });
+      if (nextUpstreams === prev.upstreams) {
+        return prev;
+      }
+      return {
+        ...prev,
+        upstreams: nextUpstreams,
+      };
+    });
+  }, [
+    codexAccounts.accounts,
+    codexAccounts.loading,
+    kiroAccounts.accounts,
+    kiroAccounts.loading,
+    state.setForm,
+  ]);
 
   useEffect(() => {
     if (derived.autoSaveKey === lastObservedAutoSaveKeyRef.current) {

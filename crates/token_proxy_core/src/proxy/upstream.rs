@@ -273,6 +273,7 @@ pub(super) struct PreparedUpstreamRequest {
     upstream_path_with_query: String,
     upstream_url: String,
     request_headers: HeaderMap,
+    proxy_url: Option<String>,
     meta: RequestMeta,
 }
 
@@ -280,6 +281,7 @@ struct ResolvedUpstreamAuth {
     upstream_url: String,
     auth: http::UpstreamAuthHeader,
     extra_headers: Option<HeaderMap>,
+    proxy_url: Option<String>,
 }
 
 fn resolve_provider_upstreams<'a>(
@@ -758,6 +760,7 @@ async fn prepare_upstream_request(
         upstream_url,
         auth,
         extra_headers,
+        proxy_url,
     } = resolved;
     let request_headers = request::build_request_headers(
         provider,
@@ -771,6 +774,7 @@ async fn prepare_upstream_request(
         upstream_path_with_query,
         upstream_url,
         request_headers,
+        proxy_url,
         meta: mapped_meta,
     })
 }
@@ -794,6 +798,7 @@ async fn resolve_upstream_auth(
             upstream_url,
             auth,
             extra_headers: None,
+            proxy_url: upstream.proxy_url.clone(),
         });
     }
     if provider == "kiro" {
@@ -811,6 +816,7 @@ async fn resolve_upstream_auth(
         upstream_url: upstream_url.to_string(),
         auth,
         extra_headers: None,
+        proxy_url: upstream.proxy_url.clone(),
     })
 }
 
@@ -819,20 +825,18 @@ async fn resolve_kiro_upstream(
     upstream: &UpstreamRuntime,
     upstream_url: &str,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
-    let Some(account_id) = upstream.kiro_account_id.as_deref() else {
-        return Err(AttemptOutcome::Fatal(http::error_response(
-            StatusCode::UNAUTHORIZED,
-            "Kiro account is not configured.",
-        )));
-    };
-    let token = state
+    let (_, record) = state
         .kiro_accounts
-        .get_access_token(account_id)
+        .resolve_account_record(upstream.kiro_account_id.as_deref())
         .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
-        })?;
-    let value = http::bearer_header(&token).ok_or_else(|| {
+        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
+    let global_proxy_url = state.kiro_accounts.app_proxy_url().await;
+    let proxy_url = record
+        .proxy_url
+        .clone()
+        .or_else(|| upstream.proxy_url.clone())
+        .or(global_proxy_url);
+    let value = http::bearer_header(&record.access_token).ok_or_else(|| {
         AttemptOutcome::Fatal(http::error_response(
             StatusCode::UNAUTHORIZED,
             "Upstream access token contains invalid characters.",
@@ -845,6 +849,7 @@ async fn resolve_kiro_upstream(
             value,
         },
         extra_headers: None,
+        proxy_url,
     })
 }
 
@@ -853,19 +858,17 @@ async fn resolve_codex_upstream(
     upstream: &UpstreamRuntime,
     upstream_url: &str,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
-    let Some(account_id) = upstream.codex_account_id.as_deref() else {
-        return Err(AttemptOutcome::Fatal(http::error_response(
-            StatusCode::UNAUTHORIZED,
-            "Codex account is not configured.",
-        )));
-    };
-    let record = state
+    let (_, record) = state
         .codex_accounts
-        .get_account_record(account_id)
+        .resolve_account_record(upstream.codex_account_id.as_deref())
         .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
-        })?;
+        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
+    let global_proxy_url = state.codex_accounts.app_proxy_url().await;
+    let proxy_url = record
+        .proxy_url
+        .clone()
+        .or_else(|| upstream.proxy_url.clone())
+        .or(global_proxy_url);
     let value = http::bearer_header(&record.access_token).ok_or_else(|| {
         AttemptOutcome::Fatal(http::error_response(
             StatusCode::UNAUTHORIZED,
@@ -893,6 +896,7 @@ async fn resolve_codex_upstream(
             value,
         },
         extra_headers,
+        proxy_url,
     })
 }
 

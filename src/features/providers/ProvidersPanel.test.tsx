@@ -25,6 +25,23 @@ const providerMocks = vi.hoisted(() => {
   const refreshCodexQuotas = vi.fn(async () => undefined);
   const logoutKiro = vi.fn(async () => undefined);
   const logoutCodex = vi.fn(async () => undefined);
+  const setKiroProxyUrl = vi.fn(async () => ({
+    account_id: "kiro-1",
+    provider: "kiro" as const,
+    auth_method: "google",
+    email: "alice@example.com",
+    expires_at: "2026-05-01T00:00:00Z",
+    status: "active" as const,
+    proxy_url: "http://127.0.0.1:7890",
+  }));
+  const setCodexProxyUrl = vi.fn(async () => ({
+    account_id: "codex-1",
+    email: "bob@example.com",
+    expires_at: "2026-04-01T00:00:00Z",
+    status: "expired" as const,
+    auto_refresh_enabled: true,
+    proxy_url: "socks5://127.0.0.1:1080",
+  }));
   const beginKiroLogin = vi.fn();
   const beginCodexLogin = vi.fn();
   const importKiroIde = vi.fn(async () => undefined);
@@ -54,6 +71,7 @@ const providerMocks = vi.hoisted(() => {
           status: "active" as const,
           auth_method: "google",
           provider_name: "kiro",
+          proxy_url: "http://127.0.0.1:7890",
         },
         {
           provider_kind: "codex" as const,
@@ -64,6 +82,7 @@ const providerMocks = vi.hoisted(() => {
           auth_method: null,
           provider_name: null,
           auto_refresh_enabled: true,
+          proxy_url: "",
         },
       ];
       const keyword = search?.trim().toLowerCase() ?? "";
@@ -124,6 +143,8 @@ const providerMocks = vi.hoisted(() => {
     refreshCodexQuotas,
     logoutKiro,
     logoutCodex,
+    setKiroProxyUrl,
+    setCodexProxyUrl,
     beginKiroLogin,
     beginCodexLogin,
     importKiroIde,
@@ -162,6 +183,7 @@ vi.mock("@/features/kiro/use-kiro-accounts", () => ({
         email: "alice@example.com",
         expires_at: "2026-05-01T00:00:00Z",
         status: "active",
+        proxy_url: "http://127.0.0.1:7890",
       },
     ],
     loading: providerMocks.kiroAccountsLoading,
@@ -170,6 +192,7 @@ vi.mock("@/features/kiro/use-kiro-accounts", () => ({
     logout: providerMocks.logoutKiro,
     importIde: providerMocks.importKiroIde,
     importKam: providerMocks.importKiroKam,
+    setProxyUrl: providerMocks.setKiroProxyUrl,
   }),
 }));
 
@@ -181,6 +204,7 @@ vi.mock("@/features/codex/use-codex-accounts", () => ({
         email: "bob@example.com",
         expires_at: "2026-04-01T00:00:00Z",
         status: "expired",
+        proxy_url: "",
       },
     ],
     loading: providerMocks.codexAccountsLoading,
@@ -188,6 +212,7 @@ vi.mock("@/features/codex/use-codex-accounts", () => ({
     refresh: providerMocks.refreshCodexAccounts,
     refreshAccount: providerMocks.refreshCodexAccount,
     setAutoRefresh: providerMocks.setCodexAutoRefresh,
+    setProxyUrl: providerMocks.setCodexProxyUrl,
     logout: providerMocks.logoutCodex,
     importFile: providerMocks.importCodexFile,
   }),
@@ -616,8 +641,8 @@ describe("providers/ProvidersPanel", () => {
 
   it("optimistically hides selected rows while batch delete is in progress", async () => {
     const user = userEvent.setup();
-    let resolveDelete: (() => void) | undefined;
-    const deletePromise = new Promise<void>((resolve) => {
+    let resolveDelete: ((value: undefined) => void) | undefined;
+    const deletePromise = new Promise<undefined>((resolve) => {
       resolveDelete = resolve;
     });
     providerMocks.deleteProviderAccounts.mockReturnValueOnce(deletePromise);
@@ -638,7 +663,7 @@ describe("providers/ProvidersPanel", () => {
     expect(screen.queryByText("bob@example.com")).not.toBeInTheDocument();
     expect(screen.getByText(m.providers_accounts_loading())).toBeInTheDocument();
 
-    resolveDelete?.();
+    resolveDelete?.(undefined);
     await waitFor(() => {
       expect(providerMocks.toastSuccess).toHaveBeenCalledWith(
         m.providers_accounts_delete_success({ count: 2 })

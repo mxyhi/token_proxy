@@ -16,14 +16,12 @@ describe("upstreams/upstream-editor-helpers", () => {
       nextProviders: ["gemini"],
       upstreams: [upstream],
       editingIndex: 0,
-      kiroAccountId: "",
-      codexAccountId: "",
     });
 
     expect(id).toBe("custom-1");
   });
 
-  it("updates id to account_id when editing and switching to kiro/codex", () => {
+  it("keeps id stable when editing and switching to kiro/codex", () => {
     const upstream = createEmptyUpstream();
     upstream.id = "custom-1";
     upstream.providers = ["openai"];
@@ -35,10 +33,8 @@ describe("upstreams/upstream-editor-helpers", () => {
       nextProviders: ["kiro"],
       upstreams: [upstream],
       editingIndex: 0,
-      kiroAccountId: "foo.json",
-      codexAccountId: "",
     });
-    expect(kiroId).toBe("foo");
+    expect(kiroId).toBe("custom-1");
 
     const codexId = resolveUpstreamIdForProviderChange({
       mode: "edit",
@@ -47,10 +43,8 @@ describe("upstreams/upstream-editor-helpers", () => {
       nextProviders: ["codex"],
       upstreams: [upstream],
       editingIndex: 0,
-      kiroAccountId: "",
-      codexAccountId: "bar.json",
     });
-    expect(codexId).toBe("bar");
+    expect(codexId).toBe("custom-1");
   });
 
   it("keeps id when editing and switching away from special provider", () => {
@@ -65,8 +59,6 @@ describe("upstreams/upstream-editor-helpers", () => {
       nextProviders: ["openai"],
       upstreams: [upstream],
       editingIndex: 0,
-      kiroAccountId: "",
-      codexAccountId: "",
     });
 
     expect(id).toBe("foo");
@@ -83,8 +75,6 @@ describe("upstreams/upstream-editor-helpers", () => {
       currentProviders: ["openai"],
       nextProviders: ["gemini"],
       upstreams: [upstream],
-      kiroAccountId: "",
-      codexAccountId: "",
     });
 
     expect(id).toBe("gemini-1");

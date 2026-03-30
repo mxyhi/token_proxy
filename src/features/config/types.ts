@@ -146,8 +146,6 @@ export type UpstreamForm = {
   filterSafetyIdentifier: boolean;
   useChatCompletionsForResponses: boolean;
   rewriteDeveloperRoleToSystem: boolean;
-  kiroAccountId: string;
-  codexAccountId: string;
   preferredEndpoint: "" | KiroPreferredEndpoint;
   proxyUrl: string;
   priority: string;

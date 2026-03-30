@@ -74,6 +74,7 @@ pub struct ProviderAccountListItem {
     pub auth_method: Option<String>,
     pub provider_name: Option<String>,
     pub auto_refresh_enabled: Option<bool>,
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -270,6 +271,11 @@ LIMIT ?6 OFFSET ?7;
                         .map_err(|err| format!("Failed to decode record_json: {err}"))?
                         .as_str(),
                 )?,
+                proxy_url: decode_proxy_url(
+                    row.try_get::<String, _>("record_json")
+                        .map_err(|err| format!("Failed to decode record_json: {err}"))?
+                        .as_str(),
+                )?,
                 provider_name: row
                     .try_get("provider_name")
                     .map_err(|err| format!("Failed to decode provider_name: {err}"))?,
@@ -407,6 +413,17 @@ fn decode_auto_refresh_enabled(
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(true),
     ))
+}
+
+fn decode_proxy_url(record_json: &str) -> Result<Option<String>, String> {
+    let value: serde_json::Value = serde_json::from_str(record_json)
+        .map_err(|err| format!("Failed to parse provider record_json: {err}"))?;
+    Ok(value
+        .get("proxy_url")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string))
 }
 
 fn now_unix_ms() -> i64 {

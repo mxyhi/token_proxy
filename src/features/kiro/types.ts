@@ -7,6 +7,7 @@ export type KiroAccountSummary = {
   email: string | null;
   expires_at: string | null;
   status: KiroAccountStatus;
+  proxy_url?: string | null;
 };
 
 export type KiroLoginMethod = "aws" | "aws_authcode" | "google";

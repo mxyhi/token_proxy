@@ -312,6 +312,15 @@ async fn kiro_fetch_quotas(
 }
 
 #[tauri::command]
+async fn kiro_set_proxy_url(
+    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+    account_id: String,
+    proxy_url: Option<String>,
+) -> Result<kiro::KiroAccountSummary, String> {
+    kiro_store.set_proxy_url(&account_id, proxy_url.as_deref()).await
+}
+
+#[tauri::command]
 async fn codex_list_accounts(
     codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
 ) -> Result<Vec<codex::CodexAccountSummary>, String> {
@@ -352,6 +361,15 @@ async fn codex_set_auto_refresh(
     enabled: bool,
 ) -> Result<codex::CodexAccountSummary, String> {
     codex_store.set_auto_refresh(&account_id, enabled).await
+}
+
+#[tauri::command]
+async fn codex_set_proxy_url(
+    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    account_id: String,
+    proxy_url: Option<String>,
+) -> Result<codex::CodexAccountSummary, String> {
+    codex_store.set_proxy_url(&account_id, proxy_url.as_deref()).await
 }
 
 #[tauri::command]
@@ -703,11 +721,13 @@ pub fn run() {
             kiro_logout,
             kiro_handle_callback,
             kiro_fetch_quotas,
+            kiro_set_proxy_url,
             codex_list_accounts,
             codex_import_file,
             codex_fetch_quotas,
             codex_refresh_account,
             codex_set_auto_refresh,
+            codex_set_proxy_url,
             codex_start_login,
             codex_poll_login,
             codex_logout,

@@ -34,10 +34,9 @@ pub struct KiroQuotaSummary {
 
 pub async fn fetch_quotas(store: &KiroAccountStore) -> Result<Vec<KiroQuotaSummary>, String> {
     let accounts = store.list_accounts().await?;
-    let proxy_url = store.app_proxy_url().await;
     let mut results = Vec::with_capacity(accounts.len());
     for account in accounts {
-        match fetch_account_quota(store, &account, proxy_url.as_deref()).await {
+        match fetch_account_quota(store, &account).await {
             Ok(summary) => results.push(summary),
             Err(err) => results.push(KiroQuotaSummary {
                 account_id: account.account_id.clone(),
@@ -54,14 +53,14 @@ pub async fn fetch_quotas(store: &KiroAccountStore) -> Result<Vec<KiroQuotaSumma
 async fn fetch_account_quota(
     store: &KiroAccountStore,
     account: &KiroAccountSummary,
-    proxy_url: Option<&str>,
 ) -> Result<KiroQuotaSummary, String> {
     let record = store.get_account_record(&account.account_id).await?;
     let profile_arn = record
         .profile_arn
         .as_deref()
         .ok_or_else(|| "Missing Kiro profile ARN.".to_string())?;
-    let response = request_usage_limits(&record.access_token, profile_arn, proxy_url).await?;
+    let proxy_url = store.effective_proxy_url(record.proxy_url.as_deref()).await;
+    let response = request_usage_limits(&record.access_token, profile_arn, proxy_url.as_deref()).await?;
     Ok(map_usage_response(account, &response))
 }
 

@@ -6,6 +6,7 @@ export type CodexAccountSummary = {
   expires_at?: string | null;
   status: CodexAccountStatus;
   auto_refresh_enabled?: boolean;
+  proxy_url?: string | null;
 };
 
 export type CodexLoginStatus = "waiting" | "success" | "error";

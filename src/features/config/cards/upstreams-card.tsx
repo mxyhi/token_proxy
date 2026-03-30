@@ -14,14 +14,10 @@ import {
   coerceProviderSelection,
   createAutoUpstreamId,
   createCopiedUpstreamId,
-  findIdleCodexAccount,
-  findIdleKiroAccount,
-  hasProvider,
   normalizeProviders,
   pruneConvertFromMap,
   providersEqual,
   resolveUpstreamIdForProviderChange,
-  stripJsonSuffix,
 } from "@/features/config/cards/upstreams/upstream-editor-helpers";
 import { ColumnsDialog } from "@/features/config/cards/upstreams/columns-dialog";
 import { DeleteUpstreamDialog } from "@/features/config/cards/upstreams/delete-dialog";
@@ -33,8 +29,6 @@ import type {
   UpstreamEditorState,
 } from "@/features/config/cards/upstreams/types";
 import { createEmptyUpstream } from "@/features/config/form";
-import { useCodexAccounts } from "@/features/codex/use-codex-accounts";
-import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
 import type { ConfigForm, UpstreamForm } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
@@ -73,31 +67,15 @@ export function UpstreamsCard({
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [editor, setEditor] = useState<UpstreamEditorState>({ open: false });
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>({ open: false });
-  const {
-    accounts: kiroAccounts,
-    loading: kiroAccountsLoading,
-    error: kiroAccountsError,
-    refresh: refreshKiroAccounts,
-  } = useKiroAccounts();
-  const {
-    accounts: codexAccounts,
-    loading: codexAccountsLoading,
-    error: codexAccountsError,
-    refresh: refreshCodexAccounts,
-  } = useCodexAccounts();
   const columns = useMemo(
     () => UPSTREAM_COLUMNS.filter((column) => columnVisibility[column.id]),
     [columnVisibility]
   );
   const apiKeyVisible = columnVisibility.apiKeys;
-  const kiroAccountMap = useMemo(() => {
-    const map = new Map(kiroAccounts.map((account) => [account.account_id, account]));
-    return map;
-  }, [kiroAccounts]);
-  const codexAccountMap = useMemo(() => {
-    const map = new Map(codexAccounts.map((account) => [account.account_id, account]));
-    return map;
-  }, [codexAccounts]);
+  const isSpecialAccountBackedUpstream = useCallback((upstream: UpstreamForm) => {
+    const providers = normalizeProviders(upstream.providers);
+    return providers.length === 1 && (providers[0] === "kiro" || providers[0] === "codex");
+  }, []);
 
   // 更新 draft，处理 provider 变化时的自动逻辑
   const updateDraft = useCallback(
@@ -114,37 +92,19 @@ export function UpstreamsCard({
         const providersChanged =
           patch.providers !== undefined &&
           !providersEqual(nextProviders, currentProviders);
-        const nextPrimary = nextProviders[0] ?? "";
 
-        // 如果 provider 变化，处理账户绑定 + ID 自动逻辑：
+        // 如果 provider 变化，处理 ID / provider 专属字段的自动逻辑：
         // - 新增：根据 provider 自动生成 ID
-        // - 编辑：普通 provider 不自动改 ID（避免统计/引用被拆分），仅 kiro/codex 会随账户同步
+        // - 编辑：保持现有 ID，避免统计/引用被拆分
         if (providersChanged) {
-          let kiroAccountId = prev.draft.kiroAccountId;
-          let codexAccountId = prev.draft.codexAccountId;
           // openai-response 专属开关：切换到其它 provider 时清零，避免把无效字段写进配置。
           let filterPromptCacheRetention = prev.draft.filterPromptCacheRetention;
           let filterSafetyIdentifier = prev.draft.filterSafetyIdentifier;
           let useChatCompletionsForResponses = prev.draft.useChatCompletionsForResponses;
           let rewriteDeveloperRoleToSystem = prev.draft.rewriteDeveloperRoleToSystem;
+          let baseUrl = patch.baseUrl ?? prev.draft.baseUrl;
+          let proxyUrl = patch.proxyUrl ?? prev.draft.proxyUrl;
           let convertFromMap = patch.convertFromMap ?? prev.draft.convertFromMap;
-
-          if (nextPrimary === "kiro") {
-            const idleAccount = findIdleKiroAccount(kiroAccounts, upstreams, editingIndex);
-            kiroAccountId = idleAccount?.account_id ?? "";
-            codexAccountId = "";
-          } else if (nextPrimary === "codex") {
-            const idleAccount = findIdleCodexAccount(codexAccounts, upstreams, editingIndex);
-            codexAccountId = idleAccount?.account_id ?? "";
-            kiroAccountId = "";
-          } else {
-            if (currentProviders.includes("kiro")) {
-              kiroAccountId = "";
-            }
-            if (currentProviders.includes("codex")) {
-              codexAccountId = "";
-            }
-          }
 
           if (!nextProviders.includes("openai-response")) {
             filterPromptCacheRetention = false;
@@ -153,6 +113,13 @@ export function UpstreamsCard({
           }
           if (!nextProviders.some((provider) => provider === "openai" || provider === "openai-response")) {
             rewriteDeveloperRoleToSystem = false;
+          }
+          if (
+            nextProviders.length === 1 &&
+            (nextProviders[0] === "kiro" || nextProviders[0] === "codex")
+          ) {
+            baseUrl = "";
+            proxyUrl = "";
           }
           if (patch.filterPromptCacheRetention !== undefined) {
             filterPromptCacheRetention = patch.filterPromptCacheRetention;
@@ -176,8 +143,6 @@ export function UpstreamsCard({
             nextProviders,
             upstreams,
             editingIndex,
-            kiroAccountId,
-            codexAccountId,
           });
 
           return {
@@ -187,44 +152,20 @@ export function UpstreamsCard({
               ...patch,
               providers: nextProviders,
               id,
-              kiroAccountId,
-              codexAccountId,
+              baseUrl,
               filterPromptCacheRetention,
               filterSafetyIdentifier,
               useChatCompletionsForResponses,
               rewriteDeveloperRoleToSystem,
+              proxyUrl,
               convertFromMap,
             },
-          };
-        }
-
-        // 如果是 kiro provider 且 kiroAccountId 变化，同步更新 ID（去掉 .json）
-        if (
-          hasProvider(prev.draft, "kiro") &&
-          patch.kiroAccountId !== undefined &&
-          patch.kiroAccountId !== prev.draft.kiroAccountId
-        ) {
-          const newId = patch.kiroAccountId ? stripJsonSuffix(patch.kiroAccountId) : prev.draft.id;
-          return {
-            ...prev,
-            draft: { ...prev.draft, ...patch, id: newId },
-          };
-        }
-        if (
-          hasProvider(prev.draft, "codex") &&
-          patch.codexAccountId !== undefined &&
-          patch.codexAccountId !== prev.draft.codexAccountId
-        ) {
-          const newId = patch.codexAccountId ? stripJsonSuffix(patch.codexAccountId) : prev.draft.id;
-          return {
-            ...prev,
-            draft: { ...prev.draft, ...patch, id: newId },
           };
         }
         return { ...prev, draft: { ...prev.draft, ...patch } };
       });
     },
-    [upstreams, kiroAccounts, codexAccounts],
+    [upstreams],
   );
 
   const openCreateDialog = () => {
@@ -306,9 +247,9 @@ export function UpstreamsCard({
             upstreams={upstreams}
             columns={columns}
             showApiKeys={showApiKeys}
-            kiroAccounts={kiroAccountMap}
-            codexAccounts={codexAccountMap}
             disableDelete={false}
+            isCopyDisabled={isSpecialAccountBackedUpstream}
+            isDeleteDisabled={isSpecialAccountBackedUpstream}
             onEdit={openEditDialog}
             onCopy={openCopyDialog}
             onToggleEnabled={(index) => {
@@ -343,14 +284,6 @@ export function UpstreamsCard({
         onOpenChange={(open) => !open && setEditor({ open: false })}
         onChangeDraft={updateDraft}
         onSave={saveDraft}
-        kiroAccounts={kiroAccounts}
-        kiroAccountsLoading={kiroAccountsLoading}
-        kiroAccountsError={kiroAccountsError}
-        onRefreshKiroAccounts={refreshKiroAccounts}
-        codexAccounts={codexAccounts}
-        codexAccountsLoading={codexAccountsLoading}
-        codexAccountsError={codexAccountsError}
-        onRefreshCodexAccounts={refreshCodexAccounts}
       />
       <DeleteUpstreamDialog
         dialog={deleteDialog}

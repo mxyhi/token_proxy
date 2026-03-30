@@ -35,10 +35,9 @@ pub struct CodexQuotaSummary {
 
 pub async fn fetch_quotas(store: &CodexAccountStore) -> Result<Vec<CodexQuotaSummary>, String> {
     let accounts = store.list_accounts().await?;
-    let proxy_url = store.app_proxy_url().await;
     let mut results = Vec::with_capacity(accounts.len());
     for account in accounts {
-        match fetch_account_quota(store, &account, proxy_url.as_deref()).await {
+        match fetch_account_quota(store, &account).await {
             Ok(summary) => results.push(summary),
             Err(err) => results.push(CodexQuotaSummary {
                 account_id: account.account_id.clone(),
@@ -54,13 +53,13 @@ pub async fn fetch_quotas(store: &CodexAccountStore) -> Result<Vec<CodexQuotaSum
 async fn fetch_account_quota(
     store: &CodexAccountStore,
     account: &CodexAccountSummary,
-    proxy_url: Option<&str>,
 ) -> Result<CodexQuotaSummary, String> {
     let record = store.get_account_record(&account.account_id).await?;
+    let proxy_url = store.effective_proxy_url(record.proxy_url.as_deref()).await;
     let response = request_usage(
         &record.access_token,
         record.account_id.as_deref(),
-        proxy_url,
+        proxy_url.as_deref(),
     )
     .await?;
     Ok(map_usage_response(account, response))

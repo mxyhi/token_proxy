@@ -38,6 +38,7 @@ export function UpdateNotifier() {
   const { checkForUpdate, downloadAndInstall, relaunchApp } = actions;
   const [dismissedRestartPromptKey, setDismissedRestartPromptKey] = useState<string | null>(null);
   const availableToastVersionRef = useRef<string | null>(null);
+  const availableToastIdRef = useRef<ToastId | null>(null);
   const progressToastIdRef = useRef<ToastId | null>(null);
   const lastStatusRef = useRef<UpdateStatus>(state.status);
   const installedRestartPromptKey =
@@ -74,7 +75,7 @@ export function UpdateNotifier() {
       const version = state.updateInfo.version;
       if (availableToastVersionRef.current !== version) {
         availableToastVersionRef.current = version;
-        toast(m.update_status_available(), {
+        const toastId = toast(m.update_status_available(), {
           duration: Infinity,
           description: `${m.update_latest_version_label()}: ${version}`,
           action: {
@@ -90,7 +91,20 @@ export function UpdateNotifier() {
             },
           },
         });
+        availableToastIdRef.current = toastId;
       }
+    }
+
+    // Avoid stacked update popups: when workflow enters download/install/restart stages,
+    // dismiss the "update available" toast to prevent an unclickable toast under modal dialogs.
+    if (
+      (state.status === "downloading" ||
+        state.status === "installing" ||
+        state.status === "installed") &&
+      availableToastIdRef.current
+    ) {
+      toast.dismiss(availableToastIdRef.current);
+      availableToastIdRef.current = null;
     }
 
     if (state.status === "downloading" || state.status === "installing") {
@@ -155,6 +169,17 @@ export function UpdateNotifier() {
     state.statusMessage,
     state.updateInfo,
   ]);
+
+  useEffect(() => {
+    return () => {
+      if (availableToastIdRef.current) {
+        toast.dismiss(availableToastIdRef.current);
+      }
+      if (progressToastIdRef.current) {
+        toast.dismiss(progressToastIdRef.current);
+      }
+    };
+  }, []);
 
   const handleRestartPromptOpenChange = useCallback(
     (open: boolean) => {

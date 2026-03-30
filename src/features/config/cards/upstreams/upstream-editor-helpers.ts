@@ -1,7 +1,5 @@
 import { createNativeInboundFormatSet, removeInboundFormatsInSet } from "@/features/config/inbound-formats";
 import type { UpstreamForm } from "@/features/config/types";
-import type { CodexAccountSummary } from "@/features/codex/types";
-import type { KiroAccountSummary } from "@/features/kiro/types";
 
 export function createCopiedUpstreamId(sourceId: string, upstreams: readonly UpstreamForm[]) {
   const base = sourceId.trim() || "upstream";
@@ -117,16 +115,9 @@ export function pruneConvertFromMap(
 }
 
 /**
- * 去除 account_id 的 .json 后缀，用于生成更简洁的 upstream ID
- */
-export function stripJsonSuffix(accountId: string) {
-  return accountId.endsWith(".json") ? accountId.slice(0, -5) : accountId;
-}
-
-/**
  * 编辑时 ID 的期望：
- * - 普通 provider：切换 provider 不自动改 ID（避免统计/引用被“拆分”）
- * - kiro/codex：ID 与账户绑定，允许自动同步为 account_id（去掉 .json）
+ * - 编辑：切换 provider 不自动改 ID（避免统计/引用被“拆分”）
+ * - 新增：切换 provider 时自动生成 provider 前缀 ID
  */
 export function resolveUpstreamIdForProviderChange(args: {
   mode: "create" | "edit";
@@ -135,21 +126,9 @@ export function resolveUpstreamIdForProviderChange(args: {
   nextProviders: readonly string[];
   upstreams: readonly UpstreamForm[];
   editingIndex?: number;
-  kiroAccountId: string;
-  codexAccountId: string;
 }) {
   const currentPrimary = args.currentProviders[0]?.trim() ?? "";
   const nextPrimary = args.nextProviders[0]?.trim() ?? "";
-
-  const specialId =
-    nextPrimary === "kiro" && args.kiroAccountId.trim()
-      ? stripJsonSuffix(args.kiroAccountId.trim())
-      : nextPrimary === "codex" && args.codexAccountId.trim()
-        ? stripJsonSuffix(args.codexAccountId.trim())
-        : null;
-  if (specialId) {
-    return specialId;
-  }
 
   // 仅“新增”才允许根据 provider 自动改 ID；编辑中保持稳定，交给用户手动调整。
   if (args.mode === "edit") {
@@ -161,61 +140,6 @@ export function resolveUpstreamIdForProviderChange(args: {
     return args.currentId;
   }
   return createAutoUpstreamId(args.nextProviders, args.upstreams, args.editingIndex);
-}
-
-/**
- * 找到第一个未被其他上游使用的空闲 kiro 账户
- * 优先返回 active 状态的账户
- */
-export function findIdleKiroAccount(
-  accounts: KiroAccountSummary[],
-  upstreams: readonly UpstreamForm[],
-  editingIndex?: number,
-): KiroAccountSummary | undefined {
-  // 收集已被使用的 kiro account id
-  const usedAccountIds = new Set(
-    upstreams
-      .filter((upstream, index) => {
-        if (index === editingIndex) return false;
-        return hasProvider(upstream, "kiro") && upstream.kiroAccountId.trim();
-      })
-      .map((upstream) => upstream.kiroAccountId.trim()),
-  );
-
-  // 先找 active 状态的空闲账户
-  const activeIdle = accounts.find(
-    (account) => account.status === "active" && !usedAccountIds.has(account.account_id),
-  );
-  if (activeIdle) return activeIdle;
-
-  // 如果没有 active 的，找任意空闲账户
-  return accounts.find((account) => !usedAccountIds.has(account.account_id));
-}
-
-/**
- * 找到第一个未被其他上游使用的空闲 codex 账户
- * 优先返回 active 状态的账户
- */
-export function findIdleCodexAccount(
-  accounts: CodexAccountSummary[],
-  upstreams: readonly UpstreamForm[],
-  editingIndex?: number,
-): CodexAccountSummary | undefined {
-  const usedAccountIds = new Set(
-    upstreams
-      .filter((upstream, index) => {
-        if (index === editingIndex) return false;
-        return hasProvider(upstream, "codex") && upstream.codexAccountId.trim();
-      })
-      .map((upstream) => upstream.codexAccountId.trim()),
-  );
-
-  const activeIdle = accounts.find(
-    (account) => account.status === "active" && !usedAccountIds.has(account.account_id),
-  );
-  if (activeIdle) return activeIdle;
-
-  return accounts.find((account) => !usedAccountIds.has(account.account_id));
 }
 
 export function cloneUpstreamDraft(upstream: UpstreamForm) {

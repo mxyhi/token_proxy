@@ -11,6 +11,7 @@ import {
 type ProviderMultiSelectProps = {
   providerOptions: readonly string[];
   value: readonly string[];
+  disabled?: boolean;
   onChange: (next: string[]) => void;
 };
 
@@ -74,6 +75,7 @@ function toggleProvider(
 export function ProviderMultiSelect({
   providerOptions,
   value,
+  disabled = false,
   onChange,
 }: ProviderMultiSelectProps) {
   const selected = orderProviders(normalizeProviders(value), providerOptions);
@@ -87,6 +89,7 @@ export function ProviderMultiSelect({
           variant="outline"
           className="w-full justify-between"
           data-slot="provider-multi-select"
+          disabled={disabled}
         >
           <span className="truncate">{label}</span>
           <ChevronDown className="size-4 text-muted-foreground" aria-hidden="true" />
@@ -100,7 +103,9 @@ export function ProviderMultiSelect({
               key={option}
               checked={checked}
               onCheckedChange={(nextChecked) =>
-                onChange(toggleProvider(selected, providerOptions, option, nextChecked === true))
+                disabled
+                  ? undefined
+                  : onChange(toggleProvider(selected, providerOptions, option, nextChecked === true))
               }
             >
               {option}

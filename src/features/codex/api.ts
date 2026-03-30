@@ -41,3 +41,10 @@ export async function setCodexAutoRefresh(accountId: string, enabled: boolean) {
     enabled,
   });
 }
+
+export async function setCodexProxyUrl(accountId: string, proxyUrl: string | null) {
+  return await invoke<CodexAccountSummary>("codex_set_proxy_url", {
+    accountId,
+    proxyUrl,
+  });
+}

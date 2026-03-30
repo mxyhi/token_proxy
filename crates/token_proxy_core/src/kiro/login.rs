@@ -479,6 +479,7 @@ async fn handle_builder_success(
         last_refresh: Some(now_rfc3339()),
         start_url: None,
         region: None,
+        proxy_url: None,
     };
     match manager.store.save_new_account(record).await {
         Ok(account) => manager.complete_session(&state, account).await,
@@ -524,6 +525,7 @@ async fn handle_social_success(
         last_refresh: Some(now_rfc3339()),
         start_url: None,
         region: None,
+        proxy_url: None,
     };
     match manager.store.save_new_account(record).await {
         Ok(account) => manager.complete_session(&state, account).await,

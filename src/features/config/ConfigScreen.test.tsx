@@ -37,6 +37,33 @@ vi.mock("@/features/update/updater", () => ({
   }),
 }));
 
+vi.mock("@/features/kiro/use-kiro-accounts", () => ({
+  useKiroAccounts: () => ({
+    accounts: [],
+    loading: false,
+    error: "",
+    refresh: async () => undefined,
+    logout: async () => undefined,
+    importIde: async () => [],
+    importKam: async () => [],
+    setProxyUrl: async () => undefined,
+  }),
+}));
+
+vi.mock("@/features/codex/use-codex-accounts", () => ({
+  useCodexAccounts: () => ({
+    accounts: [],
+    loading: false,
+    error: "",
+    refresh: async () => undefined,
+    refreshAccount: async () => undefined,
+    setAutoRefresh: async () => undefined,
+    setProxyUrl: async () => undefined,
+    logout: async () => undefined,
+    importFile: async () => [],
+  }),
+}));
+
 vi.mock("@/features/config/AppView", () => ({
   AppView: ({
     form,

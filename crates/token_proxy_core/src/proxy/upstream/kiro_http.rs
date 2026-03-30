@@ -19,11 +19,11 @@ pub(super) enum KiroSendError {
 
 pub(super) fn build_client(
     state: &ProxyState,
-    upstream: &UpstreamRuntime,
+    proxy_url: Option<&str>,
 ) -> Result<reqwest::Client, AttemptOutcome> {
     state
         .http_clients
-        .client_for_proxy_url(upstream.proxy_url.as_deref())
+        .client_for_proxy_url(proxy_url)
         .map_err(|message| {
             AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
         })

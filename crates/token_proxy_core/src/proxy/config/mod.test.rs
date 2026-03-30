@@ -302,3 +302,52 @@ fn build_runtime_config_rejects_multiple_api_keys_for_account_based_provider() {
 
     assert!(result.is_err());
 }
+
+#[test]
+fn build_runtime_config_allows_account_based_provider_without_binding_account_id() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![
+        UpstreamConfig {
+            id: "kiro-default".to_string(),
+            providers: vec!["kiro".to_string()],
+            base_url: String::new(),
+            api_keys: Vec::new(),
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: false,
+            use_chat_completions_for_responses: false,
+            rewrite_developer_role_to_system: false,
+            kiro_account_id: None,
+            codex_account_id: None,
+            preferred_endpoint: None,
+            proxy_url: None,
+            priority: Some(0),
+            enabled: true,
+            model_mappings: HashMap::new(),
+            convert_from_map: HashMap::new(),
+            overrides: None,
+        },
+        UpstreamConfig {
+            id: "codex-default".to_string(),
+            providers: vec!["codex".to_string()],
+            base_url: String::new(),
+            api_keys: Vec::new(),
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: false,
+            use_chat_completions_for_responses: false,
+            rewrite_developer_role_to_system: false,
+            kiro_account_id: None,
+            codex_account_id: None,
+            preferred_endpoint: None,
+            proxy_url: None,
+            priority: Some(0),
+            enabled: true,
+            model_mappings: HashMap::new(),
+            convert_from_map: HashMap::new(),
+            overrides: None,
+        },
+    ];
+
+    let result = build_runtime_config(config);
+
+    assert!(result.is_ok());
+}

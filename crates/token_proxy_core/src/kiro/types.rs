@@ -16,6 +16,8 @@ pub struct KiroTokenRecord {
     pub last_refresh: Option<String>,
     pub start_url: Option<String>,
     pub region: Option<String>,
+    #[serde(default)]
+    pub proxy_url: Option<String>,
 }
 
 impl KiroTokenRecord {
@@ -58,6 +60,7 @@ pub struct KiroAccountSummary {
     pub email: Option<String>,
     pub expires_at: Option<String>,
     pub status: KiroAccountStatus,
+    pub proxy_url: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

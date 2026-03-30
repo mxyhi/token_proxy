@@ -29,6 +29,7 @@ function buildRow(index: number): ProviderAccountTableRow {
     sourceOrMethodLabel: index % 2 === 0 ? "Google" : "—",
     detailDescription: `detail-${index}`,
     detailFields: [],
+    proxyUrlValue: index % 2 === 0 ? "http://127.0.0.1:7890" : "",
     quotaError: "",
     quotaItems: [],
     canRefresh: index % 2 === 1,
@@ -43,6 +44,7 @@ describe("providers/providers-accounts-table", () => {
     const onRefresh = vi.fn(async () => undefined);
     const onLogout = vi.fn(async () => undefined);
     const onBatchDelete = vi.fn(async () => undefined);
+    const onSaveProxyUrl = vi.fn(async () => undefined);
     const allRows = Array.from({ length: 11 }, (_, index) => buildRow(index + 1));
 
     function Harness() {
@@ -64,6 +66,7 @@ describe("providers/providers-accounts-table", () => {
           onRefresh={onRefresh}
           onLogout={onLogout}
           onBatchDelete={onBatchDelete}
+          onSaveProxyUrl={onSaveProxyUrl}
           onToggleAutoRefresh={vi.fn(async () => undefined)}
         />
       );
@@ -89,6 +92,7 @@ describe("providers/providers-accounts-table", () => {
     const onRefresh = vi.fn(async () => undefined);
     const onLogout = vi.fn(async () => undefined);
     const onBatchDelete = vi.fn(async () => undefined);
+    const onSaveProxyUrl = vi.fn(async () => undefined);
     const allRows = Array.from({ length: 11 }, (_, index) => buildRow(index + 1));
 
     function Harness() {
@@ -110,6 +114,7 @@ describe("providers/providers-accounts-table", () => {
           onRefresh={onRefresh}
           onLogout={onLogout}
           onBatchDelete={onBatchDelete}
+          onSaveProxyUrl={onSaveProxyUrl}
           onToggleAutoRefresh={vi.fn(async () => undefined)}
         />
       );
@@ -132,6 +137,7 @@ describe("providers/providers-accounts-table", () => {
     const onRefresh = vi.fn(async () => undefined);
     const onLogout = vi.fn(async () => undefined);
     const onBatchDelete = vi.fn(async () => undefined);
+    const onSaveProxyUrl = vi.fn(async () => undefined);
     const rows = [buildRow(1), buildRow(2)];
 
     render(
@@ -147,6 +153,7 @@ describe("providers/providers-accounts-table", () => {
         onRefresh={onRefresh}
         onLogout={onLogout}
         onBatchDelete={onBatchDelete}
+        onSaveProxyUrl={onSaveProxyUrl}
         onToggleAutoRefresh={vi.fn(async () => undefined)}
       />
     );
@@ -165,5 +172,96 @@ describe("providers/providers-accounts-table", () => {
       expect(onBatchDelete).toHaveBeenCalledTimes(1);
     });
     expect(onBatchDelete).toHaveBeenCalledWith([rows[0]]);
+  });
+
+  it("saves proxy url from the account detail dialog", async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn(async () => undefined);
+    const onLogout = vi.fn(async () => undefined);
+    const onBatchDelete = vi.fn(async () => undefined);
+    const onSaveProxyUrl = vi.fn(async () => undefined);
+    const rows = [{ ...buildRow(1), proxyUrlValue: "http://127.0.0.1:7890" }];
+
+    render(
+      <ProvidersAccountsTableSection
+        rows={rows}
+        loading={false}
+        error=""
+        page={1}
+        totalPages={1}
+        totalItems={rows.length}
+        onPrevPage={() => undefined}
+        onNextPage={() => undefined}
+        onRefresh={onRefresh}
+        onLogout={onLogout}
+        onBatchDelete={onBatchDelete}
+        onSaveProxyUrl={onSaveProxyUrl}
+        onToggleAutoRefresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: m.providers_account_dialog_title() }));
+
+    const input = await screen.findByLabelText(m.field_proxy_url());
+    expect(input).toHaveValue("http://127.0.0.1:7890");
+
+    await user.clear(input);
+    await user.type(input, "socks5://127.0.0.1:1080");
+    await user.click(screen.getByRole("button", { name: m.common_save() }));
+
+    await waitFor(() => {
+      expect(onSaveProxyUrl).toHaveBeenCalledTimes(1);
+    });
+    expect(onSaveProxyUrl).toHaveBeenCalledWith(rows[0], "socks5://127.0.0.1:1080");
+  });
+
+  it("renders account detail dialog as summary and list sections instead of field cards", async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn(async () => undefined);
+    const onLogout = vi.fn(async () => undefined);
+    const onBatchDelete = vi.fn(async () => undefined);
+    const onSaveProxyUrl = vi.fn(async () => undefined);
+    const rows = [
+      {
+        ...buildRow(2),
+        detailFields: [
+          { label: "邮箱", value: "bob@example.com" },
+          { label: "账户 ID", value: "account-2.json" },
+        ],
+        quotaItems: [
+          {
+            name: "Requests",
+            summary: "25 / 100",
+            secondary: "Reset at 2026-04-15",
+          },
+        ],
+      },
+    ];
+
+    render(
+      <ProvidersAccountsTableSection
+        rows={rows}
+        loading={false}
+        error=""
+        page={1}
+        totalPages={1}
+        totalItems={rows.length}
+        onPrevPage={() => undefined}
+        onNextPage={() => undefined}
+        onRefresh={onRefresh}
+        onLogout={onLogout}
+        onBatchDelete={onBatchDelete}
+        onSaveProxyUrl={onSaveProxyUrl}
+        onToggleAutoRefresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: m.providers_account_dialog_title() }));
+
+    expect(document.querySelector("[data-slot='provider-account-summary-band']")).toBeTruthy();
+    expect(document.querySelector("[data-slot='provider-account-detail-list']")).toBeTruthy();
+    expect(document.querySelector("[data-slot='provider-account-quota-list']")).toBeTruthy();
+    expect(screen.getByText("邮箱")).toBeInTheDocument();
+    expect(screen.getByText("25 / 100")).toBeInTheDocument();
   });
 });

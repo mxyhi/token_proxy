@@ -6,6 +6,7 @@ use reqwest::{Client, Proxy};
 use sha2::{Digest, Sha256};
 use std::time::Duration;
 use time::OffsetDateTime;
+use url::Url;
 
 pub fn generate_state(prefix: &str) -> Result<String, String> {
     let mut bytes = [0u8; 16];
@@ -104,4 +105,15 @@ pub fn build_reqwest_client(proxy_url: Option<&str>, timeout: Duration) -> Resul
     builder
         .build()
         .map_err(|err| format!("Failed to build HTTP client: {err}"))
+}
+
+pub fn normalize_proxy_url(value: Option<&str>) -> Result<Option<String>, String> {
+    let Some(value) = value.map(str::trim).filter(|item| !item.is_empty()) else {
+        return Ok(None);
+    };
+    let parsed = Url::parse(value).map_err(|_| "proxy_url is not a valid URL.".to_string())?;
+    match parsed.scheme() {
+        "http" | "https" | "socks5" | "socks5h" => Ok(Some(value.to_string())),
+        scheme => Err(format!("proxy_url scheme is not supported: {scheme}.")),
+    }
 }

@@ -334,7 +334,7 @@ async fn codex_import_file(
 ) -> Result<Vec<codex::CodexAccountSummary>, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
-        return Err("File path is required.".to_string());
+        return Err("Import path is required.".to_string());
     }
     codex_store.import_file(PathBuf::from(trimmed)).await
 }

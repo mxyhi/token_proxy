@@ -64,6 +64,7 @@ pub struct DashboardRequestItem {
     pub path: String,
     pub provider: String,
     pub upstream_id: String,
+    pub account_id: Option<String>,
     pub model: Option<String>,
     pub mapped_model: Option<String>,
     pub stream: bool,
@@ -483,6 +484,7 @@ SELECT
   path,
   provider,
   upstream_id,
+  account_id,
   model,
   mapped_model,
   stream,
@@ -518,6 +520,7 @@ LIMIT ?3 OFFSET ?4;
         let path: String = row.try_get("path").ok()?;
         let provider: String = row.try_get("provider").ok()?;
         let upstream_id: String = row.try_get("upstream_id").ok()?;
+        let account_id: Option<String> = row.try_get("account_id").ok()?;
         let model: Option<String> = row.try_get("model").ok()?;
         let mapped_model: Option<String> = row.try_get("mapped_model").ok()?;
         let stream: bool = row.try_get("stream").unwrap_or(false);
@@ -532,6 +535,7 @@ LIMIT ?3 OFFSET ?4;
             path,
             provider,
             upstream_id,
+            account_id,
             model,
             mapped_model,
             stream,

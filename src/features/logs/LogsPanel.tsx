@@ -23,6 +23,7 @@ import {
 } from "@/features/dashboard/snapshot";
 import {
   createDashboardTimeFormatter,
+  formatDashboardProviderLabel,
   formatDashboardTimestamp,
   formatInteger,
 } from "@/features/dashboard/format";
@@ -106,6 +107,11 @@ type BasicInfoSectionProps = {
 function BasicInfoSection({ detail, formatter }: BasicInfoSectionProps) {
   const timestamp = formatDashboardTimestamp(detail.tsMs, formatter);
   const streamText = detail.stream ? m.logs_detail_stream_yes() : m.logs_detail_stream_no();
+  const providerText = formatDashboardProviderLabel(
+    detail.upstreamId,
+    detail.provider,
+    detail.accountId,
+  );
   // 只有当 mappedModel 与 model 不同时才展示（相同说明没有实际映射）
   const hasMappedModel =
     detail.mappedModel?.trim() &&
@@ -119,7 +125,7 @@ function BasicInfoSection({ detail, formatter }: BasicInfoSectionProps) {
         <DetailField label="ID" value={String(detail.id)} />
         <DetailField label={m.dashboard_table_time()} value={timestamp} />
         <DetailField label={m.dashboard_table_path()} value={detail.path} />
-        <DetailField label={m.dashboard_table_provider()} value={`${detail.upstreamId} · ${detail.provider}`} />
+        <DetailField label={m.dashboard_table_provider()} value={providerText} />
         {/* Model 展示逻辑与表格一致：主模型在上，映射模型在下 */}
         <div className="flex items-baseline justify-between gap-2 py-1">
           <span className="text-xs text-muted-foreground shrink-0">{m.dashboard_table_model()}</span>
@@ -173,6 +179,11 @@ function DetailSection({ title, value }: DetailSectionProps) {
 // 将详情格式化为可复制的文本
 function formatDetailAsText(detail: RequestLogDetail, formatter: Intl.DateTimeFormat): string {
   const lines: string[] = [];
+  const providerText = formatDashboardProviderLabel(
+    detail.upstreamId,
+    detail.provider,
+    detail.accountId,
+  );
   const hasMappedModel =
     detail.mappedModel?.trim() &&
     detail.model?.trim() &&
@@ -181,7 +192,7 @@ function formatDetailAsText(detail: RequestLogDetail, formatter: Intl.DateTimeFo
   lines.push(`ID: ${detail.id}`);
   lines.push(`${m.dashboard_table_time()}: ${formatDashboardTimestamp(detail.tsMs, formatter)}`);
   lines.push(`${m.dashboard_table_path()}: ${detail.path}`);
-  lines.push(`${m.dashboard_table_provider()}: ${detail.upstreamId} · ${detail.provider}`);
+  lines.push(`${m.dashboard_table_provider()}: ${providerText}`);
   lines.push(`${m.dashboard_table_model()}: ${detail.model?.trim() || DETAIL_PLACEHOLDER}`);
   if (hasMappedModel) {
     lines.push(`${m.logs_detail_model_mapped()}: ${detail.mappedModel}`);

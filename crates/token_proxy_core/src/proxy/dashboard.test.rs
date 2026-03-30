@@ -82,6 +82,7 @@ async fn setup_test_db() -> SqlitePool {
             path TEXT NOT NULL,
             provider TEXT NOT NULL,
             upstream_id TEXT NOT NULL,
+            account_id TEXT,
             model TEXT,
             mapped_model TEXT,
             stream INTEGER NOT NULL,
@@ -125,6 +126,7 @@ async fn insert_request(
     ts_ms: i64,
     provider: &str,
     upstream_id: &str,
+    account_id: Option<&str>,
     status: i64,
     input_tokens: Option<i64>,
     output_tokens: Option<i64>,
@@ -139,6 +141,7 @@ async fn insert_request(
             path,
             provider,
             upstream_id,
+            account_id,
             stream,
             status,
             input_tokens,
@@ -147,12 +150,13 @@ async fn insert_request(
             cached_tokens,
             latency_ms
         )
-        VALUES (?, '/test', ?, ?, 0, ?, ?, ?, ?, ?, ?)
+        VALUES (?, '/test', ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
         "#,
     )
     .bind(ts_ms)
     .bind(provider)
     .bind(upstream_id)
+    .bind(account_id)
     .bind(status)
     .bind(input_tokens)
     .bind(output_tokens)
@@ -264,6 +268,7 @@ async fn read_snapshot_filters_by_upstream_and_keeps_all_upstream_options() {
         100,
         "openai",
         "alpha",
+        Some("codex-a.json"),
         200,
         Some(10),
         Some(20),
@@ -277,6 +282,7 @@ async fn read_snapshot_filters_by_upstream_and_keeps_all_upstream_options() {
         200,
         "anthropic",
         "beta",
+        None,
         500,
         Some(3),
         Some(4),
@@ -312,6 +318,7 @@ async fn read_snapshot_filters_by_upstream_and_keeps_all_upstream_options() {
 
     assert_eq!(snapshot.recent.len(), 1);
     assert_eq!(snapshot.recent[0].upstream_id, "alpha");
+    assert_eq!(snapshot.recent[0].account_id.as_deref(), Some("codex-a.json"));
     assert!(
         snapshot
             .series

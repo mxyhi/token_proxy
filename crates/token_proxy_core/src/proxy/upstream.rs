@@ -274,6 +274,7 @@ pub(super) struct PreparedUpstreamRequest {
     upstream_url: String,
     request_headers: HeaderMap,
     proxy_url: Option<String>,
+    selected_account_id: Option<String>,
     meta: RequestMeta,
 }
 
@@ -282,6 +283,7 @@ struct ResolvedUpstreamAuth {
     auth: http::UpstreamAuthHeader,
     extra_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
+    selected_account_id: Option<String>,
 }
 
 fn resolve_provider_upstreams<'a>(
@@ -300,6 +302,7 @@ fn resolve_provider_upstreams<'a>(
                 meta,
                 provider,
                 LOCAL_UPSTREAM_ID,
+                None,
                 inbound_path,
                 StatusCode::BAD_GATEWAY,
                 "No available upstream configured.".to_string(),
@@ -382,6 +385,7 @@ fn finalize_forward_response(
             meta,
             provider,
             LOCAL_UPSTREAM_ID,
+            None,
             inbound_path,
             StatusCode::UNAUTHORIZED,
             "Missing upstream API key.".to_string(),
@@ -761,6 +765,7 @@ async fn prepare_upstream_request(
         auth,
         extra_headers,
         proxy_url,
+        selected_account_id,
     } = resolved;
     let request_headers = request::build_request_headers(
         provider,
@@ -775,6 +780,7 @@ async fn prepare_upstream_request(
         upstream_url,
         request_headers,
         proxy_url,
+        selected_account_id,
         meta: mapped_meta,
     })
 }
@@ -799,6 +805,7 @@ async fn resolve_upstream_auth(
             auth,
             extra_headers: None,
             proxy_url: upstream.proxy_url.clone(),
+            selected_account_id: None,
         });
     }
     if provider == "kiro" {
@@ -817,6 +824,7 @@ async fn resolve_upstream_auth(
         auth,
         extra_headers: None,
         proxy_url: upstream.proxy_url.clone(),
+        selected_account_id: None,
     })
 }
 
@@ -825,7 +833,7 @@ async fn resolve_kiro_upstream(
     upstream: &UpstreamRuntime,
     upstream_url: &str,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
-    let (_, record) = state
+    let (selected_account_id, record) = state
         .kiro_accounts
         .resolve_account_record(upstream.kiro_account_id.as_deref())
         .await
@@ -850,6 +858,7 @@ async fn resolve_kiro_upstream(
         },
         extra_headers: None,
         proxy_url,
+        selected_account_id: Some(selected_account_id),
     })
 }
 
@@ -858,7 +867,7 @@ async fn resolve_codex_upstream(
     upstream: &UpstreamRuntime,
     upstream_url: &str,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
-    let (_, record) = state
+    let (selected_account_id, record) = state
         .codex_accounts
         .resolve_account_record(upstream.codex_account_id.as_deref())
         .await
@@ -897,6 +906,7 @@ async fn resolve_codex_upstream(
         },
         extra_headers,
         proxy_url,
+        selected_account_id: Some(selected_account_id),
     })
 }
 

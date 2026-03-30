@@ -21,6 +21,14 @@ export function formatDashboardTimestamp(tsMs: number, formatter: Intl.DateTimeF
   return Number.isNaN(date.getTime()) ? "—" : formatter.format(date);
 }
 
+export function formatDashboardProviderLabel(
+  upstreamId: string,
+  provider: string,
+  accountId: string | null | undefined,
+) {
+  return [upstreamId, provider, accountId].filter(Boolean).join(" · ");
+}
+
 // 使用逗号作为千位分隔符，便于阅读
 export function formatInteger(value: number) {
   return Math.round(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");

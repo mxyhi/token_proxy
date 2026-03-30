@@ -10,11 +10,17 @@ import { m } from "@/paraglide/messages.js";
 vi.mock("@/components/data-table", () => ({
   DataTable: ({
     items,
+    onSelectItem,
   }: {
-    items: Array<{ upstreamId: string }>;
+    items: Array<{ id: number; upstreamId: string; provider: string; accountId?: string | null }>;
+    onSelectItem?: (item: { id: number; upstreamId: string; provider: string; accountId?: string | null }) => void;
   }) => (
     <div data-testid="logs-items">
-      {items.map((item) => item.upstreamId).join(",")}
+      {items.map((item) => (
+        <button key={item.id} type="button" onClick={() => onSelectItem?.(item)}>
+          {[item.upstreamId, item.provider, item.accountId].filter(Boolean).join(" · ")}
+        </button>
+      ))}
     </div>
   ),
 }));
@@ -32,10 +38,12 @@ const {
   readDashboardSnapshotMock,
   readRequestDetailCaptureMock,
   setRequestDetailCaptureMock,
+  readRequestLogDetailMock,
 } = vi.hoisted(() => ({
   readDashboardSnapshotMock: vi.fn(),
   readRequestDetailCaptureMock: vi.fn(),
   setRequestDetailCaptureMock: vi.fn(),
+  readRequestLogDetailMock: vi.fn(),
 }));
 
 vi.mock("@/features/dashboard/api", () => ({
@@ -45,7 +53,7 @@ vi.mock("@/features/dashboard/api", () => ({
 vi.mock("@/features/logs/api", () => ({
   readRequestDetailCapture: readRequestDetailCaptureMock,
   setRequestDetailCapture: setRequestDetailCaptureMock,
-  readRequestLogDetail: vi.fn(),
+  readRequestLogDetail: readRequestLogDetailMock,
 }));
 
 function renderPanel() {
@@ -61,6 +69,7 @@ describe("logs/LogsPanel", () => {
     readDashboardSnapshotMock.mockReset();
     readRequestDetailCaptureMock.mockReset();
     setRequestDetailCaptureMock.mockReset();
+    readRequestLogDetailMock.mockReset();
 
     readRequestDetailCaptureMock.mockResolvedValue({
       enabled: false,
@@ -69,6 +78,28 @@ describe("logs/LogsPanel", () => {
     setRequestDetailCaptureMock.mockResolvedValue({
       enabled: false,
       expiresAtMs: null,
+    });
+    readRequestLogDetailMock.mockResolvedValue({
+      id: 1,
+      tsMs: 100,
+      path: "/v1/chat/completions",
+      provider: "codex",
+      upstreamId: "alpha",
+      accountId: "codex-a.json",
+      model: "gpt-5",
+      mappedModel: null,
+      stream: false,
+      status: 200,
+      inputTokens: 10,
+      outputTokens: 20,
+      totalTokens: 30,
+      cachedTokens: 5,
+      latencyMs: 30,
+      upstreamRequestId: "req-1",
+      usageJson: null,
+      requestHeaders: null,
+      requestBody: null,
+      responseError: null,
     });
 
     readDashboardSnapshotMock.mockImplementation(
@@ -129,6 +160,7 @@ describe("logs/LogsPanel", () => {
                 path: "/v1/chat/completions",
                 provider: "openai",
                 upstreamId: "alpha",
+                accountId: null,
                 model: "gpt-5",
                 mappedModel: null,
                 stream: false,
@@ -159,12 +191,13 @@ describe("logs/LogsPanel", () => {
             {
               id: 1,
               tsMs: 100,
-              path: "/v1/chat/completions",
-              provider: "openai",
-              upstreamId: "alpha",
-              model: "gpt-5",
-              mappedModel: null,
-              stream: false,
+                path: "/v1/chat/completions",
+                provider: "openai",
+                upstreamId: "alpha",
+                accountId: null,
+                model: "gpt-5",
+                mappedModel: null,
+                stream: false,
               status: 200,
               totalTokens: 30,
               cachedTokens: 5,
@@ -174,12 +207,13 @@ describe("logs/LogsPanel", () => {
             {
               id: 2,
               tsMs: 120,
-              path: "/v1/messages",
-              provider: "anthropic",
-              upstreamId: "beta",
-              model: "claude",
-              mappedModel: null,
-              stream: false,
+                path: "/v1/messages",
+                provider: "anthropic",
+                upstreamId: "beta",
+                accountId: null,
+                model: "claude",
+                mappedModel: null,
+                stream: false,
               status: 500,
               totalTokens: 7,
               cachedTokens: 1,
@@ -198,7 +232,8 @@ describe("logs/LogsPanel", () => {
     renderPanel();
 
     await waitFor(() => {
-      expect(screen.getByTestId("logs-items")).toHaveTextContent("alpha,beta");
+      expect(screen.getByTestId("logs-items")).toHaveTextContent("alpha · openai");
+      expect(screen.getByTestId("logs-items")).toHaveTextContent("beta · anthropic");
     });
 
     await user.click(
@@ -218,5 +253,24 @@ describe("logs/LogsPanel", () => {
         upstreamId: "alpha",
       }
     );
+  });
+
+  it("shows account id in the provider field inside request detail", async () => {
+    const user = userEvent.setup();
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "alpha · openai" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "alpha · openai" }));
+
+    await waitFor(() => {
+      expect(readRequestLogDetailMock).toHaveBeenCalledWith(1);
+    });
+
+    const providerValues = await screen.findAllByText("alpha · codex · codex-a.json");
+    expect(providerValues.length).toBeGreaterThan(0);
   });
 });

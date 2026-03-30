@@ -144,6 +144,7 @@ fn test_log_context() -> LogContext {
         path: "/v1/responses".to_string(),
         provider: "codex".to_string(),
         upstream_id: "test".to_string(),
+        account_id: None,
         model: Some("gpt-5-codex".to_string()),
         mapped_model: None,
         stream: true,

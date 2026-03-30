@@ -1,9 +1,6 @@
 import { useCallback, useMemo, useState } from "react";
 
-import { HelpCircle } from "lucide-react";
-
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   createDefaultColumnVisibility,
   mergeProviderOptions,
@@ -219,19 +216,6 @@ export function UpstreamsCard({
 
   return (
     <Card data-slot="upstreams-card">
-      <CardHeader>
-        <CardTitle className="inline-flex items-center gap-1">
-          {m.upstreams_title()}
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <HelpCircle className="size-4 text-muted-foreground cursor-help" />
-            </TooltipTrigger>
-            <TooltipContent side="right" className="max-w-xs">
-              {m.upstreams_desc()}
-            </TooltipContent>
-          </Tooltip>
-        </CardTitle>
-      </CardHeader>
       <CardContent className="space-y-4">
         <UpstreamsToolbar
           apiKeyVisible={apiKeyVisible}

@@ -88,7 +88,8 @@ type ProvidersToolbarProps = {
   onImportKiroIde: () => Promise<void>;
   onImportKiroKam: () => Promise<void>;
   onCodexLogin: () => Promise<void>;
-  onImportCodex: () => Promise<void>;
+  onImportCodexFile: () => Promise<void>;
+  onImportCodexDirectory: () => Promise<void>;
   refreshing: boolean;
   kiroActionBusy: boolean;
   codexActionBusy: boolean;
@@ -204,7 +205,8 @@ function ProvidersToolbar({
   onImportKiroIde,
   onImportKiroKam,
   onCodexLogin,
-  onImportCodex,
+  onImportCodexFile,
+  onImportCodexDirectory,
   refreshing,
   kiroActionBusy,
   codexActionBusy,
@@ -254,7 +256,8 @@ function ProvidersToolbar({
         onImportKiroIde={onImportKiroIde}
         onImportKiroKam={onImportKiroKam}
         onCodexLogin={onCodexLogin}
-        onImportCodex={onImportCodex}
+        onImportCodexFile={onImportCodexFile}
+        onImportCodexDirectory={onImportCodexDirectory}
         kiroActionBusy={kiroActionBusy}
         codexActionBusy={codexActionBusy}
         kiroStatusText={kiroStatusText}
@@ -307,7 +310,8 @@ function ProvidersAddAccountDialog({
   onImportKiroIde,
   onImportKiroKam,
   onCodexLogin,
-  onImportCodex,
+  onImportCodexFile,
+  onImportCodexDirectory,
   kiroActionBusy,
   codexActionBusy,
   kiroStatusText,
@@ -322,7 +326,8 @@ function ProvidersAddAccountDialog({
   onImportKiroIde: () => Promise<void>;
   onImportKiroKam: () => Promise<void>;
   onCodexLogin: () => Promise<void>;
-  onImportCodex: () => Promise<void>;
+  onImportCodexFile: () => Promise<void>;
+  onImportCodexDirectory: () => Promise<void>;
   kiroActionBusy: boolean;
   codexActionBusy: boolean;
   kiroStatusText: string;
@@ -461,12 +466,24 @@ function ProvidersAddAccountDialog({
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    void onImportCodex();
+                    void onImportCodexFile();
                   }}
                   disabled={codexActionBusy}
-                  data-slot="providers-add-codex-import"
+                  data-slot="providers-add-codex-import-file"
                 >
-                  {m.codex_import_button()}
+                  {m.codex_import_file_button()}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    void onImportCodexDirectory();
+                  }}
+                  disabled={codexActionBusy}
+                  data-slot="providers-add-codex-import-directory"
+                >
+                  {m.codex_import_directory_button()}
                 </Button>
               </div>
               {codexStatusText ? (
@@ -531,7 +548,8 @@ function buildToolbarProps(
   onImportKiroIde: () => Promise<void>,
   onImportKiroKam: () => Promise<void>,
   onCodexLogin: () => Promise<void>,
-  onImportCodex: () => Promise<void>,
+  onImportCodexFile: () => Promise<void>,
+  onImportCodexDirectory: () => Promise<void>,
   onRefresh: () => void,
   refreshing: boolean,
   kiroActionBusy: boolean,
@@ -555,7 +573,8 @@ function buildToolbarProps(
     onImportKiroIde,
     onImportKiroKam,
     onCodexLogin,
-    onImportCodex,
+    onImportCodexFile,
+    onImportCodexDirectory,
     onRefresh,
     refreshing,
     kiroActionBusy,
@@ -959,11 +978,31 @@ function useProvidersPanelState() {
   const loginCodex = useCallback(async () => {
     await codexLogin.beginLogin();
   }, [codexLogin]);
-  const importCodex = useCallback(async () => {
+  const importCodexFile = useCallback(async () => {
     const selection = await open({
       directory: false,
       multiple: false,
       filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (typeof selection !== "string" || !selection.trim()) {
+      return;
+    }
+    setCodexImporting(true);
+    try {
+      await codexAccounts.importFile(selection);
+      await codexQuotas.refresh();
+      await providerAccounts.refresh();
+      toast.success(m.codex_import_success());
+    } catch (error) {
+      toast.error(parseError(error));
+    } finally {
+      setCodexImporting(false);
+    }
+  }, [codexAccounts, codexQuotas, providerAccounts]);
+  const importCodexDirectory = useCallback(async () => {
+    const selection = await open({
+      directory: true,
+      multiple: false,
     });
     if (typeof selection !== "string" || !selection.trim()) {
       return;
@@ -1011,7 +1050,8 @@ function useProvidersPanelState() {
     importKiroIde,
     importKiroKam,
     loginCodex,
-    importCodex,
+    importCodexFile,
+    importCodexDirectory,
     refreshAll,
     refreshBusy,
     kiroActionBusy,

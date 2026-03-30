@@ -38,6 +38,7 @@ pub(crate) struct LogEntry {
     pub(crate) path: String,
     pub(crate) provider: String,
     pub(crate) upstream_id: String,
+    pub(crate) account_id: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) mapped_model: Option<String>,
     pub(crate) stream: bool,
@@ -57,6 +58,7 @@ pub(crate) struct LogContext {
     pub(crate) path: String,
     pub(crate) provider: String,
     pub(crate) upstream_id: String,
+    pub(crate) account_id: Option<String>,
     pub(crate) model: Option<String>,
     pub(crate) mapped_model: Option<String>,
     pub(crate) stream: bool,
@@ -106,6 +108,7 @@ pub(crate) fn build_log_entry(
         path: context.path.clone(),
         provider: context.provider.clone(),
         upstream_id: context.upstream_id.clone(),
+        account_id: context.account_id.clone(),
         model: context.model.clone(),
         mapped_model: context.mapped_model.clone(),
         stream: context.stream,
@@ -145,6 +148,7 @@ INSERT INTO request_logs (
   path,
   provider,
   upstream_id,
+  account_id,
   model,
   mapped_model,
   stream,
@@ -159,13 +163,14 @@ INSERT INTO request_logs (
   request_body,
   response_error,
   latency_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 "#,
     )
     .bind(to_i64_u128(entry.ts_ms))
     .bind(entry.path.as_str())
     .bind(entry.provider.as_str())
     .bind(entry.upstream_id.as_str())
+    .bind(entry.account_id.as_deref())
     .bind(entry.model.as_deref())
     .bind(entry.mapped_model.as_deref())
     .bind(entry.stream)

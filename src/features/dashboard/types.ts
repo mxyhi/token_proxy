@@ -46,6 +46,7 @@ export type DashboardRequestItem = {
   path: string;
   provider: string;
   upstreamId: string;
+  accountId?: string | null;
   model: string | null;
   mappedModel: string | null;
   stream: boolean;

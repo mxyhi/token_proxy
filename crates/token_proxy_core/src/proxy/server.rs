@@ -690,6 +690,7 @@ fn log_request_error(
         path: path.to_string(),
         provider: provider.to_string(),
         upstream_id: upstream_id.to_string(),
+        account_id: None,
         model: None,
         mapped_model: None,
         stream: false,

@@ -627,15 +627,44 @@ describe("providers/ProvidersPanel", () => {
     await openAddAccountDialog(user);
     await switchAddProviderToCodex(user);
 
-    const importButton = document.querySelector('[data-slot="providers-add-codex-import"]');
+    const importButton = document.querySelector('[data-slot="providers-add-codex-import-file"]');
     if (!(importButton instanceof HTMLButtonElement)) {
-      throw new Error("Missing codex import button");
+      throw new Error("Missing codex import file button");
     }
 
     await user.click(importButton);
 
     expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith({
+      directory: false,
+      multiple: false,
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
     expect(providerMocks.importCodexFile).toHaveBeenCalledWith("/tmp/codex-account.json");
+    expect(providerMocks.refreshCodexQuotas).toHaveBeenCalledTimes(1);
+  });
+
+  it("imports codex account directory from toolbar action", async () => {
+    const user = userEvent.setup();
+    vi.mocked(open).mockResolvedValueOnce("/tmp/codex-auth");
+
+    render(<ProvidersPanel />);
+    await openAddAccountDialog(user);
+    await switchAddProviderToCodex(user);
+
+    const importButton = document.querySelector('[data-slot="providers-add-codex-import-directory"]');
+    if (!(importButton instanceof HTMLButtonElement)) {
+      throw new Error("Missing codex import directory button");
+    }
+
+    await user.click(importButton);
+
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+    });
+    expect(providerMocks.importCodexFile).toHaveBeenCalledWith("/tmp/codex-auth");
     expect(providerMocks.refreshCodexQuotas).toHaveBeenCalledTimes(1);
   });
 
@@ -674,26 +703,39 @@ describe("providers/ProvidersPanel", () => {
   it("keeps codex import enabled while unrelated kiro data is loading", async () => {
     const user = userEvent.setup();
     providerMocks.kiroQuotasLoading = true;
-    vi.mocked(open).mockResolvedValueOnce("/tmp/codex-account.json");
+    vi.mocked(open)
+      .mockResolvedValueOnce("/tmp/codex-account.json")
+      .mockResolvedValueOnce("/tmp/codex-auth");
 
     render(<ProvidersPanel />);
     await openAddAccountDialog(user);
     await switchAddProviderToCodex(user);
 
-    const importButton = document.querySelector('[data-slot="providers-add-codex-import"]');
-    if (!(importButton instanceof HTMLButtonElement)) {
-      throw new Error("Missing codex import button");
+    const importFileButton = document.querySelector('[data-slot="providers-add-codex-import-file"]');
+    if (!(importFileButton instanceof HTMLButtonElement)) {
+      throw new Error("Missing codex import file button");
+    }
+    const importDirectoryButton = document.querySelector('[data-slot="providers-add-codex-import-directory"]');
+    if (!(importDirectoryButton instanceof HTMLButtonElement)) {
+      throw new Error("Missing codex import directory button");
     }
 
-    expect(importButton.disabled).toBe(false);
+    expect(importFileButton.disabled).toBe(false);
+    expect(importDirectoryButton.disabled).toBe(false);
 
-    await user.click(importButton);
+    await user.click(importFileButton);
+    await user.click(importDirectoryButton);
 
-    expect(open).toHaveBeenCalledWith({
+    expect(open).toHaveBeenNthCalledWith(1, {
       directory: false,
       multiple: false,
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
-    expect(providerMocks.importCodexFile).toHaveBeenCalledWith("/tmp/codex-account.json");
+    expect(open).toHaveBeenNthCalledWith(2, {
+      directory: true,
+      multiple: false,
+    });
+    expect(providerMocks.importCodexFile).toHaveBeenNthCalledWith(1, "/tmp/codex-account.json");
+    expect(providerMocks.importCodexFile).toHaveBeenNthCalledWith(2, "/tmp/codex-auth");
   });
 });

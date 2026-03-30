@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   createDashboardTimeFormatter,
+  formatDashboardProviderLabel,
   formatDashboardTimestamp,
   formatInteger,
 } from "@/features/dashboard/format";
@@ -103,13 +104,14 @@ function providerColumn(): ColumnDef<DashboardRequestItem> {
     id: "provider",
     header: m.dashboard_table_provider(),
     cell: ({ row }) => {
-      const full = `${row.original.upstreamId} · ${row.original.provider}`;
+      const full = formatDashboardProviderLabel(
+        row.original.upstreamId,
+        row.original.provider,
+        row.original.accountId,
+      );
       return (
         <CellTooltip content={full}>
-          <span className="block truncate text-xs text-muted-foreground">
-            {row.original.upstreamId}
-            <span className="text-muted-foreground/70"> · {row.original.provider}</span>
-          </span>
+          <span className="block truncate text-xs text-muted-foreground">{full}</span>
         </CellTooltip>
       );
     },

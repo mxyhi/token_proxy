@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
   path TEXT NOT NULL,
   provider TEXT NOT NULL,
   upstream_id TEXT NOT NULL,
+  account_id TEXT,
   model TEXT,
   mapped_model TEXT,
   stream INTEGER NOT NULL,
@@ -220,6 +221,13 @@ async fn ensure_request_logs_columns(pool: &SqlitePool) -> Result<(), String> {
             .execute(pool)
             .await
             .map_err(|err| format!("Failed to add response_error column: {err}"))?;
+    }
+
+    if !columns.contains("account_id") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN account_id TEXT;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add account_id column: {err}"))?;
     }
 
     Ok(())

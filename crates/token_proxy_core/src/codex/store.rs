@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -55,23 +55,50 @@ impl CodexAccountStore {
 
     pub async fn import_file(&self, path: PathBuf) -> Result<Vec<CodexAccountSummary>, String> {
         if path.as_os_str().is_empty() {
-            return Err("File path is required.".to_string());
+            return Err("Import path is required.".to_string());
         }
         if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            return Err("Selected file not found.".to_string());
+            return Err("Selected import path not found.".to_string());
         }
-        let contents = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|err| format!("Failed to read JSON file: {err}"))?;
-        let records = parse_import_records(&contents)?;
         let mut imported = Vec::new();
-        for record in records {
-            if let Ok(summary) = self.save_new_account(record).await {
-                imported.push(summary);
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .map_err(|err| format!("Failed to read import path metadata: {err}"))?;
+        let candidate_files = if metadata.is_dir() {
+            collect_json_files(&path).await?
+        } else {
+            vec![path.clone()]
+        };
+
+        for file_path in candidate_files {
+            let contents = match tokio::fs::read_to_string(&file_path).await {
+                Ok(contents) => contents,
+                Err(err) if metadata.is_dir() => {
+                    let _ = err;
+                    continue;
+                }
+                Err(err) => return Err(format!("Failed to read JSON file: {err}")),
+            };
+            let records = match parse_import_records(&contents) {
+                Ok(records) => records,
+                Err(err) if metadata.is_dir() => {
+                    let _ = err;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+            for record in records {
+                if let Ok(summary) = self.save_new_account(record).await {
+                    imported.push(summary);
+                }
             }
         }
         if imported.is_empty() {
-            return Err("No valid Codex accounts found in JSON file.".to_string());
+            return Err(if metadata.is_dir() {
+                "No valid Codex accounts found in selected directory.".to_string()
+            } else {
+                "No valid Codex accounts found in JSON file.".to_string()
+            });
         }
         Ok(imported)
     }
@@ -144,6 +171,17 @@ impl CodexAccountStore {
         mut record: CodexTokenRecord,
     ) -> Result<CodexAccountSummary, String> {
         fill_record_from_jwt(&mut record);
+        if let Some((existing_local_account_id, existing_record)) =
+            self.find_existing_import_target(&record).await?
+        {
+            // Re-importing the same real Codex account should refresh credentials in place
+            // instead of creating duplicate local entries. Keep app-local settings.
+            record.auto_refresh_enabled = existing_record.auto_refresh_enabled;
+            if record.proxy_url.is_none() {
+                record.proxy_url = existing_record.proxy_url.clone();
+            }
+            return self.save_record(existing_local_account_id, record).await;
+        }
         let id_part_source = record
             .email
             .as_deref()
@@ -275,6 +313,33 @@ impl CodexAccountStore {
         Err(last_error.unwrap_or_else(|| "Codex account is not configured.".to_string()))
     }
 
+    pub(crate) async fn resolve_next_account_record(
+        &self,
+        excluded_account_ids: &[String],
+    ) -> Result<Option<(String, CodexTokenRecord)>, String> {
+        self.refresh_cache().await?;
+        let account_ids = {
+            let cache = self.cache.read().await;
+            let mut account_ids = cache.keys().cloned().collect::<Vec<_>>();
+            account_ids.sort();
+            account_ids
+        };
+
+        for account_id in account_ids {
+            if excluded_account_ids.iter().any(|value| value == &account_id) {
+                continue;
+            }
+            match self.get_account_record(&account_id).await {
+                Ok(record) if !matches!(record.status(), CodexAccountStatus::Expired) => {
+                    return Ok(Some((account_id, record)));
+                }
+                Ok(_) | Err(_) => continue,
+            }
+        }
+
+        Ok(None)
+    }
+
     pub(crate) async fn effective_proxy_url(&self, proxy_url: Option<&str>) -> Option<String> {
         match normalize_proxy_url(proxy_url) {
             Ok(Some(proxy_url)) => Some(proxy_url),
@@ -306,6 +371,89 @@ impl CodexAccountStore {
         }
     }
 
+    async fn find_existing_import_target(
+        &self,
+        imported: &CodexTokenRecord,
+    ) -> Result<Option<(String, CodexTokenRecord)>, String> {
+        self.refresh_cache().await?;
+        let imported_account_id = normalize_optional_identity(imported.account_id.as_deref());
+        let imported_email = normalize_optional_identity(imported.email.as_deref());
+        let cache = self.cache.read().await;
+
+        if let Some(account_id) = imported_account_id {
+            if let Some((local_account_id, existing_record)) = cache
+                .iter()
+                .find(|(_, existing_record)| {
+                    normalize_optional_identity(existing_record.account_id.as_deref())
+                        .as_deref()
+                        == Some(account_id.as_str())
+                })
+            {
+                return Ok(Some((local_account_id.clone(), existing_record.clone())));
+            }
+        }
+
+        if let Some(email) = imported_email {
+            if let Some((local_account_id, existing_record)) = cache
+                .iter()
+                .find(|(_, existing_record)| {
+                    normalize_optional_identity(existing_record.email.as_deref()).as_deref()
+                        == Some(email.as_str())
+                })
+            {
+                return Ok(Some((local_account_id.clone(), existing_record.clone())));
+            }
+        }
+
+        Ok(None)
+    }
+
+}
+
+fn normalize_optional_identity(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_ascii_lowercase())
+}
+
+async fn collect_json_files(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut directories = vec![root.to_path_buf()];
+    let mut files = Vec::new();
+
+    // Recursive async traversal keeps directory import compatible with nested auth mirrors.
+    while let Some(directory) = directories.pop() {
+        let mut entries = tokio::fs::read_dir(&directory)
+            .await
+            .map_err(|err| format!("Failed to read import directory: {err}"))?;
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|err| format!("Failed to read import directory entry: {err}"))?
+        {
+            let entry_path = entry.path();
+            let entry_type = entry
+                .file_type()
+                .await
+                .map_err(|err| format!("Failed to inspect import path: {err}"))?;
+            if entry_type.is_dir() {
+                directories.push(entry_path);
+                continue;
+            }
+            if !entry_type.is_file() {
+                continue;
+            }
+            let Some(extension) = entry_path.extension().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if extension.eq_ignore_ascii_case("json") {
+                files.push(entry_path);
+            }
+        }
+    }
+
+    files.sort();
+    Ok(files)
 }
 
 fn fill_record_from_jwt(record: &mut CodexTokenRecord) {
@@ -822,6 +970,142 @@ mod tests {
                 .await
                 .expect("record should exist");
             assert_eq!(record.refresh_token, "");
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_recursively_imports_directory_json_records() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let import_dir = data_dir.join("codex-imports");
+            let nested_dir = import_dir.join("nested");
+            tokio::fs::create_dir_all(&nested_dir)
+                .await
+                .expect("create import dir");
+            tokio::fs::write(
+                import_dir.join("codex-root.json"),
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "root-access-token",
+                    "refresh_token": "root-refresh-token",
+                    "account_id": "acct-root-dir",
+                    "email": "root@example.com",
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize root json"),
+            )
+            .await
+            .expect("write root json");
+            tokio::fs::write(
+                nested_dir.join("codex-nested.json"),
+                serde_json::to_string_pretty(&json!({
+                    "access_token": "nested-access-token",
+                    "refresh_token": "nested-refresh-token",
+                    "id_token": build_id_token("nested@example.com", "acct-nested-dir"),
+                    "expires_at": future_rfc3339(6),
+                }))
+                .expect("serialize nested json"),
+            )
+            .await
+            .expect("write nested json");
+            tokio::fs::write(import_dir.join("README.txt"), "ignore me")
+                .await
+                .expect("write non json file");
+
+            let imported = store
+                .import_file(import_dir)
+                .await
+                .expect("directory import should succeed");
+
+            assert_eq!(imported.len(), 2);
+            let emails = imported
+                .iter()
+                .filter_map(|item| item.email.clone())
+                .collect::<Vec<_>>();
+            assert!(emails.iter().any(|value| value == "root@example.com"));
+            assert!(emails.iter().any(|value| value == "nested@example.com"));
+
+            let accounts = store
+                .list_accounts()
+                .await
+                .expect("imported accounts should be listed");
+            assert_eq!(accounts.len(), 2);
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_overwrites_existing_record_for_same_real_account() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let first_path = data_dir.join("codex-first.json");
+            tokio::fs::write(
+                &first_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "first-access-token",
+                    "refresh_token": "first-refresh-token",
+                    "account_id": "acct-overwrite",
+                    "email": "overwrite@example.com",
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize first json"),
+            )
+            .await
+            .expect("write first json");
+
+            let first_imported = store
+                .import_file(first_path)
+                .await
+                .expect("first import should succeed");
+            let first_local_account_id = first_imported[0].account_id.clone();
+            store
+                .set_proxy_url(&first_local_account_id, Some("http://127.0.0.1:7890"))
+                .await
+                .expect("set proxy url should succeed");
+
+            let second_path = data_dir.join("codex-second.json");
+            tokio::fs::write(
+                &second_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "second-access-token",
+                    "refresh_token": "second-refresh-token",
+                    "account_id": "acct-overwrite",
+                    "email": "overwrite@example.com",
+                    "expired": future_rfc3339(12),
+                }))
+                .expect("serialize second json"),
+            )
+            .await
+            .expect("write second json");
+
+            let second_imported = store
+                .import_file(second_path)
+                .await
+                .expect("second import should succeed");
+
+            assert_eq!(second_imported.len(), 1);
+            assert_eq!(second_imported[0].account_id, first_local_account_id);
+
+            let accounts = store
+                .list_accounts()
+                .await
+                .expect("list accounts should succeed");
+            assert_eq!(accounts.len(), 1);
+            assert_eq!(accounts[0].account_id, first_local_account_id);
+            assert_eq!(accounts[0].proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
+
+            let record = store
+                .get_account_record(&first_local_account_id)
+                .await
+                .expect("record should exist");
+            assert_eq!(record.access_token, "second-access-token");
+            assert_eq!(record.refresh_token, "second-refresh-token");
+            assert_eq!(record.proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
 
             let _ = std::fs::remove_dir_all(data_dir);
         });

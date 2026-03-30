@@ -11,6 +11,7 @@ pub struct RequestLogDetail {
     pub path: String,
     pub provider: String,
     pub upstream_id: String,
+    pub account_id: Option<String>,
     pub model: Option<String>,
     pub mapped_model: Option<String>,
     pub stream: bool,
@@ -40,6 +41,7 @@ SELECT
   path,
   provider,
   upstream_id,
+  account_id,
   model,
   mapped_model,
   stream,
@@ -74,6 +76,7 @@ LIMIT 1;
         path: row.try_get::<String, _>("path").unwrap_or_default(),
         provider: row.try_get::<String, _>("provider").unwrap_or_default(),
         upstream_id: row.try_get::<String, _>("upstream_id").unwrap_or_default(),
+        account_id: row.try_get::<Option<String>, _>("account_id").ok().flatten(),
         model: row.try_get::<Option<String>, _>("model").ok().flatten(),
         mapped_model: row
             .try_get::<Option<String>, _>("mapped_model")
@@ -113,4 +116,47 @@ LIMIT 1;
             .ok()
             .flatten(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn read_request_log_detail_reads_account_id() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite");
+
+        crate::proxy::sqlite::init_schema(&pool)
+            .await
+            .expect("init schema");
+
+        sqlx::query(
+            r#"
+            INSERT INTO request_logs (
+              ts_ms,
+              path,
+              provider,
+              upstream_id,
+              account_id,
+              stream,
+              status,
+              latency_ms
+            ) VALUES (123, '/responses', 'codex', 'codex-default', 'codex-a.json', 0, 200, 30);
+            "#,
+        )
+        .execute(&pool)
+        .await
+        .expect("insert request log");
+
+        let detail = read_request_log_detail(&pool, 1)
+            .await
+            .expect("read request log detail");
+
+        assert_eq!(detail.account_id.as_deref(), Some("codex-a.json"));
+    }
 }

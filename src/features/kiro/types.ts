@@ -1,4 +1,4 @@
-export type KiroAccountStatus = "active" | "expired";
+export type KiroAccountStatus = "active" | "disabled" | "expired";
 
 export type KiroAccountSummary = {
   account_id: string;

@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { ProvidersPanel } from "@/features/providers/ProvidersPanel";
+import type { ProviderAccountPageItem } from "@/features/providers/types";
 import { m } from "@/paraglide/messages.js";
 
 const providerMocks = vi.hoisted(() => {
@@ -14,6 +15,10 @@ const providerMocks = vi.hoisted(() => {
   const refreshKiroAccounts = vi.fn(async () => undefined);
   const refreshCodexAccounts = vi.fn(async () => undefined);
   const refreshCodexAccount = vi.fn(async () => undefined);
+  const refreshKiroQuotaCache = vi.fn(async () => undefined);
+  const refreshCodexQuotaCache = vi.fn(async () => undefined);
+  const refreshKiroQuotaNow = vi.fn(async () => undefined);
+  const refreshCodexQuotaNow = vi.fn(async () => undefined);
   const setCodexAutoRefresh = vi.fn(async () => ({
     account_id: "codex-1",
     email: "bob@example.com",
@@ -34,6 +39,15 @@ const providerMocks = vi.hoisted(() => {
     status: "active" as const,
     proxy_url: "http://127.0.0.1:7890",
   }));
+  const setKiroStatus = vi.fn(async () => ({
+    account_id: "kiro-1",
+    provider: "kiro" as const,
+    auth_method: "google",
+    email: "alice@example.com",
+    expires_at: "2026-05-01T00:00:00Z",
+    status: "disabled" as const,
+    proxy_url: "http://127.0.0.1:7890",
+  }));
   const setCodexProxyUrl = vi.fn(async () => ({
     account_id: "codex-1",
     email: "bob@example.com",
@@ -42,11 +56,46 @@ const providerMocks = vi.hoisted(() => {
     auto_refresh_enabled: true,
     proxy_url: "socks5://127.0.0.1:1080",
   }));
+  const setCodexStatus = vi.fn(async () => ({
+    account_id: "codex-1",
+    email: "bob@example.com",
+    expires_at: "2026-04-01T00:00:00Z",
+    status: "disabled" as const,
+    auto_refresh_enabled: true,
+    proxy_url: "",
+  }));
   const beginKiroLogin = vi.fn();
   const beginCodexLogin = vi.fn();
-  const importKiroIde = vi.fn(async () => undefined);
-  const importKiroKam = vi.fn(async () => undefined);
-  const importCodexFile = vi.fn(async () => undefined);
+  const importKiroIde = vi.fn(async () => [
+    {
+      account_id: "kiro-1",
+      provider: "kiro" as const,
+      auth_method: "google",
+      email: "alice@example.com",
+      expires_at: "2026-05-01T00:00:00Z",
+      status: "active" as const,
+      proxy_url: "http://127.0.0.1:7890",
+    },
+  ]);
+  const importKiroKam = vi.fn(async () => [
+    {
+      account_id: "kiro-1",
+      provider: "kiro" as const,
+      auth_method: "google",
+      email: "alice@example.com",
+      expires_at: "2026-05-01T00:00:00Z",
+      status: "active" as const,
+      proxy_url: "http://127.0.0.1:7890",
+    },
+  ]);
+  const importCodexFile = vi.fn(async () => [
+    {
+      account_id: "codex-1",
+      email: "bob@example.com",
+      expires_at: "2026-04-01T00:00:00Z",
+      status: "expired" as const,
+    },
+  ]);
   const deleteProviderAccounts = vi.fn(async () => undefined);
   const listProviderAccountsPage = vi.fn(
     async ({
@@ -59,10 +108,10 @@ const providerMocks = vi.hoisted(() => {
       page?: number;
       pageSize?: number;
       providerKind?: "kiro" | "codex";
-      status?: "active" | "expired";
+      status?: "active" | "disabled" | "expired" | "cooling_down";
       search?: string;
     }) => {
-      const rows = [
+      const rows: ProviderAccountPageItem[] = [
         {
           provider_kind: "kiro" as const,
           account_id: "kiro-1",
@@ -72,6 +121,21 @@ const providerMocks = vi.hoisted(() => {
           auth_method: "google",
           provider_name: "kiro",
           proxy_url: "http://127.0.0.1:7890",
+          quota: {
+            plan_type: "Kiro Cached Plan",
+            error: null,
+            checked_at: "2026-04-01T00:00:00Z",
+            items: [
+              {
+                name: "Requests",
+                percentage: 25,
+                used: 25,
+                limit: 100,
+                reset_at: "2026-04-15T00:00:00Z",
+                is_trial: false,
+              },
+            ],
+          },
         },
         {
           provider_kind: "codex" as const,
@@ -83,6 +147,21 @@ const providerMocks = vi.hoisted(() => {
           provider_name: null,
           auto_refresh_enabled: true,
           proxy_url: "",
+          quota: {
+            plan_type: "Codex Cached Plan",
+            error: null,
+            checked_at: "2026-04-01T00:00:00Z",
+            items: [
+              {
+                name: "codex-weekly",
+                percentage: 50,
+                used: 50,
+                limit: 100,
+                reset_at: "2026-04-08T00:00:00Z",
+                is_trial: false,
+              },
+            ],
+          },
         },
       ];
       const keyword = search?.trim().toLowerCase() ?? "";
@@ -138,13 +217,19 @@ const providerMocks = vi.hoisted(() => {
     refreshKiroAccounts,
     refreshCodexAccounts,
     refreshCodexAccount,
+    refreshKiroQuotaCache,
+    refreshCodexQuotaCache,
+    refreshKiroQuotaNow,
+    refreshCodexQuotaNow,
     setCodexAutoRefresh,
     refreshKiroQuotas,
     refreshCodexQuotas,
     logoutKiro,
     logoutCodex,
     setKiroProxyUrl,
+    setKiroStatus,
     setCodexProxyUrl,
+    setCodexStatus,
     beginKiroLogin,
     beginCodexLogin,
     importKiroIde,
@@ -192,7 +277,10 @@ vi.mock("@/features/kiro/use-kiro-accounts", () => ({
     logout: providerMocks.logoutKiro,
     importIde: providerMocks.importKiroIde,
     importKam: providerMocks.importKiroKam,
+    refreshQuotaCache: providerMocks.refreshKiroQuotaCache,
+    refreshQuotaNow: providerMocks.refreshKiroQuotaNow,
     setProxyUrl: providerMocks.setKiroProxyUrl,
+    setStatus: providerMocks.setKiroStatus,
   }),
 }));
 
@@ -211,8 +299,11 @@ vi.mock("@/features/codex/use-codex-accounts", () => ({
     error: "",
     refresh: providerMocks.refreshCodexAccounts,
     refreshAccount: providerMocks.refreshCodexAccount,
+    refreshQuotaCache: providerMocks.refreshCodexQuotaCache,
+    refreshQuotaNow: providerMocks.refreshCodexQuotaNow,
     setAutoRefresh: providerMocks.setCodexAutoRefresh,
     setProxyUrl: providerMocks.setCodexProxyUrl,
+    setStatus: providerMocks.setCodexStatus,
     logout: providerMocks.logoutCodex,
     importFile: providerMocks.importCodexFile,
   }),
@@ -360,6 +451,8 @@ describe("providers/ProvidersPanel", () => {
     expect(screen.getByRole("columnheader", { name: m.providers_table_account() })).toBeInTheDocument();
     expect(within(getAccountsTable()).getByText("alice@example.com")).toBeInTheDocument();
     expect(within(getAccountsTable()).getByText("bob@example.com")).toBeInTheDocument();
+    expect(within(getAccountsTable()).getByText("Kiro Cached Plan")).toBeInTheDocument();
+    expect(within(getAccountsTable()).getByText("Codex Cached Plan")).toBeInTheDocument();
   });
 
   it("does not render extra provider group panels below the accounts table", () => {
@@ -460,7 +553,8 @@ describe("providers/ProvidersPanel", () => {
     await user.click(within(refreshConfirmDialog).getByRole("button", { name: m.common_refresh() }));
 
     expect(providerMocks.refreshCodexAccount).toHaveBeenCalledWith("codex-1");
-    expect(providerMocks.refreshCodexQuotas).toHaveBeenCalledTimes(1);
+    expect(providerMocks.refreshCodexQuotaCache).toHaveBeenCalledWith(["codex-1"]);
+    expect(providerMocks.refreshCodexQuotas).not.toHaveBeenCalled();
   });
 
   it("shows toast when codex account refresh fails", async () => {
@@ -503,6 +597,62 @@ describe("providers/ProvidersPanel", () => {
     expect(providerMocks.setCodexAutoRefresh).toHaveBeenCalledWith("codex-1", false);
   });
 
+  it("manually refreshes kiro quota from account dialog", async () => {
+    const user = userEvent.setup();
+    render(<ProvidersPanel />);
+
+    await user.click(
+      within(await findAccountRow("alice@example.com")).getByRole("button", {
+        name: m.providers_account_dialog_title(),
+      })
+    );
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Refresh Quota" }));
+
+    expect(providerMocks.refreshKiroQuotaNow).toHaveBeenCalledWith("kiro-1");
+  });
+
+  it("manually refreshes codex quota from account dialog", async () => {
+    const user = userEvent.setup();
+    render(<ProvidersPanel />);
+
+    await user.click(
+      within(await findAccountRow("bob@example.com")).getByRole("button", {
+        name: m.providers_account_dialog_title(),
+      })
+    );
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Refresh Quota" }));
+
+    expect(providerMocks.refreshCodexQuotaNow).toHaveBeenCalledWith("codex-1");
+  });
+
+  it("disables kiro account from account dialog", async () => {
+    const user = userEvent.setup();
+    render(<ProvidersPanel />);
+
+    await user.click(
+      within(await findAccountRow("alice@example.com")).getByRole("button", {
+        name: m.providers_account_dialog_title(),
+      })
+    );
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Disable" }));
+
+    expect(providerMocks.setKiroStatus).toHaveBeenCalledWith("kiro-1", "disabled");
+  });
+
+  it("disables codex account from account dialog", async () => {
+    const user = userEvent.setup();
+    render(<ProvidersPanel />);
+
+    await user.click(
+      within(await findAccountRow("bob@example.com")).getByRole("button", {
+        name: m.providers_account_dialog_title(),
+      })
+    );
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Disable" }));
+
+    expect(providerMocks.setCodexStatus).toHaveBeenCalledWith("codex-1", "disabled");
+  });
+
   it("refreshes all provider data from toolbar action", async () => {
     const user = userEvent.setup();
     render(<ProvidersPanel />);
@@ -510,9 +660,9 @@ describe("providers/ProvidersPanel", () => {
     await user.click(within(getToolbar()).getByRole("button", { name: m.common_refresh() }));
 
     expect(providerMocks.refreshKiroAccounts).toHaveBeenCalledTimes(1);
-    expect(providerMocks.refreshKiroQuotas).toHaveBeenCalledTimes(1);
     expect(providerMocks.refreshCodexAccounts).toHaveBeenCalledTimes(1);
-    expect(providerMocks.refreshCodexQuotas).toHaveBeenCalledTimes(1);
+    expect(providerMocks.refreshKiroQuotas).not.toHaveBeenCalled();
+    expect(providerMocks.refreshCodexQuotas).not.toHaveBeenCalled();
   });
 
   it("opens add account dialog from toolbar add button", async () => {
@@ -577,7 +727,8 @@ describe("providers/ProvidersPanel", () => {
       multiple: false,
     });
     expect(providerMocks.importKiroIde).toHaveBeenCalledWith("/tmp/kiro");
-    expect(providerMocks.refreshKiroQuotas).toHaveBeenCalledTimes(1);
+    expect(providerMocks.refreshKiroQuotaCache).toHaveBeenCalledWith(["kiro-1"]);
+    expect(providerMocks.refreshKiroQuotas).not.toHaveBeenCalled();
   });
 
   it("imports kiro kam json from toolbar action", async () => {
@@ -600,7 +751,36 @@ describe("providers/ProvidersPanel", () => {
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
     expect(providerMocks.importKiroKam).toHaveBeenCalledWith("/tmp/kiro.json");
-    expect(providerMocks.refreshKiroQuotas).toHaveBeenCalledTimes(1);
+    expect(providerMocks.refreshKiroQuotaCache).toHaveBeenCalledWith(["kiro-1"]);
+    expect(providerMocks.refreshKiroQuotas).not.toHaveBeenCalled();
+  });
+
+  it("shows kiro import success toast before post-import refresh finishes", async () => {
+    const user = userEvent.setup();
+    let resolveRefreshQuota: (() => void) | undefined;
+    providerMocks.refreshKiroQuotaCache.mockReturnValueOnce(
+      new Promise<undefined>((resolve) => {
+        resolveRefreshQuota = () => resolve(undefined);
+      })
+    );
+    vi.mocked(open).mockResolvedValueOnce("/tmp/kiro");
+
+    render(<ProvidersPanel />);
+    await openAddAccountDialog(user);
+
+    const importButton = document.querySelector('[data-slot="providers-add-kiro-import-ide"]');
+    if (!(importButton instanceof HTMLButtonElement)) {
+      throw new Error("Missing kiro import ide button");
+    }
+
+    await user.click(importButton);
+
+    await waitFor(() => {
+      expect(providerMocks.toastSuccess).toHaveBeenCalledWith(m.kiro_import_success());
+    });
+    expect(providerMocks.refreshKiroQuotaCache).toHaveBeenCalledWith(["kiro-1"]);
+
+    resolveRefreshQuota?.();
   });
 
   it("starts codex login from toolbar action", async () => {
@@ -641,7 +821,8 @@ describe("providers/ProvidersPanel", () => {
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
     expect(providerMocks.importCodexFile).toHaveBeenCalledWith("/tmp/codex-account.json");
-    expect(providerMocks.refreshCodexQuotas).toHaveBeenCalledTimes(1);
+    expect(providerMocks.refreshCodexQuotaCache).toHaveBeenCalledWith(["codex-1"]);
+    expect(providerMocks.refreshCodexQuotas).not.toHaveBeenCalled();
   });
 
   it("imports codex account directory from toolbar action", async () => {
@@ -665,7 +846,37 @@ describe("providers/ProvidersPanel", () => {
       multiple: false,
     });
     expect(providerMocks.importCodexFile).toHaveBeenCalledWith("/tmp/codex-auth");
-    expect(providerMocks.refreshCodexQuotas).toHaveBeenCalledTimes(1);
+    expect(providerMocks.refreshCodexQuotaCache).toHaveBeenCalledWith(["codex-1"]);
+    expect(providerMocks.refreshCodexQuotas).not.toHaveBeenCalled();
+  });
+
+  it("shows codex import success toast before post-import refresh finishes", async () => {
+    const user = userEvent.setup();
+    let resolveRefreshQuota: (() => void) | undefined;
+    providerMocks.refreshCodexQuotaCache.mockReturnValueOnce(
+      new Promise<undefined>((resolve) => {
+        resolveRefreshQuota = () => resolve(undefined);
+      })
+    );
+    vi.mocked(open).mockResolvedValueOnce("/tmp/codex-account.json");
+
+    render(<ProvidersPanel />);
+    await openAddAccountDialog(user);
+    await switchAddProviderToCodex(user);
+
+    const importButton = document.querySelector('[data-slot="providers-add-codex-import-file"]');
+    if (!(importButton instanceof HTMLButtonElement)) {
+      throw new Error("Missing codex import file button");
+    }
+
+    await user.click(importButton);
+
+    await waitFor(() => {
+      expect(providerMocks.toastSuccess).toHaveBeenCalledWith(m.codex_import_success());
+    });
+    expect(providerMocks.refreshCodexQuotaCache).toHaveBeenCalledWith(["codex-1"]);
+
+    resolveRefreshQuota?.();
   });
 
   it("optimistically hides selected rows while batch delete is in progress", async () => {
@@ -737,5 +948,55 @@ describe("providers/ProvidersPanel", () => {
     });
     expect(providerMocks.importCodexFile).toHaveBeenNthCalledWith(1, "/tmp/codex-account.json");
     expect(providerMocks.importCodexFile).toHaveBeenNthCalledWith(2, "/tmp/codex-auth");
+  });
+
+  it("renders unified disabled and cooling down account statuses", async () => {
+    providerMocks.listProviderAccountsPage.mockResolvedValueOnce({
+      items: [
+        {
+          provider_kind: "kiro" as const,
+          account_id: "kiro-disabled.json",
+          email: "disabled@example.com",
+          expires_at: "2026-05-01T00:00:00Z",
+          status: "disabled" as const,
+          auth_method: "google",
+          provider_name: "kiro",
+          proxy_url: null,
+          quota: {
+            plan_type: null,
+            error: null,
+            checked_at: null,
+            items: [],
+          },
+        },
+        {
+          provider_kind: "codex" as const,
+          account_id: "codex-cooling.json",
+          email: "cooling@example.com",
+          expires_at: "2026-05-01T00:00:00Z",
+          status: "cooling_down" as const,
+          auth_method: null,
+          provider_name: null,
+          auto_refresh_enabled: true,
+          proxy_url: null,
+          quota: {
+            plan_type: null,
+            error: null,
+            checked_at: null,
+            items: [],
+          },
+        },
+      ],
+      total: 2,
+      page: 1,
+      page_size: 10,
+    });
+
+    render(<ProvidersPanel />);
+
+    expect(await screen.findByText("disabled@example.com")).toBeInTheDocument();
+    expect(screen.getByText("cooling@example.com")).toBeInTheDocument();
+    expect(screen.getByText(m.kiro_account_status_disabled())).toBeInTheDocument();
+    expect(screen.getByText(m.providers_account_status_cooling_down())).toBeInTheDocument();
   });
 });

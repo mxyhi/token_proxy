@@ -32,6 +32,75 @@ pub(super) async fn attempt_kiro_upstream(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> AttemptOutcome {
+    if upstream
+        .kiro_account_id
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        return attempt_kiro_single_account(
+            state,
+            upstream,
+            body,
+            meta,
+            headers,
+            method,
+            inbound_path,
+            response_transform,
+            request_detail,
+        )
+        .await
+        .outcome;
+    }
+
+    let mut excluded_account_ids: Vec<String> = Vec::new();
+    let mut current_upstream = upstream.clone();
+    loop {
+        let result = attempt_kiro_single_account(
+            state,
+            &current_upstream,
+            body,
+            meta,
+            headers,
+            method.clone(),
+            inbound_path,
+            response_transform,
+            request_detail.clone(),
+        )
+        .await;
+        let Some(account_id) = result.selected_account_id.clone() else {
+            return result.outcome;
+        };
+        if !should_failover_kiro_account(&result.outcome) {
+            return result.outcome;
+        }
+
+        mark_failed_kiro_account_before_failover(state, &account_id, &result.outcome);
+        excluded_account_ids.push(account_id);
+        let Some(next_account_id) = resolve_next_kiro_account_id(state, &excluded_account_ids).await
+        else {
+            return into_group_retryable_kiro_outcome(result.outcome);
+        };
+        current_upstream.kiro_account_id = Some(next_account_id);
+    }
+}
+
+struct KiroAttemptResult {
+    outcome: AttemptOutcome,
+    selected_account_id: Option<String>,
+}
+
+async fn attempt_kiro_single_account(
+    state: &ProxyState,
+    upstream: &UpstreamRuntime,
+    body: &ReplayableBody,
+    meta: &RequestMeta,
+    headers: &HeaderMap,
+    method: Method,
+    inbound_path: &str,
+    response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
+) -> KiroAttemptResult {
     let mut context = match prepare_kiro_context(
         state,
         upstream,
@@ -46,9 +115,19 @@ pub(super) async fn attempt_kiro_upstream(
     .await
     {
         Ok(context) => context,
-        Err(outcome) => return outcome,
+        Err(outcome) => {
+            return KiroAttemptResult {
+                outcome,
+                selected_account_id: None,
+            };
+        }
     };
-    run_kiro_endpoints(&mut context).await
+    let selected_account_id = Some(context.account_id.clone());
+    let outcome = run_kiro_endpoints(&mut context).await;
+    KiroAttemptResult {
+        outcome,
+        selected_account_id,
+    }
 }
 
 struct KiroContext<'a> {
@@ -105,9 +184,22 @@ async fn prepare_kiro_context<'a>(
 ) -> Result<KiroContext<'a>, AttemptOutcome> {
     let mapped_meta = super::build_mapped_meta(meta, upstream);
     let request_value = read_request_json(state, body).await?;
+    let ordered_account_ids = if upstream
+        .kiro_account_id
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        None
+    } else {
+        Some(super::ordered_runtime_account_ids(state, "kiro").await)
+    };
     let (account_id, record) = state
         .kiro_accounts
-        .resolve_account_record(upstream.kiro_account_id.as_deref())
+        .resolve_account_record_with_order(
+            upstream.kiro_account_id.as_deref(),
+            ordered_account_ids.as_deref(),
+        )
         .await
         .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
     let is_idc = record.auth_method.trim().eq_ignore_ascii_case("idc");
@@ -413,7 +505,7 @@ async fn send_endpoint_request(
     let response = match send_kiro_request(
         &context.client,
         context.method.clone(),
-        endpoint.url,
+        &endpoint.url,
         &context.record.access_token,
         endpoint.amz_target,
         context.is_idc,
@@ -470,7 +562,7 @@ fn resolve_endpoints(
         .kiro_preferred_endpoint
         .clone()
         .or(state.config.kiro_preferred_endpoint.clone());
-    select_endpoints(preferred, is_idc)
+    select_endpoints(preferred, is_idc, Some(upstream.base_url.as_str()))
 }
 
 fn resolve_model(meta: &RequestMeta) -> (String, bool, bool) {
@@ -488,6 +580,109 @@ fn resolve_source_format(transform: FormatTransform) -> KiroSourceFormat {
     match transform {
         FormatTransform::KiroToAnthropic => KiroSourceFormat::Anthropic,
         _ => KiroSourceFormat::Responses,
+    }
+}
+
+fn should_failover_kiro_account(outcome: &AttemptOutcome) -> bool {
+    match outcome {
+        AttemptOutcome::Success(response) => !response.status().is_success(),
+        AttemptOutcome::Retryable { .. } => true,
+        AttemptOutcome::Fatal(_) | AttemptOutcome::SkippedAuth => false,
+    }
+}
+
+fn mark_failed_kiro_account_before_failover(
+    state: &ProxyState,
+    account_id: &str,
+    outcome: &AttemptOutcome,
+) {
+    match outcome {
+        AttemptOutcome::Success(response) if !response.status().is_success() => {
+            let retry_after = response
+                .headers()
+                .get(axum::http::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let reason_detail = match retry_after {
+                Some(value) => format!("{} retry-after={value}", response.status().as_u16()),
+                None => response.status().as_u16().to_string(),
+            };
+            if let Some(cooldown_until_ms) = state.account_selector.mark_response_status(
+                "kiro",
+                account_id,
+                response.status(),
+                response.headers(),
+            ) {
+                let entry = crate::proxy::logs::build_account_state_log_entry(
+                    "kiro",
+                    account_id,
+                    "cooldown_started",
+                    "http_status",
+                    "cooling_down",
+                    Some(reason_detail),
+                    Some(cooldown_until_ms),
+                );
+                state.log.clone().write_account_state_detached(entry);
+            }
+        }
+        AttemptOutcome::Retryable { .. } => {
+            let reason_detail = match outcome {
+                AttemptOutcome::Retryable { message, .. } => Some(message.clone()),
+                _ => None,
+            };
+            if let Some(cooldown_until_ms) = state
+                .account_selector
+                .mark_retryable_failure("kiro", account_id)
+            {
+                let entry = crate::proxy::logs::build_account_state_log_entry(
+                    "kiro",
+                    account_id,
+                    "cooldown_started",
+                    "retryable_error",
+                    "cooling_down",
+                    reason_detail,
+                    Some(cooldown_until_ms),
+                );
+                state.log.clone().write_account_state_detached(entry);
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn resolve_next_kiro_account_id(
+    state: &ProxyState,
+    excluded_account_ids: &[String],
+) -> Option<String> {
+    let ordered_account_ids = super::ordered_runtime_account_ids(state, "kiro").await;
+    let ordered_account_ids = ordered_account_ids
+        .into_iter()
+        .filter(|account_id| !excluded_account_ids.iter().any(|value| value == account_id))
+        .collect::<Vec<_>>();
+    if ordered_account_ids.is_empty() {
+        return None;
+    }
+    state
+        .kiro_accounts
+        .resolve_account_record_with_order(None, Some(ordered_account_ids.as_slice()))
+        .await
+        .ok()
+        .map(|(account_id, _)| account_id)
+}
+
+fn into_group_retryable_kiro_outcome(outcome: AttemptOutcome) -> AttemptOutcome {
+    match outcome {
+        AttemptOutcome::Success(response) if super::utils::is_retryable_status(response.status()) => {
+            let status = response.status();
+            AttemptOutcome::Retryable {
+                message: format!("Upstream responded with {}", status.as_u16()),
+                response: Some(response),
+                is_timeout: false,
+                should_cooldown: super::result::should_cooldown_retryable_status(status),
+            }
+        }
+        other => other,
     }
 }
 

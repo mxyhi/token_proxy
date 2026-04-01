@@ -8,9 +8,9 @@ mod types;
 mod util;
 
 pub use login::KiroLoginManager;
-pub use quota::{fetch_quotas, KiroQuotaSummary};
+pub use quota::fetch_quotas;
 pub use store::KiroAccountStore;
 pub use types::{
-    KiroAccountSummary, KiroLoginMethod, KiroLoginPollResponse, KiroLoginStartResponse,
-    KiroTokenRecord,
+    KiroAccountStatus, KiroAccountSummary, KiroLoginMethod, KiroLoginPollResponse,
+    KiroLoginStartResponse, KiroQuotaCache, KiroQuotaItem, KiroQuotaSummary, KiroTokenRecord,
 };

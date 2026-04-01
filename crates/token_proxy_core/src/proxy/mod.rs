@@ -1,4 +1,5 @@
 mod anthropic_compat;
+mod account_selector;
 mod codex_compat;
 mod compat_content;
 mod compat_reason;
@@ -43,6 +44,7 @@ struct ProxyState {
     log: Arc<log::LogWriter>,
     cursors: HashMap<String, Vec<AtomicUsize>>,
     upstream_selector: upstream_selector::UpstreamSelectorRuntime,
+    account_selector: account_selector::AccountSelectorRuntime,
     request_detail: Arc<request_detail::RequestDetailCapture>,
     token_rate: Arc<token_rate::TokenRateTracker>,
     kiro_accounts: Arc<KiroAccountStore>,

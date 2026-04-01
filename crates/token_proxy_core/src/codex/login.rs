@@ -12,7 +12,7 @@ use super::oauth::CodexOAuthClient;
 use super::store::CodexAccountStore;
 use super::types::{
     CodexAccountSummary, CodexLoginPollResponse, CodexLoginStartResponse, CodexLoginStatus,
-    CodexTokenRecord,
+    CodexQuotaCache, CodexTokenRecord,
 };
 
 const AUTH_CODE_TIMEOUT: Duration = Duration::from_secs(600);
@@ -225,11 +225,13 @@ async fn run_auth_code_login(
         refresh_token: token.refresh_token,
         id_token: token.id_token,
         auto_refresh_enabled: true,
+        status: super::types::CodexAccountStatus::Active,
         account_id: None,
         email: None,
         expires_at: expires_at_from_seconds(token.expires_in),
         last_refresh: Some(now_rfc3339()),
         proxy_url: None,
+        quota: CodexQuotaCache::default(),
     };
     match manager.store.save_new_account(record).await {
         Ok(account) => manager.complete_session(&state, account).await,

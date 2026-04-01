@@ -3,7 +3,10 @@ import { useCallback, useEffect, useState } from "react";
 import {
   importCodexFile,
   listCodexAccounts,
+  refreshCodexQuotaCache,
+  refreshCodexQuotaNow,
   setCodexAutoRefresh,
+  setCodexStatus,
   setCodexProxyUrl,
   refreshCodexAccount,
   logoutCodexAccount,
@@ -11,7 +14,12 @@ import {
 import type { CodexAccountSummary } from "@/features/codex/types";
 import { parseError } from "@/lib/error";
 
-export function useCodexAccounts() {
+type UseCodexAccountsOptions = {
+  autoLoad?: boolean;
+};
+
+export function useCodexAccounts(options?: UseCodexAccountsOptions) {
+  const autoLoad = options?.autoLoad ?? true;
   const [accounts, setAccounts] = useState<CodexAccountSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -84,12 +92,28 @@ export function useCodexAccounts() {
     }
   }, []);
 
+  const setStatus = useCallback(async (accountId: string, status: "active" | "disabled") => {
+    setLoading(true);
+    try {
+      const updated = await setCodexStatus(accountId, status);
+      setAccounts((prev) =>
+        prev.map((item) => (item.account_id === accountId ? { ...item, ...updated } : item))
+      );
+      setError("");
+      return updated;
+    } catch (err) {
+      const message = parseError(err);
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const importFile = useCallback(async (path: string) => {
     setLoading(true);
     try {
       const imported = await importCodexFile(path);
-      const next = await listCodexAccounts();
-      setAccounts(next);
       setError("");
       return imported;
     } catch (err) {
@@ -101,9 +125,20 @@ export function useCodexAccounts() {
     }
   }, []);
 
+  const refreshQuotaCache = useCallback(async (accountIds?: string[]) => {
+    await refreshCodexQuotaCache(accountIds);
+  }, []);
+
+  const refreshQuotaNow = useCallback(async (accountId: string) => {
+    await refreshCodexQuotaNow(accountId);
+  }, []);
+
   useEffect(() => {
+    if (!autoLoad) {
+      return;
+    }
     void refresh();
-  }, [refresh]);
+  }, [autoLoad, refresh]);
 
   return {
     accounts,
@@ -112,8 +147,11 @@ export function useCodexAccounts() {
     refresh,
     refreshAccount,
     setAutoRefresh,
+    setStatus,
     setProxyUrl,
     logout,
     importFile,
+    refreshQuotaCache,
+    refreshQuotaNow,
   };
 }

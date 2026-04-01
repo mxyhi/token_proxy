@@ -28,9 +28,13 @@ function formatAccountLabel(account: CodexAccountSummary) {
 }
 
 function formatAccountStatus(account: CodexAccountSummary) {
-  return account.status === "expired"
-    ? m.codex_account_status_expired()
-    : m.codex_account_status_active();
+  if (account.status === "expired") {
+    return m.codex_account_status_expired();
+  }
+  if (account.status === "disabled") {
+    return m.codex_account_status_disabled();
+  }
+  return m.codex_account_status_active();
 }
 
 export function CodexAccountSelect({

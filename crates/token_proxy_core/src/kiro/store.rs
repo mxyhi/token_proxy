@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
-use time::OffsetDateTime;
-use tokio::sync::RwLock;
+use time::{Duration, OffsetDateTime};
+use tokio::sync::{Mutex, RwLock};
 
 use crate::app_proxy::AppProxyState;
 use crate::oauth_util::normalize_proxy_url;
@@ -23,6 +23,7 @@ pub struct KiroAccountStore {
     paths: TokenProxyPaths,
     cache: RwLock<HashMap<String, KiroTokenRecord>>,
     app_proxy: AppProxyState,
+    quota_refreshing: Mutex<HashSet<String>>,
 }
 
 impl KiroAccountStore {
@@ -33,6 +34,7 @@ impl KiroAccountStore {
             paths: paths.clone(),
             cache: RwLock::new(HashMap::new()),
             app_proxy,
+            quota_refreshing: Mutex::new(HashSet::new()),
         })
     }
 
@@ -129,7 +131,7 @@ impl KiroAccountStore {
                         .format(&time::format_description::well_known::Rfc3339)
                         .unwrap_or_else(|_| record.expires_at.clone())
                 }),
-                status: record.status(),
+                status: record.effective_status(),
                 proxy_url: record.proxy_url.clone(),
             })
             .collect();
@@ -155,6 +157,20 @@ impl KiroAccountStore {
         Ok(())
     }
 
+    pub async fn refresh_quota_cache(
+        &self,
+        account_ids: Option<&[String]>,
+    ) -> Result<Vec<String>, String> {
+        let targets = self.resolve_quota_targets(account_ids).await?;
+        let mut refreshed = Vec::new();
+        for account_id in targets {
+            if self.refresh_quota_if_stale(&account_id).await? {
+                refreshed.push(account_id);
+            }
+        }
+        Ok(refreshed)
+    }
+
     pub async fn set_proxy_url(
         &self,
         account_id: &str,
@@ -163,6 +179,31 @@ impl KiroAccountStore {
         let mut record = self.load_account(account_id).await?;
         record.proxy_url = normalize_proxy_url(proxy_url)?;
         self.save_record(account_id.to_string(), record).await
+    }
+
+    pub async fn set_status(
+        &self,
+        account_id: &str,
+        status: KiroAccountStatus,
+    ) -> Result<KiroAccountSummary, String> {
+        let mut record = self.load_account(account_id).await?;
+        record.status = status;
+        let summary = self.save_record(account_id.to_string(), record).await?;
+        let entry = crate::proxy::logs::build_account_state_log_entry(
+            "kiro",
+            account_id,
+            "status_changed",
+            "manual_status",
+            kiro_status_key(status),
+            Some(format!("manual status -> {}", kiro_status_key(status))),
+            None,
+        );
+        if let Err(err) =
+            crate::proxy::logs::write_account_state_log_for_paths(&self.paths, &entry).await
+        {
+            tracing::warn!(error = %err, account_id, "write kiro manual status log failed");
+        }
+        Ok(summary)
     }
 
     pub(crate) async fn save_record(
@@ -183,9 +224,18 @@ impl KiroAccountStore {
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_else(|_| record.expires_at.clone())
             }),
-            status: record.status(),
+            status: record.effective_status(),
             proxy_url: record.proxy_url.clone(),
         })
+    }
+
+    pub(crate) async fn persist_quota_cache(
+        &self,
+        account_id: &str,
+        record: KiroTokenRecord,
+    ) -> Result<KiroTokenRecord, String> {
+        self.save_record(account_id.to_string(), record.clone()).await?;
+        Ok(record)
     }
 
     pub(crate) async fn save_new_account(
@@ -239,6 +289,10 @@ impl KiroAccountStore {
             "social" => oauth::refresh_social_token(&record, proxy_url.as_deref()).await?,
             _ => return Err("Unsupported Kiro auth method.".to_string()),
         };
+        let refreshed = KiroTokenRecord {
+            quota: record.quota.clone(),
+            ..refreshed
+        };
         let summary = self
             .save_record(account_id.to_string(), refreshed.clone())
             .await?;
@@ -248,7 +302,7 @@ impl KiroAccountStore {
         Ok(refreshed)
     }
 
-    async fn load_account(&self, account_id: &str) -> Result<KiroTokenRecord, String> {
+    pub(crate) async fn load_account(&self, account_id: &str) -> Result<KiroTokenRecord, String> {
         if let Some(record) = self.cache.read().await.get(account_id).cloned() {
             return Ok(record);
         }
@@ -265,20 +319,52 @@ impl KiroAccountStore {
         self.app_proxy.read().await.clone()
     }
 
+    pub(crate) async fn refresh_quota_if_stale(&self, account_id: &str) -> Result<bool, String> {
+        if !self.start_quota_refresh(account_id).await {
+            return Ok(false);
+        }
+        let result = self.refresh_quota_if_stale_inner(account_id).await;
+        self.finish_quota_refresh(account_id).await;
+        result
+    }
+
+    pub async fn refresh_quota_cache_now(&self, account_id: &str) -> Result<(), String> {
+        if !self.start_quota_refresh(account_id).await {
+            return Ok(());
+        }
+        let result = super::quota::refresh_quota_cache(self, account_id).await;
+        self.finish_quota_refresh(account_id).await;
+        result.map(|_| ())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn resolve_account_record(
         &self,
         account_id: Option<&str>,
     ) -> Result<(String, KiroTokenRecord), String> {
+        self.resolve_account_record_with_order(account_id, None).await
+    }
+
+    pub(crate) async fn resolve_account_record_with_order(
+        &self,
+        account_id: Option<&str>,
+        ordered_account_ids: Option<&[String]>,
+    ) -> Result<(String, KiroTokenRecord), String> {
         if let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) {
             let record = self.get_account_record(account_id).await?;
-            if matches!(record.status(), KiroAccountStatus::Expired) {
+            if matches!(record.effective_status(), KiroAccountStatus::Disabled) {
+                return Err(format!("Kiro account is disabled: {account_id}"));
+            }
+            if matches!(record.effective_status(), KiroAccountStatus::Expired) {
                 return Err(format!("Kiro account is expired: {account_id}"));
             }
             return Ok((account_id.to_string(), record));
         }
 
         self.refresh_cache().await?;
-        let account_ids = {
+        let account_ids = if let Some(ordered_account_ids) = ordered_account_ids {
+            ordered_account_ids.to_vec()
+        } else {
             let cache = self.cache.read().await;
             let mut account_ids = cache.keys().cloned().collect::<Vec<_>>();
             account_ids.sort();
@@ -288,8 +374,11 @@ impl KiroAccountStore {
         let mut last_error = None;
         for account_id in account_ids {
             match self.get_account_record(&account_id).await {
-                Ok(record) if !matches!(record.status(), KiroAccountStatus::Expired) => {
+                Ok(record) if record.is_schedulable() => {
                     return Ok((account_id, record));
+                }
+                Ok(record) if matches!(record.effective_status(), KiroAccountStatus::Disabled) => {
+                    last_error = Some(format!("Kiro account is disabled: {account_id}"));
                 }
                 Ok(_) => {
                     last_error = Some(format!("Kiro account is expired: {account_id}"));
@@ -308,6 +397,51 @@ impl KiroAccountStore {
             Ok(Some(proxy_url)) => Some(proxy_url),
             Ok(None) | Err(_) => self.app_proxy_url().await,
         }
+    }
+
+    async fn resolve_quota_targets(
+        &self,
+        account_ids: Option<&[String]>,
+    ) -> Result<Vec<String>, String> {
+        if let Some(account_ids) = account_ids {
+            let mut targets = account_ids
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            targets.sort();
+            targets.dedup();
+            return Ok(targets);
+        }
+
+        self.refresh_cache().await?;
+        let mut targets = self.cache.read().await.keys().cloned().collect::<Vec<_>>();
+        targets.sort();
+        Ok(targets)
+    }
+
+    async fn start_quota_refresh(&self, account_id: &str) -> bool {
+        let mut refreshing = self.quota_refreshing.lock().await;
+        if refreshing.contains(account_id) {
+            return false;
+        }
+        refreshing.insert(account_id.to_string());
+        true
+    }
+
+    async fn finish_quota_refresh(&self, account_id: &str) {
+        let mut refreshing = self.quota_refreshing.lock().await;
+        refreshing.remove(account_id);
+    }
+
+    async fn refresh_quota_if_stale_inner(&self, account_id: &str) -> Result<bool, String> {
+        let record = self.load_account(account_id).await?;
+        if !quota_refresh_is_due(record.quota.checked_at.as_deref()) {
+            return Ok(false);
+        }
+        super::quota::refresh_quota_cache_if_stale(self, account_id).await?;
+        Ok(true)
     }
 
     async fn refresh_cache(&self) -> Result<(), String> {
@@ -334,6 +468,26 @@ impl KiroAccountStore {
         }
     }
 
+}
+
+fn kiro_status_key(status: KiroAccountStatus) -> &'static str {
+    match status {
+        KiroAccountStatus::Active => "active",
+        KiroAccountStatus::Disabled => "disabled",
+        KiroAccountStatus::Expired => "expired",
+    }
+}
+
+const QUOTA_REFRESH_INTERVAL_SECONDS: i64 = 30;
+
+fn quota_refresh_is_due(checked_at: Option<&str>) -> bool {
+    let Some(checked_at) = checked_at.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    let Ok(checked_at) = OffsetDateTime::parse(checked_at, &Rfc3339) else {
+        return true;
+    };
+    OffsetDateTime::now_utc() - checked_at >= Duration::seconds(QUOTA_REFRESH_INTERVAL_SECONDS)
 }
 
 fn is_json_file(path: &Path) -> bool {
@@ -407,7 +561,9 @@ fn kam_account_to_record(account: KamAccount) -> Option<KiroTokenRecord> {
         last_refresh: Some(now_rfc3339()),
         start_url: credentials.start_url,
         region: credentials.region,
+        status: KiroAccountStatus::Active,
         proxy_url: None,
+        quota: super::types::KiroQuotaCache::default(),
     })
 }
 
@@ -513,7 +669,9 @@ impl KiroIdeTokenFile {
             last_refresh: Some(last_refresh),
             start_url: self.start_url,
             region: self.region,
+            status: KiroAccountStatus::Active,
             proxy_url: None,
+            quota: super::types::KiroQuotaCache::default(),
         })
     }
 }
@@ -550,6 +708,19 @@ mod tests {
     }
 
     #[test]
+    fn quota_refresh_waits_for_30_second_interval() {
+        let within_window = (OffsetDateTime::now_utc() - Duration::seconds(29))
+            .format(&Rfc3339)
+            .expect("format checked_at");
+        assert!(!quota_refresh_is_due(Some(within_window.as_str())));
+
+        let outside_window = (OffsetDateTime::now_utc() - Duration::seconds(31))
+            .format(&Rfc3339)
+            .expect("format checked_at");
+        assert!(quota_refresh_is_due(Some(outside_window.as_str())));
+    }
+
+    #[test]
     fn list_accounts_reads_from_sqlite_after_legacy_files_are_removed() {
         run_async(async {
             let (store, data_dir) = create_test_store();
@@ -567,7 +738,9 @@ mod tests {
                     last_refresh: None,
                     start_url: None,
                     region: None,
+                    status: KiroAccountStatus::Active,
                     proxy_url: None,
+                    quota: crate::kiro::KiroQuotaCache::default(),
                 })
                 .await
                 .expect("save kiro account");
@@ -610,7 +783,9 @@ mod tests {
                     last_refresh: None,
                     start_url: None,
                     region: None,
+                    status: KiroAccountStatus::Active,
                     proxy_url: None,
+                    quota: crate::kiro::KiroQuotaCache::default(),
                 })
                 .await
                 .expect("save kiro account");
@@ -638,6 +813,126 @@ mod tests {
                 .await
                 .expect("record should exist");
             assert_eq!(cleared_record.proxy_url, None);
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn set_enabled_updates_record_flag() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let saved = store
+                .save_new_account(KiroTokenRecord {
+                    access_token: "access-token".to_string(),
+                    refresh_token: "refresh-token".to_string(),
+                    profile_arn: Some("arn:aws:iam::123456789012:user/test".to_string()),
+                    expires_at: future_rfc3339(6),
+                    auth_method: "google".to_string(),
+                    provider: "kiro".to_string(),
+                    client_id: None,
+                    client_secret: None,
+                    email: Some("enabled-kiro@example.com".to_string()),
+                    last_refresh: None,
+                    start_url: None,
+                    region: None,
+                    status: KiroAccountStatus::Active,
+                    proxy_url: None,
+                    quota: crate::kiro::KiroQuotaCache::default(),
+                })
+                .await
+                .expect("save kiro account");
+
+            let updated = store
+                .set_status(&saved.account_id, KiroAccountStatus::Disabled)
+                .await
+                .expect("set status should succeed");
+            assert!(matches!(updated.status, KiroAccountStatus::Disabled));
+
+            let record = store
+                .get_account_record(&saved.account_id)
+                .await
+                .expect("record should exist");
+            assert!(matches!(record.status, KiroAccountStatus::Disabled));
+
+            let pool = crate::proxy::sqlite::open_read_pool(&store.paths)
+                .await
+                .expect("open sqlite");
+            let logs = crate::proxy::logs::read_recent_account_state_logs(&pool, None, None, 10)
+                .await
+                .expect("read account state logs");
+            assert!(
+                logs.iter().any(|item| {
+                    item.provider == "kiro"
+                        && item.account_id == saved.account_id
+                        && item.event_kind == "status_changed"
+                        && item.status == "disabled"
+                }),
+                "manual status change should write account state log"
+            );
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn resolve_account_record_skips_disabled_accounts() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            store
+                .save_record(
+                    "kiro-google-a.json".to_string(),
+                    KiroTokenRecord {
+                        access_token: "access-1".to_string(),
+                        refresh_token: "refresh-1".to_string(),
+                        profile_arn: Some("arn:aws:iam::123456789012:user/a".to_string()),
+                        expires_at: future_rfc3339(6),
+                        auth_method: "google".to_string(),
+                        provider: "kiro".to_string(),
+                        client_id: None,
+                        client_secret: None,
+                        email: Some("aaa@example.com".to_string()),
+                        last_refresh: None,
+                        start_url: None,
+                        region: None,
+                        status: KiroAccountStatus::Disabled,
+                        proxy_url: None,
+                        quota: crate::kiro::KiroQuotaCache::default(),
+                    },
+                )
+                .await
+                .expect("save first account");
+            store
+                .save_record(
+                    "kiro-google-b.json".to_string(),
+                    KiroTokenRecord {
+                        access_token: "access-2".to_string(),
+                        refresh_token: "refresh-2".to_string(),
+                        profile_arn: Some("arn:aws:iam::123456789012:user/b".to_string()),
+                        expires_at: future_rfc3339(6),
+                        auth_method: "google".to_string(),
+                        provider: "kiro".to_string(),
+                        client_id: None,
+                        client_secret: None,
+                        email: Some("zzz@example.com".to_string()),
+                        last_refresh: None,
+                        start_url: None,
+                        region: None,
+                        status: KiroAccountStatus::Active,
+                        proxy_url: None,
+                        quota: crate::kiro::KiroQuotaCache::default(),
+                    },
+                )
+                .await
+                .expect("save second account");
+
+            let (account_id, record) = store
+                .resolve_account_record(None)
+                .await
+                .expect("should resolve enabled account");
+
+            assert_eq!(account_id, "kiro-google-b.json");
+            assert!(record.is_schedulable());
 
             let _ = std::fs::remove_dir_all(data_dir);
         });

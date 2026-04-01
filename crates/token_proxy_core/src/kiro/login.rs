@@ -15,8 +15,8 @@ use super::sso_oidc::{
 };
 use super::store::KiroAccountStore;
 use super::types::{
-    KiroAccountSummary, KiroLoginMethod, KiroLoginPollResponse, KiroLoginStartResponse,
-    KiroLoginStatus, KiroTokenRecord,
+    KiroAccountStatus, KiroAccountSummary, KiroLoginMethod, KiroLoginPollResponse,
+    KiroLoginStartResponse, KiroLoginStatus, KiroQuotaCache, KiroTokenRecord,
 };
 use super::util::{expires_at_from_seconds, generate_pkce, generate_state, now_rfc3339};
 use crate::app_proxy::AppProxyState;
@@ -479,7 +479,9 @@ async fn handle_builder_success(
         last_refresh: Some(now_rfc3339()),
         start_url: None,
         region: None,
+        status: KiroAccountStatus::Active,
         proxy_url: None,
+        quota: KiroQuotaCache::default(),
     };
     match manager.store.save_new_account(record).await {
         Ok(account) => manager.complete_session(&state, account).await,
@@ -525,7 +527,9 @@ async fn handle_social_success(
         last_refresh: Some(now_rfc3339()),
         start_url: None,
         region: None,
+        status: KiroAccountStatus::Active,
         proxy_url: None,
+        quota: KiroQuotaCache::default(),
     };
     match manager.store.save_new_account(record).await {
         Ok(account) => manager.complete_session(&state, account).await,

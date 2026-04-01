@@ -31,6 +31,16 @@ export async function fetchCodexQuotas() {
   return await invoke<CodexQuotaSummary[]>("codex_fetch_quotas");
 }
 
+export async function refreshCodexQuotaCache(accountIds?: string[]) {
+  return await invoke<string[]>("codex_refresh_quota_cache", {
+    accountIds: accountIds ?? null,
+  });
+}
+
+export async function refreshCodexQuotaNow(accountId: string) {
+  return await invoke<void>("codex_refresh_quota_now", { accountId });
+}
+
 export async function refreshCodexAccount(accountId: string) {
   return await invoke<void>("codex_refresh_account", { accountId });
 }
@@ -39,6 +49,13 @@ export async function setCodexAutoRefresh(accountId: string, enabled: boolean) {
   return await invoke<CodexAccountSummary>("codex_set_auto_refresh", {
     accountId,
     enabled,
+  });
+}
+
+export async function setCodexStatus(accountId: string, status: "active" | "disabled") {
+  return await invoke<CodexAccountSummary>("codex_set_status", {
+    accountId,
+    status,
   });
 }
 

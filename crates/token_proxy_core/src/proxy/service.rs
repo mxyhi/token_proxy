@@ -1,5 +1,6 @@
 use serde::Serialize;
 use sqlx::SqlitePool;
+use std::collections::HashSet;
 use std::future::IntoFuture;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -86,6 +87,10 @@ impl ProxyServiceHandle {
 
     pub async fn apply_saved_config(&self, ctx: &ProxyContext) -> ProxyConfigSaveResult {
         self.inner.apply_saved_config(ctx).await
+    }
+
+    pub async fn cooling_account_ids(&self, provider: &str, account_ids: &[String]) -> HashSet<String> {
+        self.inner.cooling_account_ids(provider, account_ids).await
     }
 }
 
@@ -201,6 +206,12 @@ impl ProxyService {
         let mut inner = self.inner.lock().await;
         inner.refresh_if_finished().await;
         inner.apply_saved_config(ctx).await
+    }
+
+    async fn cooling_account_ids(&self, provider: &str, account_ids: &[String]) -> HashSet<String> {
+        let mut inner = self.inner.lock().await;
+        inner.refresh_if_finished().await;
+        inner.cooling_account_ids(provider, account_ids).await
     }
 }
 
@@ -399,6 +410,18 @@ impl ProxyServiceInner {
         Some((running.addr.clone(), guard.config.max_request_body_bytes))
     }
 
+    async fn cooling_account_ids(&self, provider: &str, account_ids: &[String]) -> HashSet<String> {
+        let Some(running) = self.running.as_ref() else {
+            return HashSet::new();
+        };
+        let guard = running.state_handle.read().await;
+        account_ids
+            .iter()
+            .filter(|account_id| guard.account_selector.is_cooling_down(provider, account_id))
+            .cloned()
+            .collect()
+    }
+
     async fn finish_task(&mut self, mut running: RunningProxy) {
         if let Some(tx) = running.shutdown_tx.take() {
             let _ = tx.send(());
@@ -466,6 +489,9 @@ async fn build_proxy_state(
     let codex_accounts = ctx.codex_accounts.clone();
     Ok(Arc::new(ProxyState {
         upstream_selector: super::upstream_selector::UpstreamSelectorRuntime::new_with_cooldown(
+            config.retryable_failure_cooldown,
+        ),
+        account_selector: super::account_selector::AccountSelectorRuntime::new_with_cooldown(
             config.retryable_failure_cooldown,
         ),
         config,

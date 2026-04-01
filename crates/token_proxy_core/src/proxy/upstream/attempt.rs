@@ -127,6 +127,26 @@ enum CodexFailoverResult {
     Resolved(AttemptOutcome),
 }
 
+fn mark_failed_codex_account_before_failover(
+    state: &ProxyState,
+    provider: &str,
+    attempt: &Result<UpstreamAttempt, UpstreamAttemptFailure>,
+) {
+    let Ok(attempt) = attempt else {
+        return;
+    };
+    if attempt.response.status().is_success() {
+        return;
+    }
+    update_account_cooldown_for_response(
+        state,
+        provider,
+        attempt.selected_account_id.as_deref(),
+        attempt.response.status(),
+        attempt.response.headers(),
+    );
+}
+
 async fn retry_after_kiro_refresh(
     state: &ProxyState,
     method: Method,
@@ -189,6 +209,12 @@ async fn finalize_attempt(
     request_detail: Option<RequestDetailSnapshot>,
     attempt: UpstreamAttempt,
 ) -> AttemptOutcome {
+    schedule_account_quota_refresh(
+        state,
+        provider,
+        attempt.selected_account_id.as_deref(),
+        attempt.response.status(),
+    );
     result::handle_upstream_result(
         state,
         Ok(attempt.response),
@@ -204,6 +230,98 @@ async fn finalize_attempt(
         request_detail,
     )
     .await
+}
+
+fn schedule_account_quota_refresh(
+    state: &ProxyState,
+    provider: &str,
+    account_id: Option<&str>,
+    status: StatusCode,
+) {
+    if !status.is_success() {
+        return;
+    }
+    let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let account_id = account_id.to_string();
+    match provider {
+        "kiro" => {
+            let store = state.kiro_accounts.clone();
+            tokio::spawn(async move {
+                let _ = store.refresh_quota_if_stale(&account_id).await;
+            });
+        }
+        "codex" => {
+            let store = state.codex_accounts.clone();
+            tokio::spawn(async move {
+                let _ = store.refresh_quota_if_stale(&account_id).await;
+            });
+        }
+        _ => {}
+    }
+}
+
+fn update_account_cooldown_for_response(
+    state: &ProxyState,
+    provider: &str,
+    account_id: Option<&str>,
+    status: StatusCode,
+    headers: &HeaderMap,
+) {
+    let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let retry_after = headers
+        .get(axum::http::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let reason_detail = match retry_after {
+        Some(value) => format!("{} retry-after={value}", status.as_u16()),
+        None => status.as_u16().to_string(),
+    };
+    if let Some(cooldown_until_ms) = state
+        .account_selector
+        .mark_response_status(provider, account_id, status, headers)
+    {
+        let entry = crate::proxy::logs::build_account_state_log_entry(
+            provider,
+            account_id,
+            "cooldown_started",
+            "http_status",
+            "cooling_down",
+            Some(reason_detail),
+            Some(cooldown_until_ms),
+        );
+        state.log.clone().write_account_state_detached(entry);
+    }
+}
+
+fn mark_account_retryable_failure(
+    state: &ProxyState,
+    provider: &str,
+    account_id: Option<&str>,
+    reason_detail: Option<String>,
+) {
+    let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if let Some(cooldown_until_ms) = state
+        .account_selector
+        .mark_retryable_failure(provider, account_id)
+    {
+        let entry = crate::proxy::logs::build_account_state_log_entry(
+            provider,
+            account_id,
+            "cooldown_started",
+            "retryable_error",
+            "cooling_down",
+            reason_detail,
+            Some(cooldown_until_ms),
+        );
+        state.log.clone().write_account_state_detached(entry);
+    }
 }
 
 async fn retry_with_next_codex_account(
@@ -229,6 +347,7 @@ async fn retry_with_next_codex_account(
         };
     };
 
+    mark_failed_codex_account_before_failover(state, provider, &first);
     let mut excluded_account_ids = vec![first_selected_account_id];
     let mut last_retry: Option<Result<(UpstreamRuntime, UpstreamAttempt), UpstreamAttemptFailure>> =
         Some(first.map(|attempt| (upstream.clone(), attempt)));
@@ -236,9 +355,21 @@ async fn retry_with_next_codex_account(
     // 这里做账户级 failover，而不是 upstream 级 failover。
     // 当 codex upstream 未绑定具体账户时，只要当前账户请求报错，就继续尝试下一个本地可用账户。
     loop {
+        let ordered_account_ids = state
+            .codex_accounts
+            .list_accounts()
+            .await
+            .map(|items| items.into_iter().map(|item| item.account_id).collect::<Vec<_>>())
+            .unwrap_or_default();
+        let ordered_account_ids = state
+            .account_selector
+            .order_accounts(provider, &ordered_account_ids);
         let next_account_id = match state
             .codex_accounts
-            .resolve_next_account_record(&excluded_account_ids)
+            .resolve_next_account_record_with_order(
+                &excluded_account_ids,
+                Some(ordered_account_ids.as_slice()),
+            )
             .await
         {
             Ok(Some((account_id, _))) => account_id,
@@ -293,6 +424,9 @@ async fn retry_with_next_codex_account(
         excluded_account_ids.push(next_account_id);
 
         let should_retry_again = failover_selected_account_id(provider, upstream, &retry).is_some();
+        if should_retry_again {
+            mark_failed_codex_account_before_failover(state, provider, &retry);
+        }
         if !should_retry_again {
             return match retry {
                 Ok(attempt) => CodexFailoverResult::Resolved(
@@ -848,6 +982,12 @@ fn handle_upstream_timeout(
         "Upstream did not respond within {}s.",
         state.config.upstream_no_data_timeout.as_secs()
     );
+    mark_account_retryable_failure(
+        state,
+        provider,
+        selected_account_id,
+        Some(message.clone()),
+    );
     result::log_upstream_error_if_needed(
         &state.log,
         request_detail,
@@ -886,6 +1026,12 @@ fn map_upstream_error(
         } else {
             StatusCode::BAD_GATEWAY
         };
+        mark_account_retryable_failure(
+            state,
+            provider,
+            selected_account_id,
+            Some(message.clone()),
+        );
         result::log_upstream_error_if_needed(
             &state.log,
             request_detail,

@@ -1,10 +1,10 @@
-use serde::Serialize;
 use serde_json::{Map, Value};
+use time::format_description::well_known::Rfc3339;
 
 use crate::oauth_util::build_reqwest_client;
 
 use super::store::KiroAccountStore;
-use super::types::KiroAccountSummary;
+use super::types::{KiroAccountSummary, KiroQuotaCache, KiroQuotaItem, KiroQuotaSummary};
 
 const KIRO_USAGE_ENDPOINT: &str = "https://codewhisperer.us-east-1.amazonaws.com";
 const KIRO_USAGE_TARGET: &str = "AmazonCodeWhispererService.GetUsageLimits";
@@ -13,31 +13,21 @@ const KIRO_USAGE_RESOURCE_TYPE: &str = "AGENTIC_REQUEST";
 const KIRO_CONTENT_TYPE: &str = "application/x-amz-json-1.0";
 const KIRO_ACCEPT: &str = "application/json";
 
-#[derive(Clone, Serialize)]
-pub struct KiroQuotaItem {
-    pub name: String,
-    pub percentage: f64,
-    pub used: Option<f64>,
-    pub limit: Option<f64>,
-    pub reset_at: Option<String>,
-    pub is_trial: bool,
-}
-
-#[derive(Clone, Serialize)]
-pub struct KiroQuotaSummary {
-    pub account_id: String,
-    pub provider: String,
-    pub plan_type: Option<String>,
-    pub quotas: Vec<KiroQuotaItem>,
-    pub error: Option<String>,
-}
-
 pub async fn fetch_quotas(store: &KiroAccountStore) -> Result<Vec<KiroQuotaSummary>, String> {
     let accounts = store.list_accounts().await?;
     let mut results = Vec::with_capacity(accounts.len());
     for account in accounts {
-        match fetch_account_quota(store, &account).await {
-            Ok(summary) => results.push(summary),
+        match store.get_account_record(&account.account_id).await {
+            Ok(record) => match fetch_account_quota(store, &account, &record).await {
+                Ok(summary) => results.push(summary),
+                Err(err) => results.push(KiroQuotaSummary {
+                    account_id: account.account_id.clone(),
+                    provider: account.provider.clone(),
+                    plan_type: None,
+                    quotas: Vec::new(),
+                    error: Some(err),
+                }),
+            },
             Err(err) => results.push(KiroQuotaSummary {
                 account_id: account.account_id.clone(),
                 provider: account.provider.clone(),
@@ -50,11 +40,75 @@ pub async fn fetch_quotas(store: &KiroAccountStore) -> Result<Vec<KiroQuotaSumma
     Ok(results)
 }
 
+pub(crate) async fn refresh_quota_cache_if_stale(
+    store: &KiroAccountStore,
+    account_id: &str,
+) -> Result<KiroQuotaCache, String> {
+    refresh_quota_cache(store, account_id).await
+}
+
+pub(crate) async fn refresh_quota_cache(
+    store: &KiroAccountStore,
+    account_id: &str,
+) -> Result<KiroQuotaCache, String> {
+    let record = store.load_account(account_id).await?;
+    let checked_at = super::util::now_rfc3339();
+    let account = KiroAccountSummary {
+        account_id: account_id.to_string(),
+        provider: record.provider.clone(),
+        auth_method: record.auth_method.clone(),
+        email: record.email.clone(),
+        expires_at: record.expires_at().map(|value| {
+            value
+                .format(&Rfc3339)
+                .unwrap_or_else(|_| record.expires_at.clone())
+        }),
+        status: record.effective_status(),
+        proxy_url: record.proxy_url.clone(),
+    };
+    let resolved = match store.get_account_record(account_id).await {
+        Ok(record) => record,
+        Err(err) => {
+            let mut failed_record = record;
+            failed_record.quota.error = Some(err);
+            failed_record.quota.checked_at = Some(checked_at);
+            return store
+                .persist_quota_cache(account_id, failed_record)
+                .await
+                .map(|summary| summary.quota);
+        }
+    };
+    match fetch_account_quota(store, &account, &resolved).await {
+        Ok(summary) => {
+            let mut next_record = resolved;
+            next_record.quota = KiroQuotaCache {
+                plan_type: summary.plan_type,
+                quotas: summary.quotas,
+                error: None,
+                checked_at: Some(checked_at),
+            };
+            store
+                .persist_quota_cache(account_id, next_record)
+                .await
+                .map(|summary| summary.quota)
+        }
+        Err(err) => {
+            let mut failed_record = resolved;
+            failed_record.quota.error = Some(err);
+            failed_record.quota.checked_at = Some(checked_at);
+            store
+                .persist_quota_cache(account_id, failed_record)
+                .await
+                .map(|summary| summary.quota)
+        }
+    }
+}
+
 async fn fetch_account_quota(
     store: &KiroAccountStore,
     account: &KiroAccountSummary,
+    record: &super::types::KiroTokenRecord,
 ) -> Result<KiroQuotaSummary, String> {
-    let record = store.get_account_record(&account.account_id).await?;
     let profile_arn = record
         .profile_arn
         .as_deref()

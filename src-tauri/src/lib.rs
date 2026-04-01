@@ -22,6 +22,79 @@ const REQUEST_DETAIL_CAPTURE_EVENT: &str = "request-detail-capture-changed";
 
 type RequestDetailCaptureEvent = proxy::request_detail::RequestDetailCaptureState;
 
+#[derive(Clone, Copy)]
+enum ManualAccountStatus {
+    Active,
+    Disabled,
+}
+
+impl From<ManualAccountStatus> for kiro::KiroAccountStatus {
+    fn from(value: ManualAccountStatus) -> Self {
+        match value {
+            ManualAccountStatus::Active => Self::Active,
+            ManualAccountStatus::Disabled => Self::Disabled,
+        }
+    }
+}
+
+impl From<ManualAccountStatus> for codex::CodexAccountStatus {
+    fn from(value: ManualAccountStatus) -> Self {
+        match value {
+            ManualAccountStatus::Active => Self::Active,
+            ManualAccountStatus::Disabled => Self::Disabled,
+        }
+    }
+}
+
+fn parse_manual_account_status(value: &str) -> Result<ManualAccountStatus, String> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "active" => Ok(ManualAccountStatus::Active),
+        "disabled" => Ok(ManualAccountStatus::Disabled),
+        other => Err(format!("Unsupported manual account status: {other}")),
+    }
+}
+
+async fn apply_runtime_account_cooldowns(
+    proxy_service: ProxyServiceHandle,
+    items: &mut [token_proxy_core::provider_accounts::ProviderAccountListItem],
+) {
+    let kiro_account_ids = items
+        .iter()
+        .filter(|item| {
+            item.provider_kind == token_proxy_core::provider_accounts::ProviderAccountKind::Kiro
+                && item.status == token_proxy_core::provider_accounts::ProviderAccountStatus::Active
+        })
+        .map(|item| item.account_id.clone())
+        .collect::<Vec<_>>();
+    let codex_account_ids = items
+        .iter()
+        .filter(|item| {
+            item.provider_kind == token_proxy_core::provider_accounts::ProviderAccountKind::Codex
+                && item.status == token_proxy_core::provider_accounts::ProviderAccountStatus::Active
+        })
+        .map(|item| item.account_id.clone())
+        .collect::<Vec<_>>();
+    let cooling_kiro = proxy_service.cooling_account_ids("kiro", &kiro_account_ids).await;
+    let cooling_codex = proxy_service.cooling_account_ids("codex", &codex_account_ids).await;
+
+    for item in items.iter_mut() {
+        if item.status != token_proxy_core::provider_accounts::ProviderAccountStatus::Active {
+            continue;
+        }
+        let is_cooling = match item.provider_kind {
+            token_proxy_core::provider_accounts::ProviderAccountKind::Kiro => {
+                cooling_kiro.contains(&item.account_id)
+            }
+            token_proxy_core::provider_accounts::ProviderAccountKind::Codex => {
+                cooling_codex.contains(&item.account_id)
+            }
+        };
+        if is_cooling {
+            item.status = token_proxy_core::provider_accounts::ProviderAccountStatus::CoolingDown;
+        }
+    }
+}
+
 // 主窗口显示/销毁时同步 Dock/任务栏展示状态。
 pub(crate) fn set_main_window_visibility(app: &tauri::AppHandle, visible: bool) {
     #[cfg(target_os = "macos")]
@@ -222,6 +295,22 @@ async fn read_request_log_detail(
 }
 
 #[tauri::command]
+async fn read_account_state_logs(
+    app: tauri::AppHandle,
+    range: proxy::dashboard::DashboardRange,
+) -> Result<Vec<proxy::logs::AccountStateLogItem>, String> {
+    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
+    let pool = proxy::sqlite::open_read_pool(paths.inner().as_ref()).await?;
+    proxy::logs::read_recent_account_state_logs(
+        &pool,
+        range.from_ts_ms.map(|value| value as i64),
+        range.to_ts_ms.map(|value| value as i64),
+        50,
+    )
+    .await
+}
+
+#[tauri::command]
 fn read_request_detail_capture(
     capture_state: tauri::State<'_, Arc<proxy::request_detail::RequestDetailCapture>>,
 ) -> proxy::request_detail::RequestDetailCaptureState {
@@ -312,6 +401,32 @@ async fn kiro_fetch_quotas(
 }
 
 #[tauri::command]
+async fn kiro_refresh_quota_cache(
+    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+    account_ids: Option<Vec<String>>,
+) -> Result<Vec<String>, String> {
+    kiro_store.refresh_quota_cache(account_ids.as_deref()).await
+}
+
+#[tauri::command]
+async fn kiro_refresh_quota_now(
+    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+    account_id: String,
+) -> Result<(), String> {
+    kiro_store.refresh_quota_cache_now(&account_id).await
+}
+
+#[tauri::command]
+async fn kiro_set_status(
+    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+    account_id: String,
+    status: String,
+) -> Result<kiro::KiroAccountSummary, String> {
+    let status = parse_manual_account_status(&status)?;
+    kiro_store.set_status(&account_id, status.into()).await
+}
+
+#[tauri::command]
 async fn kiro_set_proxy_url(
     kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
     account_id: String,
@@ -347,6 +462,22 @@ async fn codex_fetch_quotas(
 }
 
 #[tauri::command]
+async fn codex_refresh_quota_cache(
+    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    account_ids: Option<Vec<String>>,
+) -> Result<Vec<String>, String> {
+    codex_store.refresh_quota_cache(account_ids.as_deref()).await
+}
+
+#[tauri::command]
+async fn codex_refresh_quota_now(
+    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    account_id: String,
+) -> Result<(), String> {
+    codex_store.refresh_quota_cache_now(&account_id).await
+}
+
+#[tauri::command]
 async fn codex_refresh_account(
     codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
     account_id: String,
@@ -361,6 +492,16 @@ async fn codex_set_auto_refresh(
     enabled: bool,
 ) -> Result<codex::CodexAccountSummary, String> {
     codex_store.set_auto_refresh(&account_id, enabled).await
+}
+
+#[tauri::command]
+async fn codex_set_status(
+    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    account_id: String,
+    status: String,
+) -> Result<codex::CodexAccountSummary, String> {
+    let status = parse_manual_account_status(&status)?;
+    codex_store.set_status(&account_id, status.into()).await
 }
 
 #[tauri::command]
@@ -398,6 +539,7 @@ async fn codex_logout(
 #[tauri::command]
 async fn providers_list_accounts_page(
     paths: tauri::State<'_, Arc<token_proxy_core::paths::TokenProxyPaths>>,
+    proxy_service: tauri::State<'_, ProxyServiceHandle>,
     page: u32,
     page_size: u32,
     provider_kind: Option<String>,
@@ -413,17 +555,36 @@ async fn providers_list_accounts_page(
         .map(token_proxy_core::provider_accounts::ProviderAccountStatus::parse)
         .transpose()?;
 
-    token_proxy_core::provider_accounts::list_accounts_page(
+    let mut items = token_proxy_core::provider_accounts::list_accounts_snapshot(
         paths.inner().as_ref(),
-        token_proxy_core::provider_accounts::ProviderAccountsPageParams {
-            page,
-            page_size,
+        token_proxy_core::provider_accounts::ProviderAccountsQueryParams {
             provider_kind,
-            status,
             search: search.unwrap_or_default(),
         },
     )
-    .await
+    .await?;
+    apply_runtime_account_cooldowns(proxy_service.inner().clone(), &mut items).await;
+    if let Some(status) = status {
+        items.retain(|item| item.status == status);
+    }
+
+    let page = page.max(1);
+    let page_size = page_size.clamp(1, token_proxy_core::provider_accounts::MAX_PAGE_SIZE);
+    let total = u32::try_from(items.len()).unwrap_or(u32::MAX);
+    let start = usize::try_from((page - 1) * page_size).unwrap_or(usize::MAX);
+    let end = start.saturating_add(usize::try_from(page_size).unwrap_or(usize::MAX));
+    let items = if start >= items.len() {
+        Vec::new()
+    } else {
+        items[start..items.len().min(end)].to_vec()
+    };
+
+    Ok(token_proxy_core::provider_accounts::ProviderAccountsPage {
+        items,
+        total,
+        page,
+        page_size,
+    })
 }
 
 #[tauri::command]
@@ -711,6 +872,7 @@ pub fn run() {
             save_proxy_config,
             read_dashboard_snapshot,
             read_request_log_detail,
+            read_account_state_logs,
             read_request_detail_capture,
             set_request_detail_capture,
             kiro_list_accounts,
@@ -721,12 +883,18 @@ pub fn run() {
             kiro_logout,
             kiro_handle_callback,
             kiro_fetch_quotas,
+            kiro_refresh_quota_cache,
+            kiro_refresh_quota_now,
+            kiro_set_status,
             kiro_set_proxy_url,
             codex_list_accounts,
             codex_import_file,
             codex_fetch_quotas,
+            codex_refresh_quota_cache,
+            codex_refresh_quota_now,
             codex_refresh_account,
             codex_set_auto_refresh,
+            codex_set_status,
             codex_set_proxy_url,
             codex_start_login,
             codex_poll_login,

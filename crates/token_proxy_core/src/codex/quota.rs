@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::error::Error as StdError;
 use std::time::Duration;
 use time::format_description::well_known::Rfc3339;
@@ -10,35 +10,26 @@ use crate::oauth_util::build_reqwest_client;
 
 use super::error::format_usage_status_error;
 use super::store::CodexAccountStore;
-use super::types::CodexAccountSummary;
+use super::types::{CodexAccountSummary, CodexQuotaCache, CodexQuotaItem, CodexQuotaSummary};
 
 const CODEX_USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
 // Match Codex CLI UA to avoid edge filtering on some proxies.
 const CODEX_USER_AGENT: &str = "codex_cli_rs/0.50.0 (Mac OS 26.0.1; arm64) Apple_Terminal/464";
 
-#[derive(Clone, Serialize)]
-pub struct CodexQuotaItem {
-    pub name: String,
-    pub percentage: f64,
-    pub used: Option<f64>,
-    pub limit: Option<f64>,
-    pub reset_at: Option<String>,
-}
-
-#[derive(Clone, Serialize)]
-pub struct CodexQuotaSummary {
-    pub account_id: String,
-    pub plan_type: Option<String>,
-    pub quotas: Vec<CodexQuotaItem>,
-    pub error: Option<String>,
-}
-
 pub async fn fetch_quotas(store: &CodexAccountStore) -> Result<Vec<CodexQuotaSummary>, String> {
     let accounts = store.list_accounts().await?;
     let mut results = Vec::with_capacity(accounts.len());
     for account in accounts {
-        match fetch_account_quota(store, &account).await {
-            Ok(summary) => results.push(summary),
+        match store.get_account_record(&account.account_id).await {
+            Ok(record) => match fetch_account_quota(store, &account, &record).await {
+                Ok(summary) => results.push(summary),
+                Err(err) => results.push(CodexQuotaSummary {
+                    account_id: account.account_id.clone(),
+                    plan_type: None,
+                    quotas: Vec::new(),
+                    error: Some(err),
+                }),
+            },
             Err(err) => results.push(CodexQuotaSummary {
                 account_id: account.account_id.clone(),
                 plan_type: None,
@@ -50,11 +41,74 @@ pub async fn fetch_quotas(store: &CodexAccountStore) -> Result<Vec<CodexQuotaSum
     Ok(results)
 }
 
+pub(crate) async fn refresh_quota_cache_if_stale(
+    store: &CodexAccountStore,
+    account_id: &str,
+) -> Result<CodexQuotaCache, String> {
+    refresh_quota_cache(store, account_id).await
+}
+
+pub(crate) async fn refresh_quota_cache(
+    store: &CodexAccountStore,
+    account_id: &str,
+) -> Result<CodexQuotaCache, String> {
+    let record = store.load_account(account_id).await?;
+    let checked_at = crate::oauth_util::now_rfc3339();
+    let account = CodexAccountSummary {
+        account_id: account_id.to_string(),
+        email: record.email.clone(),
+        expires_at: record.expires_at().map(|value| {
+            value
+                .format(&Rfc3339)
+                .unwrap_or_else(|_| record.expires_at.clone())
+        }),
+        status: record.effective_status(),
+        auto_refresh_enabled: record.auto_refresh_enabled,
+        proxy_url: record.proxy_url.clone(),
+    };
+    let resolved = match store.get_account_record(account_id).await {
+        Ok(record) => record,
+        Err(err) => {
+            let mut failed_record = record;
+            failed_record.quota.error = Some(err);
+            failed_record.quota.checked_at = Some(checked_at);
+            return store
+                .persist_quota_cache(account_id, failed_record)
+                .await
+                .map(|summary| summary.quota);
+        }
+    };
+    match fetch_account_quota(store, &account, &resolved).await {
+        Ok(summary) => {
+            let mut next_record = resolved;
+            next_record.quota = CodexQuotaCache {
+                plan_type: summary.plan_type,
+                quotas: summary.quotas,
+                error: None,
+                checked_at: Some(checked_at),
+            };
+            store
+                .persist_quota_cache(account_id, next_record)
+                .await
+                .map(|summary| summary.quota)
+        }
+        Err(err) => {
+            let mut failed_record = resolved;
+            failed_record.quota.error = Some(err);
+            failed_record.quota.checked_at = Some(checked_at);
+            store
+                .persist_quota_cache(account_id, failed_record)
+                .await
+                .map(|summary| summary.quota)
+        }
+    }
+}
+
 async fn fetch_account_quota(
     store: &CodexAccountStore,
     account: &CodexAccountSummary,
+    record: &super::types::CodexTokenRecord,
 ) -> Result<CodexQuotaSummary, String> {
-    let record = store.get_account_record(&account.account_id).await?;
     let proxy_url = store.effective_proxy_url(record.proxy_url.as_deref()).await;
     let response = request_usage(
         &record.access_token,

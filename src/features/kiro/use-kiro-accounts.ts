@@ -5,12 +5,20 @@ import {
   importKiroKamTokens,
   listKiroAccounts,
   logoutKiroAccount,
+  refreshKiroQuotaCache,
+  refreshKiroQuotaNow,
+  setKiroStatus,
   setKiroProxyUrl,
 } from "@/features/kiro/api";
 import type { KiroAccountSummary } from "@/features/kiro/types";
 import { parseError } from "@/lib/error";
 
-export function useKiroAccounts() {
+type UseKiroAccountsOptions = {
+  autoLoad?: boolean;
+};
+
+export function useKiroAccounts(options?: UseKiroAccountsOptions) {
+  const autoLoad = options?.autoLoad ?? true;
   const [accounts, setAccounts] = useState<KiroAccountSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
@@ -40,8 +48,6 @@ export function useKiroAccounts() {
     setLoading(true);
     try {
       const imported = await importKiroIdeTokens(directory);
-      const next = await listKiroAccounts();
-      setAccounts(next);
       setError("");
       return imported;
     } catch (err) {
@@ -57,8 +63,6 @@ export function useKiroAccounts() {
     setLoading(true);
     try {
       const imported = await importKiroKamTokens(path);
-      const next = await listKiroAccounts();
-      setAccounts(next);
       setError("");
       return imported;
     } catch (err) {
@@ -88,9 +92,50 @@ export function useKiroAccounts() {
     }
   }, []);
 
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  const setStatus = useCallback(async (accountId: string, status: "active" | "disabled") => {
+    setLoading(true);
+    try {
+      const updated = await setKiroStatus(accountId, status);
+      setAccounts((prev) =>
+        prev.map((item) => (item.account_id === accountId ? { ...item, ...updated } : item))
+      );
+      setError("");
+      return updated;
+    } catch (err) {
+      const message = parseError(err);
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  return { accounts, loading, error, refresh, logout, importIde, importKam, setProxyUrl };
+  const refreshQuotaCache = useCallback(async (accountIds?: string[]) => {
+    await refreshKiroQuotaCache(accountIds);
+  }, []);
+
+  const refreshQuotaNow = useCallback(async (accountId: string) => {
+    await refreshKiroQuotaNow(accountId);
+  }, []);
+
+  useEffect(() => {
+    if (!autoLoad) {
+      return;
+    }
+    void refresh();
+  }, [autoLoad, refresh]);
+
+  return {
+    accounts,
+    loading,
+    error,
+    refresh,
+    logout,
+    importIde,
+    importKam,
+    setProxyUrl,
+    setStatus,
+    refreshQuotaCache,
+    refreshQuotaNow,
+  };
 }

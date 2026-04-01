@@ -1,4 +1,4 @@
-export type CodexAccountStatus = "active" | "expired";
+export type CodexAccountStatus = "active" | "disabled" | "expired";
 
 export type CodexAccountSummary = {
   account_id: string;

@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/select";
 import { useCodexAccounts } from "@/features/codex/use-codex-accounts";
 import { useCodexLogin } from "@/features/codex/use-codex-login";
-import { useCodexQuotas } from "@/features/codex/use-codex-quotas";
 import { type CodexLoginState } from "@/features/codex/use-codex-login";
 import { formatDateLabel } from "@/features/providers/date";
 import type { ProviderAccountPageItem } from "@/features/providers/types";
@@ -35,7 +34,6 @@ import {
 } from "@/features/providers/providers-accounts-table";
 import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
 import { useKiroLogin } from "@/features/kiro/use-kiro-login";
-import { useKiroQuotas } from "@/features/kiro/use-kiro-quotas";
 import { type KiroLoginMethod } from "@/features/kiro/types";
 import { type KiroLoginState } from "@/features/kiro/use-kiro-login";
 import { parseError } from "@/lib/error";
@@ -49,27 +47,17 @@ const NUMBER_FORMATTER = new Intl.NumberFormat(undefined, {
 });
 
 type ProviderFilterValue = typeof PROVIDER_FILTER_ALL | "kiro" | "codex";
-type StatusFilterValue = typeof STATUS_FILTER_ALL | "active" | "expired";
+type StatusFilterValue =
+  | typeof STATUS_FILTER_ALL
+  | "active"
+  | "disabled"
+  | "expired"
+  | "cooling_down";
 
 type AccountBase = {
   account_id: string;
   email?: string | null;
-  status: "active" | "expired";
-};
-
-type QuotaEntry = ReturnType<typeof useKiroQuotas>["quotas"][number];
-type CodexQuotaEntry = ReturnType<typeof useCodexQuotas>["quotas"][number];
-
-type KiroQuotaView = {
-  planType: string | null;
-  quotas: QuotaEntry["quotas"];
-  error: string | null;
-};
-
-type CodexQuotaView = {
-  planType: string | null;
-  quotas: CodexQuotaEntry["quotas"];
-  error: string | null;
+  status: "active" | "disabled" | "expired" | "cooling_down";
 };
 
 type AddDialogProvider = "kiro" | "codex";
@@ -110,9 +98,11 @@ type ProvidersSectionsProps = {
   onPrevPage: () => void;
   onNextPage: () => void;
   onRefresh: (row: ProviderAccountTableRow) => Promise<void>;
+  onRefreshQuota: (row: ProviderAccountTableRow) => Promise<void>;
   onLogout: (row: ProviderAccountTableRow) => Promise<void>;
   onBatchDelete: (rows: ProviderAccountTableRow[]) => Promise<void>;
   onSaveProxyUrl: (row: ProviderAccountTableRow, proxyUrl: string) => Promise<void>;
+  onToggleStatus: (row: ProviderAccountTableRow, status: "active" | "disabled") => Promise<void>;
   onToggleAutoRefresh: (row: ProviderAccountTableRow, enabled: boolean) => Promise<void>;
 };
 
@@ -176,7 +166,9 @@ function StatusFilterSelect({
         <SelectContent>
           <SelectItem value={STATUS_FILTER_ALL}>{m.providers_filter_all_statuses()}</SelectItem>
           <SelectItem value="active">{m.kiro_account_status_active()}</SelectItem>
+          <SelectItem value="disabled">{m.common_disabled()}</SelectItem>
           <SelectItem value="expired">{m.kiro_account_status_expired()}</SelectItem>
+          <SelectItem value="cooling_down">{m.providers_account_status_cooling_down()}</SelectItem>
         </SelectContent>
       </Select>
     </div>
@@ -514,32 +506,6 @@ function useProviderFilters() {
   };
 }
 
-function buildQuotaMap(quotas: QuotaEntry[]): Map<string, KiroQuotaView> {
-  return new Map(
-    quotas.map((item) => [
-      item.account_id,
-      {
-        planType: item.plan_type ?? null,
-        quotas: item.quotas,
-        error: item.error ?? null,
-      },
-    ])
-  );
-}
-
-function buildCodexQuotaMap(quotas: CodexQuotaEntry[]): Map<string, CodexQuotaView> {
-  return new Map(
-    quotas.map((item) => [
-      item.account_id,
-      {
-        planType: item.plan_type ?? null,
-        quotas: item.quotas,
-        error: item.error ?? null,
-      },
-    ])
-  );
-}
-
 function buildToolbarProps(
   filters: ReturnType<typeof useProviderFilters>,
   addDialogOpen: boolean,
@@ -647,19 +613,42 @@ function formatDisplayName(account: AccountBase) {
 }
 
 function formatStatusVariant(status: AccountBase["status"]) {
-  return status === "expired" ? "destructive" : "secondary";
+  if (status === "expired") {
+    return "destructive";
+  }
+  if (status === "disabled") {
+    return "outline";
+  }
+  if (status === "cooling_down") {
+    return "default";
+  }
+  return "secondary";
 }
 
 function formatKiroStatus(status: AccountBase["status"]) {
-  return status === "expired"
-    ? m.kiro_account_status_expired()
-    : m.kiro_account_status_active();
+  if (status === "expired") {
+    return m.kiro_account_status_expired();
+  }
+  if (status === "disabled") {
+    return m.kiro_account_status_disabled();
+  }
+  if (status === "cooling_down") {
+    return m.kiro_account_status_cooling_down();
+  }
+  return m.kiro_account_status_active();
 }
 
 function formatCodexStatus(status: AccountBase["status"]) {
-  return status === "expired"
-    ? m.codex_account_status_expired()
-    : m.codex_account_status_active();
+  if (status === "expired") {
+    return m.codex_account_status_expired();
+  }
+  if (status === "disabled") {
+    return m.codex_account_status_disabled();
+  }
+  if (status === "cooling_down") {
+    return m.codex_account_status_cooling_down();
+  }
+  return m.codex_account_status_active();
 }
 
 function formatKiroAuthMethod(method: string | null | undefined) {
@@ -689,24 +678,24 @@ function joinSummaryParts(parts: Array<string>) {
   return parts.filter(Boolean).join(" · ");
 }
 
-function buildKiroQuotaDetails(quota: KiroQuotaView | null) {
+function buildKiroQuotaDetails(quota: ProviderAccountPageItem["quota"] | null) {
   if (quota?.error) {
     return {
-      planType: quota.planType ?? PLACEHOLDER,
+      planType: quota.plan_type ?? PLACEHOLDER,
       quotaSummary: m.providers_quota_failed_title(),
       quotaError: quota.error,
       quotaItems: [] as ProviderAccountQuotaDetailItem[],
     };
   }
-  if (!quota || quota.quotas.length === 0) {
+  if (!quota || quota.items.length === 0) {
     return {
-      planType: quota?.planType ?? PLACEHOLDER,
+      planType: quota?.plan_type ?? PLACEHOLDER,
       quotaSummary: PLACEHOLDER,
       quotaError: "",
       quotaItems: [] as ProviderAccountQuotaDetailItem[],
     };
   }
-  const quotaItems = quota.quotas.map((item) => {
+  const quotaItems = quota.items.map((item) => {
     const resetLabel = item.reset_at
       ? item.is_trial
         ? m.providers_quota_expires({ date: formatDateValue(item.reset_at) })
@@ -722,7 +711,7 @@ function buildKiroQuotaDetails(quota: KiroQuotaView | null) {
     };
   });
   return {
-    planType: quota.planType ?? PLACEHOLDER,
+    planType: quota.plan_type ?? PLACEHOLDER,
     quotaSummary: summarizeQuota(
       `${quotaItems[0]?.name} · ${quotaItems[0]?.summary ?? PLACEHOLDER}`,
       quotaItems.length
@@ -732,24 +721,24 @@ function buildKiroQuotaDetails(quota: KiroQuotaView | null) {
   };
 }
 
-function buildCodexQuotaDetails(quota: CodexQuotaView | null) {
+function buildCodexQuotaDetails(quota: ProviderAccountPageItem["quota"] | null) {
   if (quota?.error) {
     return {
-      planType: quota.planType ?? PLACEHOLDER,
+      planType: quota.plan_type ?? PLACEHOLDER,
       quotaSummary: m.providers_quota_failed_title(),
       quotaError: quota.error,
       quotaItems: [] as ProviderAccountQuotaDetailItem[],
     };
   }
-  if (!quota || quota.quotas.length === 0) {
+  if (!quota || quota.items.length === 0) {
     return {
-      planType: quota?.planType ?? PLACEHOLDER,
+      planType: quota?.plan_type ?? PLACEHOLDER,
       quotaSummary: PLACEHOLDER,
       quotaError: "",
       quotaItems: [] as ProviderAccountQuotaDetailItem[],
     };
   }
-  const quotaItems = quota.quotas.map((item) => {
+  const quotaItems = quota.items.map((item) => {
     const usageLabel =
       item.used !== null || item.limit !== null
         ? m.providers_quota_usage({
@@ -773,7 +762,7 @@ function buildCodexQuotaDetails(quota: CodexQuotaView | null) {
     };
   });
   return {
-    planType: quota.planType ?? PLACEHOLDER,
+    planType: quota.plan_type ?? PLACEHOLDER,
     quotaSummary: summarizeQuota(
       `${quotaItems[0]?.name} · ${quotaItems[0]?.summary ?? PLACEHOLDER}`,
       quotaItems.length
@@ -784,17 +773,17 @@ function buildCodexQuotaDetails(quota: CodexQuotaView | null) {
 }
 
 function buildKiroRows(
-  accounts: Array<ProviderAccountPageItem & { provider_kind: "kiro" }>,
-  quotaMap: Map<string, KiroQuotaView>
+  accounts: Array<ProviderAccountPageItem & { provider_kind: "kiro" }>
 ): ProviderAccountTableRow[] {
   return accounts.map((account) => {
-    const quota = buildKiroQuotaDetails(quotaMap.get(account.account_id) ?? null);
+    const quota = buildKiroQuotaDetails(account.quota);
     return {
       id: `kiro:${account.account_id}`,
       provider: "kiro",
       providerLabel: m.providers_kiro_title(),
       displayName: formatDisplayName(account),
       accountId: account.account_id,
+      status: account.status,
       statusLabel: formatKiroStatus(account.status),
       statusVariant: formatStatusVariant(account.status),
       expiresAtLabel: formatDateValue(account.expires_at),
@@ -822,17 +811,17 @@ function buildKiroRows(
 }
 
 function buildCodexRows(
-  accounts: Array<ProviderAccountPageItem & { provider_kind: "codex" }>,
-  quotaMap: Map<string, CodexQuotaView>
+  accounts: Array<ProviderAccountPageItem & { provider_kind: "codex" }>
 ): ProviderAccountTableRow[] {
   return accounts.map((account) => {
-    const quota = buildCodexQuotaDetails(quotaMap.get(account.account_id) ?? null);
+    const quota = buildCodexQuotaDetails(account.quota);
     return {
       id: `codex:${account.account_id}`,
       provider: "codex",
       providerLabel: m.providers_codex_title(),
       displayName: formatDisplayName(account),
       accountId: account.account_id,
+      status: account.status,
       statusLabel: formatCodexStatus(account.status),
       statusVariant: formatStatusVariant(account.status),
       expiresAtLabel: formatDateValue(account.expires_at ?? null),
@@ -872,9 +861,11 @@ function ProvidersSections({
   onPrevPage,
   onNextPage,
   onRefresh,
+  onRefreshQuota,
   onLogout,
   onBatchDelete,
   onSaveProxyUrl,
+  onToggleStatus,
   onToggleAutoRefresh,
 }: ProvidersSectionsProps) {
   return (
@@ -888,9 +879,11 @@ function ProvidersSections({
       onPrevPage={onPrevPage}
       onNextPage={onNextPage}
       onRefresh={onRefresh}
+      onRefreshQuota={onRefreshQuota}
       onLogout={onLogout}
       onBatchDelete={onBatchDelete}
       onSaveProxyUrl={onSaveProxyUrl}
+      onToggleStatus={onToggleStatus}
       onToggleAutoRefresh={onToggleAutoRefresh}
     />
   );
@@ -903,18 +896,34 @@ function useProvidersPanelState() {
     providerFilter: filters.providerFilter,
     statusFilter: filters.statusFilter,
   });
-  const kiroAccounts = useKiroAccounts();
-  const codexAccounts = useCodexAccounts();
-  const kiroQuotas = useKiroQuotas();
-  const codexQuotas = useCodexQuotas();
-  const refreshKiroData = useCallback(async () => {
-    await Promise.all([kiroAccounts.refresh(), kiroQuotas.refresh()]);
+  const kiroAccounts = useKiroAccounts({ autoLoad: false });
+  const codexAccounts = useCodexAccounts({ autoLoad: false });
+  const refreshKiroData = useCallback(async (accountId?: string) => {
+    await kiroAccounts.refreshQuotaCache(accountId ? [accountId] : undefined);
     await providerAccounts.refresh();
-  }, [kiroAccounts, kiroQuotas, providerAccounts]);
-  const refreshCodexData = useCallback(async () => {
-    await Promise.all([codexAccounts.refresh(), codexQuotas.refresh()]);
+    await kiroAccounts.refresh();
+  }, [kiroAccounts, providerAccounts]);
+  const refreshCodexData = useCallback(async (accountId?: string) => {
+    await codexAccounts.refreshQuotaCache(accountId ? [accountId] : undefined);
     await providerAccounts.refresh();
-  }, [codexAccounts, codexQuotas, providerAccounts]);
+    await codexAccounts.refresh();
+  }, [codexAccounts, providerAccounts]);
+  const syncImportedKiroAccounts = useCallback(async (accountIds: string[]) => {
+    try {
+      await kiroAccounts.refreshQuotaCache(accountIds);
+      await Promise.all([providerAccounts.refresh(), kiroAccounts.refresh()]);
+    } catch (error) {
+      toast.error(parseError(error));
+    }
+  }, [kiroAccounts, providerAccounts]);
+  const syncImportedCodexAccounts = useCallback(async (accountIds: string[]) => {
+    try {
+      await codexAccounts.refreshQuotaCache(accountIds);
+      await Promise.all([providerAccounts.refresh(), codexAccounts.refresh()]);
+    } catch (error) {
+      toast.error(parseError(error));
+    }
+  }, [codexAccounts, providerAccounts]);
   const kiroLogin = useKiroLogin({ onRefresh: refreshKiroData });
   const codexLogin = useCodexLogin({ onRefresh: refreshCodexData });
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -923,14 +932,9 @@ function useProvidersPanelState() {
   const [batchDeleting, setBatchDeleting] = useState(false);
   const [optimisticDeletedIds, setOptimisticDeletedIds] = useState<Set<string>>(new Set());
   const refreshAll = useCallback(async () => {
-    await Promise.all([
-      kiroAccounts.refresh(),
-      kiroQuotas.refresh(),
-      codexAccounts.refresh(),
-      codexQuotas.refresh(),
-    ]);
+    await Promise.all([kiroAccounts.refresh(), codexAccounts.refresh()]);
     await providerAccounts.refresh();
-  }, [kiroAccounts, kiroQuotas, codexAccounts, codexQuotas, providerAccounts]);
+  }, [kiroAccounts, codexAccounts, providerAccounts]);
   const loginKiro = useCallback(async (method: KiroLoginMethod) => {
     await kiroLogin.beginLogin(method);
   }, [kiroLogin]);
@@ -944,16 +948,15 @@ function useProvidersPanelState() {
     }
     setKiroImporting(true);
     try {
-      await kiroAccounts.importIde(selection);
-      await kiroQuotas.refresh();
-      await providerAccounts.refresh();
+      const imported = await kiroAccounts.importIde(selection);
       toast.success(m.kiro_import_success());
+      void syncImportedKiroAccounts(imported.map((item) => item.account_id));
     } catch (error) {
       toast.error(parseError(error));
     } finally {
       setKiroImporting(false);
     }
-  }, [kiroAccounts, kiroQuotas, providerAccounts]);
+  }, [kiroAccounts, syncImportedKiroAccounts]);
   const importKiroKam = useCallback(async () => {
     const selection = await open({
       directory: false,
@@ -965,16 +968,15 @@ function useProvidersPanelState() {
     }
     setKiroImporting(true);
     try {
-      await kiroAccounts.importKam(selection);
-      await kiroQuotas.refresh();
-      await providerAccounts.refresh();
+      const imported = await kiroAccounts.importKam(selection);
       toast.success(m.kiro_import_kam_success());
+      void syncImportedKiroAccounts(imported.map((item) => item.account_id));
     } catch (error) {
       toast.error(parseError(error));
     } finally {
       setKiroImporting(false);
     }
-  }, [kiroAccounts, kiroQuotas, providerAccounts]);
+  }, [kiroAccounts, syncImportedKiroAccounts]);
   const loginCodex = useCallback(async () => {
     await codexLogin.beginLogin();
   }, [codexLogin]);
@@ -989,16 +991,15 @@ function useProvidersPanelState() {
     }
     setCodexImporting(true);
     try {
-      await codexAccounts.importFile(selection);
-      await codexQuotas.refresh();
-      await providerAccounts.refresh();
+      const imported = await codexAccounts.importFile(selection);
       toast.success(m.codex_import_success());
+      void syncImportedCodexAccounts(imported.map((item) => item.account_id));
     } catch (error) {
       toast.error(parseError(error));
     } finally {
       setCodexImporting(false);
     }
-  }, [codexAccounts, codexQuotas, providerAccounts]);
+  }, [codexAccounts, syncImportedCodexAccounts]);
   const importCodexDirectory = useCallback(async () => {
     const selection = await open({
       directory: true,
@@ -1009,24 +1010,16 @@ function useProvidersPanelState() {
     }
     setCodexImporting(true);
     try {
-      await codexAccounts.importFile(selection);
-      await codexQuotas.refresh();
-      await providerAccounts.refresh();
+      const imported = await codexAccounts.importFile(selection);
       toast.success(m.codex_import_success());
+      void syncImportedCodexAccounts(imported.map((item) => item.account_id));
     } catch (error) {
       toast.error(parseError(error));
     } finally {
       setCodexImporting(false);
     }
-  }, [codexAccounts, codexQuotas, providerAccounts]);
-  const quotaMap = useMemo(() => buildQuotaMap(kiroQuotas.quotas), [kiroQuotas.quotas]);
-  const codexQuotaMap = useMemo(() => buildCodexQuotaMap(codexQuotas.quotas), [codexQuotas.quotas]);
-  const refreshBusy =
-    kiroAccounts.loading ||
-    kiroQuotas.loading ||
-    codexAccounts.loading ||
-    codexQuotas.loading ||
-    providerAccounts.loading;
+  }, [codexAccounts, syncImportedCodexAccounts]);
+  const refreshBusy = kiroAccounts.loading || codexAccounts.loading || providerAccounts.loading;
   const kiroActionBusy =
     kiroImporting ||
     kiroLogin.login.status === "waiting" ||
@@ -1072,10 +1065,10 @@ function useProvidersPanelState() {
         item.provider_kind === "codex"
     );
     return [
-      ...buildKiroRows(kiroPageItems, quotaMap),
-      ...buildCodexRows(codexPageItems, codexQuotaMap),
+      ...buildKiroRows(kiroPageItems),
+      ...buildCodexRows(codexPageItems),
     ];
-  }, [providerAccounts.items, quotaMap, codexQuotaMap]);
+  }, [providerAccounts.items]);
   const visibleRows = useMemo(
     () => rows.filter((row) => !optimisticDeletedIds.has(row.id)),
     [rows, optimisticDeletedIds]
@@ -1084,23 +1077,21 @@ function useProvidersPanelState() {
   const tableError = collectErrorMessages([
     providerAccounts.error,
     filters.providerFilter !== "codex" ? kiroAccounts.error : "",
-    filters.providerFilter !== "codex" ? kiroQuotas.error : "",
     filters.providerFilter !== "kiro" ? codexAccounts.error : "",
-    filters.providerFilter !== "kiro" ? codexQuotas.error : "",
   ]);
   const handleRowLogout = useCallback(
     async (row: ProviderAccountTableRow) => {
       if (row.provider === "kiro") {
         await kiroAccounts.logout(row.accountId);
-        await kiroQuotas.refresh();
         await providerAccounts.refresh();
+        await kiroAccounts.refresh();
         return;
       }
       await codexAccounts.logout(row.accountId);
-      await codexQuotas.refresh();
       await providerAccounts.refresh();
+      await codexAccounts.refresh();
     },
-    [kiroAccounts, kiroQuotas, codexAccounts, codexQuotas, providerAccounts]
+    [kiroAccounts, codexAccounts, providerAccounts]
   );
   const handleRowRefresh = useCallback(
     async (row: ProviderAccountTableRow) => {
@@ -1109,13 +1100,14 @@ function useProvidersPanelState() {
       }
       try {
         await codexAccounts.refreshAccount(row.accountId);
-        await codexQuotas.refresh();
+        await codexAccounts.refreshQuotaCache([row.accountId]);
         await providerAccounts.refresh();
+        await codexAccounts.refresh();
       } catch (error) {
         toast.error(parseError(error));
       }
     },
-    [codexAccounts, codexQuotas, providerAccounts]
+    [codexAccounts, providerAccounts]
   );
   const handleCodexAutoRefreshToggle = useCallback(
     async (row: ProviderAccountTableRow, enabled: boolean) => {
@@ -1131,22 +1123,54 @@ function useProvidersPanelState() {
     },
     [codexAccounts, providerAccounts]
   );
+  const handleRowRefreshQuota = useCallback(
+    async (row: ProviderAccountTableRow) => {
+      try {
+        if (row.provider === "kiro") {
+          await kiroAccounts.refreshQuotaNow(row.accountId);
+          await Promise.all([providerAccounts.refresh(), kiroAccounts.refresh()]);
+          return;
+        }
+        await codexAccounts.refreshQuotaNow(row.accountId);
+        await Promise.all([providerAccounts.refresh(), codexAccounts.refresh()]);
+      } catch (error) {
+        toast.error(parseError(error));
+      }
+    },
+    [kiroAccounts, codexAccounts, providerAccounts]
+  );
+  const handleAccountStatusToggle = useCallback(
+    async (row: ProviderAccountTableRow, status: "active" | "disabled") => {
+      try {
+        if (row.provider === "kiro") {
+          await kiroAccounts.setStatus(row.accountId, status);
+          await Promise.all([providerAccounts.refresh(), kiroAccounts.refresh()]);
+          return;
+        }
+        await codexAccounts.setStatus(row.accountId, status);
+        await Promise.all([providerAccounts.refresh(), codexAccounts.refresh()]);
+      } catch (error) {
+        toast.error(parseError(error));
+      }
+    },
+    [kiroAccounts, codexAccounts, providerAccounts]
+  );
   const handleSaveProxyUrl = useCallback(
     async (row: ProviderAccountTableRow, proxyUrl: string) => {
       try {
         if (row.provider === "kiro") {
           await kiroAccounts.setProxyUrl(row.accountId, proxyUrl || null);
-          await kiroQuotas.refresh();
+          await kiroAccounts.refresh();
         } else {
           await codexAccounts.setProxyUrl(row.accountId, proxyUrl || null);
-          await codexQuotas.refresh();
+          await codexAccounts.refresh();
         }
         await providerAccounts.refresh();
       } catch (error) {
         toast.error(parseError(error));
       }
     },
-    [kiroAccounts, kiroQuotas, codexAccounts, codexQuotas, providerAccounts]
+    [kiroAccounts, codexAccounts, providerAccounts]
   );
 
   const handleBatchDelete = useCallback(
@@ -1161,12 +1185,7 @@ function useProvidersPanelState() {
       try {
         await deleteProviderAccounts(accountIds);
         await providerAccounts.refresh();
-        void Promise.all([
-          kiroAccounts.refresh(),
-          kiroQuotas.refresh(),
-          codexAccounts.refresh(),
-          codexQuotas.refresh(),
-        ]).catch(() => undefined);
+        void Promise.all([kiroAccounts.refresh(), codexAccounts.refresh()]).catch(() => undefined);
         toast.success(m.providers_accounts_delete_success({ count: accountIds.length }));
       } catch (error) {
         toast.error(parseError(error));
@@ -1175,7 +1194,7 @@ function useProvidersPanelState() {
         setOptimisticDeletedIds(new Set());
       }
     },
-    [kiroAccounts, kiroQuotas, codexAccounts, codexQuotas, providerAccounts]
+    [kiroAccounts, codexAccounts, providerAccounts]
   );
 
   return {
@@ -1189,9 +1208,11 @@ function useProvidersPanelState() {
     onPrevPage: providerAccounts.onPrevPage,
     onNextPage: providerAccounts.onNextPage,
     onRefresh: handleRowRefresh,
+    onRefreshQuota: handleRowRefreshQuota,
     onLogout: handleRowLogout,
     onBatchDelete: handleBatchDelete,
     onSaveProxyUrl: handleSaveProxyUrl,
+    onToggleStatus: handleAccountStatusToggle,
     onToggleAutoRefresh: handleCodexAutoRefreshToggle,
   };
 }
@@ -1212,9 +1233,11 @@ export function ProvidersPanel() {
         onPrevPage={state.onPrevPage}
         onNextPage={state.onNextPage}
         onRefresh={state.onRefresh}
+        onRefreshQuota={state.onRefreshQuota}
         onLogout={state.onLogout}
         onBatchDelete={state.onBatchDelete}
         onSaveProxyUrl={state.onSaveProxyUrl}
+        onToggleStatus={state.onToggleStatus}
         onToggleAutoRefresh={state.onToggleAutoRefresh}
       />
     </div>

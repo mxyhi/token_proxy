@@ -21,7 +21,7 @@ type LoginPollingHandlers = {
 };
 
 type UseKiroLoginOptions = {
-  onRefresh: () => Promise<void> | void;
+  onRefresh: (accountId?: string) => Promise<void> | void;
   onSelect?: (accountId: string) => void;
 };
 
@@ -66,7 +66,7 @@ export function useKiroLogin({ onRefresh, onSelect }: UseKiroLoginOptions) {
         onSuccess: async (accountId) => {
           clearPoller();
           setLogin({ status: "success" });
-          await Promise.resolve(onRefresh());
+          await Promise.resolve(onRefresh(accountId));
           toast.success(m.kiro_login_success());
           if (accountId && onSelect) {
             onSelect(accountId);

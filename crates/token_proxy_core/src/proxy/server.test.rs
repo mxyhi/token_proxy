@@ -1,7 +1,7 @@
 use super::*;
 
 use axum::{
-    body::{to_bytes, Body},
+    body::{to_bytes, Body, Bytes},
     extract::State,
     http::{HeaderMap, HeaderValue, Method, StatusCode, Uri},
     response::IntoResponse,
@@ -152,6 +152,14 @@ struct MockUpstreamState {
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
+#[derive(Clone)]
+struct MockRawUpstreamState {
+    status: StatusCode,
+    body: Bytes,
+    content_type: String,
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
+}
+
 struct MockUpstream {
     base_url: String,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
@@ -171,6 +179,13 @@ impl MockUpstream {
 #[derive(Clone)]
 struct MockAuthSwitchState {
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
+    primary_status: StatusCode,
+}
+
+#[derive(Clone)]
+struct MockKiroAuthSwitchState {
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
+    primary_status: StatusCode,
 }
 
 async fn mock_upstream_handler(
@@ -243,6 +258,68 @@ async fn spawn_mock_upstream_with_delay(
     }
 }
 
+async fn mock_raw_upstream_handler(
+    State(state): State<Arc<MockRawUpstreamState>>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Body,
+) -> axum::response::Response {
+    let bytes = to_bytes(body, usize::MAX).await.expect("read mock body");
+    let json_body = serde_json::from_slice::<Value>(&bytes).expect("mock request json");
+    state
+        .requests
+        .lock()
+        .expect("requests lock")
+        .push(RecordedRequest {
+            path: uri.path().to_string(),
+            body: json_body,
+            authorization: headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
+            chatgpt_account_id: headers
+                .get("chatgpt-account-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string),
+        });
+    axum::response::Response::builder()
+        .status(state.status)
+        .header(axum::http::header::CONTENT_TYPE, state.content_type.as_str())
+        .body(Body::from(state.body.clone()))
+        .expect("build raw mock response")
+}
+
+async fn spawn_mock_raw_upstream(
+    status: StatusCode,
+    body: Bytes,
+    content_type: &str,
+) -> MockUpstream {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let state = Arc::new(MockRawUpstreamState {
+        status,
+        body,
+        content_type: content_type.to_string(),
+        requests: requests.clone(),
+    });
+    let app = Router::new()
+        .route("/{*path}", any(mock_raw_upstream_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind raw mock upstream");
+    let addr: SocketAddr = listener.local_addr().expect("mock local addr");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("raw mock upstream server should run");
+    });
+    MockUpstream {
+        base_url: format!("http://{addr}"),
+        requests,
+        task,
+    }
+}
+
 async fn auth_switch_upstream_handler(
     State(state): State<Arc<MockAuthSwitchState>>,
     headers: HeaderMap,
@@ -273,15 +350,26 @@ async fn auth_switch_upstream_handler(
 
     let (status, body) = match authorization.as_deref() {
         Some("Bearer codex-access-a") => (
-            StatusCode::UNAUTHORIZED,
-            json!({
-                "error": {
-                    "message": "Your authentication token has been invalidated. Please try signing in again.",
-                    "type": "invalid_request_error",
-                    "code": "token_invalidated",
-                    "param": null
-                }
-            }),
+            state.primary_status,
+            if state.primary_status == StatusCode::UNAUTHORIZED {
+                json!({
+                    "error": {
+                        "message": "Your authentication token has been invalidated. Please try signing in again.",
+                        "type": "invalid_request_error",
+                        "code": "token_invalidated",
+                        "param": null
+                    }
+                })
+            } else {
+                json!({
+                    "error": {
+                        "message": format!("primary failed: {}", state.primary_status.as_u16()),
+                        "type": "invalid_request_error",
+                        "code": "bad_request",
+                        "param": null
+                    }
+                })
+            },
         ),
         Some("Bearer codex-access-b") => (
             StatusCode::OK,
@@ -330,6 +418,7 @@ async fn spawn_auth_switch_mock_upstream() -> MockUpstream {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let state = Arc::new(MockAuthSwitchState {
         requests: requests.clone(),
+        primary_status: StatusCode::UNAUTHORIZED,
     });
     let app = Router::new()
         .route("/{*path}", any(auth_switch_upstream_handler))
@@ -342,6 +431,119 @@ async fn spawn_auth_switch_mock_upstream() -> MockUpstream {
         axum::serve(listener, app)
             .await
             .expect("auth switch mock upstream server should run");
+    });
+    MockUpstream {
+        base_url: format!("http://{addr}"),
+        requests,
+        task,
+    }
+}
+
+async fn spawn_auth_switch_mock_upstream_with_primary_status(
+    primary_status: StatusCode,
+) -> MockUpstream {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let state = Arc::new(MockAuthSwitchState {
+        requests: requests.clone(),
+        primary_status,
+    });
+    let app = Router::new()
+        .route("/{*path}", any(auth_switch_upstream_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind auth switch mock upstream");
+    let addr: SocketAddr = listener.local_addr().expect("mock local addr");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("auth switch mock upstream server should run");
+    });
+    MockUpstream {
+        base_url: format!("http://{addr}"),
+        requests,
+        task,
+    }
+}
+
+async fn kiro_auth_switch_upstream_handler(
+    State(state): State<Arc<MockKiroAuthSwitchState>>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Body,
+) -> axum::response::Response {
+    let bytes = to_bytes(body, usize::MAX).await.expect("read mock body");
+    let json_body = serde_json::from_slice::<Value>(&bytes).expect("mock request json");
+    let authorization = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+
+    state
+        .requests
+        .lock()
+        .expect("requests lock")
+        .push(RecordedRequest {
+            path: uri.path().to_string(),
+            body: json_body,
+            authorization: authorization.clone(),
+            chatgpt_account_id: None,
+        });
+
+    let (status, content_type, body) = match authorization.as_deref() {
+        Some("Bearer kiro-access-a") => (
+            state.primary_status,
+            "application/json",
+            (json!({
+                "error": {
+                    "message": format!("primary failed: {}", state.primary_status.as_u16())
+                }
+            }))
+            .to_string()
+            .into_bytes(),
+        ),
+        Some("Bearer kiro-access-b") => (
+            StatusCode::OK,
+            "application/vnd.amazon.eventstream",
+            build_kiro_event_stream("from kiro failover").to_vec(),
+        ),
+        _ => (
+            StatusCode::UNAUTHORIZED,
+            "application/json",
+            (json!({
+                "error": {
+                    "message": "unexpected account"
+                }
+            }))
+            .to_string()
+            .into_bytes(),
+        ),
+    };
+
+    axum::response::Response::builder()
+        .status(status)
+        .header(axum::http::header::CONTENT_TYPE, content_type)
+        .body(Body::from(body))
+        .expect("build kiro auth switch response")
+}
+
+async fn spawn_kiro_auth_switch_mock_upstream(primary_status: StatusCode) -> MockUpstream {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let state = Arc::new(MockKiroAuthSwitchState {
+        requests: requests.clone(),
+        primary_status,
+    });
+    let app = Router::new()
+        .route("/{*path}", any(kiro_auth_switch_upstream_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind kiro auth switch mock upstream");
+    let addr: SocketAddr = listener.local_addr().expect("mock local addr");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("kiro auth switch mock upstream server should run");
     });
     MockUpstream {
         base_url: format!("http://{addr}"),
@@ -597,11 +799,13 @@ async fn build_test_state_handle_with_paths(
                             refresh_token: "codex-refresh-token".to_string(),
                             id_token: "codex-id-token".to_string(),
                             auto_refresh_enabled: true,
+                            status: crate::codex::CodexAccountStatus::Active,
                             account_id: Some("chatgpt-account".to_string()),
                             email: Some("codex@example.com".to_string()),
                             expires_at: expires_at.clone(),
                             last_refresh: None,
                             proxy_url: None,
+                            quota: crate::codex::CodexQuotaCache::default(),
                         },
                     )
                     .await
@@ -621,6 +825,10 @@ async fn build_test_state_handle_with_paths(
         cursors,
         upstream_selector:
             super::super::upstream_selector::UpstreamSelectorRuntime::new_with_cooldown(
+                retryable_failure_cooldown,
+            ),
+        account_selector:
+            super::super::account_selector::AccountSelectorRuntime::new_with_cooldown(
                 retryable_failure_cooldown,
             ),
         request_detail: Arc::new(super::super::request_detail::RequestDetailCapture::new(
@@ -650,15 +858,84 @@ async fn seed_codex_account(
                 refresh_token: "codex-refresh-token".to_string(),
                 id_token: "codex-id-token".to_string(),
                 auto_refresh_enabled: true,
+                status: crate::codex::CodexAccountStatus::Active,
                 account_id: Some(chatgpt_account_id.to_string()),
                 email: Some(format!("{storage_account_id}@example.com")),
                 expires_at: expires_at.to_string(),
                 last_refresh: None,
                 proxy_url: None,
+                quota: crate::codex::CodexQuotaCache::default(),
             },
         )
         .await
         .expect("seed codex account");
+}
+
+async fn seed_kiro_account(
+    state: &ProxyStateHandle,
+    storage_account_id: &str,
+    access_token: &str,
+    expires_at: &str,
+) {
+    let state_guard = state.read().await;
+    state_guard
+        .kiro_accounts
+        .save_record(
+            storage_account_id.to_string(),
+            crate::kiro::KiroTokenRecord {
+                provider: "kiro".to_string(),
+                auth_method: "social".to_string(),
+                access_token: access_token.to_string(),
+                refresh_token: "kiro-refresh-token".to_string(),
+                client_id: None,
+                client_secret: None,
+                email: Some(format!("{storage_account_id}@example.com")),
+                expires_at: expires_at.to_string(),
+                last_refresh: None,
+                profile_arn: None,
+                start_url: None,
+                region: None,
+                proxy_url: None,
+                status: crate::kiro::KiroAccountStatus::Active,
+                quota: crate::kiro::KiroQuotaCache::default(),
+            },
+        )
+        .await
+        .expect("seed kiro account");
+}
+
+fn build_kiro_event_stream(text: &str) -> Bytes {
+    let mut payload = Vec::new();
+    payload.extend(encode_kiro_event_frame(
+        json!({
+            "assistantResponseEvent": {
+                "content": text
+            }
+        })
+        .to_string()
+        .as_bytes(),
+    ));
+    payload.extend(encode_kiro_event_frame(
+        json!({
+            "messageStopEvent": {
+                "stopReason": "end_turn"
+            }
+        })
+        .to_string()
+        .as_bytes(),
+    ));
+    Bytes::from(payload)
+}
+
+fn encode_kiro_event_frame(payload: &[u8]) -> Vec<u8> {
+    let total_len = (16 + payload.len()) as u32;
+    let mut frame = Vec::with_capacity(total_len as usize);
+    frame.extend_from_slice(&total_len.to_be_bytes());
+    frame.extend_from_slice(&0u32.to_be_bytes());
+    frame.extend_from_slice(&0u32.to_be_bytes());
+    frame.extend_from_slice(payload);
+    frame.extend_from_slice(&0u32.to_be_bytes());
+    frame
 }
 
 async fn assert_responses_retry_fallback_status(status: StatusCode) {
@@ -769,6 +1046,36 @@ async fn send_responses_request(state: ProxyStateHandle) -> (StatusCode, Value) 
             json!({
                 "model": "gpt-5",
                 "input": "hi"
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("proxy response bytes");
+    let json = serde_json::from_slice(&body).expect("proxy response json");
+    (status, json)
+}
+
+async fn send_messages_request(state: ProxyStateHandle) -> (StatusCode, Value) {
+    let response = proxy_request(
+        State(state),
+        Method::POST,
+        Uri::from_static("/v1/messages"),
+        axum::http::HeaderMap::new(),
+        Body::from(
+            json!({
+                "model": "claude-sonnet-4.5",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "hi"
+                    }
+                ],
+                "max_tokens": 64
             })
             .to_string(),
         ),
@@ -983,6 +1290,278 @@ fn responses_request_failovers_to_next_codex_account_after_proxy_error() {
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].authorization.as_deref(), Some("Bearer codex-access-b"));
         assert_eq!(requests[0].chatgpt_account_id.as_deref(), Some("chatgpt-b"));
+    });
+}
+
+#[test]
+fn responses_request_cooldowns_same_codex_account_after_401() {
+    run_async(async {
+        let codex =
+            spawn_auth_switch_mock_upstream_with_primary_status(StatusCode::UNAUTHORIZED).await;
+
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_CODEX,
+            0,
+            "codex-account-cooldown-401",
+            codex.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        let provider_upstreams = config
+            .upstreams
+            .get_mut(PROVIDER_CODEX)
+            .expect("codex upstreams");
+        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
+
+        let data_dir = next_test_data_dir("responses_codex_account_cooldown_401");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("format expires_at");
+        seed_codex_account(&state, "codex-a.json", "codex-access-a", "chatgpt-a", &expires_at)
+            .await;
+        seed_codex_account(&state, "codex-b.json", "codex-access-b", "chatgpt-b", &expires_at)
+            .await;
+
+        let (first_status, first_json) = send_responses_request(state.clone()).await;
+        let (second_status, second_json) = send_responses_request(state).await;
+        let requests = codex.requests();
+
+        codex.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(first_status, StatusCode::OK);
+        assert_eq!(second_status, StatusCode::OK);
+        assert_eq!(
+            first_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from codex failover")
+        );
+        assert_eq!(
+            second_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from codex failover")
+        );
+        assert_eq!(
+            requests.len(),
+            3,
+            "401 should temporarily cool down the failed account across requests"
+        );
+        assert_eq!(requests[0].authorization.as_deref(), Some("Bearer codex-access-a"));
+        assert_eq!(requests[1].authorization.as_deref(), Some("Bearer codex-access-b"));
+        assert_eq!(requests[2].authorization.as_deref(), Some("Bearer codex-access-b"));
+    });
+}
+
+#[test]
+fn responses_request_does_not_cooldown_same_codex_account_after_400() {
+    run_async(async {
+        let codex = spawn_auth_switch_mock_upstream_with_primary_status(StatusCode::BAD_REQUEST)
+            .await;
+
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_CODEX,
+            0,
+            "codex-account-cooldown-400",
+            codex.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        let provider_upstreams = config
+            .upstreams
+            .get_mut(PROVIDER_CODEX)
+            .expect("codex upstreams");
+        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
+
+        let data_dir = next_test_data_dir("responses_codex_account_no_cooldown_400");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("format expires_at");
+        seed_codex_account(&state, "codex-a.json", "codex-access-a", "chatgpt-a", &expires_at)
+            .await;
+        seed_codex_account(&state, "codex-b.json", "codex-access-b", "chatgpt-b", &expires_at)
+            .await;
+
+        let (first_status, first_json) = send_responses_request(state.clone()).await;
+        let (second_status, second_json) = send_responses_request(state).await;
+        let requests = codex.requests();
+
+        codex.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(first_status, StatusCode::OK);
+        assert_eq!(second_status, StatusCode::OK);
+        assert_eq!(
+            first_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from codex failover")
+        );
+        assert_eq!(
+            second_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from codex failover")
+        );
+        assert_eq!(
+            requests.len(),
+            4,
+            "400 should remain same-request retryable, but must not cool down the account across requests"
+        );
+        assert_eq!(requests[0].authorization.as_deref(), Some("Bearer codex-access-a"));
+        assert_eq!(requests[1].authorization.as_deref(), Some("Bearer codex-access-b"));
+        assert_eq!(requests[2].authorization.as_deref(), Some("Bearer codex-access-a"));
+        assert_eq!(requests[3].authorization.as_deref(), Some("Bearer codex-access-b"));
+    });
+}
+
+#[test]
+fn messages_request_failovers_to_next_kiro_account_before_next_upstream() {
+    run_async(async {
+        let kiro = spawn_kiro_auth_switch_mock_upstream(StatusCode::FORBIDDEN).await;
+        let fallback = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "msg_fallback_upstream",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4.5",
+                "content": [
+                    { "type": "text", "text": "from fallback upstream" }
+                ],
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 2
+                }
+            }),
+        )
+        .await;
+
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_KIRO,
+                0,
+                "kiro-auto-failover",
+                kiro.base_url.as_str(),
+                FORMATS_MESSAGES,
+            ),
+            (
+                PROVIDER_KIRO,
+                0,
+                "kiro-fallback-upstream",
+                fallback.base_url.as_str(),
+                FORMATS_MESSAGES,
+            ),
+        ]);
+        let provider_upstreams = config
+            .upstreams
+            .get_mut(PROVIDER_KIRO)
+            .expect("kiro upstreams");
+        provider_upstreams.groups[0].items[0].kiro_account_id = None;
+        provider_upstreams.groups[0].items[1].kiro_account_id = None;
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
+
+        let data_dir = next_test_data_dir("messages_kiro_account_failover");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("format expires_at");
+        seed_kiro_account(&state, "kiro-a.json", "kiro-access-a", &expires_at).await;
+        seed_kiro_account(&state, "kiro-b.json", "kiro-access-b", &expires_at).await;
+
+        let (status, json) = send_messages_request(state).await;
+        let kiro_requests = kiro.requests();
+        let fallback_requests = fallback.requests();
+
+        kiro.abort();
+        fallback.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(json["content"][0]["text"].as_str(), Some("from kiro failover"));
+        assert_eq!(kiro_requests.len(), 2);
+        assert_eq!(kiro_requests[0].authorization.as_deref(), Some("Bearer kiro-access-a"));
+        assert_eq!(kiro_requests[1].authorization.as_deref(), Some("Bearer kiro-access-b"));
+        assert!(
+            fallback_requests.is_empty(),
+            "kiro should exhaust same-upstream accounts before falling back to next upstream"
+        );
+    });
+}
+
+#[test]
+fn messages_request_falls_back_to_next_kiro_upstream_after_all_kiro_accounts_fail() {
+    run_async(async {
+        let kiro = spawn_mock_upstream(
+            StatusCode::FORBIDDEN,
+            json!({
+                "error": {
+                    "message": "all kiro accounts failed with forbidden"
+                }
+            }),
+        )
+        .await;
+        let fallback = spawn_mock_raw_upstream(
+            StatusCode::OK,
+            build_kiro_event_stream("from downstream fallback"),
+            "application/vnd.amazon.eventstream",
+        )
+        .await;
+
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_KIRO,
+                0,
+                "kiro-all-accounts-fail",
+                kiro.base_url.as_str(),
+                FORMATS_MESSAGES,
+            ),
+            (
+                PROVIDER_KIRO,
+                0,
+                "kiro-fallback-upstream",
+                fallback.base_url.as_str(),
+                FORMATS_MESSAGES,
+            ),
+        ]);
+        let provider_upstreams = config
+            .upstreams
+            .get_mut(PROVIDER_KIRO)
+            .expect("kiro upstreams");
+        provider_upstreams.groups[0].items[0].kiro_account_id = None;
+        provider_upstreams.groups[0].items[1].kiro_account_id = None;
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
+
+        let data_dir = next_test_data_dir("messages_kiro_accounts_then_upstream");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("format expires_at");
+        seed_kiro_account(&state, "kiro-a.json", "kiro-access-a", &expires_at).await;
+        seed_kiro_account(&state, "kiro-b.json", "kiro-access-b", &expires_at).await;
+
+        let (status, json) = send_messages_request(state).await;
+        let kiro_requests = kiro.requests();
+        let fallback_requests = fallback.requests();
+
+        kiro.abort();
+        fallback.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["content"][0]["text"].as_str(),
+            Some("from downstream fallback")
+        );
+        assert_eq!(kiro_requests.len(), 2);
+        assert_eq!(kiro_requests[0].authorization.as_deref(), Some("Bearer kiro-access-a"));
+        assert_eq!(kiro_requests[1].authorization.as_deref(), Some("Bearer kiro-access-b"));
+        assert_eq!(
+            fallback_requests.len(),
+            1,
+            "next upstream should only run after same-upstream kiro accounts are exhausted"
+        );
     });
 }
 

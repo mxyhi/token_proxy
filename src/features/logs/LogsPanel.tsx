@@ -8,6 +8,13 @@ import { DataTable } from "@/components/data-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Sheet,
@@ -28,11 +35,13 @@ import {
   formatInteger,
 } from "@/features/dashboard/format";
 import {
+  readAccountStateLogs,
   readRequestDetailCapture,
   readRequestLogDetail,
   setRequestDetailCapture,
 } from "@/features/logs/api";
 import type {
+  AccountStateLogItem,
   RequestDetailCaptureState,
   RequestLogDetail,
 } from "@/features/logs/types";
@@ -49,6 +58,7 @@ const IDLE_CAPTURE_STATE: RequestDetailCaptureState = {
 };
 
 type DetailStatus = "idle" | "loading" | "error";
+type StateLogsStatus = "idle" | "loading" | "error";
 
 type RequestDetailCaptureEvent = RequestDetailCaptureState;
 
@@ -172,6 +182,117 @@ function DetailSection({ title, value }: DetailSectionProps) {
       ) : (
         <p className="text-xs text-muted-foreground">{DETAIL_PLACEHOLDER}</p>
       )}
+    </div>
+  );
+}
+
+function formatAccountStateEventKind(eventKind: string) {
+  if (eventKind === "cooldown_started") {
+    return m.logs_state_event_kind_cooldown_started();
+  }
+  if (eventKind === "cooldown_cleared") {
+    return m.logs_state_event_kind_cooldown_cleared();
+  }
+  if (eventKind === "status_changed") {
+    return m.logs_state_event_kind_status_changed();
+  }
+  return eventKind;
+}
+
+function formatAccountStateStatus(status: string) {
+  if (status === "disabled") {
+    return m.common_disabled();
+  }
+  if (status === "cooling_down") {
+    return m.providers_account_status_cooling_down();
+  }
+  if (status === "active") {
+    return m.kiro_account_status_active();
+  }
+  if (status === "expired") {
+    return m.kiro_account_status_expired();
+  }
+  return status;
+}
+
+function accountStateStatusVariant(status: string): BadgeVariant {
+  if (status === "disabled") {
+    return "secondary";
+  }
+  if (status === "cooling_down") {
+    return "destructive";
+  }
+  return "default";
+}
+
+type AccountStateLogsSectionProps = {
+  items: AccountStateLogItem[];
+  status: StateLogsStatus;
+  statusMessage: string;
+  formatter: Intl.DateTimeFormat;
+};
+
+function AccountStateLogsSection({
+  items,
+  status,
+  statusMessage,
+  formatter,
+}: AccountStateLogsSectionProps) {
+  return (
+    <div className="px-4 lg:px-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">{m.logs_state_events_title()}</CardTitle>
+          <CardDescription>{m.logs_state_events_desc()}</CardDescription>
+        </CardHeader>
+        <CardContent className="pt-0">
+          {status === "loading" ? (
+            <p className="text-sm text-muted-foreground">{m.logs_state_events_loading()}</p>
+          ) : null}
+          {status === "error" ? (
+            <Alert variant="destructive">
+              <AlertCircle className="size-4" aria-hidden="true" />
+              <div>
+                <AlertTitle>{m.logs_state_events_error()}</AlertTitle>
+                <AlertDescription>{statusMessage}</AlertDescription>
+              </div>
+            </Alert>
+          ) : null}
+          {status === "idle" && items.length === 0 ? (
+            <p className="text-sm text-muted-foreground">{m.logs_state_events_empty()}</p>
+          ) : null}
+          {status === "idle" && items.length > 0 ? (
+            <div className="space-y-3">
+              {items.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-lg border border-border/60 bg-muted/20 p-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs text-muted-foreground">
+                      {formatDashboardTimestamp(item.tsMs, formatter)}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">
+                        {formatAccountStateEventKind(item.eventKind)}
+                      </Badge>
+                      <Badge variant={accountStateStatusVariant(item.status)}>
+                        {formatAccountStateStatus(item.status)}
+                      </Badge>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-sm font-medium text-foreground">
+                    {item.provider} · {item.accountId}
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {item.reasonDetail?.trim() || m.logs_state_events_no_reason()}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -350,6 +471,7 @@ export function LogsPanel() {
     snapshot,
     status,
     statusMessage,
+    activeRange,
     rangePreset,
     selectedUpstreamId,
     upstreamOptions,
@@ -372,6 +494,9 @@ export function LogsPanel() {
   const [detailMessage, setDetailMessage] = useState("");
   const [detail, setDetail] = useState<RequestLogDetail | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [accountStateLogs, setAccountStateLogs] = useState<AccountStateLogItem[]>([]);
+  const [accountStateStatus, setAccountStateStatus] = useState<StateLogsStatus>("loading");
+  const [accountStateMessage, setAccountStateMessage] = useState("");
 
   const isLoading = status === "loading";
   const captureEnabled = isCaptureWindowActive(captureState, captureNowMs);
@@ -514,6 +639,35 @@ export function LogsPanel() {
     };
   }, [detailOpen, selectedId]);
 
+  useEffect(() => {
+    if (!snapshot && status === "loading") {
+      return;
+    }
+    let active = true;
+    const load = async () => {
+      setAccountStateStatus("loading");
+      setAccountStateMessage("");
+      try {
+        const items = await readAccountStateLogs(activeRange);
+        if (!active) {
+          return;
+        }
+        setAccountStateLogs(items);
+        setAccountStateStatus("idle");
+      } catch (error) {
+        if (!active) {
+          return;
+        }
+        setAccountStateMessage(parseError(error));
+        setAccountStateStatus("error");
+      }
+    };
+    void load();
+    return () => {
+      active = false;
+    };
+  }, [activeRange, snapshot, status]);
+
   return (
     <div className="flex flex-col gap-4">
       {status === "error" ? (
@@ -553,6 +707,13 @@ export function LogsPanel() {
         onPrevPage={onPrevPage}
         onNextPage={onNextPage}
         onSelectItem={(item) => handleSelectItem(item.id)}
+      />
+
+      <AccountStateLogsSection
+        items={accountStateLogs}
+        status={accountStateStatus}
+        statusMessage={accountStateMessage}
+        formatter={formatter}
       />
 
       <RequestDetailSheet

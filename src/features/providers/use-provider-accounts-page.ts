@@ -9,7 +9,7 @@ export const PROVIDER_ACCOUNTS_PAGE_SIZE = 10;
 export type ProviderAccountsPageFilters = {
   searchKeyword: string;
   providerFilter: "all" | "kiro" | "codex";
-  statusFilter: "all" | "active" | "expired";
+  statusFilter: "all" | "active" | "disabled" | "expired" | "cooling_down";
 };
 
 type ProviderAccountsPageStatus = "idle" | "loading" | "error";

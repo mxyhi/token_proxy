@@ -6,7 +6,7 @@ export async function listProviderAccountsPage(params: {
   page: number;
   pageSize: number;
   providerKind?: "kiro" | "codex";
-  status?: "active" | "expired";
+  status?: "active" | "disabled" | "expired" | "cooling_down";
   search?: string;
 }) {
   return await invoke<ProviderAccountsPage>("providers_list_accounts_page", {

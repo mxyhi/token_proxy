@@ -256,7 +256,9 @@ impl SsoOidcClient {
             last_refresh: Some(now_rfc3339()),
             start_url: None,
             region: None,
+            status: super::types::KiroAccountStatus::Active,
             proxy_url: None,
+            quota: super::types::KiroQuotaCache::default(),
         })
     }
 
@@ -370,7 +372,9 @@ pub(crate) async fn refresh_idc_token(
         last_refresh: Some(now_rfc3339()),
         start_url: record.start_url.clone(),
         region: Some(region.to_string()),
+        status: record.status,
         proxy_url: record.proxy_url.clone(),
+        quota: record.quota.clone(),
     })
 }
 

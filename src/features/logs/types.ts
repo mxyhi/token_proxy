@@ -3,6 +3,18 @@ export type RequestDetailCaptureState = {
   expiresAtMs: number | null;
 };
 
+export type AccountStateLogItem = {
+  id: number;
+  tsMs: number;
+  provider: string;
+  accountId: string;
+  eventKind: string;
+  triggerKind: string;
+  status: string;
+  reasonDetail: string | null;
+  cooldownUntilMs: number | null;
+};
+
 /// 请求日志详情，包含表格展示的基础字段和详情面板的扩展字段
 export type RequestLogDetail = {
   id: number;

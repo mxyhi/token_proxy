@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
-use time::OffsetDateTime;
-use tokio::sync::RwLock;
+use time::{Duration, OffsetDateTime};
+use tokio::sync::{Mutex, RwLock};
 
 use crate::app_proxy::AppProxyState;
 use crate::oauth_util::{
@@ -20,6 +20,7 @@ pub struct CodexAccountStore {
     paths: TokenProxyPaths,
     cache: RwLock<HashMap<String, CodexTokenRecord>>,
     app_proxy: AppProxyState,
+    quota_refreshing: Mutex<HashSet<String>>,
 }
 
 impl CodexAccountStore {
@@ -28,6 +29,7 @@ impl CodexAccountStore {
             paths: paths.clone(),
             cache: RwLock::new(HashMap::new()),
             app_proxy,
+            quota_refreshing: Mutex::new(HashSet::new()),
         })
     }
 
@@ -44,7 +46,7 @@ impl CodexAccountStore {
                         .format(&time::format_description::well_known::Rfc3339)
                         .unwrap_or_else(|_| record.expires_at.clone())
                 }),
-                status: record.status(),
+                status: record.effective_status(),
                 auto_refresh_enabled: record.auto_refresh_enabled,
                 proxy_url: record.proxy_url.clone(),
             })
@@ -124,6 +126,20 @@ impl CodexAccountStore {
         Ok(())
     }
 
+    pub async fn refresh_quota_cache(
+        &self,
+        account_ids: Option<&[String]>,
+    ) -> Result<Vec<String>, String> {
+        let targets = self.resolve_quota_targets(account_ids).await?;
+        let mut refreshed = Vec::new();
+        for account_id in targets {
+            if self.refresh_quota_if_stale(&account_id).await? {
+                refreshed.push(account_id);
+            }
+        }
+        Ok(refreshed)
+    }
+
     pub async fn set_auto_refresh(
         &self,
         account_id: &str,
@@ -132,6 +148,31 @@ impl CodexAccountStore {
         let mut record = self.load_account(account_id).await?;
         record.auto_refresh_enabled = enabled;
         self.save_record(account_id.to_string(), record).await
+    }
+
+    pub async fn set_status(
+        &self,
+        account_id: &str,
+        status: CodexAccountStatus,
+    ) -> Result<CodexAccountSummary, String> {
+        let mut record = self.load_account(account_id).await?;
+        record.status = status;
+        let summary = self.save_record(account_id.to_string(), record).await?;
+        let entry = crate::proxy::logs::build_account_state_log_entry(
+            "codex",
+            account_id,
+            "status_changed",
+            "manual_status",
+            codex_status_key(status),
+            Some(format!("manual status -> {}", codex_status_key(status))),
+            None,
+        );
+        if let Err(err) =
+            crate::proxy::logs::write_account_state_log_for_paths(&self.paths, &entry).await
+        {
+            tracing::warn!(error = %err, account_id, "write codex manual status log failed");
+        }
+        Ok(summary)
     }
 
     pub async fn set_proxy_url(
@@ -160,10 +201,19 @@ impl CodexAccountStore {
                     .format(&time::format_description::well_known::Rfc3339)
                     .unwrap_or_else(|_| record.expires_at.clone())
             }),
-            status: record.status(),
+            status: record.effective_status(),
             auto_refresh_enabled: record.auto_refresh_enabled,
             proxy_url: record.proxy_url.clone(),
         })
+    }
+
+    pub(crate) async fn persist_quota_cache(
+        &self,
+        account_id: &str,
+        record: CodexTokenRecord,
+    ) -> Result<CodexTokenRecord, String> {
+        self.save_record(account_id.to_string(), record.clone()).await?;
+        Ok(record)
     }
 
     pub(crate) async fn save_new_account(
@@ -177,6 +227,7 @@ impl CodexAccountStore {
             // Re-importing the same real Codex account should refresh credentials in place
             // instead of creating duplicate local entries. Keep app-local settings.
             record.auto_refresh_enabled = existing_record.auto_refresh_enabled;
+            record.status = existing_record.status;
             if record.proxy_url.is_none() {
                 record.proxy_url = existing_record.proxy_url.clone();
             }
@@ -242,11 +293,13 @@ impl CodexAccountStore {
                 response.id_token
             },
             auto_refresh_enabled: record.auto_refresh_enabled,
+            status: record.status,
             account_id: record.account_id.clone(),
             email: record.email.clone(),
             expires_at: expires_at_from_seconds(response.expires_in),
             last_refresh: Some(now_rfc3339()),
             proxy_url: record.proxy_url.clone(),
+            quota: record.quota.clone(),
         };
         fill_record_from_jwt(&mut refreshed);
         let summary = self
@@ -258,7 +311,7 @@ impl CodexAccountStore {
         Ok(refreshed)
     }
 
-    async fn load_account(&self, account_id: &str) -> Result<CodexTokenRecord, String> {
+    pub(crate) async fn load_account(&self, account_id: &str) -> Result<CodexTokenRecord, String> {
         if let Some(record) = self.cache.read().await.get(account_id).cloned() {
             return Ok(record);
         }
@@ -275,20 +328,52 @@ impl CodexAccountStore {
         self.app_proxy.read().await.clone()
     }
 
+    pub(crate) async fn refresh_quota_if_stale(&self, account_id: &str) -> Result<bool, String> {
+        if !self.start_quota_refresh(account_id).await {
+            return Ok(false);
+        }
+        let result = self.refresh_quota_if_stale_inner(account_id).await;
+        self.finish_quota_refresh(account_id).await;
+        result
+    }
+
+    pub async fn refresh_quota_cache_now(&self, account_id: &str) -> Result<(), String> {
+        if !self.start_quota_refresh(account_id).await {
+            return Ok(());
+        }
+        let result = super::quota::refresh_quota_cache(self, account_id).await;
+        self.finish_quota_refresh(account_id).await;
+        result.map(|_| ())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn resolve_account_record(
         &self,
         account_id: Option<&str>,
     ) -> Result<(String, CodexTokenRecord), String> {
+        self.resolve_account_record_with_order(account_id, None).await
+    }
+
+    pub(crate) async fn resolve_account_record_with_order(
+        &self,
+        account_id: Option<&str>,
+        ordered_account_ids: Option<&[String]>,
+    ) -> Result<(String, CodexTokenRecord), String> {
         if let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) {
             let record = self.get_account_record(account_id).await?;
-            if matches!(record.status(), CodexAccountStatus::Expired) {
+            if matches!(record.effective_status(), CodexAccountStatus::Disabled) {
+                return Err(format!("Codex account is disabled: {account_id}"));
+            }
+            if matches!(record.effective_status(), CodexAccountStatus::Expired) {
                 return Err(format!("Codex account is expired: {account_id}"));
             }
             return Ok((account_id.to_string(), record));
         }
 
         self.refresh_cache().await?;
-        let account_ids = {
+        let account_ids = if let Some(ordered_account_ids) = ordered_account_ids {
+            ordered_account_ids.to_vec()
+        } else {
             let cache = self.cache.read().await;
             let mut account_ids = cache.keys().cloned().collect::<Vec<_>>();
             account_ids.sort();
@@ -298,8 +383,11 @@ impl CodexAccountStore {
         let mut last_error = None;
         for account_id in account_ids {
             match self.get_account_record(&account_id).await {
-                Ok(record) if !matches!(record.status(), CodexAccountStatus::Expired) => {
+                Ok(record) if record.is_schedulable() => {
                     return Ok((account_id, record));
+                }
+                Ok(record) if matches!(record.effective_status(), CodexAccountStatus::Disabled) => {
+                    last_error = Some(format!("Codex account is disabled: {account_id}"));
                 }
                 Ok(_) => {
                     last_error = Some(format!("Codex account is expired: {account_id}"));
@@ -313,12 +401,15 @@ impl CodexAccountStore {
         Err(last_error.unwrap_or_else(|| "Codex account is not configured.".to_string()))
     }
 
-    pub(crate) async fn resolve_next_account_record(
+    pub(crate) async fn resolve_next_account_record_with_order(
         &self,
         excluded_account_ids: &[String],
+        ordered_account_ids: Option<&[String]>,
     ) -> Result<Option<(String, CodexTokenRecord)>, String> {
         self.refresh_cache().await?;
-        let account_ids = {
+        let account_ids = if let Some(ordered_account_ids) = ordered_account_ids {
+            ordered_account_ids.to_vec()
+        } else {
             let cache = self.cache.read().await;
             let mut account_ids = cache.keys().cloned().collect::<Vec<_>>();
             account_ids.sort();
@@ -330,7 +421,7 @@ impl CodexAccountStore {
                 continue;
             }
             match self.get_account_record(&account_id).await {
-                Ok(record) if !matches!(record.status(), CodexAccountStatus::Expired) => {
+                Ok(record) if record.is_schedulable() => {
                     return Ok(Some((account_id, record)));
                 }
                 Ok(_) | Err(_) => continue,
@@ -345,6 +436,51 @@ impl CodexAccountStore {
             Ok(Some(proxy_url)) => Some(proxy_url),
             Ok(None) | Err(_) => self.app_proxy_url().await,
         }
+    }
+
+    async fn resolve_quota_targets(
+        &self,
+        account_ids: Option<&[String]>,
+    ) -> Result<Vec<String>, String> {
+        if let Some(account_ids) = account_ids {
+            let mut targets = account_ids
+                .iter()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            targets.sort();
+            targets.dedup();
+            return Ok(targets);
+        }
+
+        self.refresh_cache().await?;
+        let mut targets = self.cache.read().await.keys().cloned().collect::<Vec<_>>();
+        targets.sort();
+        Ok(targets)
+    }
+
+    async fn start_quota_refresh(&self, account_id: &str) -> bool {
+        let mut refreshing = self.quota_refreshing.lock().await;
+        if refreshing.contains(account_id) {
+            return false;
+        }
+        refreshing.insert(account_id.to_string());
+        true
+    }
+
+    async fn finish_quota_refresh(&self, account_id: &str) {
+        let mut refreshing = self.quota_refreshing.lock().await;
+        refreshing.remove(account_id);
+    }
+
+    async fn refresh_quota_if_stale_inner(&self, account_id: &str) -> Result<bool, String> {
+        let record = self.load_account(account_id).await?;
+        if !quota_refresh_is_due(record.quota.checked_at.as_deref()) {
+            return Ok(false);
+        }
+        super::quota::refresh_quota_cache_if_stale(self, account_id).await?;
+        Ok(true)
     }
 
     async fn refresh_cache(&self) -> Result<(), String> {
@@ -410,11 +546,34 @@ impl CodexAccountStore {
 
 }
 
+fn codex_status_key(status: CodexAccountStatus) -> &'static str {
+    match status {
+        CodexAccountStatus::Active => "active",
+        CodexAccountStatus::Disabled => "disabled",
+        CodexAccountStatus::Expired => "expired",
+    }
+}
+
 fn normalize_optional_identity(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
+}
+
+const QUOTA_REFRESH_INTERVAL_SECONDS: i64 = 30;
+
+fn quota_refresh_is_due(checked_at: Option<&str>) -> bool {
+    let Some(checked_at) = checked_at.map(str::trim).filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    let Ok(checked_at) = OffsetDateTime::parse(
+        checked_at,
+        &time::format_description::well_known::Rfc3339,
+    ) else {
+        return true;
+    };
+    OffsetDateTime::now_utc() - checked_at >= Duration::seconds(QUOTA_REFRESH_INTERVAL_SECONDS)
 }
 
 async fn collect_json_files(root: &Path) -> Result<Vec<PathBuf>, String> {
@@ -620,11 +779,13 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
         refresh_token,
         id_token,
         auto_refresh_enabled,
+        status: CodexAccountStatus::Active,
         account_id,
         email,
         expires_at,
         last_refresh,
         proxy_url: None,
+        quota: super::types::CodexQuotaCache::default(),
     })
 }
 
@@ -757,6 +918,19 @@ mod tests {
         (OffsetDateTime::now_utc() + time::Duration::hours(hours))
             .format(&Rfc3339)
             .expect("format expires_at")
+    }
+
+    #[test]
+    fn quota_refresh_waits_for_30_second_interval() {
+        let within_window = (OffsetDateTime::now_utc() - time::Duration::seconds(29))
+            .format(&Rfc3339)
+            .expect("format checked_at");
+        assert!(!quota_refresh_is_due(Some(within_window.as_str())));
+
+        let outside_window = (OffsetDateTime::now_utc() - time::Duration::seconds(31))
+            .format(&Rfc3339)
+            .expect("format checked_at");
+        assert!(quota_refresh_is_due(Some(outside_window.as_str())));
     }
 
     #[test]
@@ -1192,6 +1366,114 @@ mod tests {
                 .await
                 .expect("record should exist");
             assert!(record.auto_refresh_enabled);
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn set_enabled_updates_record_flag() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let expires_at = future_rfc3339(6);
+            let input_path = data_dir.join("codex-enabled.json");
+            tokio::fs::write(
+                &input_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "access-token",
+                    "refresh_token": "refresh-token",
+                    "account_id": "acct-enabled",
+                    "email": "enabled@example.com",
+                    "expired": expires_at,
+                }))
+                .expect("serialize test json"),
+            )
+            .await
+            .expect("write input");
+
+            let imported = store.import_file(input_path).await.expect("import should succeed");
+            assert!(matches!(imported[0].status, CodexAccountStatus::Active));
+
+            let updated = store
+                .set_status(&imported[0].account_id, CodexAccountStatus::Disabled)
+                .await
+                .expect("set status should succeed");
+            assert!(matches!(updated.status, CodexAccountStatus::Disabled));
+
+            let record = store
+                .get_account_record(&imported[0].account_id)
+                .await
+                .expect("record should exist");
+            assert!(matches!(record.status, CodexAccountStatus::Disabled));
+
+            let pool = crate::proxy::sqlite::open_read_pool(&store.paths)
+                .await
+                .expect("open sqlite");
+            let logs = crate::proxy::logs::read_recent_account_state_logs(&pool, None, None, 10)
+                .await
+                .expect("read account state logs");
+            assert!(
+                logs.iter().any(|item| {
+                    item.provider == "codex"
+                        && item.account_id == imported[0].account_id
+                        && item.event_kind == "status_changed"
+                        && item.status == "disabled"
+                }),
+                "manual status change should write account state log"
+            );
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn resolve_account_record_skips_disabled_accounts() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let first = CodexTokenRecord {
+                access_token: "access-1".to_string(),
+                refresh_token: "refresh-1".to_string(),
+                id_token: "".to_string(),
+                auto_refresh_enabled: true,
+                status: CodexAccountStatus::Disabled,
+                account_id: Some("acct-disabled".to_string()),
+                email: Some("aaa@example.com".to_string()),
+                expires_at: future_rfc3339(6),
+                last_refresh: None,
+                proxy_url: None,
+                quota: crate::codex::CodexQuotaCache::default(),
+            };
+            let second = CodexTokenRecord {
+                access_token: "access-2".to_string(),
+                refresh_token: "refresh-2".to_string(),
+                id_token: "".to_string(),
+                auto_refresh_enabled: true,
+                status: CodexAccountStatus::Active,
+                account_id: Some("acct-enabled".to_string()),
+                email: Some("zzz@example.com".to_string()),
+                expires_at: future_rfc3339(6),
+                last_refresh: None,
+                proxy_url: None,
+                quota: crate::codex::CodexQuotaCache::default(),
+            };
+
+            store
+                .save_record("codex-a.json".to_string(), first)
+                .await
+                .expect("save first account");
+            store
+                .save_record("codex-b.json".to_string(), second)
+                .await
+                .expect("save second account");
+
+            let (account_id, record) = store
+                .resolve_account_record(None)
+                .await
+                .expect("should resolve enabled account");
+
+            assert_eq!(account_id, "codex-b.json");
+            assert!(record.is_schedulable());
 
             let _ = std::fs::remove_dir_all(data_dir);
         });

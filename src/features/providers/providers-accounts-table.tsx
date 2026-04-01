@@ -54,6 +54,7 @@ export type ProviderAccountTableRow = {
   providerLabel: string;
   displayName: string;
   accountId: string;
+  status: "active" | "disabled" | "expired" | "cooling_down";
   statusLabel: string;
   statusVariant: BadgeVariant;
   expiresAtLabel: string;
@@ -79,8 +80,10 @@ type ProviderAccountDialogProps = {
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onRefresh: (row: ProviderAccountTableRow) => Promise<void>;
+  onRefreshQuota: (row: ProviderAccountTableRow) => Promise<void>;
   onLogout: (row: ProviderAccountTableRow) => Promise<void>;
   onSaveProxyUrl: (row: ProviderAccountTableRow, proxyUrl: string) => Promise<void>;
+  onToggleStatus: (row: ProviderAccountTableRow, status: "active" | "disabled") => Promise<void>;
   onToggleAutoRefresh: (row: ProviderAccountTableRow, enabled: boolean) => Promise<void>;
 };
 
@@ -208,8 +211,10 @@ function ProviderAccountDialog({
   busy,
   onOpenChange,
   onRefresh,
+  onRefreshQuota,
   onLogout,
   onSaveProxyUrl,
+  onToggleStatus,
   onToggleAutoRefresh,
 }: ProviderAccountDialogProps) {
   const [refreshConfirmOpen, setRefreshConfirmOpen] = useState(false);
@@ -238,6 +243,21 @@ function ProviderAccountDialog({
       return;
     }
     void onToggleAutoRefresh(row, enabled);
+  };
+
+  const handleRefreshQuota = () => {
+    if (!row) {
+      return;
+    }
+    void onRefreshQuota(row);
+  };
+
+  const handleToggleStatus = () => {
+    if (!row) {
+      return;
+    }
+    const nextStatus = row.status === "disabled" ? "active" : "disabled";
+    void onToggleStatus(row, nextStatus);
   };
 
   const handleSaveProxyUrl = () => {
@@ -360,6 +380,24 @@ function ProviderAccountDialog({
                     </AlertDialog>
                   </>
                 ) : null}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={handleRefreshQuota}
+                  disabled={busy}
+                >
+                  {m.providers_account_refresh_quota()}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={handleToggleStatus}
+                  disabled={busy}
+                >
+                  {row.status === "disabled" ? m.common_enable() : m.common_disable()}
+                </Button>
                 <AccountDeleteAction
                   accountLabel={row.displayName}
                   buttonLabel={row.logoutLabel}
@@ -385,9 +423,11 @@ type ProvidersAccountsTableSectionProps = {
   onPrevPage: () => void;
   onNextPage: () => void;
   onRefresh: (row: ProviderAccountTableRow) => Promise<void>;
+  onRefreshQuota: (row: ProviderAccountTableRow) => Promise<void>;
   onLogout: (row: ProviderAccountTableRow) => Promise<void>;
   onBatchDelete: (rows: ProviderAccountTableRow[]) => Promise<void>;
   onSaveProxyUrl: (row: ProviderAccountTableRow, proxyUrl: string) => Promise<void>;
+  onToggleStatus: (row: ProviderAccountTableRow, status: "active" | "disabled") => Promise<void>;
   onToggleAutoRefresh: (row: ProviderAccountTableRow, enabled: boolean) => Promise<void>;
 };
 
@@ -431,9 +471,11 @@ export function ProvidersAccountsTableSection({
   onPrevPage,
   onNextPage,
   onRefresh,
+  onRefreshQuota,
   onLogout,
   onBatchDelete,
   onSaveProxyUrl,
+  onToggleStatus,
   onToggleAutoRefresh,
 }: ProvidersAccountsTableSectionProps) {
   const [selectedRow, setSelectedRow] = useState<ProviderAccountTableRow | null>(null);
@@ -585,7 +627,9 @@ export function ProvidersAccountsTableSection({
                       {row.accountId}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={row.statusVariant}>{row.statusLabel}</Badge>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Badge variant={row.statusVariant}>{row.statusLabel}</Badge>
+                      </div>
                     </TableCell>
                     <TableCell>{row.expiresAtLabel}</TableCell>
                     <TableCell>{row.planType}</TableCell>
@@ -648,8 +692,10 @@ export function ProvidersAccountsTableSection({
           }
         }}
         onRefresh={onRefresh}
+        onRefreshQuota={onRefreshQuota}
         onLogout={onLogout}
         onSaveProxyUrl={onSaveProxyUrl}
+        onToggleStatus={onToggleStatus}
         onToggleAutoRefresh={onToggleAutoRefresh}
       />
     </section>

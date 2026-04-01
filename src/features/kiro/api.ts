@@ -40,6 +40,23 @@ export async function fetchKiroQuotas() {
   return await invoke<KiroQuotaSummary[]>("kiro_fetch_quotas");
 }
 
+export async function refreshKiroQuotaCache(accountIds?: string[]) {
+  return await invoke<string[]>("kiro_refresh_quota_cache", {
+    accountIds: accountIds ?? null,
+  });
+}
+
+export async function refreshKiroQuotaNow(accountId: string) {
+  return await invoke<void>("kiro_refresh_quota_now", { accountId });
+}
+
+export async function setKiroStatus(accountId: string, status: "active" | "disabled") {
+  return await invoke<KiroAccountSummary>("kiro_set_status", {
+    accountId,
+    status,
+  });
+}
+
 export async function setKiroProxyUrl(accountId: string, proxyUrl: string | null) {
   return await invoke<KiroAccountSummary>("kiro_set_proxy_url", {
     accountId,

@@ -21,6 +21,7 @@ function buildRow(index: number): ProviderAccountTableRow {
     providerLabel: index % 2 === 0 ? "Kiro" : "Codex",
     displayName: `user-${index}@example.com`,
     accountId: `account-${index}.json`,
+    status: "active",
     statusLabel: "Active",
     statusVariant: "secondary",
     expiresAtLabel: "2026-04-01",
@@ -45,6 +46,8 @@ describe("providers/providers-accounts-table", () => {
     const onLogout = vi.fn(async () => undefined);
     const onBatchDelete = vi.fn(async () => undefined);
     const onSaveProxyUrl = vi.fn(async () => undefined);
+    const onRefreshQuota = vi.fn(async () => undefined);
+    const onToggleStatus = vi.fn(async () => undefined);
     const allRows = Array.from({ length: 11 }, (_, index) => buildRow(index + 1));
 
     function Harness() {
@@ -67,6 +70,8 @@ describe("providers/providers-accounts-table", () => {
           onLogout={onLogout}
           onBatchDelete={onBatchDelete}
           onSaveProxyUrl={onSaveProxyUrl}
+          onRefreshQuota={onRefreshQuota}
+          onToggleStatus={onToggleStatus}
           onToggleAutoRefresh={vi.fn(async () => undefined)}
         />
       );
@@ -93,6 +98,8 @@ describe("providers/providers-accounts-table", () => {
     const onLogout = vi.fn(async () => undefined);
     const onBatchDelete = vi.fn(async () => undefined);
     const onSaveProxyUrl = vi.fn(async () => undefined);
+    const onRefreshQuota = vi.fn(async () => undefined);
+    const onToggleStatus = vi.fn(async () => undefined);
     const allRows = Array.from({ length: 11 }, (_, index) => buildRow(index + 1));
 
     function Harness() {
@@ -115,6 +122,8 @@ describe("providers/providers-accounts-table", () => {
           onLogout={onLogout}
           onBatchDelete={onBatchDelete}
           onSaveProxyUrl={onSaveProxyUrl}
+          onRefreshQuota={onRefreshQuota}
+          onToggleStatus={onToggleStatus}
           onToggleAutoRefresh={vi.fn(async () => undefined)}
         />
       );
@@ -138,6 +147,8 @@ describe("providers/providers-accounts-table", () => {
     const onLogout = vi.fn(async () => undefined);
     const onBatchDelete = vi.fn(async () => undefined);
     const onSaveProxyUrl = vi.fn(async () => undefined);
+    const onRefreshQuota = vi.fn(async () => undefined);
+    const onToggleStatus = vi.fn(async () => undefined);
     const rows = [buildRow(1), buildRow(2)];
 
     render(
@@ -154,6 +165,8 @@ describe("providers/providers-accounts-table", () => {
         onLogout={onLogout}
         onBatchDelete={onBatchDelete}
         onSaveProxyUrl={onSaveProxyUrl}
+        onRefreshQuota={onRefreshQuota}
+        onToggleStatus={onToggleStatus}
         onToggleAutoRefresh={vi.fn(async () => undefined)}
       />
     );
@@ -180,6 +193,8 @@ describe("providers/providers-accounts-table", () => {
     const onLogout = vi.fn(async () => undefined);
     const onBatchDelete = vi.fn(async () => undefined);
     const onSaveProxyUrl = vi.fn(async () => undefined);
+    const onRefreshQuota = vi.fn(async () => undefined);
+    const onToggleStatus = vi.fn(async () => undefined);
     const rows = [{ ...buildRow(1), proxyUrlValue: "http://127.0.0.1:7890" }];
 
     render(
@@ -196,6 +211,8 @@ describe("providers/providers-accounts-table", () => {
         onLogout={onLogout}
         onBatchDelete={onBatchDelete}
         onSaveProxyUrl={onSaveProxyUrl}
+        onRefreshQuota={onRefreshQuota}
+        onToggleStatus={onToggleStatus}
         onToggleAutoRefresh={vi.fn(async () => undefined)}
       />
     );
@@ -221,6 +238,8 @@ describe("providers/providers-accounts-table", () => {
     const onLogout = vi.fn(async () => undefined);
     const onBatchDelete = vi.fn(async () => undefined);
     const onSaveProxyUrl = vi.fn(async () => undefined);
+    const onRefreshQuota = vi.fn(async () => undefined);
+    const onToggleStatus = vi.fn(async () => undefined);
     const rows = [
       {
         ...buildRow(2),
@@ -252,6 +271,8 @@ describe("providers/providers-accounts-table", () => {
         onLogout={onLogout}
         onBatchDelete={onBatchDelete}
         onSaveProxyUrl={onSaveProxyUrl}
+        onRefreshQuota={onRefreshQuota}
+        onToggleStatus={onToggleStatus}
         onToggleAutoRefresh={vi.fn(async () => undefined)}
       />
     );
@@ -263,5 +284,77 @@ describe("providers/providers-accounts-table", () => {
     expect(document.querySelector("[data-slot='provider-account-quota-list']")).toBeTruthy();
     expect(screen.getByText("邮箱")).toBeInTheDocument();
     expect(screen.getByText("25 / 100")).toBeInTheDocument();
+  });
+
+  it("triggers manual quota refresh from the account detail dialog", async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn(async () => undefined);
+    const onLogout = vi.fn(async () => undefined);
+    const onBatchDelete = vi.fn(async () => undefined);
+    const onSaveProxyUrl = vi.fn(async () => undefined);
+    const onRefreshQuota = vi.fn(async () => undefined);
+    const onToggleStatus = vi.fn(async () => undefined);
+    const rows = [buildRow(1)];
+
+    render(
+      <ProvidersAccountsTableSection
+        rows={rows}
+        loading={false}
+        error=""
+        page={1}
+        totalPages={1}
+        totalItems={rows.length}
+        onPrevPage={() => undefined}
+        onNextPage={() => undefined}
+        onRefresh={onRefresh}
+        onLogout={onLogout}
+        onBatchDelete={onBatchDelete}
+        onSaveProxyUrl={onSaveProxyUrl}
+        onRefreshQuota={onRefreshQuota}
+        onToggleStatus={onToggleStatus}
+        onToggleAutoRefresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: m.providers_account_dialog_title() }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Refresh Quota" }));
+
+    expect(onRefreshQuota).toHaveBeenCalledWith(rows[0]);
+  });
+
+  it("triggers account enable toggle from the account detail dialog", async () => {
+    const user = userEvent.setup();
+    const onRefresh = vi.fn(async () => undefined);
+    const onLogout = vi.fn(async () => undefined);
+    const onBatchDelete = vi.fn(async () => undefined);
+    const onSaveProxyUrl = vi.fn(async () => undefined);
+    const onRefreshQuota = vi.fn(async () => undefined);
+    const onToggleStatus = vi.fn(async () => undefined);
+    const rows = [{ ...buildRow(2), status: "disabled" as const, statusLabel: "Disabled" }];
+
+    render(
+      <ProvidersAccountsTableSection
+        rows={rows}
+        loading={false}
+        error=""
+        page={1}
+        totalPages={1}
+        totalItems={rows.length}
+        onPrevPage={() => undefined}
+        onNextPage={() => undefined}
+        onRefresh={onRefresh}
+        onLogout={onLogout}
+        onBatchDelete={onBatchDelete}
+        onSaveProxyUrl={onSaveProxyUrl}
+        onRefreshQuota={onRefreshQuota}
+        onToggleStatus={onToggleStatus}
+        onToggleAutoRefresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("button", { name: m.providers_account_dialog_title() }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Enable" }));
+
+    expect(onToggleStatus).toHaveBeenCalledWith(rows[0], "active");
   });
 });

@@ -833,9 +833,22 @@ async fn resolve_kiro_upstream(
     upstream: &UpstreamRuntime,
     upstream_url: &str,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
+    let ordered_account_ids = if upstream
+        .kiro_account_id
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        None
+    } else {
+        Some(ordered_runtime_account_ids(state, "kiro").await)
+    };
     let (selected_account_id, record) = state
         .kiro_accounts
-        .resolve_account_record(upstream.kiro_account_id.as_deref())
+        .resolve_account_record_with_order(
+            upstream.kiro_account_id.as_deref(),
+            ordered_account_ids.as_deref(),
+        )
         .await
         .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
     let global_proxy_url = state.kiro_accounts.app_proxy_url().await;
@@ -867,9 +880,22 @@ async fn resolve_codex_upstream(
     upstream: &UpstreamRuntime,
     upstream_url: &str,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
+    let ordered_account_ids = if upstream
+        .codex_account_id
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+    {
+        None
+    } else {
+        Some(ordered_runtime_account_ids(state, "codex").await)
+    };
     let (selected_account_id, record) = state
         .codex_accounts
-        .resolve_account_record(upstream.codex_account_id.as_deref())
+        .resolve_account_record_with_order(
+            upstream.codex_account_id.as_deref(),
+            ordered_account_ids.as_deref(),
+        )
         .await
         .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
     let global_proxy_url = state.codex_accounts.app_proxy_url().await;
@@ -908,6 +934,20 @@ async fn resolve_codex_upstream(
         proxy_url,
         selected_account_id: Some(selected_account_id),
     })
+}
+
+pub(super) async fn ordered_runtime_account_ids(state: &ProxyState, provider: &str) -> Vec<String> {
+    let account_ids = match provider {
+        "kiro" => state.kiro_accounts.list_accounts().await.map(|items| {
+            items.into_iter().map(|item| item.account_id).collect::<Vec<_>>()
+        }),
+        "codex" => state.codex_accounts.list_accounts().await.map(|items| {
+            items.into_iter().map(|item| item.account_id).collect::<Vec<_>>()
+        }),
+        _ => Ok(Vec::new()),
+    }
+    .unwrap_or_default();
+    state.account_selector.order_accounts(provider, &account_ids)
 }
 
 fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestMeta {

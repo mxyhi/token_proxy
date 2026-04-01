@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use axum::http::StatusCode;
+use reqwest::header::RETRY_AFTER;
 
 use super::utils::{is_retryable_error, is_retryable_status, sanitize_upstream_error};
 use super::AttemptOutcome;
@@ -40,14 +41,22 @@ pub(super) async fn handle_upstream_result(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> AttemptOutcome {
+    let account_id_value = account_id.as_deref().map(str::to_string);
     match upstream_res {
         Ok(res) if is_retryable_status(res.status()) => {
             let status = res.status();
+            update_account_cooldown_from_status(
+                state,
+                provider,
+                account_id_value.as_deref(),
+                status,
+                res.headers(),
+            );
             let response = build_proxy_response_buffered(
                 meta,
                 provider,
                 upstream_id,
-                account_id.clone(),
+                account_id_value.clone(),
                 inbound_path,
                 res,
                 log,
@@ -66,11 +75,18 @@ pub(super) async fn handle_upstream_result(
             }
         }
         Ok(res) => {
+            update_account_cooldown_from_status(
+                state,
+                provider,
+                account_id_value.as_deref(),
+                res.status(),
+                res.headers(),
+            );
             let response = build_proxy_response(
                 meta,
                 provider,
                 upstream_id,
-                account_id.clone(),
+                account_id_value.clone(),
                 inbound_path,
                 res,
                 log,
@@ -90,6 +106,12 @@ pub(super) async fn handle_upstream_result(
             } else {
                 StatusCode::BAD_GATEWAY
             };
+            mark_retryable_account_failure(
+                state,
+                provider,
+                account_id_value.as_deref(),
+                Some(message.clone()),
+            );
             log_upstream_error_if_needed(
                 &log,
                 request_detail.as_ref(),
@@ -131,6 +153,75 @@ pub(super) async fn handle_upstream_result(
     }
 }
 
+fn update_account_cooldown_from_status(
+    state: &ProxyState,
+    provider: &str,
+    account_id: Option<&str>,
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) {
+    let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if status.is_success() {
+        if state.account_selector.clear_cooldown(provider, account_id) {
+            let entry = crate::proxy::logs::build_account_state_log_entry(
+                provider,
+                account_id,
+                "cooldown_cleared",
+                "success",
+                "active",
+                None,
+                None,
+            );
+            state.log.clone().write_account_state_detached(entry);
+        }
+        return;
+    }
+    let reason_detail = cooldown_reason_from_status(status, headers);
+    if let Some(cooldown_until_ms) = state
+        .account_selector
+        .mark_response_status(provider, account_id, status, headers)
+    {
+        let entry = crate::proxy::logs::build_account_state_log_entry(
+            provider,
+            account_id,
+            "cooldown_started",
+            "http_status",
+            "cooling_down",
+            Some(reason_detail),
+            Some(cooldown_until_ms),
+        );
+        state.log.clone().write_account_state_detached(entry);
+    }
+}
+
+fn mark_retryable_account_failure(
+    state: &ProxyState,
+    provider: &str,
+    account_id: Option<&str>,
+    reason_detail: Option<String>,
+) {
+    let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if let Some(cooldown_until_ms) = state
+        .account_selector
+        .mark_retryable_failure(provider, account_id)
+    {
+        let entry = crate::proxy::logs::build_account_state_log_entry(
+            provider,
+            account_id,
+            "cooldown_started",
+            "retryable_error",
+            "cooling_down",
+            reason_detail,
+            Some(cooldown_until_ms),
+        );
+        state.log.clone().write_account_state_detached(entry);
+    }
+}
+
 pub(super) fn log_upstream_error_if_needed(
     log: &Arc<LogWriter>,
     request_detail: Option<&RequestDetailSnapshot>,
@@ -168,4 +259,19 @@ pub(super) fn log_upstream_error_if_needed(
     };
     let entry = build_log_entry(&context, usage, Some(response_error));
     log.clone().write_detached(entry);
+}
+
+fn cooldown_reason_from_status(
+    status: StatusCode,
+    headers: &reqwest::header::HeaderMap,
+) -> String {
+    let retry_after = headers
+        .get(RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match retry_after {
+        Some(value) => format!("{} retry-after={value}", status.as_u16()),
+        None => status.as_u16().to_string(),
+    }
 }

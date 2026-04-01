@@ -39,11 +39,13 @@ const {
   readRequestDetailCaptureMock,
   setRequestDetailCaptureMock,
   readRequestLogDetailMock,
+  readAccountStateLogsMock,
 } = vi.hoisted(() => ({
   readDashboardSnapshotMock: vi.fn(),
   readRequestDetailCaptureMock: vi.fn(),
   setRequestDetailCaptureMock: vi.fn(),
   readRequestLogDetailMock: vi.fn(),
+  readAccountStateLogsMock: vi.fn(),
 }));
 
 vi.mock("@/features/dashboard/api", () => ({
@@ -54,6 +56,7 @@ vi.mock("@/features/logs/api", () => ({
   readRequestDetailCapture: readRequestDetailCaptureMock,
   setRequestDetailCapture: setRequestDetailCaptureMock,
   readRequestLogDetail: readRequestLogDetailMock,
+  readAccountStateLogs: readAccountStateLogsMock,
 }));
 
 function renderPanel() {
@@ -70,6 +73,7 @@ describe("logs/LogsPanel", () => {
     readRequestDetailCaptureMock.mockReset();
     setRequestDetailCaptureMock.mockReset();
     readRequestLogDetailMock.mockReset();
+    readAccountStateLogsMock.mockReset();
 
     readRequestDetailCaptureMock.mockResolvedValue({
       enabled: false,
@@ -101,6 +105,30 @@ describe("logs/LogsPanel", () => {
       requestBody: null,
       responseError: null,
     });
+    readAccountStateLogsMock.mockResolvedValue([
+      {
+        id: 11,
+        tsMs: 140,
+        provider: "codex",
+        accountId: "codex-a.json",
+        eventKind: "cooldown_cleared",
+        triggerKind: "success",
+        status: "active",
+        reasonDetail: null,
+        cooldownUntilMs: null,
+      },
+      {
+        id: 10,
+        tsMs: 100,
+        provider: "codex",
+        accountId: "codex-a.json",
+        eventKind: "cooldown_started",
+        triggerKind: "http_status",
+        status: "cooling_down",
+        reasonDetail: "429 retry-after=30",
+        cooldownUntilMs: 130,
+      },
+    ]);
 
     readDashboardSnapshotMock.mockImplementation(
       async ({ upstreamId }: DashboardSnapshotQuery) => {
@@ -272,5 +300,14 @@ describe("logs/LogsPanel", () => {
 
     const providerValues = await screen.findAllByText("alpha · codex · codex-a.json");
     expect(providerValues.length).toBeGreaterThan(0);
+  });
+
+  it("shows recent account state logs", async () => {
+    renderPanel();
+
+    expect((await screen.findAllByText(m.logs_state_events_title())).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("codex · codex-a.json")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(m.logs_state_event_kind_cooldown_started())).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("429 retry-after=30")).length).toBeGreaterThan(0);
   });
 });

@@ -28,9 +28,13 @@ function formatAccountLabel(account: KiroAccountSummary) {
 }
 
 function formatAccountStatus(account: KiroAccountSummary) {
-  return account.status === "expired"
-    ? m.kiro_account_status_expired()
-    : m.kiro_account_status_active();
+  if (account.status === "expired") {
+    return m.kiro_account_status_expired();
+  }
+  if (account.status === "disabled") {
+    return m.kiro_account_status_disabled();
+  }
+  return m.kiro_account_status_active();
 }
 
 export function KiroAccountSelect({

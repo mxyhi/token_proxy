@@ -2,6 +2,33 @@ use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct KiroQuotaItem {
+    pub name: String,
+    pub percentage: f64,
+    pub used: Option<f64>,
+    pub limit: Option<f64>,
+    pub reset_at: Option<String>,
+    pub is_trial: bool,
+}
+
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct KiroQuotaCache {
+    pub plan_type: Option<String>,
+    #[serde(default)]
+    pub quotas: Vec<KiroQuotaItem>,
+    pub error: Option<String>,
+    pub checked_at: Option<String>,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum KiroAccountStatus {
+    Active,
+    Disabled,
+    Expired,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct KiroTokenRecord {
     pub access_token: String,
@@ -16,8 +43,12 @@ pub struct KiroTokenRecord {
     pub last_refresh: Option<String>,
     pub start_url: Option<String>,
     pub region: Option<String>,
+    #[serde(default = "default_account_status")]
+    pub status: KiroAccountStatus,
     #[serde(default)]
     pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub quota: KiroQuotaCache,
 }
 
 impl KiroTokenRecord {
@@ -36,20 +67,20 @@ impl KiroTokenRecord {
         OffsetDateTime::now_utc() >= expires_at
     }
 
-    pub fn status(&self) -> KiroAccountStatus {
+    pub fn effective_status(&self) -> KiroAccountStatus {
+        if self.status == KiroAccountStatus::Disabled {
+            return KiroAccountStatus::Disabled;
+        }
         if self.is_expired() {
             KiroAccountStatus::Expired
         } else {
             KiroAccountStatus::Active
         }
     }
-}
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum KiroAccountStatus {
-    Active,
-    Expired,
+    pub fn is_schedulable(&self) -> bool {
+        matches!(self.effective_status(), KiroAccountStatus::Active)
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -61,6 +92,10 @@ pub struct KiroAccountSummary {
     pub expires_at: Option<String>,
     pub status: KiroAccountStatus,
     pub proxy_url: Option<String>,
+}
+
+fn default_account_status() -> KiroAccountStatus {
+    KiroAccountStatus::Active
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -112,4 +147,13 @@ pub struct KiroLoginPollResponse {
     pub status: KiroLoginStatus,
     pub error: Option<String>,
     pub account: Option<KiroAccountSummary>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct KiroQuotaSummary {
+    pub account_id: String,
+    pub provider: String,
+    pub plan_type: Option<String>,
+    pub quotas: Vec<KiroQuotaItem>,
+    pub error: Option<String>,
 }

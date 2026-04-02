@@ -1,13 +1,16 @@
 use axum::{
+    body::{Body, Bytes},
     http::{header::AUTHORIZATION, HeaderMap, Method, StatusCode},
     response::Response,
 };
 use futures_util::stream::{FuturesUnordered, StreamExt};
+use serde_json::{json, Value};
 use std::{
+    collections::{HashMap, HashSet},
     future::Future,
     pin::Pin,
     sync::Arc,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const GEMINI_API_KEY_QUERY: &str = "key";
@@ -38,6 +41,96 @@ use super::{
 };
 
 const REQUEST_MODEL_MAPPING_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+
+pub(super) async fn aggregate_model_catalog_request(
+    state: Arc<ProxyState>,
+    provider: &str,
+    inbound_path: &str,
+    upstream_path_with_query: &str,
+    headers: &HeaderMap,
+    request_auth: &RequestAuth,
+) -> Response {
+    let Some(provider_upstreams) = state.config.provider_upstreams(provider) else {
+        return http::error_response(StatusCode::BAD_GATEWAY, "No available upstream configured.");
+    };
+
+    let mut sources: Vec<(String, Vec<String>)> = Vec::new();
+    let mut successful = 0usize;
+    let meta = RequestMeta {
+        stream: false,
+        original_model: None,
+        mapped_model: None,
+        reasoning_effort: None,
+        estimated_input_tokens: None,
+    };
+    let empty_body = ReplayableBody::from_bytes(Bytes::new());
+
+    for group in &provider_upstreams.groups {
+        for upstream in &group.items {
+            let upstream_model_catalog = fetch_upstream_model_catalog(
+                state.as_ref(),
+                provider,
+                upstream,
+                inbound_path,
+                upstream_path_with_query,
+                headers,
+                &meta,
+                request_auth,
+                &empty_body,
+            )
+            .await;
+            let mut models = upstream.advertised_model_ids.clone();
+            match upstream_model_catalog {
+                Ok(fetched_models) => {
+                    successful += 1;
+                    merge_model_catalog_ids(&mut models, fetched_models);
+                    sources.push((upstream.id.clone(), models));
+                }
+                Err(err) => {
+                    if !models.is_empty() {
+                        successful += 1;
+                        sources.push((upstream.id.clone(), models));
+                        continue;
+                    }
+                    tracing::warn!(
+                        provider = %provider,
+                        upstream = %upstream.id,
+                        error = %err,
+                        "failed to fetch upstream model catalog"
+                    );
+                }
+            }
+        }
+    }
+
+    if successful == 0 {
+        return http::error_response(
+            StatusCode::BAD_GATEWAY,
+            "No upstream model catalog available.",
+        );
+    }
+
+    let response_body = build_model_catalog_response_body(&sources, state.config.model_list_prefix);
+    let mut response_headers = HeaderMap::new();
+    response_headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    http::build_response(
+        StatusCode::OK,
+        response_headers,
+        Body::from(response_body.to_string()),
+    )
+}
+
+fn merge_model_catalog_ids(target: &mut Vec<String>, extra: Vec<String>) {
+    let mut seen = target.iter().cloned().collect::<HashSet<_>>();
+    for model in extra {
+        if seen.insert(model.clone()) {
+            target.push(model);
+        }
+    }
+}
 
 pub(super) struct ForwardUpstreamResult {
     pub(super) response: Response,
@@ -331,6 +424,7 @@ async fn run_upstream_groups(
     request_detail: Option<RequestDetailSnapshot>,
     upstreams: &ProviderUpstreams,
 ) -> ForwardAttemptState {
+    let target_upstream_id = requested_target_upstream_id(upstreams, meta.original_model.as_deref());
     let mut summary = ForwardAttemptState::new();
     for (group_index, group) in upstreams.groups.iter().enumerate() {
         // Only rotate within the highest priority group; retry network failures before degrading.
@@ -358,6 +452,7 @@ async fn run_upstream_groups(
             headers,
             body,
             meta,
+            target_upstream_id.as_deref(),
             request_auth,
             response_transform,
             request_detail.clone(),
@@ -420,6 +515,7 @@ async fn try_group_upstreams(
     headers: &HeaderMap,
     body: &ReplayableBody,
     meta: &RequestMeta,
+    target_upstream_id: Option<&str>,
     request_auth: &RequestAuth,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
@@ -431,7 +527,8 @@ async fn try_group_upstreams(
         items,
         start,
     );
-    let eligible_order = filter_eligible_upstreams(order, items, inbound_format);
+    let eligible_order =
+        filter_eligible_upstreams(order, items, inbound_format, target_upstream_id);
     if eligible_order.is_empty() {
         return GroupAttemptResult::new();
     }
@@ -458,11 +555,14 @@ fn filter_eligible_upstreams(
     order: Vec<usize>,
     items: &[UpstreamRuntime],
     inbound_format: Option<InboundApiFormat>,
+    target_upstream_id: Option<&str>,
 ) -> Vec<usize> {
     order
         .into_iter()
         .filter(|item_index| {
             inbound_format.is_none_or(|format| items[*item_index].supports_inbound(format))
+                && target_upstream_id
+                    .is_none_or(|target| items[*item_index].id.as_str() == target)
         })
         .collect()
 }
@@ -951,11 +1051,19 @@ pub(super) async fn ordered_runtime_account_ids(state: &ProxyState, provider: &s
 }
 
 fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestMeta {
+    let upstream_input_model = meta.original_model.as_deref().map(|original| {
+        strip_target_upstream_prefix(original, upstream.id.as_str())
+            .unwrap_or_else(|| original.to_string())
+    });
     // 只有当实际发生映射时才设置 mapped_model，避免与 original_model 重复
-    let mapped_model = meta
-        .original_model
+    let mapped_model = upstream_input_model
         .as_deref()
-        .and_then(|original| upstream.map_model(original));
+        .and_then(|original| upstream.map_model(original))
+        .or_else(|| {
+            let mapped_input = upstream_input_model.as_deref()?;
+            let original = meta.original_model.as_deref()?;
+            (mapped_input != original).then(|| mapped_input.to_string())
+        });
     let (mapped_model, reasoning_effort) =
         normalize_mapped_model_reasoning_suffix(mapped_model, meta.reasoning_effort.clone());
     RequestMeta {
@@ -965,6 +1073,171 @@ fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestM
         reasoning_effort,
         estimated_input_tokens: meta.estimated_input_tokens,
     }
+}
+
+async fn fetch_upstream_model_catalog(
+    state: &ProxyState,
+    provider: &str,
+    upstream: &UpstreamRuntime,
+    inbound_path: &str,
+    upstream_path_with_query: &str,
+    headers: &HeaderMap,
+    meta: &RequestMeta,
+    request_auth: &RequestAuth,
+    body: &ReplayableBody,
+) -> Result<Vec<String>, String> {
+    let prepared = prepare_upstream_request(
+        state,
+        provider,
+        upstream,
+        inbound_path,
+        upstream_path_with_query,
+        headers,
+        meta,
+        request_auth,
+    )
+    .await
+    .map_err(|_| "Failed to prepare upstream model catalog request.".to_string())?;
+
+    let client = state
+        .http_clients
+        .client_for_proxy_url(prepared.proxy_url.as_deref())?;
+    let request_body = body
+        .to_reqwest_body()
+        .await
+        .map_err(|err| format!("Failed to build upstream request body: {err}"))?;
+    let request = client
+        .request(Method::GET, &prepared.upstream_url)
+        .headers(prepared.request_headers)
+        .body(request_body);
+    let response = tokio::time::timeout(state.config.upstream_no_data_timeout, request.send())
+        .await
+        .map_err(|_| "Timed out fetching upstream model catalog.".to_string())?
+        .map_err(|err| format!("Failed to fetch upstream model catalog: {err}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Upstream model catalog returned status {}.",
+            response.status()
+        ));
+    }
+
+    let value = response
+        .json::<Value>()
+        .await
+        .map_err(|err| format!("Failed to parse upstream model catalog JSON: {err}"))?;
+    Ok(extract_model_ids_from_catalog(&value))
+}
+
+fn extract_model_ids_from_catalog(value: &Value) -> Vec<String> {
+    if let Some(items) = value.get("data").and_then(Value::as_array) {
+        return items
+            .iter()
+            .filter_map(|item| item.get("id").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    value
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            item.get("id")
+                .and_then(Value::as_str)
+                .or_else(|| item.get("name").and_then(Value::as_str))
+        })
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.trim_start_matches("models/").to_string())
+        .collect()
+}
+
+fn build_model_catalog_response_body(
+    sources: &[(String, Vec<String>)],
+    include_prefixed: bool,
+) -> Value {
+    let created = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let mut upstreams_by_model: HashMap<String, Vec<String>> = HashMap::new();
+    let mut base_order = Vec::new();
+
+    for (upstream_id, models) in sources {
+        let mut seen = HashSet::new();
+        for model in models {
+            let trimmed = model.trim();
+            if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
+                continue;
+            }
+            if !upstreams_by_model.contains_key(trimmed) {
+                base_order.push(trimmed.to_string());
+            }
+            upstreams_by_model
+                .entry(trimmed.to_string())
+                .or_default()
+                .push(upstream_id.clone());
+        }
+    }
+
+    let mut data = Vec::new();
+    for model in base_order {
+        let Some(upstream_ids) = upstreams_by_model.get(&model) else {
+            continue;
+        };
+        if include_prefixed {
+            if upstream_ids.len() > 1 {
+                data.push(model_catalog_item(model.as_str(), model.as_str(), created));
+            }
+            for upstream_id in upstream_ids {
+                let prefixed = format!("{upstream_id}/{model}");
+                data.push(model_catalog_item(&prefixed, upstream_id.as_str(), created));
+            }
+            continue;
+        }
+        data.push(model_catalog_item(model.as_str(), "token_proxy", created));
+    }
+
+    json!({
+        "object": "list",
+        "data": data,
+    })
+}
+
+fn model_catalog_item(id: &str, owned_by: &str, created: i64) -> Value {
+    json!({
+        "id": id,
+        "object": "model",
+        "created": created,
+        "owned_by": owned_by,
+    })
+}
+
+fn requested_target_upstream_id(
+    upstreams: &ProviderUpstreams,
+    original_model: Option<&str>,
+) -> Option<String> {
+    let original_model = original_model?.trim();
+    let (prefix, rest) = original_model.split_once('/')?;
+    if prefix.trim().is_empty() || rest.trim().is_empty() {
+        return None;
+    }
+    upstreams
+        .groups
+        .iter()
+        .flat_map(|group| group.items.iter())
+        .find(|upstream| upstream.id == prefix)
+        .map(|upstream| upstream.id.clone())
+}
+
+fn strip_target_upstream_prefix(model: &str, upstream_id: &str) -> Option<String> {
+    let (prefix, rest) = model.split_once('/')?;
+    if prefix != upstream_id || rest.trim().is_empty() {
+        return None;
+    }
+    Some(rest.to_string())
 }
 
 fn normalize_mapped_model_reasoning_suffix(

@@ -15,6 +15,7 @@ fn runtime(id: &str, selector_key: &str) -> UpstreamRuntime {
         kiro_preferred_endpoint: None,
         proxy_url: None,
         priority: 0,
+        advertised_model_ids: Vec::new(),
         model_mappings: None,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),

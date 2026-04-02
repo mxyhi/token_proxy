@@ -23,7 +23,7 @@ use super::{
         maybe_force_openai_stream_options_include_usage, maybe_transform_request_body,
         parse_request_meta_best_effort,
     },
-    upstream::forward_upstream_request,
+    upstream::{aggregate_model_catalog_request, forward_upstream_request},
     ProxyState, RequestMeta,
 };
 use crate::logging::LogLevel;
@@ -288,8 +288,16 @@ fn is_openai_models_path(path: &str) -> bool {
     path == "/v1/models" || path.starts_with("/v1/models/")
 }
 
+fn is_openai_models_index_path(path: &str) -> bool {
+    path == "/v1/models"
+}
+
 fn is_openai_compatible_models_path(path: &str) -> bool {
     path == "/v1beta/openai/models" || path.starts_with("/v1beta/openai/models/")
+}
+
+fn is_openai_compatible_models_index_path(path: &str) -> bool {
+    path == "/v1beta/openai/models"
 }
 
 fn is_anthropic_models_request(headers: &HeaderMap) -> bool {
@@ -1099,6 +1107,73 @@ async fn proxy_request(
     let query = uri.query().map(|value| value.to_string());
     tracing::info!(method = %method, path = %path, "incoming request");
     tracing::debug!(headers = ?headers.keys().collect::<Vec<_>>(), "request headers");
+
+    if method == Method::GET
+        && (is_openai_models_index_path(&path) || is_openai_compatible_models_index_path(&path))
+    {
+        let body = match ensure_local_auth_or_respond(
+            &state.config,
+            &state.log,
+            &headers,
+            body,
+            capture_request_detail_enabled,
+            &path,
+            query.as_deref(),
+            request_start,
+            state.config.max_request_body_bytes,
+        )
+        .await
+        {
+            Ok(body) => body,
+            Err(response) => return response,
+        };
+        let (plan, _body) = match resolve_plan_or_respond(
+            &state.config,
+            &state.log,
+            &headers,
+            body,
+            capture_request_detail_enabled,
+            &path,
+            query.as_deref(),
+            request_start,
+            state.config.max_request_body_bytes,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(response) => return response,
+        };
+        let request_auth = match resolve_request_auth_or_respond(
+            &state.config,
+            &headers,
+            &state.log,
+            None,
+            &path,
+            plan.provider,
+            request_start,
+        ) {
+            Ok(request_auth) => request_auth,
+            Err(response) => return response,
+        };
+        let meta = RequestMeta {
+            stream: false,
+            original_model: None,
+            mapped_model: None,
+            reasoning_effort: None,
+            estimated_input_tokens: None,
+        };
+        let outbound_path = resolve_outbound_path(&path, &plan, &meta);
+        let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, &uri);
+        return aggregate_model_catalog_request(
+            state,
+            plan.provider,
+            &path,
+            &outbound_path_with_query,
+            &headers,
+            &request_auth,
+        )
+        .await;
+    }
 
     let inbound = match prepare_inbound_request(
         &state,

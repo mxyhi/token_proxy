@@ -91,6 +91,7 @@ fn config_with_runtime_upstreams(
             kiro_preferred_endpoint: None,
             proxy_url: None,
             priority: *priority,
+            advertised_model_ids: Vec::new(),
             model_mappings: None,
             header_overrides: None,
             allowed_inbound_formats: Default::default(),
@@ -123,6 +124,7 @@ fn config_with_runtime_upstreams(
         host: "127.0.0.1".to_string(),
         port: 9208,
         local_api_key: None,
+        model_list_prefix: false,
         log_level: LogLevel::Silent,
         max_request_body_bytes: 20 * 1024 * 1024,
         retryable_failure_cooldown: std::time::Duration::from_secs(15),
@@ -157,6 +159,12 @@ struct MockRawUpstreamState {
     status: StatusCode,
     body: Bytes,
     content_type: String,
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
+}
+
+#[derive(Clone)]
+struct MockModelCatalogState {
+    body: Value,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
 }
 
@@ -312,6 +320,53 @@ async fn spawn_mock_raw_upstream(
         axum::serve(listener, app)
             .await
             .expect("raw mock upstream server should run");
+    });
+    MockUpstream {
+        base_url: format!("http://{addr}"),
+        requests,
+        task,
+    }
+}
+
+async fn mock_model_catalog_handler(
+    State(state): State<Arc<MockModelCatalogState>>,
+    uri: Uri,
+) -> axum::response::Response {
+    state
+        .requests
+        .lock()
+        .expect("requests lock")
+        .push(RecordedRequest {
+            path: uri.path().to_string(),
+            body: Value::Null,
+            authorization: None,
+            chatgpt_account_id: None,
+        });
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        state.body.to_string(),
+    )
+        .into_response()
+}
+
+async fn spawn_model_catalog_upstream(body: Value) -> MockUpstream {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let state = Arc::new(MockModelCatalogState {
+        body,
+        requests: requests.clone(),
+    });
+    let app = Router::new()
+        .route("/{*path}", any(mock_model_catalog_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind model catalog mock upstream");
+    let addr: SocketAddr = listener.local_addr().expect("mock local addr");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("model catalog mock upstream server should run");
     });
     MockUpstream {
         base_url: format!("http://{addr}"),
@@ -1088,6 +1143,282 @@ async fn send_messages_request(state: ProxyStateHandle) -> (StatusCode, Value) {
         .expect("proxy response bytes");
     let json = serde_json::from_slice(&body).expect("proxy response json");
     (status, json)
+}
+
+async fn send_responses_request_with_model(
+    state: ProxyStateHandle,
+    model: &str,
+) -> (StatusCode, Value) {
+    let response = proxy_request(
+        State(state),
+        Method::POST,
+        Uri::from_static(RESPONSES_PATH),
+        axum::http::HeaderMap::new(),
+        Body::from(
+            json!({
+                "model": model,
+                "input": "hi"
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("proxy response bytes");
+    let json = serde_json::from_slice(&body).expect("proxy response json");
+    (status, json)
+}
+
+async fn send_models_request(state: ProxyStateHandle) -> (StatusCode, Value) {
+    let response = proxy_request(
+        State(state),
+        Method::GET,
+        Uri::from_static("/v1/models"),
+        axum::http::HeaderMap::new(),
+        Body::empty(),
+    )
+    .await;
+
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("proxy response bytes");
+    let json = serde_json::from_slice(&body).expect("proxy response json");
+    (status, json)
+}
+
+#[test]
+fn models_index_aggregates_unique_ids_when_prefix_disabled() {
+    run_async(async {
+        let upstream_a = spawn_model_catalog_upstream(json!({
+            "object": "list",
+            "data": [
+                { "id": "gpt-5", "object": "model" },
+                { "id": "gpt-4.1", "object": "model" }
+            ]
+        }))
+        .await;
+        let upstream_b = spawn_model_catalog_upstream(json!({
+            "object": "list",
+            "data": [
+                { "id": "gpt-5", "object": "model" },
+                { "id": "o3", "object": "model" }
+            ]
+        }))
+        .await;
+        let data_dir = next_test_data_dir("models_index_aggregates_unique_ids_when_prefix_disabled");
+        let config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                0,
+                "alpha",
+                upstream_a.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                0,
+                "beta",
+                upstream_b.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        let state = build_test_state_handle(config, data_dir).await;
+
+        let (status, body) = send_models_request(state).await;
+        assert_eq!(status, StatusCode::OK);
+        let mut ids = body["data"]
+            .as_array()
+            .expect("models data")
+            .iter()
+            .filter_map(|item| item["id"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, vec!["gpt-4.1", "gpt-5", "o3"]);
+        let alpha_requests = upstream_a.requests();
+        let beta_requests = upstream_b.requests();
+        assert_eq!(alpha_requests.len(), 1);
+        assert_eq!(alpha_requests[0].path, "/v1/models");
+        assert_eq!(beta_requests.len(), 1);
+        assert_eq!(beta_requests[0].path, "/v1/models");
+
+        upstream_a.abort();
+        upstream_b.abort();
+    });
+}
+
+#[test]
+fn models_index_adds_prefixed_entries_and_duplicate_alias_when_enabled() {
+    run_async(async {
+        let upstream_a = spawn_model_catalog_upstream(json!({
+            "object": "list",
+            "data": [
+                { "id": "gpt-5", "object": "model" },
+                { "id": "gpt-4.1", "object": "model" }
+            ]
+        }))
+        .await;
+        let upstream_b = spawn_model_catalog_upstream(json!({
+            "object": "list",
+            "data": [
+                { "id": "gpt-5", "object": "model" },
+                { "id": "o3", "object": "model" }
+            ]
+        }))
+        .await;
+        let data_dir =
+            next_test_data_dir("models_index_adds_prefixed_entries_and_duplicate_alias_when_enabled");
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                0,
+                "alpha",
+                upstream_a.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                0,
+                "beta",
+                upstream_b.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        config.model_list_prefix = true;
+        let state = build_test_state_handle(config, data_dir).await;
+
+        let (status, body) = send_models_request(state).await;
+        assert_eq!(status, StatusCode::OK);
+        let mut ids = body["data"]
+            .as_array()
+            .expect("models data")
+            .iter()
+            .filter_map(|item| item["id"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec![
+                "alpha/gpt-4.1",
+                "alpha/gpt-5",
+                "beta/gpt-5",
+                "beta/o3",
+                "gpt-5",
+            ]
+        );
+
+        upstream_a.abort();
+        upstream_b.abort();
+    });
+}
+
+#[test]
+fn models_index_includes_exact_model_mapping_keys_when_catalog_is_empty() {
+    run_async(async {
+        let upstream = spawn_model_catalog_upstream(json!({
+            "object": "list",
+            "data": []
+        }))
+        .await;
+        let data_dir =
+            next_test_data_dir("models_index_includes_exact_model_mapping_keys_when_catalog_is_empty");
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_RESPONSES,
+            0,
+            "alpha",
+            upstream.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        config
+            .upstreams
+            .get_mut(PROVIDER_RESPONSES)
+            .expect("responses upstreams")
+            .groups[0]
+            .items[0]
+            .advertised_model_ids = vec![
+            "alias-gpt-5".to_string(),
+            "alias-gpt-4.1".to_string(),
+        ];
+        let state = build_test_state_handle(config, data_dir).await;
+
+        let (status, body) = send_models_request(state).await;
+        assert_eq!(status, StatusCode::OK);
+        let mut ids = body["data"]
+            .as_array()
+            .expect("models data")
+            .iter()
+            .filter_map(|item| item["id"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, vec!["alias-gpt-4.1", "alias-gpt-5"]);
+
+        upstream.abort();
+    });
+}
+
+#[test]
+fn prefixed_model_routes_to_target_upstream_and_strips_prefix_before_forwarding() {
+    run_async(async {
+        let upstream_a = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_alpha",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5",
+                "status": "completed",
+                "output": [],
+                "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 }
+            }),
+        )
+        .await;
+        let upstream_b = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_beta",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5",
+                "status": "completed",
+                "output": [],
+                "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 }
+            }),
+        )
+        .await;
+        let data_dir =
+            next_test_data_dir("prefixed_model_routes_to_target_upstream_and_strips_prefix_before_forwarding");
+        let config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                0,
+                "alpha",
+                upstream_a.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                0,
+                "beta",
+                upstream_b.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        let state = build_test_state_handle(config, data_dir).await;
+
+        let (status, body) = send_responses_request_with_model(state, "beta/gpt-5").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["model"].as_str(), Some("beta/gpt-5"));
+        assert!(upstream_a.requests().is_empty());
+        let beta_requests = upstream_b.requests();
+        assert_eq!(beta_requests.len(), 1);
+        assert_eq!(beta_requests[0].body["model"].as_str(), Some("gpt-5"));
+
+        upstream_a.abort();
+        upstream_b.abort();
+    });
 }
 
 async fn wait_for_logged_account_id(pool: &sqlx::SqlitePool) -> Option<String> {

@@ -106,6 +106,7 @@ export type ProxyConfigFileBase = {
   port: number;
   local_api_key: string | null;
   app_proxy_url: string | null;
+  model_list_prefix?: boolean;
   kiro_preferred_endpoint?: KiroPreferredEndpoint | null;
   log_level?: LogLevel;
   retryable_failure_cooldown_secs?: number;
@@ -175,6 +176,7 @@ export type ConfigForm = {
   port: string;
   localApiKey: string;
   appProxyUrl: string;
+  modelListPrefix: boolean;
   kiroPreferredEndpoint: "" | KiroPreferredEndpoint;
   logLevel: LogLevel;
   retryableFailureCooldownSecs: string;

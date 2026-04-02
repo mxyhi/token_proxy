@@ -109,6 +109,7 @@ fn normalize_single_upstream(
         .map(|value| value.to_string());
     let proxy_url =
         normalize_upstream_proxy_url(upstream.proxy_url.as_deref(), app_proxy_url, &upstream.id)?;
+    let advertised_model_ids = collect_advertised_model_ids(&upstream.model_mappings);
     let model_mappings = compile_model_mappings(&upstream.id, &upstream.model_mappings)?;
     let header_overrides = normalize_header_overrides(upstream.overrides.as_ref())?;
 
@@ -146,6 +147,7 @@ fn normalize_single_upstream(
                 kiro_preferred_endpoint: upstream.preferred_endpoint.clone(),
                 proxy_url: proxy_url.clone(),
                 priority: upstream.priority.unwrap_or(0),
+                advertised_model_ids: advertised_model_ids.clone(),
                 model_mappings: model_mappings.clone(),
                 header_overrides: header_overrides.clone(),
                 allowed_inbound_formats,
@@ -158,6 +160,18 @@ fn normalize_single_upstream(
     }
 
     Ok(output)
+}
+
+fn collect_advertised_model_ids(model_mappings: &HashMap<String, String>) -> Vec<String> {
+    let mut ids = model_mappings
+        .keys()
+        .map(|key| key.trim())
+        .filter(|key| !key.is_empty() && !key.contains('*'))
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 fn resolve_runtime_providers(

@@ -121,11 +121,13 @@ describe("config/form", () => {
       ...EMPTY_FORM,
       host: " 127.0.0.1 ",
       localApiKey: " ",
+      modelListPrefix: true,
       upstreams: [upstream],
     });
 
     expect(payload.host).toBe("127.0.0.1");
     expect(payload.local_api_key).toBeNull();
+    expect(payload.model_list_prefix).toBe(true);
     expect(payload.retryable_failure_cooldown_secs).toBe(15);
     expect(payload.upstream_no_data_timeout_secs).toBe(120);
     expect(payload.upstreams[0]?.id).toBe("upstream-1");
@@ -191,6 +193,7 @@ describe("config/form", () => {
     });
 
     expect(form.upstreamNoDataTimeoutSecs).toBe("120");
+    expect(form.modelListPrefix).toBe(false);
     expect(form.upstreams[0]?.apiKeys).toBe("key-a, key-b");
     expect(form.upstreamStrategy).toEqual({
       order: "fill_first",

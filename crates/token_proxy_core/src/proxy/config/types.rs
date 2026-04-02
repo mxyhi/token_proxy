@@ -34,6 +34,10 @@ fn default_retryable_failure_cooldown_secs() -> u64 {
     15
 }
 
+fn default_model_list_prefix() -> bool {
+    false
+}
+
 fn is_default_retryable_failure_cooldown_secs(value: &u64) -> bool {
     *value == default_retryable_failure_cooldown_secs()
 }
@@ -208,6 +212,8 @@ pub struct ProxyConfigFile {
     pub port: u16,
     pub local_api_key: Option<String>,
     pub app_proxy_url: Option<String>,
+    #[serde(default = "default_model_list_prefix", skip_serializing_if = "is_false")]
+    pub model_list_prefix: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
     #[serde(
@@ -242,6 +248,7 @@ impl Default for ProxyConfigFile {
             port: default_proxy_port(),
             local_api_key: None,
             app_proxy_url: None,
+            model_list_prefix: default_model_list_prefix(),
             kiro_preferred_endpoint: None,
             log_level: LogLevel::default(),
             max_request_body_bytes: None,
@@ -287,6 +294,7 @@ pub struct ProxyConfig {
     pub host: String,
     pub port: u16,
     pub local_api_key: Option<String>,
+    pub model_list_prefix: bool,
     pub log_level: LogLevel,
     pub max_request_body_bytes: usize,
     pub retryable_failure_cooldown: std::time::Duration,
@@ -341,6 +349,7 @@ pub struct UpstreamRuntime {
     pub(crate) kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
     pub(crate) proxy_url: Option<String>,
     pub(crate) priority: i32,
+    pub(crate) advertised_model_ids: Vec<String>,
     pub(crate) model_mappings: Option<ModelMappingRules>,
     pub(crate) header_overrides: Option<Vec<HeaderOverride>>,
     pub(crate) allowed_inbound_formats: InboundApiFormatMask,

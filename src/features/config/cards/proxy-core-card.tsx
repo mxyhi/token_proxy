@@ -9,6 +9,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { ProxyServicePanel, type ProxyServiceViewProps } from "@/features/config/cards/proxy-service-card";
 import { type ConfigForm, type KiroPreferredEndpoint } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
@@ -90,6 +91,19 @@ function ProxyCoreFields({
         <p className="text-xs text-muted-foreground">
           {m.proxy_core_app_proxy_url_help({ placeholder: "$app_proxy_url" })}
         </p>
+      </div>
+      <div className="flex items-start justify-between gap-4 rounded-lg border border-border/60 p-3">
+        <div className="space-y-1">
+          <Label htmlFor="model-list-prefix">模型列表显示渠道前缀</Label>
+          <p className="text-xs text-muted-foreground">
+            开启后，`/v1/models` 会返回 `upstream_id/模型名`；同名模型额外保留无前缀入口用于轮询。
+          </p>
+        </div>
+        <Switch
+          id="model-list-prefix"
+          checked={form.modelListPrefix}
+          onCheckedChange={(checked) => onChange({ modelListPrefix: checked })}
+        />
       </div>
       <div className="grid gap-2">
         <Label htmlFor="kiro-preferred-endpoint">

@@ -16,6 +16,7 @@ fn config_with_addr_and_body_limit(
         host: host.to_string(),
         port,
         local_api_key: None,
+        model_list_prefix: false,
         log_level: LogLevel::Silent,
         max_request_body_bytes,
         retryable_failure_cooldown: Duration::from_secs(15),

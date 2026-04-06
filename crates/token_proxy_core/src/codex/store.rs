@@ -212,7 +212,8 @@ impl CodexAccountStore {
         account_id: &str,
         record: CodexTokenRecord,
     ) -> Result<CodexTokenRecord, String> {
-        self.save_record(account_id.to_string(), record.clone()).await?;
+        self.save_record(account_id.to_string(), record.clone())
+            .await?;
         Ok(record)
     }
 
@@ -351,7 +352,8 @@ impl CodexAccountStore {
         &self,
         account_id: Option<&str>,
     ) -> Result<(String, CodexTokenRecord), String> {
-        self.resolve_account_record_with_order(account_id, None).await
+        self.resolve_account_record_with_order(account_id, None)
+            .await
     }
 
     pub(crate) async fn resolve_account_record_with_order(
@@ -417,7 +419,10 @@ impl CodexAccountStore {
         };
 
         for account_id in account_ids {
-            if excluded_account_ids.iter().any(|value| value == &account_id) {
+            if excluded_account_ids
+                .iter()
+                .any(|value| value == &account_id)
+            {
                 continue;
             }
             match self.get_account_record(&account_id).await {
@@ -517,11 +522,9 @@ impl CodexAccountStore {
         let cache = self.cache.read().await;
 
         if let Some(account_id) = imported_account_id {
-            if let Some((local_account_id, existing_record)) = cache
-                .iter()
-                .find(|(_, existing_record)| {
-                    normalize_optional_identity(existing_record.account_id.as_deref())
-                        .as_deref()
+            if let Some((local_account_id, existing_record)) =
+                cache.iter().find(|(_, existing_record)| {
+                    normalize_optional_identity(existing_record.account_id.as_deref()).as_deref()
                         == Some(account_id.as_str())
                 })
             {
@@ -530,9 +533,8 @@ impl CodexAccountStore {
         }
 
         if let Some(email) = imported_email {
-            if let Some((local_account_id, existing_record)) = cache
-                .iter()
-                .find(|(_, existing_record)| {
+            if let Some((local_account_id, existing_record)) =
+                cache.iter().find(|(_, existing_record)| {
                     normalize_optional_identity(existing_record.email.as_deref()).as_deref()
                         == Some(email.as_str())
                 })
@@ -543,7 +545,6 @@ impl CodexAccountStore {
 
         Ok(None)
     }
-
 }
 
 fn codex_status_key(status: CodexAccountStatus) -> &'static str {
@@ -567,10 +568,9 @@ fn quota_refresh_is_due(checked_at: Option<&str>) -> bool {
     let Some(checked_at) = checked_at.map(str::trim).filter(|value| !value.is_empty()) else {
         return true;
     };
-    let Ok(checked_at) = OffsetDateTime::parse(
-        checked_at,
-        &time::format_description::well_known::Rfc3339,
-    ) else {
+    let Ok(checked_at) =
+        OffsetDateTime::parse(checked_at, &time::format_description::well_known::Rfc3339)
+    else {
         return true;
     };
     OffsetDateTime::now_utc() - checked_at >= Duration::seconds(QUOTA_REFRESH_INTERVAL_SECONDS)
@@ -1271,7 +1271,10 @@ mod tests {
                 .expect("list accounts should succeed");
             assert_eq!(accounts.len(), 1);
             assert_eq!(accounts[0].account_id, first_local_account_id);
-            assert_eq!(accounts[0].proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
+            assert_eq!(
+                accounts[0].proxy_url.as_deref(),
+                Some("http://127.0.0.1:7890")
+            );
 
             let record = store
                 .get_account_record(&first_local_account_id)
@@ -1392,7 +1395,10 @@ mod tests {
             .await
             .expect("write input");
 
-            let imported = store.import_file(input_path).await.expect("import should succeed");
+            let imported = store
+                .import_file(input_path)
+                .await
+                .expect("import should succeed");
             assert!(matches!(imported[0].status, CodexAccountStatus::Active));
 
             let updated = store
@@ -1508,7 +1514,10 @@ mod tests {
                 .set_proxy_url(&imported[0].account_id, Some("socks5://127.0.0.1:1080"))
                 .await
                 .expect("set proxy url should succeed");
-            assert_eq!(updated.proxy_url.as_deref(), Some("socks5://127.0.0.1:1080"));
+            assert_eq!(
+                updated.proxy_url.as_deref(),
+                Some("socks5://127.0.0.1:1080")
+            );
 
             let record = store
                 .get_account_record(&imported[0].account_id)

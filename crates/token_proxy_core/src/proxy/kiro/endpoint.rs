@@ -55,5 +55,8 @@ fn build_endpoint_url(base_url_override: Option<&str>, default_url: &str) -> Str
     else {
         return default_url.to_string();
     };
-    format!("{}/generateAssistantResponse", base_url.trim_end_matches('/'))
+    format!(
+        "{}/generateAssistantResponse",
+        base_url.trim_end_matches('/')
+    )
 }

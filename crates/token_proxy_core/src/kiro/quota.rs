@@ -114,7 +114,8 @@ async fn fetch_account_quota(
         .as_deref()
         .ok_or_else(|| "Missing Kiro profile ARN.".to_string())?;
     let proxy_url = store.effective_proxy_url(record.proxy_url.as_deref()).await;
-    let response = request_usage_limits(&record.access_token, profile_arn, proxy_url.as_deref()).await?;
+    let response =
+        request_usage_limits(&record.access_token, profile_arn, proxy_url.as_deref()).await?;
     Ok(map_usage_response(account, &response))
 }
 

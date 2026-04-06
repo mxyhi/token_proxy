@@ -160,7 +160,10 @@ pub async fn delete_account(paths: &TokenProxyPaths, account_id: &str) -> Result
     Ok(())
 }
 
-pub async fn delete_accounts(paths: &TokenProxyPaths, account_ids: &[String]) -> Result<(), String> {
+pub async fn delete_accounts(
+    paths: &TokenProxyPaths,
+    account_ids: &[String],
+) -> Result<(), String> {
     if account_ids.is_empty() {
         return Ok(());
     }
@@ -174,7 +177,12 @@ pub async fn delete_accounts(paths: &TokenProxyPaths, account_ids: &[String]) ->
             .bind(account_id.as_str())
             .execute(&mut *tx)
             .await
-            .map_err(|err| format!("Failed to delete provider account row {}: {err}", account_id))?;
+            .map_err(|err| {
+                format!(
+                    "Failed to delete provider account row {}: {err}",
+                    account_id
+                )
+            })?;
     }
     tx.commit()
         .await
@@ -222,8 +230,7 @@ ORDER BY provider_kind ASC, account_id ASC
     .await
     .map_err(|err| format!("Failed to read provider account rows: {err}"))?;
 
-    rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             let provider_kind = ProviderAccountKind::parse(
                 row.try_get::<String, _>("provider_kind")
@@ -303,9 +310,7 @@ fn build_codex_db_record(
         account_id: account_id.to_string(),
         email: normalize_optional_string(record.email.as_deref()),
         expires_at: normalize_optional_string(Some(record.expires_at.as_str())),
-        expires_at_ms: record
-            .expires_at()
-            .map(offset_datetime_to_unix_ms),
+        expires_at_ms: record.expires_at().map(offset_datetime_to_unix_ms),
         auth_method: None,
         provider_name: None,
         record_json: serde_json::to_string(record)
@@ -314,7 +319,10 @@ fn build_codex_db_record(
     })
 }
 
-async fn upsert_account(paths: &TokenProxyPaths, record: &ProviderAccountDbRecord) -> Result<(), String> {
+async fn upsert_account(
+    paths: &TokenProxyPaths,
+    record: &ProviderAccountDbRecord,
+) -> Result<(), String> {
     let pool = sqlite::open_write_pool(paths).await?;
     execute_upsert_pool(&pool, record).await
 }

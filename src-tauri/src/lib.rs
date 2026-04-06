@@ -74,8 +74,12 @@ async fn apply_runtime_account_cooldowns(
         })
         .map(|item| item.account_id.clone())
         .collect::<Vec<_>>();
-    let cooling_kiro = proxy_service.cooling_account_ids("kiro", &kiro_account_ids).await;
-    let cooling_codex = proxy_service.cooling_account_ids("codex", &codex_account_ids).await;
+    let cooling_kiro = proxy_service
+        .cooling_account_ids("kiro", &kiro_account_ids)
+        .await;
+    let cooling_codex = proxy_service
+        .cooling_account_ids("codex", &codex_account_ids)
+        .await;
 
     for item in items.iter_mut() {
         if item.status != token_proxy_core::provider_accounts::ProviderAccountStatus::Active {
@@ -432,7 +436,9 @@ async fn kiro_set_proxy_url(
     account_id: String,
     proxy_url: Option<String>,
 ) -> Result<kiro::KiroAccountSummary, String> {
-    kiro_store.set_proxy_url(&account_id, proxy_url.as_deref()).await
+    kiro_store
+        .set_proxy_url(&account_id, proxy_url.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -466,7 +472,9 @@ async fn codex_refresh_quota_cache(
     codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
     account_ids: Option<Vec<String>>,
 ) -> Result<Vec<String>, String> {
-    codex_store.refresh_quota_cache(account_ids.as_deref()).await
+    codex_store
+        .refresh_quota_cache(account_ids.as_deref())
+        .await
 }
 
 #[tauri::command]
@@ -510,7 +518,9 @@ async fn codex_set_proxy_url(
     account_id: String,
     proxy_url: Option<String>,
 ) -> Result<codex::CodexAccountSummary, String> {
-    codex_store.set_proxy_url(&account_id, proxy_url.as_deref()).await
+    codex_store
+        .set_proxy_url(&account_id, proxy_url.as_deref())
+        .await
 }
 
 #[tauri::command]

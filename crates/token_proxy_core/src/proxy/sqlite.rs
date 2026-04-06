@@ -289,8 +289,9 @@ async fn migrate_provider_account_status(pool: &SqlitePool) -> Result<(), String
         let record_json = row
             .try_get::<String, _>("record_json")
             .map_err(|err| format!("Failed to decode provider_accounts.record_json: {err}"))?;
-        let mut value = serde_json::from_str::<serde_json::Value>(&record_json)
-            .map_err(|err| format!("Failed to parse provider_accounts.record_json for {account_id}: {err}"))?;
+        let mut value = serde_json::from_str::<serde_json::Value>(&record_json).map_err(|err| {
+            format!("Failed to parse provider_accounts.record_json for {account_id}: {err}")
+        })?;
         let Some(object) = value.as_object_mut() else {
             continue;
         };
@@ -445,9 +446,13 @@ INSERT INTO provider_accounts (
         let record_json = row
             .try_get::<String, _>("record_json")
             .expect("decode record_json");
-        let value: serde_json::Value = serde_json::from_str(&record_json).expect("parse record_json");
+        let value: serde_json::Value =
+            serde_json::from_str(&record_json).expect("parse record_json");
 
-        assert_eq!(value.get("status").and_then(serde_json::Value::as_str), Some("disabled"));
+        assert_eq!(
+            value.get("status").and_then(serde_json::Value::as_str),
+            Some("disabled")
+        );
         assert!(
             value.get("enabled").is_none(),
             "legacy enabled field should be removed after migration"

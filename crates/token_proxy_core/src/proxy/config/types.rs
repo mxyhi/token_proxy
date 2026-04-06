@@ -212,7 +212,10 @@ pub struct ProxyConfigFile {
     pub port: u16,
     pub local_api_key: Option<String>,
     pub app_proxy_url: Option<String>,
-    #[serde(default = "default_model_list_prefix", skip_serializing_if = "is_false")]
+    #[serde(
+        default = "default_model_list_prefix",
+        skip_serializing_if = "is_false"
+    )]
     pub model_list_prefix: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,

@@ -89,7 +89,11 @@ impl ProxyServiceHandle {
         self.inner.apply_saved_config(ctx).await
     }
 
-    pub async fn cooling_account_ids(&self, provider: &str, account_ids: &[String]) -> HashSet<String> {
+    pub async fn cooling_account_ids(
+        &self,
+        provider: &str,
+        account_ids: &[String],
+    ) -> HashSet<String> {
         self.inner.cooling_account_ids(provider, account_ids).await
     }
 }

@@ -144,7 +144,12 @@ impl AccountSelectorRuntime {
         None
     }
 
-    fn mark_cooldown_until(&self, provider: &str, account_id: &str, until: Instant) -> Option<u128> {
+    fn mark_cooldown_until(
+        &self,
+        provider: &str,
+        account_id: &str,
+        until: Instant,
+    ) -> Option<u128> {
         let mut cooldowns = self
             .cooldowns
             .lock()

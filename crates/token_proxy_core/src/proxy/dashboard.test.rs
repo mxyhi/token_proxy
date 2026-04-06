@@ -318,7 +318,10 @@ async fn read_snapshot_filters_by_upstream_and_keeps_all_upstream_options() {
 
     assert_eq!(snapshot.recent.len(), 1);
     assert_eq!(snapshot.recent[0].upstream_id, "alpha");
-    assert_eq!(snapshot.recent[0].account_id.as_deref(), Some("codex-a.json"));
+    assert_eq!(
+        snapshot.recent[0].account_id.as_deref(),
+        Some("codex-a.json")
+    );
     assert!(
         snapshot
             .series

@@ -126,7 +126,10 @@ LIMIT 1;
         path: row.try_get::<String, _>("path").unwrap_or_default(),
         provider: row.try_get::<String, _>("provider").unwrap_or_default(),
         upstream_id: row.try_get::<String, _>("upstream_id").unwrap_or_default(),
-        account_id: row.try_get::<Option<String>, _>("account_id").ok().flatten(),
+        account_id: row
+            .try_get::<Option<String>, _>("account_id")
+            .ok()
+            .flatten(),
         model: row.try_get::<Option<String>, _>("model").ok().flatten(),
         mapped_model: row
             .try_get::<Option<String>, _>("mapped_model")
@@ -355,6 +358,9 @@ mod tests {
         assert_eq!(items[0].event_kind, "cooldown_cleared");
         assert_eq!(items[0].status, "active");
         assert_eq!(items[1].trigger_kind, "http_status");
-        assert_eq!(items[1].reason_detail.as_deref(), Some("429 retry-after=30"));
+        assert_eq!(
+            items[1].reason_detail.as_deref(),
+            Some("429 retry-after=30")
+        );
     }
 }

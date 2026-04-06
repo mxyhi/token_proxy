@@ -234,7 +234,8 @@ impl KiroAccountStore {
         account_id: &str,
         record: KiroTokenRecord,
     ) -> Result<KiroTokenRecord, String> {
-        self.save_record(account_id.to_string(), record.clone()).await?;
+        self.save_record(account_id.to_string(), record.clone())
+            .await?;
         Ok(record)
     }
 
@@ -342,7 +343,8 @@ impl KiroAccountStore {
         &self,
         account_id: Option<&str>,
     ) -> Result<(String, KiroTokenRecord), String> {
-        self.resolve_account_record_with_order(account_id, None).await
+        self.resolve_account_record_with_order(account_id, None)
+            .await
     }
 
     pub(crate) async fn resolve_account_record_with_order(
@@ -467,7 +469,6 @@ impl KiroAccountStore {
             suffix += 1;
         }
     }
-
 }
 
 fn kiro_status_key(status: KiroAccountStatus) -> &'static str {

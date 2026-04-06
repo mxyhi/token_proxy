@@ -88,6 +88,40 @@ fn local_auth_accepts_gemini_query_key() {
 }
 
 #[test]
+fn local_auth_accepts_gemini_model_catalog_query_key() {
+    let config = config_with_local("local-key");
+    let headers = HeaderMap::new();
+    let result = ensure_local_auth(&config, &headers, "/v1beta/models", Some("key=local-key"));
+    assert!(result.is_ok());
+}
+
+#[test]
+fn local_auth_accepts_gemini_count_tokens_query_key() {
+    let config = config_with_local("local-key");
+    let headers = HeaderMap::new();
+    let result = ensure_local_auth(
+        &config,
+        &headers,
+        "/v1beta/models/gemini-1.5-flash:countTokens",
+        Some("key=local-key"),
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
+fn local_auth_accepts_gemini_upload_files_query_key() {
+    let config = config_with_local("local-key");
+    let headers = HeaderMap::new();
+    let result = ensure_local_auth(
+        &config,
+        &headers,
+        "/upload/v1beta/files",
+        Some("key=local-key"),
+    );
+    assert!(result.is_ok());
+}
+
+#[test]
 fn local_auth_accepts_openai_authorization() {
     let config = config_with_local("local-key");
     let mut headers = HeaderMap::new();

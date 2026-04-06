@@ -4,6 +4,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use url::Url;
 
 use super::{
     http,
@@ -20,6 +21,10 @@ const PROVIDER_ANTHROPIC: &str = "anthropic";
 const PROVIDER_GEMINI: &str = "gemini";
 const PROVIDER_CODEX: &str = "codex";
 const RESPONSE_ERROR_LIMIT_BYTES: usize = 256 * 1024;
+const GEMINI_UPLOAD_URL_HEADER: &str = "x-goog-upload-url";
+const GEMINI_PROXY_UPLOAD_TARGET_QUERY: &str = "tp_upload_target";
+const GEMINI_UPLOAD_PROXY_PATH: &str = "/upload/v1beta/files";
+const GEMINI_API_KEY_QUERY: &str = "key";
 
 pub(super) async fn build_proxy_response(
     meta: &RequestMeta,
@@ -31,12 +36,20 @@ pub(super) async fn build_proxy_response(
     log: Arc<LogWriter>,
     token_rate: Arc<TokenRateTracker>,
     start: Instant,
+    proxy_base_url: &str,
+    client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     upstream_no_data_timeout: Duration,
 ) -> Response {
     let status = upstream_res.status();
     let mut response_headers = http::filter_response_headers(upstream_res.headers());
+    maybe_rewrite_gemini_upload_url(
+        provider,
+        &mut response_headers,
+        proxy_base_url,
+        client_gemini_api_key,
+    );
     let (request_headers, request_body) = request_detail
         .map(|detail| (detail.request_headers, detail.request_body))
         .unwrap_or((None, None));
@@ -110,12 +123,20 @@ pub(super) async fn build_proxy_response_buffered(
     log: Arc<LogWriter>,
     token_rate: Arc<TokenRateTracker>,
     start: Instant,
+    proxy_base_url: &str,
+    client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     upstream_no_data_timeout: Duration,
 ) -> Response {
     let status = upstream_res.status();
     let mut response_headers = http::filter_response_headers(upstream_res.headers());
+    maybe_rewrite_gemini_upload_url(
+        provider,
+        &mut response_headers,
+        proxy_base_url,
+        client_gemini_api_key,
+    );
     let (request_headers, request_body) = request_detail
         .map(|detail| (detail.request_headers, detail.request_body))
         .unwrap_or((None, None));
@@ -159,6 +180,62 @@ pub(super) async fn build_proxy_response_buffered(
         upstream_no_data_timeout,
     )
     .await
+}
+
+fn maybe_rewrite_gemini_upload_url(
+    provider: &str,
+    response_headers: &mut axum::http::HeaderMap,
+    proxy_base_url: &str,
+    client_gemini_api_key: Option<&str>,
+) {
+    if provider != PROVIDER_GEMINI {
+        return;
+    }
+    let Some(upload_url) = response_headers
+        .get(GEMINI_UPLOAD_URL_HEADER)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return;
+    };
+    let Ok(proxy_url) = build_proxy_upload_url(proxy_base_url, upload_url, client_gemini_api_key)
+    else {
+        return;
+    };
+    let Ok(value) = axum::http::HeaderValue::from_str(proxy_url.as_str()) else {
+        return;
+    };
+    response_headers.insert(GEMINI_UPLOAD_URL_HEADER, value);
+}
+
+fn build_proxy_upload_url(
+    proxy_base_url: &str,
+    upstream_upload_url: &str,
+    client_gemini_api_key: Option<&str>,
+) -> Result<Url, url::ParseError> {
+    let mut sanitized_target = Url::parse(upstream_upload_url)?;
+    let pairs = sanitized_target
+        .query_pairs()
+        .filter(|(name, _)| name != GEMINI_API_KEY_QUERY)
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    sanitized_target.set_query(None);
+    if !pairs.is_empty() {
+        let mut query = sanitized_target.query_pairs_mut();
+        for (name, value) in pairs {
+            query.append_pair(&name, &value);
+        }
+    }
+    let mut proxy_url = Url::parse(proxy_base_url)?;
+    proxy_url.set_path(GEMINI_UPLOAD_PROXY_PATH);
+    proxy_url.set_query(None);
+    {
+        let mut pairs = proxy_url.query_pairs_mut();
+        pairs.append_pair(GEMINI_PROXY_UPLOAD_TARGET_QUERY, sanitized_target.as_str());
+        if let Some(api_key) = client_gemini_api_key {
+            pairs.append_pair(GEMINI_API_KEY_QUERY, api_key);
+        }
+    }
+    Ok(proxy_url)
 }
 
 #[cfg(test)]

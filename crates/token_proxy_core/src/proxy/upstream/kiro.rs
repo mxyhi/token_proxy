@@ -77,7 +77,8 @@ pub(super) async fn attempt_kiro_upstream(
 
         mark_failed_kiro_account_before_failover(state, &account_id, &result.outcome);
         excluded_account_ids.push(account_id);
-        let Some(next_account_id) = resolve_next_kiro_account_id(state, &excluded_account_ids).await
+        let Some(next_account_id) =
+            resolve_next_kiro_account_id(state, &excluded_account_ids).await
         else {
             return into_group_retryable_kiro_outcome(result.outcome);
         };
@@ -201,7 +202,9 @@ async fn prepare_kiro_context<'a>(
             ordered_account_ids.as_deref(),
         )
         .await
-        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
+        .map_err(|err| {
+            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
+        })?;
     let is_idc = record.auth_method.trim().eq_ignore_ascii_case("idc");
     let profile_arn = resolve_profile_arn(&record);
     let endpoints = resolve_endpoints(state, upstream, is_idc);
@@ -673,7 +676,9 @@ async fn resolve_next_kiro_account_id(
 
 fn into_group_retryable_kiro_outcome(outcome: AttemptOutcome) -> AttemptOutcome {
     match outcome {
-        AttemptOutcome::Success(response) if super::utils::is_retryable_status(response.status()) => {
+        AttemptOutcome::Success(response)
+            if super::utils::is_retryable_status(response.status()) =>
+        {
             let status = response.status();
             AttemptOutcome::Retryable {
                 message: format!("Upstream responded with {}", status.as_u16()),
@@ -699,6 +704,7 @@ async fn finalize_response(
     start_time: Instant,
 ) -> AttemptOutcome {
     if force_success {
+        let proxy_base_url = crate::proxy::http::local_proxy_base_url(&state.config);
         let output = crate::proxy::response::build_proxy_response(
             meta,
             "kiro",
@@ -709,6 +715,8 @@ async fn finalize_response(
             state.log.clone(),
             state.token_rate.clone(),
             start_time,
+            &proxy_base_url,
+            None,
             response_transform,
             request_detail,
             state.config.upstream_no_data_timeout,
@@ -727,6 +735,7 @@ async fn finalize_response(
         state.log.clone(),
         state.token_rate.clone(),
         start_time,
+        None,
         response_transform,
         request_detail,
     )

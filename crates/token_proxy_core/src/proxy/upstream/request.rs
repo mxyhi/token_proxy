@@ -6,6 +6,7 @@ use axum::{
     },
 };
 use serde_json::Value;
+use url::Url;
 
 use super::super::http::RequestAuth;
 use super::super::{
@@ -24,6 +25,7 @@ use crate::proxy::server_helpers::is_anthropic_path;
 const ANTHROPIC_VERSION_HEADER: &str = "anthropic-version";
 const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 const GEMINI_API_KEY_QUERY: &str = "key";
+const GEMINI_PROXY_UPLOAD_TARGET_QUERY: &str = "tp_upload_target";
 const GEMINI_API_KEY_HEADER: HeaderName = HeaderName::from_static("x-goog-api-key");
 const OPENAI_CHAT_PATH: &str = "/v1/chat/completions";
 const OPENAI_RESPONSES_PATH: &str = "/v1/responses";
@@ -372,7 +374,20 @@ pub(super) fn resolve_gemini_upstream(
         return Err(AttemptOutcome::SkippedAuth);
     };
 
-    let upstream_url = match ensure_query_param(upstream_url, GEMINI_API_KEY_QUERY, api_key) {
+    let upstream_url = match resolve_gemini_target_url(upstream, upstream_path_with_query) {
+        Ok(Some(url)) => url,
+        Ok(None) => upstream_url.to_string(),
+        Err(message) => {
+            return Err(AttemptOutcome::Fatal(http::error_response(
+                StatusCode::BAD_GATEWAY,
+                format!("Failed to resolve Gemini upload target: {message}"),
+            )))
+        }
+    };
+
+    let upstream_url = match remove_query_param(&upstream_url, GEMINI_API_KEY_QUERY)
+        .and_then(|url| ensure_query_param(&url, GEMINI_API_KEY_QUERY, api_key))
+    {
         Ok(url) => url,
         Err(message) => {
             return Err(AttemptOutcome::Fatal(http::error_response(
@@ -396,4 +411,60 @@ pub(super) fn resolve_gemini_upstream(
             value,
         },
     ))
+}
+
+fn resolve_gemini_target_url(
+    upstream: &UpstreamRuntime,
+    upstream_path_with_query: &str,
+) -> Result<Option<String>, String> {
+    let Some(target) =
+        extract_query_param(upstream_path_with_query, GEMINI_PROXY_UPLOAD_TARGET_QUERY)
+    else {
+        return Ok(None);
+    };
+    let target_url = Url::parse(&target).map_err(|err| err.to_string())?;
+    validate_gemini_upload_target(upstream, &target_url)?;
+    Ok(Some(target_url.to_string()))
+}
+
+fn validate_gemini_upload_target(
+    upstream: &UpstreamRuntime,
+    target_url: &Url,
+) -> Result<(), String> {
+    let upstream_base = Url::parse(&upstream.base_url).map_err(|err| err.to_string())?;
+    let same_origin = upstream_base.scheme() == target_url.scheme()
+        && upstream_base.host_str() == target_url.host_str()
+        && upstream_base.port_or_known_default() == target_url.port_or_known_default();
+    if !same_origin {
+        return Err("upload target origin does not match configured Gemini upstream".to_string());
+    }
+    let base_path = upstream_base.path().trim_end_matches('/');
+    let target_path = target_url.path();
+    if !base_path.is_empty()
+        && base_path != "/"
+        && !target_path.starts_with(&format!("{base_path}/"))
+        && target_path != base_path
+    {
+        return Err(
+            "upload target path is outside configured Gemini upstream base path".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn remove_query_param(url: &str, key: &str) -> Result<String, String> {
+    let mut parsed = Url::parse(url).map_err(|err| err.to_string())?;
+    let pairs = parsed
+        .query_pairs()
+        .filter(|(name, _)| name != key)
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    parsed.set_query(None);
+    if !pairs.is_empty() {
+        let mut query = parsed.query_pairs_mut();
+        for (name, value) in pairs {
+            query.append_pair(&name, &value);
+        }
+    }
+    Ok(parsed.to_string())
 }

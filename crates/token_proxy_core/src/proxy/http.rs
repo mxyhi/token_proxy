@@ -53,6 +53,34 @@ pub(crate) fn ensure_local_auth(
     Ok(())
 }
 
+pub(crate) fn resolve_client_gemini_api_key(
+    config: &ProxyConfig,
+    headers: &HeaderMap,
+    path: &str,
+    query: Option<&str>,
+) -> Result<Option<String>, String> {
+    if !gemini::is_gemini_native_path(path) {
+        return Ok(None);
+    }
+    if let Some(local_key) = config.local_api_key.as_ref() {
+        return Ok(Some(local_key.clone()));
+    }
+    if let Some(value) = parse_raw_header(headers, X_GOOG_API_KEY)? {
+        return Ok(Some(value));
+    }
+    parse_query_key(query)
+}
+
+pub(crate) fn local_proxy_base_url(config: &ProxyConfig) -> String {
+    let host = config.host.trim();
+    let host = if host.contains(':') && !host.starts_with('[') && !host.ends_with(']') {
+        format!("[{host}]")
+    } else {
+        host.to_string()
+    };
+    format!("http://{host}:{}", config.port)
+}
+
 /// 遮蔽敏感 key，仅显示前 8 字符
 fn mask_key(key: &str) -> String {
     if key.len() <= 8 {
@@ -77,7 +105,7 @@ fn resolve_local_auth_token(
         return parse_bearer_header(headers);
     }
 
-    if gemini::is_gemini_path(path) {
+    if gemini::is_gemini_native_path(path) {
         if let Some(value) = parse_raw_header(headers, X_GOOG_API_KEY)? {
             return Ok(Some(value));
         }

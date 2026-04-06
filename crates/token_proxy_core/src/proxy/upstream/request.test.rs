@@ -1,5 +1,77 @@
 use super::*;
 use axum::http::header::AUTHORIZATION;
+use url::form_urlencoded;
+
+fn gemini_upstream() -> UpstreamRuntime {
+    UpstreamRuntime {
+        id: "gemini-test".to_string(),
+        selector_key: "gemini-test".to_string(),
+        base_url: "https://generativelanguage.googleapis.com".to_string(),
+        api_key: Some("upstream-gemini-key".to_string()),
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
+        kiro_account_id: None,
+        codex_account_id: None,
+        kiro_preferred_endpoint: None,
+        proxy_url: None,
+        priority: 0,
+        advertised_model_ids: Vec::new(),
+        model_mappings: None,
+        header_overrides: None,
+        allowed_inbound_formats: Default::default(),
+    }
+}
+
+#[test]
+fn resolve_gemini_upstream_uses_proxy_upload_target_without_leaking_upstream_key() {
+    let target =
+        "https://generativelanguage.googleapis.com/upload/resumable/session-1?upload_id=session-1";
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair(GEMINI_PROXY_UPLOAD_TARGET_QUERY, target)
+        .append_pair(GEMINI_API_KEY_QUERY, "local-debug-key")
+        .finish();
+    let path = format!("/upload/v1beta/files?{query}");
+    let request_auth = RequestAuth::default();
+
+    let resolved = resolve_gemini_upstream(
+        &gemini_upstream(),
+        &request_auth,
+        &path,
+        "https://generativelanguage.googleapis.com/upload/v1beta/files",
+    );
+    let (upstream_url, auth) = match resolved {
+        Ok(value) => value,
+        Err(_) => panic!("resolve gemini upload target"),
+    };
+
+    assert_eq!(
+        upstream_url,
+        "https://generativelanguage.googleapis.com/upload/resumable/session-1?upload_id=session-1&key=upstream-gemini-key"
+    );
+    assert_eq!(auth.name.as_str(), "x-goog-api-key");
+    assert_eq!(auth.value.to_str().ok(), Some("upstream-gemini-key"));
+    assert!(!upstream_url.contains("local-debug-key"));
+}
+
+#[test]
+fn resolve_gemini_upstream_rejects_proxy_upload_target_from_other_origin() {
+    let target = "https://evil.example/upload/resumable/session-1?upload_id=session-1";
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair(GEMINI_PROXY_UPLOAD_TARGET_QUERY, target)
+        .finish();
+    let path = format!("/upload/v1beta/files?{query}");
+    let request_auth = RequestAuth::default();
+
+    let result = resolve_gemini_upstream(
+        &gemini_upstream(),
+        &request_auth,
+        &path,
+        "https://generativelanguage.googleapis.com/upload/v1beta/files",
+    );
+
+    assert!(result.is_err());
+}
 
 #[tokio::test]
 async fn filters_prompt_cache_retention_for_openai_responses_upstream() {

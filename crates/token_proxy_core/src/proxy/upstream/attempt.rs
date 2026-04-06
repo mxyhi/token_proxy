@@ -28,6 +28,7 @@ pub(super) async fn attempt_upstream(
     body: &ReplayableBody,
     meta: &RequestMeta,
     request_auth: &crate::proxy::http::RequestAuth,
+    client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> AttemptOutcome {
@@ -70,6 +71,7 @@ pub(super) async fn attempt_upstream(
         body,
         meta,
         request_auth,
+        client_gemini_api_key,
         response_transform,
         request_detail.clone(),
         first,
@@ -90,6 +92,7 @@ pub(super) async fn attempt_upstream(
         body,
         meta,
         request_auth,
+        client_gemini_api_key,
         response_transform,
         request_detail.clone(),
         &first,
@@ -103,6 +106,7 @@ pub(super) async fn attempt_upstream(
         provider,
         upstream,
         inbound_path,
+        client_gemini_api_key,
         response_transform,
         request_detail,
         first,
@@ -158,6 +162,7 @@ async fn retry_after_kiro_refresh(
     body: &ReplayableBody,
     meta: &RequestMeta,
     request_auth: &crate::proxy::http::RequestAuth,
+    client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     first: &UpstreamAttempt,
@@ -192,6 +197,7 @@ async fn retry_after_kiro_refresh(
             provider,
             upstream,
             inbound_path,
+            client_gemini_api_key,
             response_transform,
             request_detail,
             retry,
@@ -205,6 +211,7 @@ async fn finalize_attempt(
     provider: &str,
     upstream: &UpstreamRuntime,
     inbound_path: &str,
+    client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     attempt: UpstreamAttempt,
@@ -226,6 +233,7 @@ async fn finalize_attempt(
         state.log.clone(),
         state.token_rate.clone(),
         attempt.start_time,
+        client_gemini_api_key,
         response_transform,
         request_detail,
     )
@@ -335,6 +343,7 @@ async fn retry_with_next_codex_account(
     body: &ReplayableBody,
     meta: &RequestMeta,
     request_auth: &crate::proxy::http::RequestAuth,
+    client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     first: Result<UpstreamAttempt, UpstreamAttemptFailure>,
@@ -359,7 +368,12 @@ async fn retry_with_next_codex_account(
             .codex_accounts
             .list_accounts()
             .await
-            .map(|items| items.into_iter().map(|item| item.account_id).collect::<Vec<_>>())
+            .map(|items| {
+                items
+                    .into_iter()
+                    .map(|item| item.account_id)
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
         let ordered_account_ids = state
             .account_selector
@@ -381,6 +395,7 @@ async fn retry_with_next_codex_account(
                             provider,
                             &retry_upstream,
                             inbound_path,
+                            client_gemini_api_key,
                             response_transform,
                             request_detail,
                             retry_attempt,
@@ -399,9 +414,10 @@ async fn retry_with_next_codex_account(
                 }
             },
             Err(err) => {
-                return CodexFailoverResult::Resolved(AttemptOutcome::Fatal(
-                    http::error_response(StatusCode::UNAUTHORIZED, err),
-                ));
+                return CodexFailoverResult::Resolved(AttemptOutcome::Fatal(http::error_response(
+                    StatusCode::UNAUTHORIZED,
+                    err,
+                )));
             }
         };
 
@@ -435,6 +451,7 @@ async fn retry_with_next_codex_account(
                         provider,
                         &retry_upstream,
                         inbound_path,
+                        client_gemini_api_key,
                         response_transform,
                         request_detail,
                         attempt,
@@ -982,12 +999,7 @@ fn handle_upstream_timeout(
         "Upstream did not respond within {}s.",
         state.config.upstream_no_data_timeout.as_secs()
     );
-    mark_account_retryable_failure(
-        state,
-        provider,
-        selected_account_id,
-        Some(message.clone()),
-    );
+    mark_account_retryable_failure(state, provider, selected_account_id, Some(message.clone()));
     result::log_upstream_error_if_needed(
         &state.log,
         request_detail,
@@ -1026,12 +1038,7 @@ fn map_upstream_error(
         } else {
             StatusCode::BAD_GATEWAY
         };
-        mark_account_retryable_failure(
-            state,
-            provider,
-            selected_account_id,
-            Some(message.clone()),
-        );
+        mark_account_retryable_failure(state, provider, selected_account_id, Some(message.clone()));
         result::log_upstream_error_if_needed(
             &state.log,
             request_detail,

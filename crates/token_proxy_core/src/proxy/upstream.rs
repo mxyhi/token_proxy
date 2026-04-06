@@ -147,6 +147,7 @@ pub(super) async fn forward_upstream_request(
     body: &ReplayableBody,
     meta: &RequestMeta,
     request_auth: &RequestAuth,
+    client_gemini_api_key: Option<String>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> ForwardUpstreamResult {
@@ -178,6 +179,7 @@ pub(super) async fn forward_upstream_request(
         body,
         meta,
         request_auth,
+        client_gemini_api_key.as_deref(),
         response_transform,
         request_detail.clone(),
         upstreams,
@@ -420,11 +422,13 @@ async fn run_upstream_groups(
     body: &ReplayableBody,
     meta: &RequestMeta,
     request_auth: &RequestAuth,
+    client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     upstreams: &ProviderUpstreams,
 ) -> ForwardAttemptState {
-    let target_upstream_id = requested_target_upstream_id(upstreams, meta.original_model.as_deref());
+    let target_upstream_id =
+        requested_target_upstream_id(upstreams, meta.original_model.as_deref());
     let mut summary = ForwardAttemptState::new();
     for (group_index, group) in upstreams.groups.iter().enumerate() {
         // Only rotate within the highest priority group; retry network failures before degrading.
@@ -454,6 +458,7 @@ async fn run_upstream_groups(
             meta,
             target_upstream_id.as_deref(),
             request_auth,
+            client_gemini_api_key,
             response_transform,
             request_detail.clone(),
         )
@@ -517,6 +522,7 @@ async fn try_group_upstreams(
     meta: &RequestMeta,
     target_upstream_id: Option<&str>,
     request_auth: &RequestAuth,
+    client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> GroupAttemptResult {
@@ -544,6 +550,7 @@ async fn try_group_upstreams(
         body,
         meta,
         request_auth,
+        client_gemini_api_key,
         response_transform,
         request_detail,
         GroupDispatchPlan::from_dispatch(&state.config.upstream_strategy.dispatch),
@@ -561,8 +568,7 @@ fn filter_eligible_upstreams(
         .into_iter()
         .filter(|item_index| {
             inbound_format.is_none_or(|format| items[*item_index].supports_inbound(format))
-                && target_upstream_id
-                    .is_none_or(|target| items[*item_index].id.as_str() == target)
+                && target_upstream_id.is_none_or(|target| items[*item_index].id.as_str() == target)
         })
         .collect()
 }
@@ -608,6 +614,7 @@ async fn dispatch_group_upstreams(
     body: &ReplayableBody,
     meta: &RequestMeta,
     request_auth: &RequestAuth,
+    client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     dispatch_plan: GroupDispatchPlan,
@@ -631,6 +638,7 @@ async fn dispatch_group_upstreams(
         body,
         meta,
         request_auth,
+        client_gemini_api_key,
         response_transform,
         &request_detail,
     );
@@ -659,6 +667,7 @@ async fn dispatch_group_upstreams(
                 body,
                 meta,
                 request_auth,
+                client_gemini_api_key,
                 response_transform,
                 &request_detail,
             );
@@ -690,6 +699,7 @@ async fn dispatch_group_upstreams(
                         body,
                         meta,
                         request_auth,
+                        client_gemini_api_key,
                         response_transform,
                         &request_detail,
                     );
@@ -724,6 +734,7 @@ async fn dispatch_group_upstreams(
                     body,
                     meta,
                     request_auth,
+                    client_gemini_api_key,
                     response_transform,
                     &request_detail,
                 );
@@ -756,6 +767,7 @@ fn launch_group_attempts<'a>(
     body: &'a ReplayableBody,
     meta: &'a RequestMeta,
     request_auth: &'a RequestAuth,
+    client_gemini_api_key: Option<&'a str>,
     response_transform: FormatTransform,
     request_detail: &Option<RequestDetailSnapshot>,
 ) {
@@ -777,6 +789,7 @@ fn launch_group_attempts<'a>(
             body,
             meta,
             request_auth,
+            client_gemini_api_key,
             response_transform,
             request_detail,
         );
@@ -796,6 +809,7 @@ fn enqueue_group_attempt<'a>(
     body: &'a ReplayableBody,
     meta: &'a RequestMeta,
     request_auth: &'a RequestAuth,
+    client_gemini_api_key: Option<&'a str>,
     response_transform: FormatTransform,
     request_detail: &Option<RequestDetailSnapshot>,
 ) {
@@ -814,6 +828,7 @@ fn enqueue_group_attempt<'a>(
             body,
             meta,
             request_auth,
+            client_gemini_api_key,
             response_transform,
             request_detail,
         )
@@ -950,7 +965,9 @@ async fn resolve_kiro_upstream(
             ordered_account_ids.as_deref(),
         )
         .await
-        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
+        .map_err(|err| {
+            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
+        })?;
     let global_proxy_url = state.kiro_accounts.app_proxy_url().await;
     let proxy_url = record
         .proxy_url
@@ -997,7 +1014,9 @@ async fn resolve_codex_upstream(
             ordered_account_ids.as_deref(),
         )
         .await
-        .map_err(|err| AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err)))?;
+        .map_err(|err| {
+            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
+        })?;
     let global_proxy_url = state.codex_accounts.app_proxy_url().await;
     let proxy_url = record
         .proxy_url
@@ -1039,15 +1058,23 @@ async fn resolve_codex_upstream(
 pub(super) async fn ordered_runtime_account_ids(state: &ProxyState, provider: &str) -> Vec<String> {
     let account_ids = match provider {
         "kiro" => state.kiro_accounts.list_accounts().await.map(|items| {
-            items.into_iter().map(|item| item.account_id).collect::<Vec<_>>()
+            items
+                .into_iter()
+                .map(|item| item.account_id)
+                .collect::<Vec<_>>()
         }),
         "codex" => state.codex_accounts.list_accounts().await.map(|items| {
-            items.into_iter().map(|item| item.account_id).collect::<Vec<_>>()
+            items
+                .into_iter()
+                .map(|item| item.account_id)
+                .collect::<Vec<_>>()
         }),
         _ => Ok(Vec::new()),
     }
     .unwrap_or_default();
-    state.account_selector.order_accounts(provider, &account_ids)
+    state
+        .account_selector
+        .order_accounts(provider, &account_ids)
 }
 
 fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestMeta {

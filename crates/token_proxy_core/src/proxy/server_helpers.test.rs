@@ -45,6 +45,21 @@ fn gemini_meta_prefers_path_for_stream_and_model() {
 }
 
 #[test]
+fn gemini_meta_treats_generate_content_alt_sse_as_stream() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let body = ReplayableBody::from_bytes(Bytes::from_static(b"{}"));
+        let meta = parse_request_meta_best_effort(
+            "/v1beta/models/gemini-1.5-flash:generateContent?alt=sse",
+            &body,
+        )
+        .await;
+        assert!(meta.stream);
+        assert_eq!(meta.original_model.as_deref(), Some("gemini-1.5-flash"));
+    });
+}
+
+#[test]
 fn meta_parses_reasoning_suffix_and_strips_model() {
     let rt = tokio::runtime::Runtime::new().expect("runtime");
     rt.block_on(async {

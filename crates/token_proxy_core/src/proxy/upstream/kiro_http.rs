@@ -123,6 +123,7 @@ pub(super) async fn handle_send_error(
                 state.log.clone(),
                 state.token_rate.clone(),
                 start_time,
+                None,
                 response_transform,
                 request_detail,
             )

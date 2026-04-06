@@ -38,10 +38,12 @@ pub(super) async fn handle_upstream_result(
     log: Arc<LogWriter>,
     token_rate: Arc<TokenRateTracker>,
     start_time: Instant,
+    client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> AttemptOutcome {
     let account_id_value = account_id.as_deref().map(str::to_string);
+    let proxy_base_url = http::local_proxy_base_url(&state.config);
     match upstream_res {
         Ok(res) if is_retryable_status(res.status()) => {
             let status = res.status();
@@ -62,6 +64,8 @@ pub(super) async fn handle_upstream_result(
                 log,
                 token_rate,
                 start_time,
+                &proxy_base_url,
+                client_gemini_api_key,
                 response_transform,
                 request_detail.clone(),
                 state.config.upstream_no_data_timeout,
@@ -92,6 +96,8 @@ pub(super) async fn handle_upstream_result(
                 log,
                 token_rate,
                 start_time,
+                &proxy_base_url,
+                client_gemini_api_key,
                 response_transform,
                 request_detail.clone(),
                 state.config.upstream_no_data_timeout,
@@ -261,10 +267,7 @@ pub(super) fn log_upstream_error_if_needed(
     log.clone().write_detached(entry);
 }
 
-fn cooldown_reason_from_status(
-    status: StatusCode,
-    headers: &reqwest::header::HeaderMap,
-) -> String {
+fn cooldown_reason_from_status(status: StatusCode, headers: &reqwest::header::HeaderMap) -> String {
     let retry_after = headers
         .get(RETRY_AFTER)
         .and_then(|value| value.to_str().ok())

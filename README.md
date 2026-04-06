@@ -122,22 +122,25 @@ Notes:
 | `overrides.header` | `{}` | Set/remove headers (null removes). Hop-by-hop/Host/Content-Length are always ignored. |
 
 ## Routing & format conversion
-- Gemini: `/v1beta/models/*:generateContent` and `*:streamGenerateContent` → `gemini` (SSE supported).
+- Gemini native API: `/v1beta/models/*` (including `:generateContent`, `:streamGenerateContent`, `:countTokens`, `:embedContent`, `:batchEmbedContents`), model catalog/detail, `/v1beta/files*`, `/upload/v1beta/files*`, `/v1beta/cachedContents*`, `/v1beta/tunedModels*` → `gemini`.
 - Anthropic: `/v1/messages` (and subpaths) and `/v1/complete` → `anthropic` (Kiro shares the same format).
-- OpenAI: `/v1/chat/completions` → `openai`; `/v1/responses` → `openai-response`.
+- OpenAI create routes: `/v1/chat/completions` → `openai`; `/v1/responses` → `openai-response`.
+- OpenAI native pass-through routes are explicitly pinned to OpenAI-compatible providers and won't fall through to `anthropic`: `chat/completions/*`, `responses/*`, `assistants*`, `threads*`, `conversations*`, `chatkit*`, `containers*`, `evals*`, `files*`, `uploads*`, `batches*`, `vector_stores*`, `images/*`, `audio/*`, `embeddings`, `moderations`, `completions`, `fine_tuning/*`, `realtime/*`, `skills*`, `videos*`.
+- For `responses/*` resources, provider preference is `openai-response` → `openai`; for other OpenAI native resources, provider preference is `openai` → `openai-response`.
 - Other paths: choose the provider with the highest configured priority; tie-break is `openai` > `openai-response` > `anthropic`.
 - Cross-format fallback/conversion is controlled by `upstreams[].convert_from_map` (no global switch). If a provider has no eligible upstream for the inbound format, it won't be selected.
 - If `openai` is missing for `/v1/chat/completions`: fallback can be `openai-response`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai-response`).
 - For `/v1/messages`: choose between `anthropic` and `kiro` by priority; tie-break uses upstream id. If the chosen provider returns a retryable error, the proxy will fall back to the other native provider (Anthropic ↔ Kiro) when configured.
 - If neither `anthropic` nor `kiro` exists for `/v1/messages`: other providers can be selected only when allowed for `anthropic_messages` via `convert_from_map` (e.g. `openai-response`, `openai`, `gemini`).
 - If `openai-response` is missing for `/v1/responses`: fallback can be `openai`, `anthropic`, or `gemini` (priority-based; tie-break prefers `openai`).
-- If `gemini` is missing for `/v1beta/models/*:generateContent`: fallback can be `openai-response`, `openai`, or `anthropic` (priority-based; tie-break prefers `openai-response`).
+- If `gemini` is missing for `/v1beta/models/*:generateContent` or `*:streamGenerateContent`: fallback can be `openai-response`, `openai`, or `anthropic` (priority-based; tie-break prefers `openai-response`).
+- Other Gemini native endpoints are pass-through only and require a configured `gemini` upstream.
 
 ## Auth rules (important)
 - Local access: `local_api_key` enabled → require format-specific key. These local auth inputs are stripped and **not** forwarded upstream.
   - OpenAI / Responses: `Authorization: Bearer <key>`
   - Anthropic `/v1/messages`: `x-api-key` or `x-anthropic-api-key`
-  - Gemini: `x-goog-api-key` or `?key=...`
+  - Gemini native API: `x-goog-api-key` or `?key=...`
 - When `local_api_key` is enabled, request headers are **not** used for upstream auth; configure `upstreams[].api_key` instead.
 - Upstream auth resolution (per request):
   - **OpenAI**: `upstream.api_key` → `x-openai-api-key` → `Authorization` (only if `local_api_key` is **not** set) → error.

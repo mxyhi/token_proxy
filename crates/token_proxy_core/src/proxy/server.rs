@@ -13,6 +13,7 @@ use super::{
     gemini, http,
     inbound::detect_inbound_api_format,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
+    openai,
     openai_compat::{
         FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES, RESPONSES_PATH,
     },
@@ -53,6 +54,7 @@ struct PreparedRequest {
     outbound_path_with_query: String,
     plan: DispatchPlan,
     meta: RequestMeta,
+    client_gemini_api_key: Option<String>,
     request_detail: Option<RequestDetailSnapshot>,
     source_body: ReplayableBody,
     outbound_body: ReplayableBody,
@@ -201,6 +203,37 @@ fn resolve_gemini_plan(config: &ProxyConfig, path: &str) -> Option<Result<Dispat
     }))
 }
 
+fn resolve_gemini_native_plan(
+    config: &ProxyConfig,
+    path: &str,
+) -> Option<Result<DispatchPlan, String>> {
+    if !gemini::is_gemini_native_path(path) || gemini::is_gemini_path(path) {
+        return None;
+    }
+    let provider = choose_provider_by_priority(config, None, &[PROVIDER_GEMINI])
+        .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+    Some(provider.map(base_plan))
+}
+
+fn resolve_openai_native_plan(
+    config: &ProxyConfig,
+    path: &str,
+) -> Option<Result<DispatchPlan, String>> {
+    if openai::is_openai_responses_resource_path(path) {
+        let provider =
+            choose_provider_by_priority(config, None, &[PROVIDER_RESPONSES, PROVIDER_CHAT])
+                .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+        return Some(provider.map(base_plan));
+    }
+    if openai::is_openai_native_resource_path(path) {
+        let provider =
+            choose_provider_by_priority(config, None, &[PROVIDER_CHAT, PROVIDER_RESPONSES])
+                .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+        return Some(provider.map(base_plan));
+    }
+    None
+}
+
 fn resolve_anthropic_plan(
     config: &ProxyConfig,
     path: &str,
@@ -317,16 +350,6 @@ fn is_gemini_models_request(headers: &HeaderMap, query: Option<&str>) -> bool {
     form_urlencoded::parse(query.as_bytes()).any(|(key, value)| key == "key" && !value.is_empty())
 }
 
-fn is_gemini_model_catalog_path(path: &str) -> bool {
-    if path == "/v1beta/models" {
-        return true;
-    }
-    let Some(rest) = path.strip_prefix("/v1beta/models/") else {
-        return false;
-    };
-    !rest.is_empty() && !rest.contains(':')
-}
-
 fn resolve_models_plan(
     config: &ProxyConfig,
     path: &str,
@@ -358,7 +381,7 @@ fn resolve_models_plan(
                 .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
         return Some(provider.map(base_plan));
     }
-    if is_gemini_model_catalog_path(path) {
+    if gemini::is_gemini_model_catalog_path(path) {
         // Gemini 的模型目录路由与 `:generateContent` 主调用路径不同；
         // 需要在 path 层显式识别，不能继续走 formatless fallback。
         let provider = choose_provider_by_priority(config, None, &[PROVIDER_GEMINI])
@@ -377,7 +400,13 @@ fn resolve_dispatch_plan_with_request(
     if let Some(plan) = resolve_models_plan(config, path, headers, query) {
         return plan;
     }
+    if let Some(plan) = resolve_openai_native_plan(config, path) {
+        return plan;
+    }
     if let Some(plan) = resolve_gemini_plan(config, path) {
+        return plan;
+    }
+    if let Some(plan) = resolve_gemini_native_plan(config, path) {
         return plan;
     }
     if let Some(plan) = resolve_anthropic_plan(config, path) {
@@ -661,6 +690,7 @@ async fn forward_retry_fallback_request(
         &outbound_body,
         &prepared.meta,
         &prepared.request_auth,
+        prepared.client_gemini_api_key.clone(),
         plan.response_transform,
         prepared.request_detail.clone(),
     )
@@ -1033,7 +1063,11 @@ async fn prepare_inbound_request(
     if is_debug_log {
         log_debug_request(headers, &body).await;
     }
-    let meta = parse_request_meta_best_effort(&path, &body).await;
+    let path_with_query = query
+        .as_deref()
+        .map(|query| format!("{path}?{query}"))
+        .unwrap_or_else(|| path.clone());
+    let meta = parse_request_meta_best_effort(&path_with_query, &body).await;
     let request_detail = if capture_request_detail_enabled {
         Some(capture_request_detail(headers, &body, state.config.max_request_body_bytes).await)
     } else {
@@ -1058,6 +1092,9 @@ async fn finalize_prepared_request(
     let source_body = inbound.body.clone();
     let outbound_path = resolve_outbound_path(&inbound.path, &inbound.plan, &inbound.meta);
     let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, uri);
+    let client_gemini_api_key =
+        http::resolve_client_gemini_api_key(&state.config, headers, &inbound.path, uri.query())
+            .map_err(|message| http::error_response(StatusCode::UNAUTHORIZED, message))?;
     let outbound_body = build_outbound_body_or_respond(
         &state.http_clients,
         &state.log,
@@ -1083,6 +1120,7 @@ async fn finalize_prepared_request(
         outbound_path_with_query,
         plan: inbound.plan,
         meta: inbound.meta,
+        client_gemini_api_key,
         request_detail: inbound.request_detail,
         source_body,
         outbound_body,
@@ -1205,6 +1243,7 @@ async fn proxy_request(
         &prepared.outbound_body,
         &prepared.meta,
         &prepared.request_auth,
+        prepared.client_gemini_api_key.clone(),
         prepared.plan.response_transform,
         prepared.request_detail.clone(),
     )

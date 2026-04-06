@@ -122,22 +122,25 @@ pnpm exec tsc --noEmit
 | `overrides.header` | `{}` | 设置/删除 header（null 表示删除）；hop-by-hop/Host/Content-Length 永远忽略 |
 
 ## 路由与格式转换
-- Gemini：`/v1beta/models/*:generateContent`、`*:streamGenerateContent` → `gemini`（支持 SSE）
+- Gemini 原生 API：`/v1beta/models/*`（包括 `:generateContent`、`:streamGenerateContent`、`:countTokens`、`:embedContent`、`:batchEmbedContents`）、模型目录/详情、`/v1beta/files*`、`/upload/v1beta/files*`、`/v1beta/cachedContents*`、`/v1beta/tunedModels*` → `gemini`
 - Anthropic：`/v1/messages`（含子路径）与 `/v1/complete` → `anthropic`（Kiro 同格式）
-- OpenAI：`/v1/chat/completions` → `openai`；`/v1/responses` → `openai-response`
+- OpenAI 创建接口：`/v1/chat/completions` → `openai`；`/v1/responses` → `openai-response`
+- OpenAI 原生 pass-through 资源路由会被显式钉到 OpenAI-compatible provider，不再掉入 `anthropic`：`chat/completions/*`、`responses/*`、`assistants*`、`threads*`、`conversations*`、`chatkit*`、`containers*`、`evals*`、`files*`、`uploads*`、`batches*`、`vector_stores*`、`images/*`、`audio/*`、`embeddings`、`moderations`、`completions`、`fine_tuning/*`、`realtime/*`、`skills*`、`videos*`
+- `responses/*` 资源优先选 `openai-response`，缺失时回退 `openai`；其它 OpenAI 原生资源优先选 `openai`，缺失时回退 `openai-response`
 - 其他路径：按已配置 provider 的最高优先级选择；优先级相同则按 `openai` > `openai-response` > `anthropic` 打破平局
 - 跨格式 fallback/转换由 `upstreams[].convert_from_map` 控制（不再有全局开关）；若某个 provider 在该入站格式下没有任何可用 upstream，则不会被选中。
 - `/v1/chat/completions` 缺少 `openai`：可 fallback 到 `openai-response` / `anthropic` / `gemini`（按优先级选择，平级优先 `openai-response`）
 - `/v1/messages`：在 `anthropic` 与 `kiro` 间按优先级选择；平级按 upstream id 排序。若命中 provider 返回“可重试错误”，且另一个 native provider 已配置，则会自动 fallback（Anthropic ↔ Kiro）
 - 当 `/v1/messages` 缺少 `anthropic` 且 `kiro` 也不存在时：其它 provider 若在 `convert_from_map` 中允许 `anthropic_messages`，则可 fallback 到 `openai-response` / `openai` / `gemini`（按优先级选择，平级优先 `openai-response`）
 - `/v1/responses` 缺少 `openai-response`：可 fallback 到 `openai` / `anthropic` / `gemini`（按优先级选择，平级优先 `openai`）
-- `/v1beta/models/*:generateContent` 缺少 `gemini`：可 fallback 到 `openai-response` / `openai` / `anthropic`（按优先级选择，平级优先 `openai-response`）
+- `/v1beta/models/*:generateContent` 或 `*:streamGenerateContent` 缺少 `gemini`：可 fallback 到 `openai-response` / `openai` / `anthropic`（按优先级选择，平级优先 `openai-response`）
+- 其它 Gemini 原生端点仅支持 pass-through，必须配置 `gemini` upstream
 
 ## 鉴权规则（重要）
 - 本地访问：设置了 `local_api_key` 必须按接口格式携带本地 key，且这些本地鉴权不会转发给上游
   - OpenAI / Responses：`Authorization: Bearer <key>`
   - Anthropic `/v1/messages`：`x-api-key` / `x-anthropic-api-key`
-  - Gemini：`x-goog-api-key` 或 `?key=...`
+  - Gemini 原生 API：`x-goog-api-key` 或 `?key=...`
 - 启用 `local_api_key` 时，请求头不会用于上游鉴权；请在 `upstreams[].api_key` 配置上游 key
 - 上游鉴权解析（逐请求）：
   - **OpenAI**：`upstream.api_key` → `x-openai-api-key` → `Authorization`（仅当未设置 `local_api_key`）→ 报错

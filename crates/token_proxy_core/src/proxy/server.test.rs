@@ -292,7 +292,10 @@ async fn mock_raw_upstream_handler(
         });
     axum::response::Response::builder()
         .status(state.status)
-        .header(axum::http::header::CONTENT_TYPE, state.content_type.as_str())
+        .header(
+            axum::http::header::CONTENT_TYPE,
+            state.content_type.as_str(),
+        )
         .body(Body::from(state.body.clone()))
         .expect("build raw mock response")
 }
@@ -882,10 +885,9 @@ async fn build_test_state_handle_with_paths(
             super::super::upstream_selector::UpstreamSelectorRuntime::new_with_cooldown(
                 retryable_failure_cooldown,
             ),
-        account_selector:
-            super::super::account_selector::AccountSelectorRuntime::new_with_cooldown(
-                retryable_failure_cooldown,
-            ),
+        account_selector: super::super::account_selector::AccountSelectorRuntime::new_with_cooldown(
+            retryable_failure_cooldown,
+        ),
         request_detail: Arc::new(super::super::request_detail::RequestDetailCapture::new(
             None,
         )),
@@ -1209,7 +1211,8 @@ fn models_index_aggregates_unique_ids_when_prefix_disabled() {
             ]
         }))
         .await;
-        let data_dir = next_test_data_dir("models_index_aggregates_unique_ids_when_prefix_disabled");
+        let data_dir =
+            next_test_data_dir("models_index_aggregates_unique_ids_when_prefix_disabled");
         let config = config_with_runtime_upstreams(&[
             (
                 PROVIDER_RESPONSES,
@@ -1269,8 +1272,9 @@ fn models_index_adds_prefixed_entries_and_duplicate_alias_when_enabled() {
             ]
         }))
         .await;
-        let data_dir =
-            next_test_data_dir("models_index_adds_prefixed_entries_and_duplicate_alias_when_enabled");
+        let data_dir = next_test_data_dir(
+            "models_index_adds_prefixed_entries_and_duplicate_alias_when_enabled",
+        );
         let mut config = config_with_runtime_upstreams(&[
             (
                 PROVIDER_RESPONSES,
@@ -1323,8 +1327,9 @@ fn models_index_includes_exact_model_mapping_keys_when_catalog_is_empty() {
             "data": []
         }))
         .await;
-        let data_dir =
-            next_test_data_dir("models_index_includes_exact_model_mapping_keys_when_catalog_is_empty");
+        let data_dir = next_test_data_dir(
+            "models_index_includes_exact_model_mapping_keys_when_catalog_is_empty",
+        );
         let mut config = config_with_runtime_upstreams(&[(
             PROVIDER_RESPONSES,
             0,
@@ -1338,10 +1343,7 @@ fn models_index_includes_exact_model_mapping_keys_when_catalog_is_empty() {
             .expect("responses upstreams")
             .groups[0]
             .items[0]
-            .advertised_model_ids = vec![
-            "alias-gpt-5".to_string(),
-            "alias-gpt-4.1".to_string(),
-        ];
+            .advertised_model_ids = vec!["alias-gpt-5".to_string(), "alias-gpt-4.1".to_string()];
         let state = build_test_state_handle(config, data_dir).await;
 
         let (status, body) = send_models_request(state).await;
@@ -1388,8 +1390,9 @@ fn prefixed_model_routes_to_target_upstream_and_strips_prefix_before_forwarding(
             }),
         )
         .await;
-        let data_dir =
-            next_test_data_dir("prefixed_model_routes_to_target_upstream_and_strips_prefix_before_forwarding");
+        let data_dir = next_test_data_dir(
+            "prefixed_model_routes_to_target_upstream_and_strips_prefix_before_forwarding",
+        );
         let config = config_with_runtime_upstreams(&[
             (
                 PROVIDER_RESPONSES,
@@ -1423,14 +1426,15 @@ fn prefixed_model_routes_to_target_upstream_and_strips_prefix_before_forwarding(
 
 async fn wait_for_logged_account_id(pool: &sqlx::SqlitePool) -> Option<String> {
     for _ in 0..50 {
-        let row = sqlx::query(
-            "SELECT account_id FROM request_logs ORDER BY id DESC LIMIT 1;",
-        )
-        .fetch_optional(pool)
-        .await
-        .expect("query request logs");
+        let row = sqlx::query("SELECT account_id FROM request_logs ORDER BY id DESC LIMIT 1;")
+            .fetch_optional(pool)
+            .await
+            .expect("query request logs");
         if let Some(row) = row {
-            return row.try_get::<Option<String>, _>("account_id").ok().flatten();
+            return row
+                .try_get::<Option<String>, _>("account_id")
+                .ok()
+                .flatten();
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
@@ -1482,8 +1486,22 @@ fn responses_request_auto_selects_first_available_codex_account_when_unbound() {
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
-        seed_codex_account(&state, "codex-z.json", "codex-access-z", "chatgpt-z", &expires_at).await;
-        seed_codex_account(&state, "codex-a.json", "codex-access-a", "chatgpt-a", &expires_at).await;
+        seed_codex_account(
+            &state,
+            "codex-z.json",
+            "codex-access-z",
+            "chatgpt-z",
+            &expires_at,
+        )
+        .await;
+        seed_codex_account(
+            &state,
+            "codex-a.json",
+            "codex-access-a",
+            "chatgpt-a",
+            &expires_at,
+        )
+        .await;
 
         let (status, json) = send_responses_request(state).await;
         let requests = codex.requests();
@@ -1497,7 +1515,10 @@ fn responses_request_auto_selects_first_available_codex_account_when_unbound() {
             Some("from auto codex")
         );
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].authorization.as_deref(), Some("Bearer codex-access-a"));
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer codex-access-a")
+        );
         assert_eq!(requests[0].chatgpt_account_id.as_deref(), Some("chatgpt-a"));
     });
 }
@@ -1525,10 +1546,22 @@ fn responses_request_failovers_to_next_codex_account_after_invalidated_token() {
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
-        seed_codex_account(&state, "codex-a.json", "codex-access-a", "chatgpt-a", &expires_at)
-            .await;
-        seed_codex_account(&state, "codex-b.json", "codex-access-b", "chatgpt-b", &expires_at)
-            .await;
+        seed_codex_account(
+            &state,
+            "codex-a.json",
+            "codex-access-a",
+            "chatgpt-a",
+            &expires_at,
+        )
+        .await;
+        seed_codex_account(
+            &state,
+            "codex-b.json",
+            "codex-access-b",
+            "chatgpt-b",
+            &expires_at,
+        )
+        .await;
 
         let (status, json) = send_responses_request(state).await;
         let requests = codex.requests();
@@ -1542,9 +1575,15 @@ fn responses_request_failovers_to_next_codex_account_after_invalidated_token() {
             Some("from codex failover")
         );
         assert_eq!(requests.len(), 2);
-        assert_eq!(requests[0].authorization.as_deref(), Some("Bearer codex-access-a"));
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer codex-access-a")
+        );
         assert_eq!(requests[0].chatgpt_account_id.as_deref(), Some("chatgpt-a"));
-        assert_eq!(requests[1].authorization.as_deref(), Some("Bearer codex-access-b"));
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer codex-access-b")
+        );
         assert_eq!(requests[1].chatgpt_account_id.as_deref(), Some("chatgpt-b"));
     });
 }
@@ -1594,10 +1633,22 @@ fn responses_request_failovers_to_next_codex_account_after_proxy_error() {
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
-        seed_codex_account(&state, "codex-a.json", "codex-access-a", "chatgpt-a", &expires_at)
-            .await;
-        seed_codex_account(&state, "codex-b.json", "codex-access-b", "chatgpt-b", &expires_at)
-            .await;
+        seed_codex_account(
+            &state,
+            "codex-a.json",
+            "codex-access-a",
+            "chatgpt-a",
+            &expires_at,
+        )
+        .await;
+        seed_codex_account(
+            &state,
+            "codex-b.json",
+            "codex-access-b",
+            "chatgpt-b",
+            &expires_at,
+        )
+        .await;
         {
             let state_guard = state.read().await;
             state_guard
@@ -1619,7 +1670,10 @@ fn responses_request_failovers_to_next_codex_account_after_proxy_error() {
             Some("from codex proxy failover")
         );
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].authorization.as_deref(), Some("Bearer codex-access-b"));
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer codex-access-b")
+        );
         assert_eq!(requests[0].chatgpt_account_id.as_deref(), Some("chatgpt-b"));
     });
 }
@@ -1649,10 +1703,22 @@ fn responses_request_cooldowns_same_codex_account_after_401() {
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
-        seed_codex_account(&state, "codex-a.json", "codex-access-a", "chatgpt-a", &expires_at)
-            .await;
-        seed_codex_account(&state, "codex-b.json", "codex-access-b", "chatgpt-b", &expires_at)
-            .await;
+        seed_codex_account(
+            &state,
+            "codex-a.json",
+            "codex-access-a",
+            "chatgpt-a",
+            &expires_at,
+        )
+        .await;
+        seed_codex_account(
+            &state,
+            "codex-b.json",
+            "codex-access-b",
+            "chatgpt-b",
+            &expires_at,
+        )
+        .await;
 
         let (first_status, first_json) = send_responses_request(state.clone()).await;
         let (second_status, second_json) = send_responses_request(state).await;
@@ -1676,17 +1742,26 @@ fn responses_request_cooldowns_same_codex_account_after_401() {
             3,
             "401 should temporarily cool down the failed account across requests"
         );
-        assert_eq!(requests[0].authorization.as_deref(), Some("Bearer codex-access-a"));
-        assert_eq!(requests[1].authorization.as_deref(), Some("Bearer codex-access-b"));
-        assert_eq!(requests[2].authorization.as_deref(), Some("Bearer codex-access-b"));
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer codex-access-a")
+        );
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer codex-access-b")
+        );
+        assert_eq!(
+            requests[2].authorization.as_deref(),
+            Some("Bearer codex-access-b")
+        );
     });
 }
 
 #[test]
 fn responses_request_does_not_cooldown_same_codex_account_after_400() {
     run_async(async {
-        let codex = spawn_auth_switch_mock_upstream_with_primary_status(StatusCode::BAD_REQUEST)
-            .await;
+        let codex =
+            spawn_auth_switch_mock_upstream_with_primary_status(StatusCode::BAD_REQUEST).await;
 
         let mut config = config_with_runtime_upstreams(&[(
             PROVIDER_CODEX,
@@ -1707,10 +1782,22 @@ fn responses_request_does_not_cooldown_same_codex_account_after_400() {
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
-        seed_codex_account(&state, "codex-a.json", "codex-access-a", "chatgpt-a", &expires_at)
-            .await;
-        seed_codex_account(&state, "codex-b.json", "codex-access-b", "chatgpt-b", &expires_at)
-            .await;
+        seed_codex_account(
+            &state,
+            "codex-a.json",
+            "codex-access-a",
+            "chatgpt-a",
+            &expires_at,
+        )
+        .await;
+        seed_codex_account(
+            &state,
+            "codex-b.json",
+            "codex-access-b",
+            "chatgpt-b",
+            &expires_at,
+        )
+        .await;
 
         let (first_status, first_json) = send_responses_request(state.clone()).await;
         let (second_status, second_json) = send_responses_request(state).await;
@@ -1734,10 +1821,22 @@ fn responses_request_does_not_cooldown_same_codex_account_after_400() {
             4,
             "400 should remain same-request retryable, but must not cool down the account across requests"
         );
-        assert_eq!(requests[0].authorization.as_deref(), Some("Bearer codex-access-a"));
-        assert_eq!(requests[1].authorization.as_deref(), Some("Bearer codex-access-b"));
-        assert_eq!(requests[2].authorization.as_deref(), Some("Bearer codex-access-a"));
-        assert_eq!(requests[3].authorization.as_deref(), Some("Bearer codex-access-b"));
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer codex-access-a")
+        );
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer codex-access-b")
+        );
+        assert_eq!(
+            requests[2].authorization.as_deref(),
+            Some("Bearer codex-access-a")
+        );
+        assert_eq!(
+            requests[3].authorization.as_deref(),
+            Some("Bearer codex-access-b")
+        );
     });
 }
 
@@ -1807,10 +1906,19 @@ fn messages_request_failovers_to_next_kiro_account_before_next_upstream() {
         let _ = std::fs::remove_dir_all(&data_dir);
 
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(json["content"][0]["text"].as_str(), Some("from kiro failover"));
+        assert_eq!(
+            json["content"][0]["text"].as_str(),
+            Some("from kiro failover")
+        );
         assert_eq!(kiro_requests.len(), 2);
-        assert_eq!(kiro_requests[0].authorization.as_deref(), Some("Bearer kiro-access-a"));
-        assert_eq!(kiro_requests[1].authorization.as_deref(), Some("Bearer kiro-access-b"));
+        assert_eq!(
+            kiro_requests[0].authorization.as_deref(),
+            Some("Bearer kiro-access-a")
+        );
+        assert_eq!(
+            kiro_requests[1].authorization.as_deref(),
+            Some("Bearer kiro-access-b")
+        );
         assert!(
             fallback_requests.is_empty(),
             "kiro should exhaust same-upstream accounts before falling back to next upstream"
@@ -1886,8 +1994,14 @@ fn messages_request_falls_back_to_next_kiro_upstream_after_all_kiro_accounts_fai
             Some("from downstream fallback")
         );
         assert_eq!(kiro_requests.len(), 2);
-        assert_eq!(kiro_requests[0].authorization.as_deref(), Some("Bearer kiro-access-a"));
-        assert_eq!(kiro_requests[1].authorization.as_deref(), Some("Bearer kiro-access-b"));
+        assert_eq!(
+            kiro_requests[0].authorization.as_deref(),
+            Some("Bearer kiro-access-a")
+        );
+        assert_eq!(
+            kiro_requests[1].authorization.as_deref(),
+            Some("Bearer kiro-access-b")
+        );
         assert_eq!(
             fallback_requests.len(),
             1,
@@ -1941,8 +2055,14 @@ fn responses_request_logs_selected_codex_account_id() {
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
-        seed_codex_account(&state, "codex-a.json", "codex-access-a", "chatgpt-a", &expires_at)
-            .await;
+        seed_codex_account(
+            &state,
+            "codex-a.json",
+            "codex-access-a",
+            "chatgpt-a",
+            &expires_at,
+        )
+        .await;
 
         let (status, json) = send_responses_request(state).await;
         let logged_account_id = wait_for_logged_account_id(&pool).await;
@@ -2973,6 +3093,44 @@ fn gemini_route_dispatches_to_gemini() {
 }
 
 #[test]
+fn gemini_count_tokens_route_dispatches_to_gemini() {
+    let config = config_with_providers(&[(PROVIDER_GEMINI, FORMATS_GEMINI)]);
+    let plan = resolve_dispatch_plan(&config, "/v1beta/models/gemini-1.5-flash:countTokens")
+        .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_GEMINI);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn gemini_embed_route_dispatches_to_gemini() {
+    let config = config_with_providers(&[(PROVIDER_GEMINI, FORMATS_GEMINI)]);
+    let plan = resolve_dispatch_plan(&config, "/v1beta/models/text-embedding-004:embedContent")
+        .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_GEMINI);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn gemini_non_generate_route_does_not_fallback_to_formatless_provider() {
+    let config = config_with_providers(&[(PROVIDER_CHAT, FORMATS_CHAT)]);
+    let error = resolve_dispatch_plan(&config, "/v1beta/models/gemini-1.5-flash:countTokens")
+        .err()
+        .expect("should reject");
+    assert_eq!(error, "No available upstream configured.");
+}
+
+#[test]
+fn gemini_upload_files_route_dispatches_to_gemini() {
+    let config = config_with_providers(&[(PROVIDER_GEMINI, FORMATS_GEMINI)]);
+    let plan = resolve_dispatch_plan(&config, "/upload/v1beta/files").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_GEMINI);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
 fn openai_models_route_prefers_openai_compatible_provider_over_anthropic_priority() {
     let config = config_with_upstreams(&[
         (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
@@ -3161,4 +3319,142 @@ fn openai_compatible_model_detail_route_rewrites_to_openai_models_detail() {
         },
     );
     assert_eq!(outbound, "/v1/models/gpt-5");
+}
+
+#[test]
+fn openai_files_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/files").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn openai_uploads_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/uploads").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_batches_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/batches").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_vector_store_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan =
+        resolve_dispatch_plan(&config, "/v1/vector_stores/vs_123/files").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_images_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/images/generations").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_audio_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/audio/transcriptions").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_embeddings_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/embeddings").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_moderations_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/moderations").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_completions_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/completions").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_fine_tuning_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/fine_tuning/jobs").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_chat_completion_resource_route_prefers_openai_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/chat/completions/cmpt_123/messages")
+        .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_responses_resource_route_prefers_openai_responses_provider_over_anthropic_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_ANTHROPIC, 10, "anthropic", FORMATS_MESSAGES),
+        (PROVIDER_RESPONSES, 0, "responses", FORMATS_RESPONSES),
+    ]);
+    let plan = resolve_dispatch_plan(&config, "/v1/responses/resp_123").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_RESPONSES);
+}
+
+#[test]
+fn openai_responses_resource_route_falls_back_to_openai_provider_when_responses_missing() {
+    let config = config_with_upstreams(&[(PROVIDER_CHAT, 0, "chat", FORMATS_CHAT)]);
+    let plan = resolve_dispatch_plan(&config, "/v1/responses/resp_123").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_files_route_falls_back_to_responses_provider_when_openai_missing() {
+    let config = config_with_upstreams(&[(PROVIDER_RESPONSES, 0, "responses", FORMATS_RESPONSES)]);
+    let plan = resolve_dispatch_plan(&config, "/v1/files/file_123").expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_RESPONSES);
 }

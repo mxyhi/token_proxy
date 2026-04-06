@@ -153,6 +153,36 @@ async fn wait_for_log_rows(pool: &SqlitePool, expected_min: i64) -> i64 {
 }
 
 #[test]
+fn build_proxy_upload_url_rewrites_to_proxy_path_and_strips_upstream_key() {
+    let rewritten = build_proxy_upload_url(
+        "http://127.0.0.1:19282",
+        "https://generativelanguage.googleapis.com/upload/resumable/session-1?upload_id=session-1&key=upstream-secret",
+        Some("local-debug-key"),
+    )
+    .expect("rewrite upload url");
+
+    assert_eq!(rewritten.path(), "/upload/v1beta/files");
+    let query = rewritten.query_pairs().collect::<Vec<_>>();
+    assert_eq!(
+        query
+            .iter()
+            .find(|(name, _)| name == GEMINI_API_KEY_QUERY)
+            .map(|(_, value)| value.as_ref()),
+        Some("local-debug-key")
+    );
+    let target = query
+        .iter()
+        .find(|(name, _)| name == GEMINI_PROXY_UPLOAD_TARGET_QUERY)
+        .map(|(_, value)| value.to_string())
+        .expect("proxy upload target");
+    assert_eq!(
+        target,
+        "https://generativelanguage.googleapis.com/upload/resumable/session-1?upload_id=session-1"
+    );
+    assert!(!rewritten.as_str().contains("upstream-secret"));
+}
+
+#[test]
 fn stream_with_logging_persists_log_when_client_drops_stream_early() {
     run_async(async {
         let sqlite_pool = create_test_sqlite_pool().await;

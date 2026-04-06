@@ -1,5 +1,5 @@
-mod anthropic_compat;
 mod account_selector;
+mod anthropic_compat;
 mod codex_compat;
 mod compat_content;
 mod compat_reason;
@@ -14,6 +14,7 @@ mod kiro;
 mod log;
 pub mod logs;
 mod model;
+mod openai;
 mod openai_compat;
 mod redact;
 mod request_body;

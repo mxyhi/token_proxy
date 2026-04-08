@@ -169,38 +169,10 @@ CREATE TABLE IF NOT EXISTS provider_accounts (
     .await
     .map_err(|err| format!("Failed to create idx_provider_accounts_email: {err}"))?;
 
-    sqlx::query(
-        r#"
-CREATE TABLE IF NOT EXISTS account_state_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ts_ms INTEGER NOT NULL,
-  provider TEXT NOT NULL,
-  account_id TEXT NOT NULL,
-  event_kind TEXT NOT NULL,
-  trigger_kind TEXT NOT NULL,
-  status TEXT NOT NULL,
-  reason_detail TEXT,
-  cooldown_until_ms INTEGER
-);
-"#,
-    )
-    .execute(pool)
-    .await
-    .map_err(|err| format!("Failed to create account_state_logs table: {err}"))?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_account_state_logs_ts_ms ON account_state_logs(ts_ms);",
-    )
-    .execute(pool)
-    .await
-    .map_err(|err| format!("Failed to create idx_account_state_logs_ts_ms: {err}"))?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_account_state_logs_provider_account_ts_ms ON account_state_logs(provider, account_id, ts_ms);",
-    )
-    .execute(pool)
-    .await
-    .map_err(|err| format!("Failed to create idx_account_state_logs_provider_account_ts_ms: {err}"))?;
+    sqlx::query("DROP TABLE IF EXISTS account_state_logs;")
+        .execute(pool)
+        .await
+        .map_err(|err| format!("Failed to drop legacy account_state_logs table: {err}"))?;
 
     migrate_provider_account_status(pool).await?;
 
@@ -361,26 +333,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn init_schema_creates_account_state_logs_table() {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .expect("connect sqlite");
-
-        init_schema(&pool).await.expect("init schema");
-
-        let row = sqlx::query(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'account_state_logs';",
-        )
-        .fetch_optional(&pool)
-        .await
-        .expect("query sqlite_master");
-
-        assert!(row.is_some(), "account_state_logs table should exist");
-    }
-
-    #[tokio::test]
     async fn init_schema_migrates_provider_account_enabled_to_status() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -456,6 +408,41 @@ INSERT INTO provider_accounts (
         assert!(
             value.get("enabled").is_none(),
             "legacy enabled field should be removed after migration"
+        );
+    }
+
+    #[tokio::test]
+    async fn init_schema_drops_legacy_account_state_logs_table() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite");
+
+        sqlx::query(
+            r#"
+CREATE TABLE account_state_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts_ms INTEGER NOT NULL
+);
+"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("create legacy account_state_logs");
+
+        init_schema(&pool).await.expect("init schema");
+
+        let row = sqlx::query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'account_state_logs';",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("query sqlite_master");
+
+        assert!(
+            row.is_none(),
+            "legacy account_state_logs table should be dropped"
         );
     }
 }

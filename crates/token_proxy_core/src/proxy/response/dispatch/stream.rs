@@ -17,8 +17,8 @@ use super::super::super::{
 };
 use super::super::{
     anthropic_to_responses, chat_to_responses, kiro_to_anthropic, responses_to_anthropic,
-    responses_to_chat, streaming, upstream_stream, PROVIDER_CODEX, PROVIDER_GEMINI,
-    PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES,
+    responses_to_chat, streaming, upstream_stream, RetryableStreamResponse, PROVIDER_CODEX,
+    PROVIDER_GEMINI, PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES,
 };
 
 type UpstreamBytesStream = futures_util::stream::BoxStream<
@@ -45,6 +45,7 @@ pub(super) async fn build_stream_response(
         status,
         &headers,
         upstream_res,
+        response_transform,
         &mut context,
         &log,
         upstream_no_data_timeout,
@@ -436,6 +437,7 @@ async fn prepare_upstream_stream(
     status: StatusCode,
     headers: &HeaderMap,
     upstream_res: reqwest::Response,
+    response_transform: FormatTransform,
     context: &mut LogContext,
     log: &Arc<LogWriter>,
     upstream_no_data_timeout: Duration,
@@ -450,7 +452,19 @@ async fn prepare_upstream_stream(
         upstream_stream::with_idle_timeout(upstream_res.bytes_stream(), upstream_no_data_timeout);
     let first = upstream.next().await;
     match first {
-        Some(Ok(chunk)) => Ok(chain_first_chunk(chunk, upstream, context)),
+        Some(Ok(chunk)) => {
+            if let Some(response) = codex_prelude_retry_response(
+                status,
+                headers,
+                response_transform,
+                &chunk,
+                context,
+                log,
+            ) {
+                return Err(response);
+            }
+            Ok(chain_first_chunk(chunk, upstream, context))
+        }
         Some(Err(err)) => Err(stream_error_response(
             err,
             context,
@@ -459,6 +473,49 @@ async fn prepare_upstream_stream(
         )),
         None => Err(http::build_response(status, headers.clone(), Body::empty())),
     }
+}
+
+fn codex_prelude_retry_response(
+    status: StatusCode,
+    headers: &HeaderMap,
+    response_transform: FormatTransform,
+    first_chunk: &Bytes,
+    context: &mut LogContext,
+    log: &Arc<LogWriter>,
+) -> Option<Response> {
+    let message = match response_transform {
+        // 只在首个完整 SSE 事件就是错误时触发 fallback，避免已经向客户端吐出业务内容后再拼接其他 upstream。
+        FormatTransform::CodexToChat | FormatTransform::CodexToResponses => {
+            codex_compat::first_codex_event_error_message(first_chunk)
+        }
+        _ => None,
+    }?;
+    if context.ttfb_ms.is_none() {
+        context.ttfb_ms = Some(context.start.elapsed().as_millis());
+    }
+    context.status = StatusCode::BAD_GATEWAY.as_u16();
+    let empty_usage = UsageSnapshot {
+        usage: None,
+        cached_tokens: None,
+        usage_json: None,
+    };
+    let entry = build_log_entry(context, empty_usage, Some(message.clone()));
+    log.clone().write_detached(entry);
+
+    let error_chunk = match response_transform {
+        FormatTransform::CodexToChat => codex_compat::stream_chat_error_sse(&message),
+        FormatTransform::CodexToResponses => codex_compat::stream_responses_error_sse(&message),
+        _ => return None,
+    };
+    let body = Body::from(Bytes::from(
+        [error_chunk.as_ref(), b"data: [DONE]\n\n"].concat(),
+    ));
+    let mut response = http::build_response(status, headers.clone(), body);
+    response.extensions_mut().insert(RetryableStreamResponse {
+        message,
+        should_cooldown: true,
+    });
+    Some(response)
 }
 
 fn chain_first_chunk(

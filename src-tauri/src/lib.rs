@@ -299,22 +299,6 @@ async fn read_request_log_detail(
 }
 
 #[tauri::command]
-async fn read_account_state_logs(
-    app: tauri::AppHandle,
-    range: proxy::dashboard::DashboardRange,
-) -> Result<Vec<proxy::logs::AccountStateLogItem>, String> {
-    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
-    let pool = proxy::sqlite::open_read_pool(paths.inner().as_ref()).await?;
-    proxy::logs::read_recent_account_state_logs(
-        &pool,
-        range.from_ts_ms.map(|value| value as i64),
-        range.to_ts_ms.map(|value| value as i64),
-        50,
-    )
-    .await
-}
-
-#[tauri::command]
 fn read_request_detail_capture(
     capture_state: tauri::State<'_, Arc<proxy::request_detail::RequestDetailCapture>>,
 ) -> proxy::request_detail::RequestDetailCaptureState {
@@ -882,7 +866,6 @@ pub fn run() {
             save_proxy_config,
             read_dashboard_snapshot,
             read_request_log_detail,
-            read_account_state_logs,
             read_request_detail_capture,
             set_request_detail_capture,
             kiro_list_accounts,

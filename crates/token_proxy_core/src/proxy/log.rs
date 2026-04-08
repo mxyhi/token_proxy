@@ -88,33 +88,12 @@ impl LogWriter {
         });
     }
 
-    pub(crate) fn write_account_state_detached(
-        self: Arc<Self>,
-        entry: crate::proxy::logs::AccountStateLogEntry,
-    ) {
-        tokio::spawn(async move {
-            self.write_account_state(&entry).await;
-        });
-    }
-
     pub(crate) async fn write(&self, entry: &LogEntry) {
         let Some(pool) = self.sqlite.as_ref() else {
             return;
         };
         if let Err(_err) = insert_log_entry(pool, entry).await {
             debug_log_error!("proxy sqlite write failed: {_err}");
-        }
-    }
-
-    pub(crate) async fn write_account_state(
-        &self,
-        entry: &crate::proxy::logs::AccountStateLogEntry,
-    ) {
-        let Some(pool) = self.sqlite.as_ref() else {
-            return;
-        };
-        if let Err(_err) = crate::proxy::logs::write_account_state_log(pool, entry).await {
-            debug_log_error!("proxy sqlite account state write failed: {_err}");
         }
     }
 }

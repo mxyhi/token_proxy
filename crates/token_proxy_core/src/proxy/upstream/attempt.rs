@@ -131,26 +131,6 @@ enum CodexFailoverResult {
     Resolved(AttemptOutcome),
 }
 
-fn mark_failed_codex_account_before_failover(
-    state: &ProxyState,
-    provider: &str,
-    attempt: &Result<UpstreamAttempt, UpstreamAttemptFailure>,
-) {
-    let Ok(attempt) = attempt else {
-        return;
-    };
-    if attempt.response.status().is_success() {
-        return;
-    }
-    update_account_cooldown_for_response(
-        state,
-        provider,
-        attempt.selected_account_id.as_deref(),
-        attempt.response.status(),
-        attempt.response.headers(),
-    );
-}
-
 async fn retry_after_kiro_refresh(
     state: &ProxyState,
     method: Method,
@@ -270,66 +250,18 @@ fn schedule_account_quota_refresh(
     }
 }
 
-fn update_account_cooldown_for_response(
-    state: &ProxyState,
-    provider: &str,
-    account_id: Option<&str>,
-    status: StatusCode,
-    headers: &HeaderMap,
-) {
-    let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
-        return;
-    };
-    let retry_after = headers
-        .get(axum::http::header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let reason_detail = match retry_after {
-        Some(value) => format!("{} retry-after={value}", status.as_u16()),
-        None => status.as_u16().to_string(),
-    };
-    if let Some(cooldown_until_ms) = state
-        .account_selector
-        .mark_response_status(provider, account_id, status, headers)
-    {
-        let entry = crate::proxy::logs::build_account_state_log_entry(
-            provider,
-            account_id,
-            "cooldown_started",
-            "http_status",
-            "cooling_down",
-            Some(reason_detail),
-            Some(cooldown_until_ms),
-        );
-        state.log.clone().write_account_state_detached(entry);
-    }
-}
-
 fn mark_account_retryable_failure(
     state: &ProxyState,
     provider: &str,
     account_id: Option<&str>,
-    reason_detail: Option<String>,
+    _reason_detail: Option<String>,
 ) {
     let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
     };
-    if let Some(cooldown_until_ms) = state
+    let _ = state
         .account_selector
-        .mark_retryable_failure(provider, account_id)
-    {
-        let entry = crate::proxy::logs::build_account_state_log_entry(
-            provider,
-            account_id,
-            "cooldown_started",
-            "retryable_error",
-            "cooling_down",
-            reason_detail,
-            Some(cooldown_until_ms),
-        );
-        state.log.clone().write_account_state_detached(entry);
-    }
+        .mark_retryable_failure(provider, account_id);
 }
 
 async fn retry_with_next_codex_account(
@@ -356,10 +288,20 @@ async fn retry_with_next_codex_account(
         };
     };
 
-    mark_failed_codex_account_before_failover(state, provider, &first);
     let mut excluded_account_ids = vec![first_selected_account_id];
-    let mut last_retry: Option<Result<(UpstreamRuntime, UpstreamAttempt), UpstreamAttemptFailure>> =
-        Some(first.map(|attempt| (upstream.clone(), attempt)));
+    let mut last_outcome = Some(
+        finalize_codex_failover_attempt(
+            state,
+            provider,
+            upstream,
+            inbound_path,
+            client_gemini_api_key,
+            response_transform,
+            request_detail.clone(),
+            first,
+        )
+        .await,
+    );
 
     // 这里做账户级 failover，而不是 upstream 级 failover。
     // 当 codex upstream 未绑定具体账户时，只要当前账户请求报错，就继续尝试下一个本地可用账户。
@@ -387,23 +329,8 @@ async fn retry_with_next_codex_account(
             .await
         {
             Ok(Some((account_id, _))) => account_id,
-            Ok(None) => match last_retry {
-                Some(Ok((retry_upstream, retry_attempt))) => {
-                    return CodexFailoverResult::Resolved(
-                        finalize_attempt(
-                            state,
-                            provider,
-                            &retry_upstream,
-                            inbound_path,
-                            client_gemini_api_key,
-                            response_transform,
-                            request_detail,
-                            retry_attempt,
-                        )
-                        .await,
-                    );
-                }
-                Some(Err(failure)) => return CodexFailoverResult::Resolved(failure.outcome),
+            Ok(None) => match last_outcome {
+                Some(outcome) => return CodexFailoverResult::Resolved(outcome),
                 None => {
                     return CodexFailoverResult::Resolved(AttemptOutcome::Fatal(
                         http::error_response(
@@ -440,9 +367,6 @@ async fn retry_with_next_codex_account(
         excluded_account_ids.push(next_account_id);
 
         let should_retry_again = failover_selected_account_id(provider, upstream, &retry).is_some();
-        if should_retry_again {
-            mark_failed_codex_account_before_failover(state, provider, &retry);
-        }
         if !should_retry_again {
             return match retry {
                 Ok(attempt) => CodexFailoverResult::Resolved(
@@ -461,7 +385,47 @@ async fn retry_with_next_codex_account(
                 Err(failure) => CodexFailoverResult::Resolved(failure.outcome),
             };
         }
-        last_retry = Some(retry.map(|attempt| (retry_upstream, attempt)));
+        last_outcome = Some(
+            finalize_codex_failover_attempt(
+                state,
+                provider,
+                &retry_upstream,
+                inbound_path,
+                client_gemini_api_key,
+                response_transform,
+                request_detail.clone(),
+                retry,
+            )
+            .await,
+        );
+    }
+}
+
+async fn finalize_codex_failover_attempt(
+    state: &ProxyState,
+    provider: &str,
+    upstream: &UpstreamRuntime,
+    inbound_path: &str,
+    client_gemini_api_key: Option<&str>,
+    response_transform: FormatTransform,
+    request_detail: Option<RequestDetailSnapshot>,
+    attempt: Result<UpstreamAttempt, UpstreamAttemptFailure>,
+) -> AttemptOutcome {
+    match attempt {
+        Ok(attempt) => {
+            finalize_attempt(
+                state,
+                provider,
+                upstream,
+                inbound_path,
+                client_gemini_api_key,
+                response_transform,
+                request_detail,
+                attempt,
+            )
+            .await
+        }
+        Err(failure) => failure.outcome,
     }
 }
 

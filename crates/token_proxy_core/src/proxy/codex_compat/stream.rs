@@ -14,6 +14,24 @@ use super::extract_tool_name_map_from_request_body;
 
 const CODEX_STREAM_INVALID_EVENT_LIMIT: usize = 1024;
 
+pub(crate) fn first_codex_event_error_message(chunk: &[u8]) -> Option<String> {
+    let mut parser = SseEventParser::new();
+    let mut events = Vec::new();
+    parser.push_chunk(chunk, |data| events.push(data));
+    let data = events.into_iter().next()?;
+    if data == "[DONE]" {
+        return None;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(&data) else {
+        return Some(invalid_event_message(&data));
+    };
+    match value.get("type").and_then(Value::as_str) {
+        Some("response.failed" | "error") => Some(stream_error_message(&value)),
+        Some(_) => None,
+        None => Some(malformed_event_message(&value)),
+    }
+}
+
 pub(crate) fn stream_codex_to_chat<E>(
     upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     context: LogContext,
@@ -278,7 +296,7 @@ where
 
     fn fail_stream(&mut self, message: String) {
         self.context.status = 502;
-        self.out.push_back(chat_error_sse(&message));
+        self.out.push_back(stream_chat_error_sse(&message));
         self.push_done();
         self.write_log_once(Some(message));
     }
@@ -460,7 +478,7 @@ where
 
     fn fail_stream(&mut self, message: String) {
         self.context.status = 502;
-        self.out.push_back(responses_error_sse(&message));
+        self.out.push_back(stream_responses_error_sse(&message));
         self.out.push_back(Bytes::from("data: [DONE]\n\n"));
         self.sent_done = true;
         self.write_log_once(Some(message));
@@ -522,7 +540,7 @@ fn truncate_event_text(text: &str) -> String {
     format!("{}... (truncated)", text[..end].trim())
 }
 
-fn chat_error_sse(message: &str) -> Bytes {
+pub(crate) fn stream_chat_error_sse(message: &str) -> Bytes {
     Bytes::from(format!(
         "data: {}\n\n",
         json!({
@@ -534,7 +552,7 @@ fn chat_error_sse(message: &str) -> Bytes {
     ))
 }
 
-fn responses_error_sse(message: &str) -> Bytes {
+pub(crate) fn stream_responses_error_sse(message: &str) -> Bytes {
     Bytes::from(format!(
         "data: {}\n\n",
         json!({

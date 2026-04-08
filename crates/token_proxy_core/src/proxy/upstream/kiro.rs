@@ -601,54 +601,17 @@ fn mark_failed_kiro_account_before_failover(
 ) {
     match outcome {
         AttemptOutcome::Success(response) if !response.status().is_success() => {
-            let retry_after = response
-                .headers()
-                .get(axum::http::header::RETRY_AFTER)
-                .and_then(|value| value.to_str().ok())
-                .map(str::trim)
-                .filter(|value| !value.is_empty());
-            let reason_detail = match retry_after {
-                Some(value) => format!("{} retry-after={value}", response.status().as_u16()),
-                None => response.status().as_u16().to_string(),
-            };
-            if let Some(cooldown_until_ms) = state.account_selector.mark_response_status(
+            let _ = state.account_selector.mark_response_status(
                 "kiro",
                 account_id,
                 response.status(),
                 response.headers(),
-            ) {
-                let entry = crate::proxy::logs::build_account_state_log_entry(
-                    "kiro",
-                    account_id,
-                    "cooldown_started",
-                    "http_status",
-                    "cooling_down",
-                    Some(reason_detail),
-                    Some(cooldown_until_ms),
-                );
-                state.log.clone().write_account_state_detached(entry);
-            }
+            );
         }
         AttemptOutcome::Retryable { .. } => {
-            let reason_detail = match outcome {
-                AttemptOutcome::Retryable { message, .. } => Some(message.clone()),
-                _ => None,
-            };
-            if let Some(cooldown_until_ms) = state
+            let _ = state
                 .account_selector
-                .mark_retryable_failure("kiro", account_id)
-            {
-                let entry = crate::proxy::logs::build_account_state_log_entry(
-                    "kiro",
-                    account_id,
-                    "cooldown_started",
-                    "retryable_error",
-                    "cooling_down",
-                    reason_detail,
-                    Some(cooldown_until_ms),
-                );
-                state.log.clone().write_account_state_detached(entry);
-            }
+                .mark_retryable_failure("kiro", account_id);
         }
         _ => {}
     }

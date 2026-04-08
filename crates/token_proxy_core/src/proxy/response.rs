@@ -26,6 +26,12 @@ const GEMINI_PROXY_UPLOAD_TARGET_QUERY: &str = "tp_upload_target";
 const GEMINI_UPLOAD_PROXY_PATH: &str = "/upload/v1beta/files";
 const GEMINI_API_KEY_QUERY: &str = "key";
 
+#[derive(Clone)]
+pub(super) struct RetryableStreamResponse {
+    pub(super) message: String,
+    pub(super) should_cooldown: bool,
+}
+
 pub(super) async fn build_proxy_response(
     meta: &RequestMeta,
     provider: &str,

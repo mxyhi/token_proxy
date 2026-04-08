@@ -41,6 +41,8 @@ import { m } from "@/paraglide/messages.js";
 
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 const DIALOG_PLACEHOLDER = "—";
+const ACCOUNT_ID_COLUMN_WIDTH_CLASS = "w-[4.5rem]";
+const TABLE_TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 
 export type ProviderAccountQuotaDetailItem = {
   name: string;
@@ -461,6 +463,23 @@ function ProviderAccountRowActions({
   );
 }
 
+function AccountIdCell({ value }: { value: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className="block max-w-[4.5rem] truncate font-mono text-xs text-muted-foreground"
+        >
+          {value}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className={TABLE_TOOLTIP_CONTENT_CLASS}>
+        {value}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function ProvidersAccountsTableSection({
   rows,
   loading,
@@ -600,7 +619,7 @@ export function ProvidersAccountsTableSection({
                   </TableHead>
                   <TableHead>{m.providers_table_provider()}</TableHead>
                   <TableHead>{m.providers_table_account()}</TableHead>
-                  <TableHead>{m.providers_table_account_id()}</TableHead>
+                  <TableHead className={ACCOUNT_ID_COLUMN_WIDTH_CLASS}>ID</TableHead>
                   <TableHead>{m.providers_table_status()}</TableHead>
                   <TableHead>{m.providers_table_expires()}</TableHead>
                   <TableHead>{m.providers_table_plan()}</TableHead>
@@ -623,8 +642,8 @@ export function ProvidersAccountsTableSection({
                     </TableCell>
                     <TableCell>{row.providerLabel}</TableCell>
                     <TableCell className="font-medium text-foreground">{row.displayName}</TableCell>
-                    <TableCell className="font-mono text-xs text-muted-foreground">
-                      {row.accountId}
+                    <TableCell className={ACCOUNT_ID_COLUMN_WIDTH_CLASS}>
+                      <AccountIdCell value={row.accountId} />
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap items-center gap-1">

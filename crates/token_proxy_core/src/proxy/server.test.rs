@@ -1093,6 +1093,175 @@ async fn assert_responses_retry_fallback_status(status: StatusCode) {
     );
 }
 
+async fn assert_responses_stream_retry_fallback_from_codex_prelude_error() {
+    let primary = spawn_mock_raw_upstream(
+        StatusCode::OK,
+        Bytes::from(
+            "data: {\"type\":\"error\",\"error\":{\"message\":\"primary codex stream failed before first output\"}}\n\n",
+        ),
+        "text/event-stream",
+    )
+    .await;
+    let fallback = spawn_mock_raw_upstream(
+        StatusCode::OK,
+        Bytes::from(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"from responses fallback\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fallback\",\"object\":\"response\",\"created_at\":123,\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"from responses fallback\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n\
+data: [DONE]\n\n",
+        ),
+        "text/event-stream",
+    )
+    .await;
+
+    let config = config_with_runtime_upstreams(&[
+        (
+            PROVIDER_CODEX,
+            10,
+            "codex-primary-stream",
+            primary.base_url.as_str(),
+            FORMATS_RESPONSES,
+        ),
+        (
+            PROVIDER_RESPONSES,
+            5,
+            "responses-fallback-stream",
+            fallback.base_url.as_str(),
+            FORMATS_RESPONSES,
+        ),
+    ]);
+    let data_dir = next_test_data_dir("responses_codex_stream_prelude_fallback");
+    let state = build_test_state_handle(config, data_dir.clone()).await;
+
+    let response = proxy_request(
+        State(state),
+        Method::POST,
+        Uri::from_static(RESPONSES_PATH),
+        axum::http::HeaderMap::new(),
+        Body::from(
+            json!({
+                "model": "gpt-5",
+                "input": "hi",
+                "stream": true
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let response_status = response.status();
+    let response_headers = response.headers().clone();
+    let response_bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("proxy stream response bytes");
+    let response_text = String::from_utf8(response_bytes.to_vec()).expect("response text");
+
+    let primary_requests = primary.requests();
+    let fallback_requests = fallback.requests();
+
+    primary.abort();
+    fallback.abort();
+    let _ = std::fs::remove_dir_all(&data_dir);
+
+    assert_eq!(response_status, StatusCode::OK);
+    assert_eq!(
+        response_headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    assert!(response_text.contains("from responses fallback"));
+    assert!(!response_text.contains("primary codex stream failed"));
+    assert_eq!(primary_requests.len(), 1);
+    assert_eq!(primary_requests[0].path, CODEX_RESPONSES_PATH);
+    assert_eq!(fallback_requests.len(), 1);
+    assert_eq!(fallback_requests[0].path, RESPONSES_PATH);
+}
+
+async fn assert_responses_stream_does_not_fallback_after_first_codex_output() {
+    let primary = spawn_mock_raw_upstream(
+        StatusCode::OK,
+        Bytes::from(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial before failure\"}\n\n\
+data: {\"type\":\"error\",\"error\":{\"message\":\"primary codex stream failed after first output\"}}\n\n",
+        ),
+        "text/event-stream",
+    )
+    .await;
+    let fallback = spawn_mock_raw_upstream(
+        StatusCode::OK,
+        Bytes::from(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"from responses fallback\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fallback\",\"object\":\"response\",\"created_at\":123,\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"from responses fallback\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n\
+data: [DONE]\n\n",
+        ),
+        "text/event-stream",
+    )
+    .await;
+
+    let config = config_with_runtime_upstreams(&[
+        (
+            PROVIDER_CODEX,
+            10,
+            "codex-primary-stream-no-fallback",
+            primary.base_url.as_str(),
+            FORMATS_RESPONSES,
+        ),
+        (
+            PROVIDER_RESPONSES,
+            5,
+            "responses-fallback-should-not-run",
+            fallback.base_url.as_str(),
+            FORMATS_RESPONSES,
+        ),
+    ]);
+    let data_dir = next_test_data_dir("responses_codex_stream_after_output_no_fallback");
+    let state = build_test_state_handle(config, data_dir.clone()).await;
+
+    let response = proxy_request(
+        State(state),
+        Method::POST,
+        Uri::from_static(RESPONSES_PATH),
+        axum::http::HeaderMap::new(),
+        Body::from(
+            json!({
+                "model": "gpt-5",
+                "input": "hi",
+                "stream": true
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let response_status = response.status();
+    let response_headers = response.headers().clone();
+    let response_bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("proxy stream response bytes");
+    let response_text = String::from_utf8(response_bytes.to_vec()).expect("response text");
+
+    let primary_requests = primary.requests();
+    let fallback_requests = fallback.requests();
+
+    primary.abort();
+    fallback.abort();
+    let _ = std::fs::remove_dir_all(&data_dir);
+
+    assert_eq!(response_status, StatusCode::OK);
+    assert_eq!(
+        response_headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    assert!(response_text.contains("partial before failure"));
+    assert!(response_text.contains("primary codex stream failed after first output"));
+    assert!(!response_text.contains("from responses fallback"));
+    assert_eq!(primary_requests.len(), 1);
+    assert_eq!(primary_requests[0].path, CODEX_RESPONSES_PATH);
+    assert_eq!(fallback_requests.len(), 0);
+}
+
 async fn send_responses_request(state: ProxyStateHandle) -> (StatusCode, Value) {
     let response = proxy_request(
         State(state),
@@ -1439,6 +1608,21 @@ async fn wait_for_logged_account_id(pool: &sqlx::SqlitePool) -> Option<String> {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     None
+}
+
+async fn wait_for_request_log_count(pool: &sqlx::SqlitePool, expected_min: i64) -> i64 {
+    for _ in 0..50 {
+        let row = sqlx::query("SELECT COUNT(*) AS count FROM request_logs;")
+            .fetch_one(pool)
+            .await
+            .expect("count request logs");
+        let count = row.try_get::<i64, _>("count").unwrap_or_default();
+        if count >= expected_min {
+            return count;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("request log count");
 }
 
 #[test]
@@ -2076,6 +2260,108 @@ fn responses_request_logs_selected_codex_account_id() {
             Some("from codex logged account")
         );
         assert_eq!(logged_account_id.as_deref(), Some("codex-a.json"));
+    });
+}
+
+#[test]
+fn responses_request_logs_each_codex_account_failover_attempt() {
+    run_async(async {
+        let codex = spawn_auth_switch_mock_upstream().await;
+
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_CODEX,
+            0,
+            "codex-account-log-all-attempts",
+            codex.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        let provider_upstreams = config
+            .upstreams
+            .get_mut(PROVIDER_CODEX)
+            .expect("codex upstreams");
+        provider_upstreams.groups[0].items[0].codex_account_id = None;
+
+        let data_dir = next_test_data_dir("responses_codex_logs_all_attempts");
+        let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("format expires_at");
+        seed_codex_account(
+            &state,
+            "codex-a.json",
+            "codex-access-a",
+            "chatgpt-a",
+            &expires_at,
+        )
+        .await;
+        seed_codex_account(
+            &state,
+            "codex-b.json",
+            "codex-access-b",
+            "chatgpt-b",
+            &expires_at,
+        )
+        .await;
+
+        let (status, json) = send_responses_request(state).await;
+        let logged_count = wait_for_request_log_count(&pool, 2).await;
+        let logged_rows =
+            sqlx::query("SELECT account_id, status FROM request_logs ORDER BY id ASC;")
+                .fetch_all(&pool)
+                .await
+                .expect("query request logs");
+
+        codex.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["output"][0]["content"][0]["text"].as_str(),
+            Some("from codex failover")
+        );
+        assert_eq!(logged_count, 2);
+        assert_eq!(
+            logged_rows[0]
+                .try_get::<Option<String>, _>("account_id")
+                .ok()
+                .flatten()
+                .as_deref(),
+            Some("codex-a.json")
+        );
+        assert_eq!(
+            logged_rows[0]
+                .try_get::<i64, _>("status")
+                .unwrap_or_default(),
+            401
+        );
+        assert_eq!(
+            logged_rows[1]
+                .try_get::<Option<String>, _>("account_id")
+                .ok()
+                .flatten()
+                .as_deref(),
+            Some("codex-b.json")
+        );
+        assert_eq!(
+            logged_rows[1]
+                .try_get::<i64, _>("status")
+                .unwrap_or_default(),
+            200
+        );
+    });
+}
+
+#[test]
+fn responses_stream_request_falls_back_from_codex_when_first_sse_event_is_error() {
+    run_async(async {
+        assert_responses_stream_retry_fallback_from_codex_prelude_error().await;
+    });
+}
+
+#[test]
+fn responses_stream_request_does_not_fallback_after_first_codex_output() {
+    run_async(async {
+        assert_responses_stream_does_not_fallback_after_first_codex_output().await;
     });
 }
 

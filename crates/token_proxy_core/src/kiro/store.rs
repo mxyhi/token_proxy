@@ -188,22 +188,7 @@ impl KiroAccountStore {
     ) -> Result<KiroAccountSummary, String> {
         let mut record = self.load_account(account_id).await?;
         record.status = status;
-        let summary = self.save_record(account_id.to_string(), record).await?;
-        let entry = crate::proxy::logs::build_account_state_log_entry(
-            "kiro",
-            account_id,
-            "status_changed",
-            "manual_status",
-            kiro_status_key(status),
-            Some(format!("manual status -> {}", kiro_status_key(status))),
-            None,
-        );
-        if let Err(err) =
-            crate::proxy::logs::write_account_state_log_for_paths(&self.paths, &entry).await
-        {
-            tracing::warn!(error = %err, account_id, "write kiro manual status log failed");
-        }
-        Ok(summary)
+        self.save_record(account_id.to_string(), record).await
     }
 
     pub(crate) async fn save_record(
@@ -468,14 +453,6 @@ impl KiroAccountStore {
             }
             suffix += 1;
         }
-    }
-}
-
-fn kiro_status_key(status: KiroAccountStatus) -> &'static str {
-    match status {
-        KiroAccountStatus::Active => "active",
-        KiroAccountStatus::Disabled => "disabled",
-        KiroAccountStatus::Expired => "expired",
     }
 }
 
@@ -855,22 +832,6 @@ mod tests {
                 .await
                 .expect("record should exist");
             assert!(matches!(record.status, KiroAccountStatus::Disabled));
-
-            let pool = crate::proxy::sqlite::open_read_pool(&store.paths)
-                .await
-                .expect("open sqlite");
-            let logs = crate::proxy::logs::read_recent_account_state_logs(&pool, None, None, 10)
-                .await
-                .expect("read account state logs");
-            assert!(
-                logs.iter().any(|item| {
-                    item.provider == "kiro"
-                        && item.account_id == saved.account_id
-                        && item.event_kind == "status_changed"
-                        && item.status == "disabled"
-                }),
-                "manual status change should write account state log"
-            );
 
             let _ = std::fs::remove_dir_all(data_dir);
         });

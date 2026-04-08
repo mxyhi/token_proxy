@@ -350,7 +350,6 @@ export function LogsPanel() {
     snapshot,
     status,
     statusMessage,
-    activeRange,
     rangePreset,
     selectedUpstreamId,
     upstreamOptions,

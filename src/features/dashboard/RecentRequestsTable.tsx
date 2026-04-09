@@ -29,7 +29,7 @@ const ROW_HEIGHT_PX = 44;
 const OVERSCAN = 6;
 
 // 让 time/tokens 列更紧凑、model 列更宽（同时保持其它列的响应式伸缩）。
-const GRID_COLS = "grid-cols-[132px_152px_148px_104px_72px_128px_110px]";
+const GRID_COLS = "grid-cols-[132px_152px_148px_104px_72px_86px_110px]";
 const CELL_PLACEHOLDER = "—";
 const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";

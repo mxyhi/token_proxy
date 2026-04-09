@@ -115,6 +115,7 @@ describe("dashboard/useDashboardSnapshot", () => {
               stream: false,
               status: 200,
               totalTokens: 30,
+              outputTokens: 20,
               cachedTokens: 5,
               latencyMs: 30,
               upstreamRequestId: "req-alpha",

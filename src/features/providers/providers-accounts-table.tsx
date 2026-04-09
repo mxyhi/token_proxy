@@ -41,6 +41,8 @@ import { m } from "@/paraglide/messages.js";
 
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
 const DIALOG_PLACEHOLDER = "—";
+const ACCOUNT_COLUMN_WIDTH_CLASS = "w-[10rem]";
+const ACCOUNT_TEXT_WIDTH_CLASS = "max-w-[10rem]";
 const ACCOUNT_ID_COLUMN_WIDTH_CLASS = "w-[4.5rem]";
 const TABLE_TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 
@@ -480,6 +482,21 @@ function AccountIdCell({ value }: { value: string }) {
   );
 }
 
+function AccountDisplayNameCell({ value }: { value: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={`block ${ACCOUNT_TEXT_WIDTH_CLASS} truncate font-medium text-foreground`}>
+          {value}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className={TABLE_TOOLTIP_CONTENT_CLASS}>
+        {value}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 export function ProvidersAccountsTableSection({
   rows,
   loading,
@@ -618,7 +635,9 @@ export function ProvidersAccountsTableSection({
                     />
                   </TableHead>
                   <TableHead>{m.providers_table_provider()}</TableHead>
-                  <TableHead>{m.providers_table_account()}</TableHead>
+                  <TableHead className={ACCOUNT_COLUMN_WIDTH_CLASS}>
+                    {m.providers_table_account()}
+                  </TableHead>
                   <TableHead className={ACCOUNT_ID_COLUMN_WIDTH_CLASS}>ID</TableHead>
                   <TableHead>{m.providers_table_status()}</TableHead>
                   <TableHead>{m.providers_table_expires()}</TableHead>
@@ -641,7 +660,9 @@ export function ProvidersAccountsTableSection({
                       />
                     </TableCell>
                     <TableCell>{row.providerLabel}</TableCell>
-                    <TableCell className="font-medium text-foreground">{row.displayName}</TableCell>
+                    <TableCell className={ACCOUNT_COLUMN_WIDTH_CLASS}>
+                      <AccountDisplayNameCell value={row.displayName} />
+                    </TableCell>
                     <TableCell className={ACCOUNT_ID_COLUMN_WIDTH_CLASS}>
                       <AccountIdCell value={row.accountId} />
                     </TableCell>

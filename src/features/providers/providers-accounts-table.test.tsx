@@ -69,6 +69,42 @@ describe("providers/providers-accounts-table", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("constrains the account column width and shows tooltip for truncated account names", async () => {
+    const user = userEvent.setup();
+    const longDisplayName = "very-long-account-name-for-tooltip-display@example.com";
+    const rows = [{ ...buildRow(1), displayName: longDisplayName }];
+
+    render(
+      <ProvidersAccountsTableSection
+        rows={rows}
+        loading={false}
+        error=""
+        page={1}
+        totalPages={1}
+        totalItems={rows.length}
+        onPrevPage={() => undefined}
+        onNextPage={() => undefined}
+        onRefresh={vi.fn(async () => undefined)}
+        onLogout={vi.fn(async () => undefined)}
+        onBatchDelete={vi.fn(async () => undefined)}
+        onSaveProxyUrl={vi.fn(async () => undefined)}
+        onRefreshQuota={vi.fn(async () => undefined)}
+        onToggleStatus={vi.fn(async () => undefined)}
+        onToggleAutoRefresh={vi.fn(async () => undefined)}
+      />
+    );
+
+    expect(screen.getByRole("columnheader", { name: m.providers_table_account() })).toHaveClass(
+      "w-[10rem]"
+    );
+
+    const accountNameCell = screen.getByText(longDisplayName);
+    expect(accountNameCell).toHaveClass("max-w-[10rem]", "truncate");
+
+    await user.hover(accountNameCell);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(longDisplayName);
+  });
+
   it("shows tooltip for truncated account id cells on hover", async () => {
     const user = userEvent.setup();
     const longAccountId = "codex-account-with-a-very-long-id-for-tooltip-display.json";

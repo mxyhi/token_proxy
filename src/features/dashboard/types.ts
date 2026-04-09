@@ -52,6 +52,7 @@ export type DashboardRequestItem = {
   stream: boolean;
   status: number;
   totalTokens: number | null;
+  outputTokens: number | null;
   cachedTokens: number | null;
   latencyMs: number;
   upstreamRequestId: string | null;

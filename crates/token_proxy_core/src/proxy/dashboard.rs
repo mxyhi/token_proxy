@@ -70,6 +70,7 @@ pub struct DashboardRequestItem {
     pub stream: bool,
     pub status: u16,
     pub total_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
     pub cached_tokens: Option<u64>,
     pub latency_ms: u64,
     pub upstream_request_id: Option<String>,
@@ -494,6 +495,7 @@ SELECT
     WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
     ELSE NULL
   END AS total_tokens,
+  output_tokens,
   cached_tokens,
   latency_ms,
   upstream_request_id
@@ -526,6 +528,7 @@ LIMIT ?3 OFFSET ?4;
         let stream: bool = row.try_get("stream").unwrap_or(false);
         let status: i64 = row.try_get("status").unwrap_or(0);
         let total_tokens: Option<i64> = row.try_get("total_tokens").ok()?;
+        let output_tokens: Option<i64> = row.try_get("output_tokens").ok()?;
         let cached_tokens: Option<i64> = row.try_get("cached_tokens").ok()?;
         let latency_ms: i64 = row.try_get("latency_ms").unwrap_or(0);
         let upstream_request_id: Option<String> = row.try_get("upstream_request_id").ok()?;
@@ -541,6 +544,7 @@ LIMIT ?3 OFFSET ?4;
             stream,
             status: i64_to_u16(status),
             total_tokens: total_tokens.map(i64_to_u64),
+            output_tokens: output_tokens.map(i64_to_u64),
             cached_tokens: cached_tokens.map(i64_to_u64),
             latency_ms: i64_to_u64(latency_ms),
             upstream_request_id,

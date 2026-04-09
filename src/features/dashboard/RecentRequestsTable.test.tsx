@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { RecentRequestsTable } from "@/features/dashboard/RecentRequestsTable";
 import { I18nProvider } from "@/lib/i18n";
+import { m } from "@/paraglide/messages.js";
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -26,6 +27,10 @@ describe("dashboard/RecentRequestsTable", () => {
     });
   });
 
+  afterEach(() => {
+    cleanup();
+  });
+
   it("shows account id in provider column when request is bound to an account", () => {
     render(
       <I18nProvider>
@@ -44,6 +49,7 @@ describe("dashboard/RecentRequestsTable", () => {
               stream: false,
               status: 200,
               totalTokens: 30,
+              outputTokens: 20,
               cachedTokens: 5,
               latencyMs: 30,
               upstreamRequestId: null,
@@ -56,5 +62,79 @@ describe("dashboard/RecentRequestsTable", () => {
     expect(screen.getByText(/alpha/)).toBeInTheDocument();
     expect(screen.getByText(/codex/)).toBeInTheDocument();
     expect(screen.getByText(/codex-a\.json/)).toBeInTheDocument();
+  });
+
+  it("keeps status, tokens, and latency columns left-aligned", () => {
+    render(
+      <I18nProvider>
+        <RecentRequestsTable
+          scrollKey="test"
+          items={[
+            {
+              id: 1,
+              tsMs: 100,
+              path: "/responses",
+              provider: "codex",
+              upstreamId: "alpha",
+              accountId: "codex-a.json",
+              model: "gpt-5",
+              mappedModel: null,
+              stream: false,
+              status: 200,
+              totalTokens: 30,
+              outputTokens: 20,
+              cachedTokens: 5,
+              latencyMs: 30,
+              upstreamRequestId: null,
+            },
+          ]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getAllByText("Status")[0]?.closest("div")).toHaveClass("text-left");
+    expect(screen.getAllByText("Tokens")[0]?.closest("div")).toHaveClass("text-left");
+    expect(
+      screen.getAllByText((content) => content.includes("(ms)"))[0]?.closest("div")
+    ).toHaveClass("text-left");
+
+    expect(screen.getAllByText("30")[0]).toHaveClass("text-left");
+
+    const table = screen.getByTestId("recent-requests-table");
+    const headerGrid = table.firstElementChild;
+    expect(headerGrid?.className).not.toContain("1fr");
+  });
+
+  it("shows output tokens directly in the tokens column", () => {
+    render(
+      <I18nProvider>
+        <RecentRequestsTable
+          scrollKey="test"
+          items={[
+            {
+              id: 1,
+              tsMs: 100,
+              path: "/responses",
+              provider: "codex",
+              upstreamId: "alpha",
+              accountId: "codex-a.json",
+              model: "gpt-5",
+              mappedModel: null,
+              stream: false,
+              status: 200,
+              totalTokens: 45518,
+              outputTokens: 1550,
+              cachedTokens: 43392,
+              latencyMs: 30,
+              upstreamRequestId: null,
+            },
+          ]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText("45,518")).toBeInTheDocument();
+    expect(screen.getByText("1,550 · 43,392")).toBeInTheDocument();
+    expect(screen.queryByText((content) => content.includes(m.dashboard_chart_output_tokens()))).toBeNull();
   });
 });

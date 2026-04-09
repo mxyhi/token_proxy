@@ -29,7 +29,7 @@ const ROW_HEIGHT_PX = 44;
 const OVERSCAN = 6;
 
 // 让 time/tokens 列更紧凑、model 列更宽（同时保持其它列的响应式伸缩）。
-const GRID_COLS = "grid-cols-[154px_1fr_1fr_1.6fr_67.5px_80px_81px]";
+const GRID_COLS = "grid-cols-[132px_152px_148px_104px_72px_128px_110px]";
 const CELL_PLACEHOLDER = "—";
 const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
@@ -158,23 +158,28 @@ function tokensColumn(): ColumnDef<DashboardRequestItem> {
     cell: ({ row }) => {
       const totalText =
         row.original.totalTokens === null ? CELL_PLACEHOLDER : formatInteger(row.original.totalTokens);
+      const outputText =
+        row.original.outputTokens === null ? CELL_PLACEHOLDER : formatInteger(row.original.outputTokens);
       const cachedText = row.original.cachedTokens ? formatInteger(row.original.cachedTokens) : null;
-      // 过滤占位符，避免 tooltip 出现 "— / 123" 这种不清晰文案
       const tooltipParts = [
-        row.original.totalTokens !== null ? totalText : null,
-        cachedText,
+        `${m.dashboard_chart_total_tokens()} ${totalText}`,
+        `${m.dashboard_chart_output_tokens()} ${outputText}`,
+        cachedText ? `${m.dashboard_chart_cached_tokens()} ${cachedText}` : null,
       ].filter((part): part is string => Boolean(part));
-      const tooltipText = tooltipParts.length > 0 ? tooltipParts.join(" / ") : CELL_PLACEHOLDER;
+      const tooltipText = tooltipParts.join(" · ");
+      const secondaryParts = [outputText, cachedText].filter((part): part is string => Boolean(part));
+      const secondaryText = secondaryParts.length > 0 ? secondaryParts.join(" · ") : CELL_PLACEHOLDER;
 
       return (
-        <CellTooltip content={tooltipText} disabled={totalText === CELL_PLACEHOLDER && !cachedText}>
-          <div className="flex min-w-0 flex-col items-end gap-0.5 font-medium text-foreground">
-            <span className="block w-full truncate text-right">{totalText}</span>
-            {cachedText ? (
-              <span className="block w-full truncate text-xs font-normal text-muted-foreground text-right">
-                {cachedText}
-              </span>
-            ) : null}
+        <CellTooltip
+          content={tooltipText}
+          disabled={totalText === CELL_PLACEHOLDER && outputText === CELL_PLACEHOLDER && !cachedText}
+        >
+          <div className="flex min-w-0 flex-col items-start gap-0.5 font-medium text-foreground">
+            <span className="block w-full truncate text-left">{totalText}</span>
+            <span className="block w-full truncate text-[11px] font-normal text-muted-foreground text-left">
+              {secondaryText}
+            </span>
           </div>
         </CellTooltip>
       );
@@ -190,7 +195,7 @@ function latencyColumn(): ColumnDef<DashboardRequestItem> {
       const latencyText = formatInteger(row.original.latencyMs);
       return (
         <CellTooltip content={latencyText}>
-          <span className="block w-full truncate text-xs text-muted-foreground text-right">
+          <span className="block w-full truncate text-xs text-muted-foreground text-left">
             {latencyText}
           </span>
         </CellTooltip>
@@ -211,10 +216,7 @@ function buildColumns(formatter: Intl.DateTimeFormat) {
   ];
 }
 
-function headerCellClass(columnId: string) {
-  if (columnId === "tokens" || columnId === "latency") {
-    return "text-right";
-  }
+function headerCellClass() {
   return "text-left";
 }
 
@@ -235,7 +237,7 @@ function rowCellClass(columnId: string) {
     return "px-3 py-2";
   }
   if (columnId === "tokens" || columnId === "latency") {
-    return "min-w-0 px-3 py-2 text-right";
+    return "min-w-0 px-3 py-2 text-left";
   }
   return "px-3 py-2";
 }
@@ -248,10 +250,10 @@ type RecentRequestsTableProps = {
 
 function RecentRequestsHeader({ table }: { table: Table<DashboardRequestItem> }) {
   return (
-    <div className={cn("grid bg-muted/50 text-xs text-muted-foreground", GRID_COLS)}>
+    <div className={cn("grid justify-start bg-muted/50 text-xs text-muted-foreground", GRID_COLS)}>
       {table.getHeaderGroups().map((group) =>
         group.headers.map((header) => (
-          <div key={header.id} className={cn("px-3 py-2 font-medium", headerCellClass(header.column.id))}>
+          <div key={header.id} className={cn("px-3 py-2 font-medium", headerCellClass())}>
             {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
           </div>
         )),
@@ -300,7 +302,7 @@ function RecentRequestsRows({
       <div
         key={row.id}
         className={cn(
-          "absolute inset-x-0 grid items-center border-t border-border/60 bg-background/70 text-sm hover:bg-accent/30",
+          "absolute inset-x-0 grid justify-start items-center border-t border-border/60 bg-background/70 text-sm hover:bg-accent/30",
           GRID_COLS,
           isInteractive && "cursor-pointer"
         )}
@@ -375,7 +377,11 @@ export function RecentRequestsTable({ items, scrollKey, onSelectItem }: RecentRe
 
   return (
     <TooltipProvider>
-      <div data-slot="recent-requests-table" className="overflow-hidden rounded-lg border border-border/60">
+      <div
+        data-slot="recent-requests-table"
+        data-testid="recent-requests-table"
+        className="overflow-hidden rounded-lg border border-border/60"
+      >
         <RecentRequestsHeader table={table} />
         <RecentRequestsBody
           rows={table.getRowModel().rows}

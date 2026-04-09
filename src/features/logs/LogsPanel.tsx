@@ -43,6 +43,9 @@ import { m } from "@/paraglide/messages.js";
 const DETAIL_PLACEHOLDER = "—";
 const REQUEST_DETAIL_CAPTURE_EVENT = "request-detail-capture-changed";
 const CAPTURE_COUNTDOWN_TICK_MS = 1_000;
+const DETAIL_FIELD_ROW_CLASS = "grid grid-cols-[5rem_minmax(0,1fr)] items-start gap-x-3 py-1";
+const DETAIL_FIELD_LABEL_CLASS = "text-xs text-muted-foreground";
+const DETAIL_FIELD_VALUE_CLASS = "min-w-0 text-sm text-foreground justify-self-start";
 const IDLE_CAPTURE_STATE: RequestDetailCaptureState = {
   enabled: false,
   expiresAtMs: null,
@@ -89,9 +92,9 @@ type DetailFieldProps = {
 
 function DetailField({ label, value }: DetailFieldProps) {
   return (
-    <div className="flex items-baseline justify-between gap-2 py-1">
-      <span className="text-xs text-muted-foreground shrink-0">{label}</span>
-      <span className="text-sm text-foreground truncate text-right">
+    <div className={DETAIL_FIELD_ROW_CLASS}>
+      <span className={DETAIL_FIELD_LABEL_CLASS}>{label}</span>
+      <span className={`${DETAIL_FIELD_VALUE_CLASS} truncate`}>
         {value?.trim() || DETAIL_PLACEHOLDER}
       </span>
     </div>
@@ -127,22 +130,24 @@ function BasicInfoSection({ detail, formatter }: BasicInfoSectionProps) {
         <DetailField label={m.dashboard_table_path()} value={detail.path} />
         <DetailField label={m.dashboard_table_provider()} value={providerText} />
         {/* Model 展示逻辑与表格一致：主模型在上，映射模型在下 */}
-        <div className="flex items-baseline justify-between gap-2 py-1">
-          <span className="text-xs text-muted-foreground shrink-0">{m.dashboard_table_model()}</span>
-          <div className="flex flex-col items-end min-w-0">
-            <span className="text-sm text-foreground truncate">
+        <div className={DETAIL_FIELD_ROW_CLASS}>
+          <span className={DETAIL_FIELD_LABEL_CLASS}>{m.dashboard_table_model()}</span>
+          <div className="flex min-w-0 flex-col items-start">
+            <span className="w-full truncate text-sm text-foreground">
               {detail.model?.trim() || DETAIL_PLACEHOLDER}
             </span>
             {hasMappedModel ? (
-              <span className="text-xs text-muted-foreground truncate">
+              <span className="w-full truncate text-xs text-muted-foreground">
                 {detail.mappedModel}
               </span>
             ) : null}
           </div>
         </div>
-        <div className="flex items-center justify-between gap-2 py-1">
-          <span className="text-xs text-muted-foreground shrink-0">{m.dashboard_table_status()}</span>
-          <Badge variant={statusToVariant(detail.status)}>{detail.status}</Badge>
+        <div className={DETAIL_FIELD_ROW_CLASS}>
+          <span className={DETAIL_FIELD_LABEL_CLASS}>{m.dashboard_table_status()}</span>
+          <Badge variant={statusToVariant(detail.status)} className="justify-self-start">
+            {detail.status}
+          </Badge>
         </div>
         <DetailField label={m.logs_detail_stream()} value={streamText} />
         <DetailField

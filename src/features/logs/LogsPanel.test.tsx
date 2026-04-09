@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LogsPanel } from "@/features/logs/LogsPanel";
 import type { DashboardSnapshotQuery } from "@/features/dashboard/types";
@@ -65,6 +65,10 @@ function renderPanel() {
 }
 
 describe("logs/LogsPanel", () => {
+  afterEach(() => {
+    cleanup();
+  });
+
   beforeEach(() => {
     readDashboardSnapshotMock.mockReset();
     readRequestDetailCaptureMock.mockReset();
@@ -271,6 +275,31 @@ describe("logs/LogsPanel", () => {
 
     const providerValues = await screen.findAllByText("alpha · codex · codex-a.json");
     expect(providerValues.length).toBeGreaterThan(0);
+  });
+
+  it("renders detail fields in a left-aligned label-value layout", async () => {
+    const user = userEvent.setup();
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "alpha · openai" })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: "alpha · openai" }));
+
+    await waitFor(() => {
+      expect(readRequestLogDetailMock).toHaveBeenCalledWith(1);
+    });
+
+    const statusLabel = await screen.findByText(m.dashboard_table_status());
+    expect(statusLabel.closest("div")).toHaveClass("grid", "grid-cols-[5rem_minmax(0,1fr)]");
+
+    const statusValue = screen.getByText("200");
+    expect(statusValue).toHaveClass("justify-self-start");
+
+    const latencyLabel = screen.getByText(m.dashboard_table_latency_ms());
+    expect(latencyLabel.closest("div")).toHaveClass("grid", "grid-cols-[5rem_minmax(0,1fr)]");
   });
 
 });

@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   createDashboardTimeFormatter,
+  formatCompact,
   formatDashboardProviderLabel,
   formatDashboardTimestamp,
   formatInteger,
@@ -157,10 +158,11 @@ function tokensColumn(): ColumnDef<DashboardRequestItem> {
     header: m.dashboard_table_tokens(),
     cell: ({ row }) => {
       const totalText =
-        row.original.totalTokens === null ? CELL_PLACEHOLDER : formatInteger(row.original.totalTokens);
+        row.original.totalTokens === null ? CELL_PLACEHOLDER : formatCompact(row.original.totalTokens);
       const outputText =
-        row.original.outputTokens === null ? CELL_PLACEHOLDER : formatInteger(row.original.outputTokens);
-      const cachedText = row.original.cachedTokens ? formatInteger(row.original.cachedTokens) : null;
+        row.original.outputTokens === null ? CELL_PLACEHOLDER : formatCompact(row.original.outputTokens);
+      const cachedText =
+        row.original.cachedTokens ? formatCompact(row.original.cachedTokens) : null;
       const tooltipParts = [
         `${m.dashboard_chart_total_tokens()} ${totalText}`,
         `${m.dashboard_chart_output_tokens()} ${outputText}`,
@@ -173,7 +175,11 @@ function tokensColumn(): ColumnDef<DashboardRequestItem> {
       return (
         <CellTooltip
           content={tooltipText}
-          disabled={totalText === CELL_PLACEHOLDER && outputText === CELL_PLACEHOLDER && !cachedText}
+          disabled={
+            totalText === CELL_PLACEHOLDER &&
+            outputText === CELL_PLACEHOLDER &&
+            !cachedText
+          }
         >
           <div className="flex min-w-0 flex-col items-start gap-0.5 font-medium text-foreground">
             <span className="block w-full truncate text-left">{totalText}</span>

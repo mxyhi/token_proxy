@@ -1,4 +1,5 @@
 import { cleanup, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { RecentRequestsTable } from "@/features/dashboard/RecentRequestsTable";
@@ -105,7 +106,9 @@ describe("dashboard/RecentRequestsTable", () => {
     expect(headerGrid?.className).not.toContain("1fr");
   });
 
-  it("shows output tokens directly in the tokens column", () => {
+  it("shows output tokens directly in the tokens column", async () => {
+    const user = userEvent.setup();
+
     render(
       <I18nProvider>
         <RecentRequestsTable
@@ -133,8 +136,12 @@ describe("dashboard/RecentRequestsTable", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByText("45,518")).toBeInTheDocument();
-    expect(screen.getByText("1,550 · 43,392")).toBeInTheDocument();
+    expect(screen.getByText("45.5K")).toBeInTheDocument();
+    expect(screen.getByText("1.6K · 43.4K")).toBeInTheDocument();
     expect(screen.queryByText((content) => content.includes(m.dashboard_chart_output_tokens()))).toBeNull();
+    await user.hover(screen.getByText("45.5K"));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("45.5K");
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("1.6K");
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("43.4K");
   });
 });

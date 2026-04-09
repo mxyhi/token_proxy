@@ -8,6 +8,23 @@ const DASHBOARD_TIME_MINUTE_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
   timeStyle: "short",
 };
 
+function normalizeProviderPart(value: string | null | undefined) {
+  return value?.trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() ?? "";
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function containsProviderPart(value: string | null | undefined, provider: string) {
+  const normalizedValue = normalizeProviderPart(value);
+  const normalizedProvider = normalizeProviderPart(provider);
+  if (!normalizedValue || !normalizedProvider) {
+    return false;
+  }
+  return new RegExp(`(^| )${escapeRegExp(normalizedProvider)}( |$)`).test(normalizedValue);
+}
+
 export function createDashboardTimeFormatter(locale: string) {
   return new Intl.DateTimeFormat(locale, DASHBOARD_TIME_FORMAT_OPTIONS);
 }
@@ -26,7 +43,15 @@ export function formatDashboardProviderLabel(
   provider: string,
   accountId: string | null | undefined,
 ) {
-  return [upstreamId, provider, accountId].filter(Boolean).join(" · ");
+  const trimmedProvider = provider.trim();
+  const shouldHideProvider =
+    trimmedProvider.length > 0 &&
+    (containsProviderPart(upstreamId, trimmedProvider) ||
+      containsProviderPart(accountId, trimmedProvider));
+
+  return [upstreamId.trim(), shouldHideProvider ? null : trimmedProvider, accountId?.trim()]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 // 使用逗号作为千位分隔符，便于阅读

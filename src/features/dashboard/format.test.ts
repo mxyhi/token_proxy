@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   createDashboardTimeFormatter,
   formatCompact,
+  formatDashboardProviderLabel,
   formatDashboardTimestamp,
   formatInteger,
 } from "@/features/dashboard/format";
@@ -37,5 +38,25 @@ describe("dashboard/format", () => {
     expect(formatCompact(1000000000)).toBe("1B");
     expect(formatCompact(2500000000)).toBe("2.5B");
   });
-});
 
+  it("keeps provider when it adds new information", () => {
+    expect(formatDashboardProviderLabel("primary", "openai", "team-account.json")).toBe(
+      "primary · openai · team-account.json"
+    );
+  });
+
+  it("omits provider when upstream or account already includes it", () => {
+    expect(formatDashboardProviderLabel("codex-default", "codex", "codex-joane.json")).toBe(
+      "codex-default · codex-joane.json"
+    );
+    expect(formatDashboardProviderLabel("fallback", "anthropic", "anthropic-main.json")).toBe(
+      "fallback · anthropic-main.json"
+    );
+  });
+
+  it("keeps provider when no account label is available", () => {
+    expect(formatDashboardProviderLabel("fallback", "anthropic", null)).toBe(
+      "fallback · anthropic"
+    );
+  });
+});

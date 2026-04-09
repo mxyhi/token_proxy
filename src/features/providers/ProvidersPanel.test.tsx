@@ -6,6 +6,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ProvidersPanel } from "@/features/providers/ProvidersPanel";
 import type { ProviderAccountPageItem } from "@/features/providers/types";
 import { m } from "@/paraglide/messages.js";
+import { setLocale } from "@/paraglide/runtime.js";
 
 const providerMocks = vi.hoisted(() => {
   let kiroAccountsLoading = false;
@@ -435,6 +436,7 @@ async function switchAddProviderToCodex(user: ReturnType<typeof userEvent.setup>
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  setLocale("en", { reload: false });
   providerMocks.kiroAccountsLoading = false;
   providerMocks.kiroQuotasLoading = false;
   providerMocks.codexAccountsLoading = false;
@@ -951,6 +953,8 @@ describe("providers/ProvidersPanel", () => {
   });
 
   it("renders unified disabled and cooling down account statuses", async () => {
+    setLocale("zh", { reload: false });
+
     providerMocks.listProviderAccountsPage.mockResolvedValueOnce({
       items: [
         {
@@ -996,7 +1000,9 @@ describe("providers/ProvidersPanel", () => {
 
     expect(await screen.findByText("disabled@example.com")).toBeInTheDocument();
     expect(screen.getByText("cooling@example.com")).toBeInTheDocument();
-    expect(screen.getByText(m.kiro_account_status_disabled())).toBeInTheDocument();
-    expect(screen.getByText(m.providers_account_status_cooling_down())).toBeInTheDocument();
+    expect(screen.getByText(m.kiro_account_status_disabled({}, { locale: "zh" }))).toBeInTheDocument();
+    expect(
+      screen.getByText(m.providers_account_status_cooling_down({}, { locale: "zh" })),
+    ).toBeInTheDocument();
   });
 });

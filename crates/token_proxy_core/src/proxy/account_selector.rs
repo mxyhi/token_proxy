@@ -37,16 +37,17 @@ impl AccountSelectorRuntime {
     pub(crate) fn order_accounts(&self, provider: &str, account_ids: &[String]) -> Vec<String> {
         let now = Instant::now();
         let mut ready = Vec::with_capacity(account_ids.len());
-        let mut cooled = Vec::new();
         let mut cooldowns = self
             .cooldowns
             .lock()
             .expect("account selector cooldown lock poisoned");
 
-        for (position, account_id) in account_ids.iter().enumerate() {
+        for account_id in account_ids {
             let key = AccountCooldownKey::new(provider, account_id);
             match cooldowns.get(&key).copied() {
-                Some(until) if until > now => cooled.push((position, account_id.clone(), until)),
+                // 账号级 cooldown 的新语义是“冷却窗口内完全不选”，
+                // 只有到期后才重新回到调度集合。
+                Some(until) if until > now => continue,
                 Some(_) => {
                     cooldowns.remove(&key);
                     ready.push(account_id.clone());
@@ -55,17 +56,6 @@ impl AccountSelectorRuntime {
             }
         }
 
-        if cooled.is_empty() {
-            return ready;
-        }
-
-        cooled.sort_by(|left, right| left.2.cmp(&right.2).then_with(|| left.0.cmp(&right.0)));
-        let cooled_ids = cooled.into_iter().map(|(_, account_id, _)| account_id);
-        if ready.is_empty() {
-            return cooled_ids.collect();
-        }
-
-        ready.extend(cooled_ids);
         ready
     }
 
@@ -183,3 +173,7 @@ fn instant_to_epoch_ms(until: Instant) -> Option<u128> {
         .ok()
         .map(|value| value.as_millis())
 }
+
+#[cfg(test)]
+#[path = "account_selector.test.rs"]
+mod tests;

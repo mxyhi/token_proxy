@@ -121,6 +121,38 @@ async fn stream_codex_to_responses_emits_error_event_for_invalid_json_event() {
 }
 
 #[tokio::test]
+async fn stream_codex_to_responses_emits_compatible_terminal_event_when_upstream_ends_early() {
+    let upstream = futures_util::stream::iter(vec![
+        Ok::<Bytes, std::io::Error>(Bytes::from(
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_early\",\"model\":\"gpt-5.4\"}}\n\n",
+        )),
+        Ok::<Bytes, std::io::Error>(Bytes::from(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial output\"}\n\n",
+        )),
+    ]);
+    let tracker = TokenRateTracker::new().register(None, None).await;
+    let context = test_log_context();
+    let log = Arc::new(LogWriter::new(None));
+
+    let chunks = stream_codex_to_responses(upstream, context, log, tracker)
+        .collect::<Vec<_>>()
+        .await;
+    let text = join_stream_chunks(&chunks);
+
+    assert!(
+        text.contains("\"type\":\"response.completed\""),
+        "chunks: {text}"
+    );
+    assert!(text.contains("\"status\":\"incomplete\""), "chunks: {text}");
+    assert!(
+        text.contains("\"incomplete_details\":{\"reason\":\"error\"}"),
+        "chunks: {text}"
+    );
+    assert!(text.contains("partial output"), "chunks: {text}");
+    assert!(text.contains("data: [DONE]"), "chunks: {text}");
+}
+
+#[tokio::test]
 async fn stream_codex_to_chat_emits_error_event_for_invalid_json_event() {
     let upstream = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
         "data: not-json\n\n",

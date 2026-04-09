@@ -1177,6 +1177,92 @@ data: [DONE]\n\n",
     assert_eq!(fallback_requests[0].path, RESPONSES_PATH);
 }
 
+async fn assert_responses_stream_retry_fallback_from_codex_created_then_failed_before_output() {
+    let primary = spawn_mock_raw_upstream(
+        StatusCode::OK,
+        Bytes::from(
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_created\",\"model\":\"gpt-5\"}}\n\n\
+data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_created\",\"model\":\"gpt-5\",\"status\":\"in_progress\"}}\n\n\
+data: {\"type\":\"response.failed\",\"error\":{\"message\":\"primary codex stream failed after created\"}}\n\n",
+        ),
+        "text/event-stream",
+    )
+    .await;
+    let fallback = spawn_mock_raw_upstream(
+        StatusCode::OK,
+        Bytes::from(
+            "data: {\"type\":\"response.output_text.delta\",\"delta\":\"from responses fallback\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fallback\",\"object\":\"response\",\"created_at\":123,\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"from responses fallback\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n\
+data: [DONE]\n\n",
+        ),
+        "text/event-stream",
+    )
+    .await;
+
+    let config = config_with_runtime_upstreams(&[
+        (
+            PROVIDER_CODEX,
+            10,
+            "codex-primary-stream-created-then-failed",
+            primary.base_url.as_str(),
+            FORMATS_RESPONSES,
+        ),
+        (
+            PROVIDER_RESPONSES,
+            5,
+            "responses-fallback-stream-created-then-failed",
+            fallback.base_url.as_str(),
+            FORMATS_RESPONSES,
+        ),
+    ]);
+    let data_dir = next_test_data_dir("responses_codex_stream_created_then_failed_fallback");
+    let state = build_test_state_handle(config, data_dir.clone()).await;
+
+    let response = proxy_request(
+        State(state),
+        Method::POST,
+        Uri::from_static(RESPONSES_PATH),
+        axum::http::HeaderMap::new(),
+        Body::from(
+            json!({
+                "model": "gpt-5",
+                "input": "hi",
+                "stream": true
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let response_status = response.status();
+    let response_headers = response.headers().clone();
+    let response_bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("proxy stream response bytes");
+    let response_text = String::from_utf8(response_bytes.to_vec()).expect("response text");
+
+    let primary_requests = primary.requests();
+    let fallback_requests = fallback.requests();
+
+    primary.abort();
+    fallback.abort();
+    let _ = std::fs::remove_dir_all(&data_dir);
+
+    assert_eq!(response_status, StatusCode::OK);
+    assert_eq!(
+        response_headers
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+        Some("text/event-stream")
+    );
+    assert!(response_text.contains("from responses fallback"));
+    assert!(!response_text.contains("primary codex stream failed after created"));
+    assert_eq!(primary_requests.len(), 1);
+    assert_eq!(primary_requests[0].path, CODEX_RESPONSES_PATH);
+    assert_eq!(fallback_requests.len(), 1);
+    assert_eq!(fallback_requests[0].path, RESPONSES_PATH);
+}
+
 async fn assert_responses_stream_does_not_fallback_after_first_codex_output() {
     let primary = spawn_mock_raw_upstream(
         StatusCode::OK,
@@ -1623,6 +1709,29 @@ async fn wait_for_request_log_count(pool: &sqlx::SqlitePool, expected_min: i64) 
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     panic!("request log count");
+}
+
+async fn wait_for_latest_request_log_status_and_error(
+    pool: &sqlx::SqlitePool,
+) -> (i64, Option<String>) {
+    for _ in 0..50 {
+        let row = sqlx::query(
+            "SELECT status, response_error FROM request_logs ORDER BY id DESC LIMIT 1;",
+        )
+        .fetch_optional(pool)
+        .await
+        .expect("query latest request log");
+        if let Some(row) = row {
+            return (
+                row.try_get::<i64, _>("status").unwrap_or_default(),
+                row.try_get::<Option<String>, _>("response_error")
+                    .ok()
+                    .flatten(),
+            );
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("latest request log status and error");
 }
 
 #[test]
@@ -2359,9 +2468,107 @@ fn responses_stream_request_falls_back_from_codex_when_first_sse_event_is_error(
 }
 
 #[test]
+fn responses_stream_request_falls_back_from_codex_when_created_then_failed_before_output() {
+    run_async(async {
+        assert_responses_stream_retry_fallback_from_codex_created_then_failed_before_output().await;
+    });
+}
+
+#[test]
 fn responses_stream_request_does_not_fallback_after_first_codex_output() {
     run_async(async {
         assert_responses_stream_does_not_fallback_after_first_codex_output().await;
+    });
+}
+
+#[test]
+fn responses_stream_request_emits_compatible_terminal_event_when_codex_upstream_ends_early() {
+    run_async(async {
+        let primary = spawn_mock_raw_upstream(
+            StatusCode::OK,
+            Bytes::from(
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_early\",\"created_at\":123,\"model\":\"gpt-5-codex\"}}\n\n\
+data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial output\"}\n\n",
+            ),
+            "text/event-stream",
+        )
+        .await;
+
+        let config = config_with_runtime_upstreams(&[(
+            PROVIDER_CODEX,
+            10,
+            "codex-primary-stream-ends-early",
+            primary.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        let data_dir = next_test_data_dir("responses_codex_stream_ends_early");
+        let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;
+
+        let response = proxy_request(
+            State(state),
+            Method::POST,
+            Uri::from_static(RESPONSES_PATH),
+            axum::http::HeaderMap::new(),
+            Body::from(
+                json!({
+                    "model": "gpt-5",
+                    "input": "hi",
+                    "stream": true
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+
+        let response_status = response.status();
+        let response_headers = response.headers().clone();
+        let response_bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("proxy stream response bytes");
+        let response_text = String::from_utf8(response_bytes.to_vec()).expect("response text");
+        let logged_count = wait_for_request_log_count(&pool, 1).await;
+        let (logged_status, logged_error) =
+            wait_for_latest_request_log_status_and_error(&pool).await;
+        let primary_requests = primary.requests();
+
+        primary.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(response_status, StatusCode::OK);
+        assert_eq!(
+            response_headers
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+        assert!(
+            response_text.contains("partial output"),
+            "chunks: {response_text}"
+        );
+        assert!(
+            response_text.contains("\"type\":\"response.completed\""),
+            "chunks: {response_text}"
+        );
+        assert!(
+            response_text.contains("\"status\":\"incomplete\""),
+            "chunks: {response_text}"
+        );
+        assert!(
+            response_text.contains("\"incomplete_details\":{\"reason\":\"error\"}"),
+            "chunks: {response_text}"
+        );
+        assert!(
+            response_text.contains("data: [DONE]"),
+            "chunks: {response_text}"
+        );
+        assert_eq!(logged_count, 1);
+        assert_eq!(logged_status, 200);
+        assert_eq!(
+            logged_error.as_deref(),
+            Some("Codex upstream stream disconnected before response.completed")
+        );
+        assert_eq!(primary_requests.len(), 1);
+        assert_eq!(primary_requests[0].path, CODEX_RESPONSES_PATH);
     });
 }
 

@@ -450,28 +450,58 @@ async fn prepare_upstream_stream(
 > {
     let mut upstream =
         upstream_stream::with_idle_timeout(upstream_res.bytes_stream(), upstream_no_data_timeout);
-    let first = upstream.next().await;
-    match first {
-        Some(Ok(chunk)) => {
-            if let Some(response) = codex_prelude_retry_response(
-                status,
-                headers,
-                response_transform,
-                &chunk,
-                context,
-                log,
-            ) {
-                return Err(response);
+    let mut buffered_chunks: Vec<Bytes> = Vec::new();
+    let mut codex_prelude = codex_prelude_inspector(response_transform);
+    loop {
+        match upstream.next().await {
+            Some(Ok(chunk)) => {
+                buffered_chunks.push(chunk);
+                let latest = buffered_chunks.last().expect("buffered chunk just pushed");
+                if let Some(inspector) = codex_prelude.as_mut() {
+                    match inspector.inspect_chunk(latest) {
+                        codex_compat::CodexPreludeDecision::Pending => continue,
+                        codex_compat::CodexPreludeDecision::RetryableError(message) => {
+                            return Err(codex_prelude_retry_response(
+                                status,
+                                headers,
+                                response_transform,
+                                message,
+                                context,
+                                log,
+                            ));
+                        }
+                        codex_compat::CodexPreludeDecision::ReadyForPassThrough => {}
+                    }
+                }
+                return Ok(chain_buffered_chunks(buffered_chunks, upstream, context));
             }
-            Ok(chain_first_chunk(chunk, upstream, context))
+            Some(Err(err)) => {
+                return Err(stream_error_response(
+                    err,
+                    context,
+                    log,
+                    upstream_no_data_timeout,
+                ));
+            }
+            None => {
+                if buffered_chunks.is_empty() {
+                    return Err(http::build_response(status, headers.clone(), Body::empty()));
+                }
+                return Ok(chain_buffered_chunks(buffered_chunks, upstream, context));
+            }
         }
-        Some(Err(err)) => Err(stream_error_response(
-            err,
-            context,
-            log,
-            upstream_no_data_timeout,
-        )),
-        None => Err(http::build_response(status, headers.clone(), Body::empty())),
+    }
+}
+
+fn codex_prelude_inspector(
+    response_transform: FormatTransform,
+) -> Option<codex_compat::CodexPreludeInspector> {
+    match response_transform {
+        // 只在首个业务输出前持续观察 Codex prelude，避免已经向客户端吐出业务内容后再拼接其他 upstream。
+        FormatTransform::CodexToChat | FormatTransform::CodexToResponses => {
+            Some(codex_compat::CodexPreludeInspector::new())
+        }
+        _ => None,
     }
 }
 
@@ -479,17 +509,10 @@ fn codex_prelude_retry_response(
     status: StatusCode,
     headers: &HeaderMap,
     response_transform: FormatTransform,
-    first_chunk: &Bytes,
+    message: String,
     context: &mut LogContext,
     log: &Arc<LogWriter>,
-) -> Option<Response> {
-    let message = match response_transform {
-        // 只在首个完整 SSE 事件就是错误时触发 fallback，避免已经向客户端吐出业务内容后再拼接其他 upstream。
-        FormatTransform::CodexToChat | FormatTransform::CodexToResponses => {
-            codex_compat::first_codex_event_error_message(first_chunk)
-        }
-        _ => None,
-    }?;
+) -> Response {
     if context.ttfb_ms.is_none() {
         context.ttfb_ms = Some(context.start.elapsed().as_millis());
     }
@@ -505,7 +528,7 @@ fn codex_prelude_retry_response(
     let error_chunk = match response_transform {
         FormatTransform::CodexToChat => codex_compat::stream_chat_error_sse(&message),
         FormatTransform::CodexToResponses => codex_compat::stream_responses_error_sse(&message),
-        _ => return None,
+        _ => unreachable!("codex prelude retry response only applies to codex transforms"),
     };
     let body = Body::from(Bytes::from(
         [error_chunk.as_ref(), b"data: [DONE]\n\n"].concat(),
@@ -515,21 +538,22 @@ fn codex_prelude_retry_response(
         message,
         should_cooldown: true,
     });
-    Some(response)
+    response
 }
 
-fn chain_first_chunk(
-    chunk: Bytes,
+fn chain_buffered_chunks(
+    chunks: Vec<Bytes>,
     upstream: UpstreamBytesStream,
     context: &mut LogContext,
 ) -> UpstreamBytesStream {
     if context.ttfb_ms.is_none() {
         context.ttfb_ms = Some(context.start.elapsed().as_millis());
     }
-    futures_util::stream::iter(vec![Ok::<
-        Bytes,
-        upstream_stream::UpstreamStreamError<reqwest::Error>,
-    >(chunk)])
+    futures_util::stream::iter(
+        chunks
+            .into_iter()
+            .map(Ok::<Bytes, upstream_stream::UpstreamStreamError<reqwest::Error>>),
+    )
     .chain(upstream)
     .boxed()
 }

@@ -14,21 +14,50 @@ use super::extract_tool_name_map_from_request_body;
 
 const CODEX_STREAM_INVALID_EVENT_LIMIT: usize = 1024;
 
-pub(crate) fn first_codex_event_error_message(chunk: &[u8]) -> Option<String> {
-    let mut parser = SseEventParser::new();
-    let mut events = Vec::new();
-    parser.push_chunk(chunk, |data| events.push(data));
-    let data = events.into_iter().next()?;
-    if data == "[DONE]" {
-        return None;
+pub(crate) enum CodexPreludeDecision {
+    Pending,
+    RetryableError(String),
+    ReadyForPassThrough,
+}
+
+pub(crate) struct CodexPreludeInspector {
+    parser: SseEventParser,
+}
+
+impl CodexPreludeInspector {
+    pub(crate) fn new() -> Self {
+        Self {
+            parser: SseEventParser::new(),
+        }
     }
-    let Ok(value) = serde_json::from_str::<Value>(&data) else {
-        return Some(invalid_event_message(&data));
+
+    pub(crate) fn inspect_chunk(&mut self, chunk: &[u8]) -> CodexPreludeDecision {
+        let mut events = Vec::new();
+        self.parser.push_chunk(chunk, |data| events.push(data));
+        for data in events {
+            let decision = inspect_codex_prelude_event(&data);
+            if !matches!(decision, CodexPreludeDecision::Pending) {
+                return decision;
+            }
+        }
+        CodexPreludeDecision::Pending
+    }
+}
+
+fn inspect_codex_prelude_event(data: &str) -> CodexPreludeDecision {
+    if data == "[DONE]" {
+        return CodexPreludeDecision::ReadyForPassThrough;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(data) else {
+        return CodexPreludeDecision::RetryableError(invalid_event_message(data));
     };
     match value.get("type").and_then(Value::as_str) {
-        Some("response.failed" | "error") => Some(stream_error_message(&value)),
-        Some(_) => None,
-        None => Some(malformed_event_message(&value)),
+        Some("response.created" | "response.in_progress") => CodexPreludeDecision::Pending,
+        Some("response.failed" | "error") => {
+            CodexPreludeDecision::RetryableError(stream_error_message(&value))
+        }
+        Some(_) => CodexPreludeDecision::ReadyForPassThrough,
+        None => CodexPreludeDecision::RetryableError(malformed_event_message(&value)),
     }
 }
 
@@ -339,6 +368,11 @@ struct CodexToResponsesState<S> {
     logged: bool,
     upstream_ended: bool,
     tool_name_map: HashMap<String, String>,
+    response_id: String,
+    created: i64,
+    model: String,
+    saw_terminal_event: bool,
+    response_error_override: Option<String>,
 }
 
 impl<S> CodexToResponsesState<S> {
@@ -369,8 +403,13 @@ where
         log: Arc<LogWriter>,
         token_tracker: RequestTokenTracker,
     ) -> Self {
+        let now_seconds = now_unix_seconds();
         let tool_name_map =
             extract_tool_name_map_from_request_body(context.request_body.as_deref());
+        let model = context
+            .model
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
         context.request_body = None;
         Self {
             upstream,
@@ -384,6 +423,11 @@ where
             logged: false,
             upstream_ended: false,
             tool_name_map,
+            response_id: format!("resp_proxy_{now_seconds}"),
+            created: now_seconds,
+            model,
+            saw_terminal_event: false,
+            response_error_override: None,
         }
     }
 
@@ -428,6 +472,7 @@ where
                         self.token_tracker.add_output_text(&text).await;
                     }
                     if !self.sent_done {
+                        self.push_compatible_incomplete_terminal();
                         self.out.push_back(Bytes::from("data: [DONE]\n\n"));
                         self.sent_done = true;
                     }
@@ -445,6 +490,7 @@ where
             return;
         }
         if data == "[DONE]" {
+            self.push_compatible_incomplete_terminal();
             self.out.push_back(Bytes::from("data: [DONE]\n\n"));
             self.sent_done = true;
             return;
@@ -460,9 +506,15 @@ where
             self.fail_stream(stream_error_message(&value));
             return;
         }
-        if value.get("type").and_then(Value::as_str).is_none() {
+        let Some(event_type) = value.get("type").and_then(Value::as_str) else {
             self.fail_stream(malformed_event_message(&value));
             return;
+        };
+        if event_type == "response.created" {
+            self.update_from_created(&value);
+        }
+        if matches!(event_type, "response.completed" | "response.incomplete") {
+            self.saw_terminal_event = true;
         }
         restore_tool_names_in_event(&mut value, &self.tool_name_map);
         if let Some(delta) = extract_output_text_delta(&value) {
@@ -473,7 +525,41 @@ where
     }
 
     fn log_usage_once(&mut self) {
-        self.write_log_once(None);
+        self.write_log_once(self.response_error_override.clone());
+    }
+
+    fn update_from_created(&mut self, value: &Value) {
+        let Some(response) = value.get("response").and_then(Value::as_object) else {
+            return;
+        };
+        if let Some(id) = response.get("id").and_then(Value::as_str) {
+            if !id.is_empty() {
+                self.response_id = id.to_string();
+            }
+        }
+        if let Some(created) = response.get("created_at").and_then(Value::as_i64) {
+            self.created = created;
+        }
+        if let Some(model) = response.get("model").and_then(Value::as_str) {
+            if !model.is_empty() {
+                self.model = model.to_string();
+            }
+        }
+    }
+
+    fn push_compatible_incomplete_terminal(&mut self) {
+        if self.saw_terminal_event {
+            return;
+        }
+        self.saw_terminal_event = true;
+        self.response_error_override =
+            Some("Codex upstream stream disconnected before response.completed".to_string());
+        self.out
+            .push_back(stream_responses_compatible_incomplete_sse(
+                &self.response_id,
+                self.created,
+                &self.model,
+            ));
     }
 
     fn fail_stream(&mut self, message: String) {
@@ -560,6 +646,25 @@ pub(crate) fn stream_responses_error_sse(message: &str) -> Bytes {
             "error": {
                 "message": message,
                 "type": "proxy_error"
+            }
+        })
+    ))
+}
+
+fn stream_responses_compatible_incomplete_sse(id: &str, created: i64, model: &str) -> Bytes {
+    Bytes::from(format!(
+        "data: {}\n\n",
+        json!({
+            "type": "response.completed",
+            "response": {
+                "id": id,
+                "object": "response",
+                "created_at": created,
+                "model": model,
+                "status": "incomplete",
+                "incomplete_details": {
+                    "reason": "error"
+                }
             }
         })
     ))

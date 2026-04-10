@@ -2054,6 +2054,100 @@ fn responses_request_cooldowns_same_codex_account_after_401() {
 }
 
 #[test]
+fn responses_request_falls_back_to_responses_provider_when_all_codex_accounts_are_cooling() {
+    run_async(async {
+        let codex =
+            spawn_auth_switch_mock_upstream_with_primary_status(StatusCode::UNAUTHORIZED).await;
+        let fallback = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "resp_fallback_after_codex_cooling",
+                "object": "response",
+                "created_at": 123,
+                "model": "gpt-5.4",
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_1",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            { "type": "output_text", "text": "from responses fallback after cooling" }
+                        ]
+                    }
+                ],
+                "usage": { "input_tokens": 1, "output_tokens": 2, "total_tokens": 3 }
+            }),
+        )
+        .await;
+
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CODEX,
+                10,
+                "codex-primary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                0,
+                "responses-fallback",
+                fallback.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        let provider_upstreams = config
+            .upstreams
+            .get_mut(PROVIDER_CODEX)
+            .expect("codex upstreams");
+        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
+
+        let data_dir = next_test_data_dir("responses_codex_cooling_cross_provider_fallback");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("format expires_at");
+        seed_codex_account(
+            &state,
+            "codex-a.json",
+            "codex-access-a",
+            "chatgpt-a",
+            &expires_at,
+        )
+        .await;
+
+        let (first_status, first_json) = send_responses_request(state.clone()).await;
+        let (second_status, second_json) = send_responses_request(state).await;
+        let codex_requests = codex.requests();
+        let fallback_requests = fallback.requests();
+
+        codex.abort();
+        fallback.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(first_status, StatusCode::OK);
+        assert_eq!(second_status, StatusCode::OK);
+        assert_eq!(
+            first_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from responses fallback after cooling")
+        );
+        assert_eq!(
+            second_json["output"][0]["content"][0]["text"].as_str(),
+            Some("from responses fallback after cooling")
+        );
+        assert_eq!(
+            codex_requests.len(),
+            1,
+            "第二次请求应因账号 cooling 而跳过 codex，不再命中主 upstream"
+        );
+        assert_eq!(fallback_requests.len(), 2);
+    });
+}
+
+#[test]
 fn responses_request_does_not_cooldown_same_codex_account_after_400() {
     run_async(async {
         let codex =

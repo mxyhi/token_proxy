@@ -997,12 +997,12 @@ async fn resolve_codex_upstream(
     upstream: &UpstreamRuntime,
     upstream_url: &str,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
-    let ordered_account_ids = if upstream
+    let has_pinned_account = upstream
         .codex_account_id
         .as_deref()
         .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-    {
+        .is_some_and(|value| !value.is_empty());
+    let ordered_account_ids = if has_pinned_account {
         None
     } else {
         Some(ordered_runtime_account_ids(state, "codex").await)
@@ -1014,9 +1014,7 @@ async fn resolve_codex_upstream(
             ordered_account_ids.as_deref(),
         )
         .await
-        .map_err(|err| {
-            AttemptOutcome::Fatal(http::error_response(StatusCode::UNAUTHORIZED, err))
-        })?;
+        .map_err(|err| codex_account_resolution_outcome(has_pinned_account, err))?;
     let global_proxy_url = state.codex_accounts.app_proxy_url().await;
     let proxy_url = record
         .proxy_url
@@ -1053,6 +1051,19 @@ async fn resolve_codex_upstream(
         proxy_url,
         selected_account_id: Some(selected_account_id),
     })
+}
+
+fn codex_account_resolution_outcome(has_pinned_account: bool, err: String) -> AttemptOutcome {
+    let response = http::error_response(StatusCode::UNAUTHORIZED, err.clone());
+    if has_pinned_account {
+        return AttemptOutcome::Fatal(response);
+    }
+    AttemptOutcome::Retryable {
+        message: err,
+        response: Some(response),
+        is_timeout: false,
+        should_cooldown: false,
+    }
 }
 
 pub(super) async fn ordered_runtime_account_ids(state: &ProxyState, provider: &str) -> Vec<String> {

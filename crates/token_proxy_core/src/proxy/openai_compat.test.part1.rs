@@ -852,3 +852,53 @@ fn transform_request_body_rejects_non_json() {
     });
     assert!(err.contains("JSON"));
 }
+
+#[test]
+fn responses_compact_to_codex_strips_reasoning_include() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let input = bytes_from_json(json!({
+        "model": "gpt-5.4",
+        "input": "compact me",
+        "include": ["reasoning.encrypted_content"]
+    }));
+
+    let output = run_async(async {
+        transform_request_body(
+            FormatTransform::ResponsesCompactToCodex,
+            &input,
+            &http_clients,
+            Some("gpt-5-codex"),
+        )
+        .await
+        .expect("transform")
+    });
+    let value = json_from_bytes(output);
+
+    assert!(value.get("include").is_none());
+    assert!(value.get("store").is_none());
+    assert!(value.get("stream").is_none());
+    assert_eq!(value["model"], json!("gpt-5.4"));
+}
+
+#[test]
+fn responses_to_codex_keeps_reasoning_include() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let input = bytes_from_json(json!({
+        "model": "gpt-5.4",
+        "input": "keep include"
+    }));
+
+    let output = run_async(async {
+        transform_request_body(
+            FormatTransform::ResponsesToCodex,
+            &input,
+            &http_clients,
+            Some("gpt-5-codex"),
+        )
+        .await
+        .expect("transform")
+    });
+    let value = json_from_bytes(output);
+
+    assert_eq!(value["include"], json!(["reasoning.encrypted_content"]));
+}

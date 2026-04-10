@@ -76,8 +76,23 @@ pub(crate) fn responses_request_to_codex(
     body: &Bytes,
     model_hint: Option<&str>,
 ) -> Result<Bytes, String> {
+    transform_responses_request_to_codex(body, model_hint, false)
+}
+
+pub(crate) fn responses_compact_request_to_codex(
+    body: &Bytes,
+    model_hint: Option<&str>,
+) -> Result<Bytes, String> {
+    transform_responses_request_to_codex(body, model_hint, true)
+}
+
+fn transform_responses_request_to_codex(
+    body: &Bytes,
+    model_hint: Option<&str>,
+    strip_reasoning_include: bool,
+) -> Result<Bytes, String> {
     let mut object = parse_object(body)?;
-    normalize_responses_payload(&mut object, model_hint);
+    normalize_responses_payload(&mut object, model_hint, strip_reasoning_include);
     let tool_map = build_tool_name_map(&object);
 
     if let Some(tools) = object.get("tools").cloned() {
@@ -404,22 +419,32 @@ fn apply_text_format(
     }
 }
 
-fn normalize_responses_payload(object: &mut Map<String, Value>, model_hint: Option<&str>) {
+fn normalize_responses_payload(
+    object: &mut Map<String, Value>,
+    model_hint: Option<&str>,
+    strip_reasoning_include: bool,
+) {
     let model = object
         .get("model")
         .and_then(Value::as_str)
         .or(model_hint)
         .unwrap_or_default();
     object.insert("model".to_string(), Value::String(model.to_string()));
-    object.insert("stream".to_string(), Value::Bool(true));
-    object.insert("store".to_string(), Value::Bool(false));
     if !object.contains_key("parallel_tool_calls") {
         object.insert("parallel_tool_calls".to_string(), Value::Bool(true));
     }
-    object.insert(
-        "include".to_string(),
-        json!(["reasoning.encrypted_content"]),
-    );
+    if strip_reasoning_include {
+        object.remove("include");
+        object.remove("store");
+        object.remove("stream");
+    } else {
+        object.insert("stream".to_string(), Value::Bool(true));
+        object.insert("store".to_string(), Value::Bool(false));
+        object.insert(
+            "include".to_string(),
+            json!(["reasoning.encrypted_content"]),
+        );
+    }
     for key in [
         "max_output_tokens",
         "max_completion_tokens",

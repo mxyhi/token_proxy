@@ -36,6 +36,7 @@ const PROVIDER_CODEX: &str = "codex";
 const PROVIDER_PROXY: &str = "proxy";
 const LOCAL_UPSTREAM_ID: &str = "local";
 const CODEX_RESPONSES_PATH: &str = "/responses";
+const CODEX_RESPONSES_COMPACT_PATH: &str = "/responses/compact";
 
 type ProxyStateHandle = Arc<RwLock<Arc<ProxyState>>>;
 
@@ -234,6 +235,16 @@ fn resolve_openai_native_plan(
     None
 }
 
+fn resolve_responses_compact_plan(
+    config: &ProxyConfig,
+    path: &str,
+) -> Option<Result<DispatchPlan, String>> {
+    if !openai::is_openai_responses_compact_path(path) {
+        return None;
+    }
+    Some(resolve_responses_native_plan(config))
+}
+
 fn resolve_anthropic_plan(
     config: &ProxyConfig,
     path: &str,
@@ -400,6 +411,9 @@ fn resolve_dispatch_plan_with_request(
     if let Some(plan) = resolve_models_plan(config, path, headers, query) {
         return plan;
     }
+    if let Some(plan) = resolve_responses_compact_plan(config, path) {
+        return plan;
+    }
     if let Some(plan) = resolve_openai_native_plan(config, path) {
         return plan;
     }
@@ -419,9 +433,36 @@ fn resolve_dispatch_plan_with_request(
 
     match format {
         InboundApiFormat::OpenaiChat => resolve_chat_plan(config),
-        InboundApiFormat::OpenaiResponses => resolve_responses_plan(config),
+        InboundApiFormat::OpenaiResponses => {
+            if openai::is_openai_responses_compact_path(path) {
+                resolve_responses_native_plan(config)
+            } else {
+                resolve_responses_plan(config)
+            }
+        }
         _ => resolve_formatless_plan(config),
     }
+}
+
+fn resolve_responses_native_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
+    let inbound_format = Some(InboundApiFormat::OpenaiResponses);
+    if let Some(selected) = choose_provider_by_priority(
+        config,
+        inbound_format,
+        &[PROVIDER_RESPONSES, PROVIDER_CODEX],
+    ) {
+        return Ok(match selected {
+            PROVIDER_RESPONSES => base_plan(PROVIDER_RESPONSES),
+            PROVIDER_CODEX => DispatchPlan {
+                provider: PROVIDER_CODEX,
+                outbound_path: Some(CODEX_RESPONSES_PATH),
+                request_transform: FormatTransform::ResponsesCompactToCodex,
+                response_transform: FormatTransform::CodexToResponses,
+            },
+            _ => base_plan(PROVIDER_RESPONSES),
+        });
+    }
+    Err(ERROR_NO_UPSTREAM.to_string())
 }
 
 fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
@@ -526,6 +567,11 @@ fn resolve_dispatch_plan(config: &ProxyConfig, path: &str) -> Result<DispatchPla
 
 fn resolve_outbound_path(path: &str, plan: &DispatchPlan, meta: &RequestMeta) -> String {
     match (plan.outbound_path, plan.provider) {
+        (Some(CODEX_RESPONSES_PATH), PROVIDER_CODEX)
+            if openai::is_openai_responses_compact_path(path) =>
+        {
+            CODEX_RESPONSES_COMPACT_PATH.to_string()
+        }
         (Some(outbound_path), _) => outbound_path.to_string(),
         (None, _) if is_openai_compatible_models_path(path) => {
             path.replacen("/v1beta/openai/models", "/v1/models", 1)
@@ -597,7 +643,11 @@ fn build_retry_fallback_plan(path: &str, provider: &'static str) -> Option<Dispa
             PROVIDER_CODEX => Some(DispatchPlan {
                 provider: PROVIDER_CODEX,
                 outbound_path: Some(CODEX_RESPONSES_PATH),
-                request_transform: FormatTransform::ResponsesToCodex,
+                request_transform: if openai::is_openai_responses_compact_path(path) {
+                    FormatTransform::ResponsesCompactToCodex
+                } else {
+                    FormatTransform::ResponsesToCodex
+                },
                 response_transform: FormatTransform::CodexToResponses,
             }),
             _ => None,

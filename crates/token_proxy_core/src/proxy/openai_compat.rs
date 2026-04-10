@@ -15,6 +15,7 @@ pub(crate) use usage::map_usage_chat_to_responses;
 
 pub(crate) const CHAT_PATH: &str = "/v1/chat/completions";
 pub(crate) const RESPONSES_PATH: &str = "/v1/responses";
+pub(crate) const RESPONSES_COMPACT_PATH: &str = "/v1/responses/compact";
 
 pub(crate) const PROVIDER_CHAT: &str = "openai";
 pub(crate) const PROVIDER_RESPONSES: &str = "openai-response";
@@ -44,17 +45,23 @@ pub(crate) enum FormatTransform {
     KiroToAnthropic,
     ChatToCodex,
     ResponsesToCodex,
+    ResponsesCompactToCodex,
     CodexToChat,
     CodexToResponses,
     CodexToAnthropic,
 }
 
 pub(crate) fn inbound_format(path: &str) -> Option<ApiFormat> {
+    let path = strip_query(path);
     match path {
         CHAT_PATH => Some(ApiFormat::ChatCompletions),
-        RESPONSES_PATH => Some(ApiFormat::Responses),
+        RESPONSES_PATH | RESPONSES_COMPACT_PATH => Some(ApiFormat::Responses),
         _ => None,
     }
+}
+
+fn strip_query(path: &str) -> &str {
+    path.split_once('?').map(|(path, _)| path).unwrap_or(path)
 }
 
 pub(crate) async fn transform_request_body(
@@ -99,6 +106,9 @@ pub(crate) async fn transform_request_body(
         FormatTransform::ChatToCodex => codex_compat::chat_request_to_codex(body, model_hint),
         FormatTransform::ResponsesToCodex => {
             codex_compat::responses_request_to_codex(body, model_hint)
+        }
+        FormatTransform::ResponsesCompactToCodex => {
+            codex_compat::responses_compact_request_to_codex(body, model_hint)
         }
         FormatTransform::CodexToChat
         | FormatTransform::CodexToResponses
@@ -148,7 +158,9 @@ pub(crate) fn transform_response_body(
         FormatTransform::CodexToChat | FormatTransform::CodexToResponses => {
             Err("Codex response conversion is handled upstream.".to_string())
         }
-        FormatTransform::ChatToCodex | FormatTransform::ResponsesToCodex => {
+        FormatTransform::ChatToCodex
+        | FormatTransform::ResponsesToCodex
+        | FormatTransform::ResponsesCompactToCodex => {
             Err("Codex response conversion is handled upstream.".to_string())
         }
     }

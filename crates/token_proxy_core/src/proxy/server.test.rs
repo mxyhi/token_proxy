@@ -40,6 +40,7 @@ const FORMATS_MESSAGES: &[InboundApiFormat] = &[InboundApiFormat::AnthropicMessa
 const FORMATS_GEMINI: &[InboundApiFormat] = &[InboundApiFormat::Gemini];
 
 const FORMATS_KIRO_NATIVE: &[InboundApiFormat] = &[InboundApiFormat::AnthropicMessages];
+const RESPONSES_COMPACT_PATH: &str = "/v1/responses/compact";
 
 fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
     Runtime::new()
@@ -3385,6 +3386,67 @@ fn responses_fallback_requires_format_conversion_enabled() {
 }
 
 #[test]
+fn responses_compact_requires_responses_family_provider() {
+    let config = config_with_providers(&[(PROVIDER_CHAT, FORMATS_ALL)]);
+    let error = resolve_dispatch_plan(&config, RESPONSES_COMPACT_PATH)
+        .err()
+        .expect("should reject");
+    assert_eq!(error, "No available upstream configured.");
+}
+
+#[test]
+fn responses_compact_prefers_responses_provider_and_preserves_path() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_CHAT, 10, "chat", FORMATS_ALL),
+        (PROVIDER_RESPONSES, 0, "responses", FORMATS_RESPONSES),
+    ]);
+    let plan = resolve_dispatch_plan(&config, RESPONSES_COMPACT_PATH).expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_RESPONSES);
+    assert_eq!(plan.outbound_path, None);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+
+    let outbound_path = resolve_outbound_path(
+        RESPONSES_COMPACT_PATH,
+        &plan,
+        &RequestMeta {
+            stream: false,
+            original_model: Some("gpt-5.4".to_string()),
+            mapped_model: None,
+            reasoning_effort: None,
+            estimated_input_tokens: None,
+        },
+    );
+    assert_eq!(outbound_path, RESPONSES_COMPACT_PATH);
+}
+
+#[test]
+fn responses_compact_can_route_to_codex_and_preserve_compact_suffix() {
+    let config = config_with_providers(&[(PROVIDER_CODEX, FORMATS_RESPONSES)]);
+    let plan = resolve_dispatch_plan(&config, RESPONSES_COMPACT_PATH).expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CODEX);
+    assert_eq!(plan.outbound_path, Some(CODEX_RESPONSES_PATH));
+    assert_eq!(
+        plan.request_transform,
+        FormatTransform::ResponsesCompactToCodex
+    );
+    assert_eq!(plan.response_transform, FormatTransform::CodexToResponses);
+
+    let outbound_path = resolve_outbound_path(
+        RESPONSES_COMPACT_PATH,
+        &plan,
+        &RequestMeta {
+            stream: false,
+            original_model: Some("gpt-5.4".to_string()),
+            mapped_model: None,
+            reasoning_effort: None,
+            estimated_input_tokens: None,
+        },
+    );
+    assert_eq!(outbound_path, "/responses/compact");
+}
+
+#[test]
 fn responses_does_not_route_to_kiro() {
     let config = config_with_providers(&[(PROVIDER_KIRO, FORMATS_ALL)]);
     let error = resolve_dispatch_plan(&config, RESPONSES_PATH)
@@ -3430,6 +3492,23 @@ fn retry_fallback_plan_switches_responses_to_codex() {
     assert_eq!(plan.provider, PROVIDER_CODEX);
     assert_eq!(plan.outbound_path, Some(CODEX_RESPONSES_PATH));
     assert_eq!(plan.request_transform, FormatTransform::ResponsesToCodex);
+    assert_eq!(plan.response_transform, FormatTransform::CodexToResponses);
+}
+
+#[test]
+fn retry_fallback_plan_switches_compact_responses_to_codex() {
+    let config = config_with_providers(&[
+        (PROVIDER_RESPONSES, FORMATS_RESPONSES),
+        (PROVIDER_CODEX, FORMATS_RESPONSES),
+    ]);
+    let plan = resolve_retry_fallback_plan(&config, RESPONSES_COMPACT_PATH, PROVIDER_RESPONSES)
+        .expect("should fallback to codex");
+    assert_eq!(plan.provider, PROVIDER_CODEX);
+    assert_eq!(plan.outbound_path, Some(CODEX_RESPONSES_PATH));
+    assert_eq!(
+        plan.request_transform,
+        FormatTransform::ResponsesCompactToCodex
+    );
     assert_eq!(plan.response_transform, FormatTransform::CodexToResponses);
 }
 

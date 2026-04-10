@@ -123,6 +123,7 @@ fn is_simple_transform(transform: FormatTransform) -> bool {
             | FormatTransform::CodexToResponses
             | FormatTransform::ChatToCodex
             | FormatTransform::ResponsesToCodex
+            | FormatTransform::ResponsesCompactToCodex
     )
 }
 
@@ -234,7 +235,9 @@ fn stream_for_simple_extended(
         FormatTransform::CodexToResponses => {
             codex_compat::stream_codex_to_responses(upstream, context, log, request_tracker).boxed()
         }
-        FormatTransform::ChatToCodex | FormatTransform::ResponsesToCodex => {
+        FormatTransform::ChatToCodex
+        | FormatTransform::ResponsesToCodex
+        | FormatTransform::ResponsesCompactToCodex => {
             streaming::stream_with_logging(upstream, context, log, request_tracker).boxed()
         }
         _ => streaming::stream_with_logging(upstream, context, log, request_tracker).boxed(),

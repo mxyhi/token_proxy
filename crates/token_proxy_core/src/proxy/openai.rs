@@ -1,4 +1,5 @@
 const OPENAI_RESPONSES_ROOT: &str = "/v1/responses";
+const OPENAI_RESPONSES_COMPACT_ROOT: &str = "/v1/responses/compact";
 const OPENAI_CHAT_COMPLETIONS_ROOT: &str = "/v1/chat/completions";
 
 const OPENAI_NATIVE_PREFIX_ROOTS: &[&str] = &[
@@ -21,7 +22,11 @@ const OPENAI_NATIVE_PREFIX_ROOTS: &[&str] = &[
 
 pub(crate) fn is_openai_responses_resource_path(path: &str) -> bool {
     let path = strip_query(path);
-    path.starts_with(&format!("{OPENAI_RESPONSES_ROOT}/"))
+    path != OPENAI_RESPONSES_COMPACT_ROOT && path.starts_with(&format!("{OPENAI_RESPONSES_ROOT}/"))
+}
+
+pub(crate) fn is_openai_responses_compact_path(path: &str) -> bool {
+    strip_query(path) == OPENAI_RESPONSES_COMPACT_ROOT
 }
 
 pub(crate) fn is_openai_native_resource_path(path: &str) -> bool {

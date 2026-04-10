@@ -652,7 +652,7 @@ mod tests {
             .expect("gpt display name");
 
         assert_eq!(claude_name, "Claude Sonnet 4 5");
-        assert_eq!(gpt_name, "Gpt 5.2 Codex");
+        assert_eq!(gpt_name, "Gpt 5.4");
     }
 
     #[test]

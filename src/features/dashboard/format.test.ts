@@ -7,6 +7,7 @@ import {
   formatDashboardTimestamp,
   formatInteger,
 } from "@/features/dashboard/format";
+import { setLocale } from "@/paraglide/runtime.js";
 
 describe("dashboard/format", () => {
   it("formats integers with thousand separators", () => {
@@ -58,5 +59,10 @@ describe("dashboard/format", () => {
     expect(formatDashboardProviderLabel("fallback", "anthropic", null)).toBe(
       "fallback · anthropic"
     );
+  });
+
+  it("uses a dedicated label for local proxy request failures", () => {
+    setLocale("en", { reload: false });
+    expect(formatDashboardProviderLabel("local", "proxy", null)).toBe("Local proxy");
   });
 });

@@ -1,3 +1,5 @@
+import { m } from "@/paraglide/messages.js";
+
 const DASHBOARD_TIME_FORMAT_OPTIONS: Intl.DateTimeFormatOptions = {
   dateStyle: "short",
   timeStyle: "medium",
@@ -14,6 +16,20 @@ function normalizeProviderPart(value: string | null | undefined) {
 
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isLocalProxyRequest(
+  upstreamId: string,
+  provider: string,
+  accountId: string | null | undefined,
+) {
+  if (accountId?.trim()) {
+    return false;
+  }
+  return (
+    normalizeProviderPart(upstreamId) === "local" &&
+    normalizeProviderPart(provider) === "proxy"
+  );
 }
 
 function containsProviderPart(value: string | null | undefined, provider: string) {
@@ -43,6 +59,10 @@ export function formatDashboardProviderLabel(
   provider: string,
   accountId: string | null | undefined,
 ) {
+  if (isLocalProxyRequest(upstreamId, provider, accountId)) {
+    return m.dashboard_provider_local_proxy();
+  }
+
   const trimmedProvider = provider.trim();
   const shouldHideProvider =
     trimmedProvider.length > 0 &&

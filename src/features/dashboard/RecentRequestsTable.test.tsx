@@ -5,6 +5,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { RecentRequestsTable } from "@/features/dashboard/RecentRequestsTable";
 import { I18nProvider } from "@/lib/i18n";
 import { m } from "@/paraglide/messages.js";
+import { setLocale } from "@/paraglide/runtime.js";
 
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
@@ -30,6 +31,7 @@ describe("dashboard/RecentRequestsTable", () => {
 
   afterEach(() => {
     cleanup();
+    setLocale("en", { reload: false });
   });
 
   it("shows account id in provider column when request is bound to an account", () => {
@@ -143,5 +145,44 @@ describe("dashboard/RecentRequestsTable", () => {
     expect(await screen.findByRole("tooltip")).toHaveTextContent("45.5K");
     expect(await screen.findByRole("tooltip")).toHaveTextContent("1.6K");
     expect(await screen.findByRole("tooltip")).toHaveTextContent("43.4K");
+  });
+
+  it("shows local proxy label for proxy local auth failures", async () => {
+    setLocale("zh", { reload: false });
+    const user = userEvent.setup();
+
+    render(
+      <I18nProvider>
+        <RecentRequestsTable
+          scrollKey="test"
+          items={[
+            {
+              id: 1,
+              tsMs: 100,
+              path: "/v1/responses",
+              provider: "proxy",
+              upstreamId: "local",
+              accountId: null,
+              model: null,
+              mappedModel: null,
+              stream: false,
+              status: 401,
+              totalTokens: null,
+              outputTokens: null,
+              cachedTokens: null,
+              latencyMs: 0,
+              upstreamRequestId: null,
+            },
+          ]}
+        />
+      </I18nProvider>,
+    );
+
+    const localProxyLabel = "本地代理";
+    expect(screen.getByText(localProxyLabel)).toBeInTheDocument();
+    expect(screen.queryByText("local · proxy")).toBeNull();
+
+    await user.hover(screen.getByText(localProxyLabel));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(localProxyLabel);
   });
 });

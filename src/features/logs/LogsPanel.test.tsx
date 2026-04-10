@@ -273,7 +273,7 @@ describe("logs/LogsPanel", () => {
       expect(readRequestLogDetailMock).toHaveBeenCalledWith(1);
     });
 
-    const providerValues = await screen.findAllByText("alpha · codex · codex-a.json");
+    const providerValues = await screen.findAllByText("alpha · codex-a.json");
     expect(providerValues.length).toBeGreaterThan(0);
   });
 

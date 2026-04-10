@@ -10,6 +10,14 @@ on:
       version:
         description: "Release version (e.g., 0.1.0)"
         required: true
+      republish:
+        description: "Republish an existing stable tag instead of preparing a release PR"
+        required: false
+        default: "false"
+
+concurrency:
+  group: release-${{ github.event_name }}-${{ github.event.workflow_run.head_branch || github.ref_name || 'manual' }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,25 +26,58 @@ env:
 
 jobs:
   stable_tag:
-    name: Tag release (main push)
-    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    name: Resolve release context
+    if: |
+      (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push') ||
+      (github.event_name == 'workflow_dispatch' && inputs.republish == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     outputs:
-      version: ${{ steps.release_guard.outputs.version }}
-      tag: ${{ steps.create_tag.outputs.tag }}
+      version: ${{ steps.release_guard.outputs.version || steps.manual_release.outputs.version }}
+      tag: ${{ steps.create_tag.outputs.tag || steps.manual_release.outputs.tag }}
       release_notes: ${{ steps.release_notes.outputs.release_body }}
       release_matrix: ${{ steps.release_matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_run'
         with:
           fetch-depth: 0
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          fetch-depth: 0
+          ref: v${{ inputs.version }}
+
       - name: Release guard
+        if: github.event_name == 'workflow_run'
         id: release_guard
         run: node scripts/release-guard.mjs
+
+      - name: Resolve manual release context
+        if: github.event_name == 'workflow_dispatch'
+        id: manual_release
+        shell: bash
+        run: |
+          version="${{ inputs.version }}"
+          tag="v${version}"
+
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Republish version must be x.y.z, got: $version" >&2
+            exit 1
+          fi
+
+          if ! git rev-parse "$tag^{object}" >/dev/null 2>&1; then
+            echo "Tag $tag does not exist on origin." >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Abort if not a release commit
         if: steps.release_guard.outputs.is_release != 'true'
@@ -46,15 +87,16 @@ jobs:
 
       - name: Resolve previous stable tag
         id: previous_tag
-        if: steps.release_guard.outputs.is_release == 'true'
+        if: steps.release_guard.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
         run: |
+          current_tag="${{ steps.create_tag.outputs.tag || steps.manual_release.outputs.tag || format('v{0}', steps.release_guard.outputs.version) }}"
           tags=$(git tag --list 'v*' --sort=v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
-          prev=$(echo "$tags" | tail -n 1)
+          prev=$(echo "$tags" | grep -vx "$current_tag" | tail -n 1)
           echo "previous_tag=$prev" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
         id: create_tag
-        if: steps.release_guard.outputs.is_release == 'true'
+        if: github.event_name == 'workflow_run' && steps.release_guard.outputs.is_release == 'true'
         run: |
           tag="v${{ steps.release_guard.outputs.version }}"
           git config --local user.email "action@github.com"
@@ -65,10 +107,10 @@ jobs:
 
       - name: Generate release notes
         id: release_notes
-        if: steps.release_guard.outputs.is_release == 'true'
+        if: steps.release_guard.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
         uses: actions/github-script@v7
         env:
-          RELEASE_TAG: ${{ steps.create_tag.outputs.tag }}
+          RELEASE_TAG: ${{ steps.create_tag.outputs.tag || steps.manual_release.outputs.tag }}
           PREVIOUS_TAG: ${{ steps.previous_tag.outputs.previous_tag }}
         with:
           script: |
@@ -89,7 +131,7 @@ jobs:
       # 避免新增/删减平台时出现两处配置漂移。
       - name: Export release matrix
         id: release_matrix
-        if: steps.release_guard.outputs.is_release == 'true'
+        if: steps.release_guard.outputs.is_release == 'true' || github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           {
@@ -390,7 +432,7 @@ jobs:
 
   prepare_release_pr:
     name: Prepare release PR
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.republish != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write

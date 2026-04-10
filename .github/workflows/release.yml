@@ -16,7 +16,9 @@ on:
         default: "false"
 
 concurrency:
-  group: release-${{ github.event_name }}-${{ github.event.workflow_run.head_branch || github.ref_name || 'manual' }}
+  # 不能只按 branch 做并发键；同一分支上其他 Test 完成也会触发 workflow_run，
+  # 进而把当前仍在上传产物的 release run 误取消，导致 release 资产残缺。
+  group: release-${{ github.event_name }}-${{ github.event.workflow_run.head_sha || inputs.version || github.ref_name || github.run_id }}
   cancel-in-progress: true
 
 env:

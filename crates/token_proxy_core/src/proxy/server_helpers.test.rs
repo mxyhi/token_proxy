@@ -1,6 +1,6 @@
 use super::*;
 
-use axum::body::Bytes;
+use axum::body::{Body, Bytes};
 
 #[test]
 fn force_openai_chat_stream_usage_inserts_stream_options_include_usage() {
@@ -56,6 +56,24 @@ fn gemini_meta_treats_generate_content_alt_sse_as_stream() {
         .await;
         assert!(meta.stream);
         assert_eq!(meta.original_model.as_deref(), Some("gemini-1.5-flash"));
+    });
+}
+
+#[test]
+fn meta_parses_large_request_body_for_stream_and_model() {
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    rt.block_on(async {
+        let padding = "x".repeat((2 * 1024 * 1024) + 128);
+        let request =
+            format!(r#"{{"model":"gpt-5.4","stream":true,"input":"hello","padding":"{padding}"}}"#);
+        let body = ReplayableBody::from_body(Body::from(request))
+            .await
+            .expect("body");
+
+        let meta = parse_request_meta_best_effort(RESPONSES_PATH, &body).await;
+
+        assert!(meta.stream);
+        assert_eq!(meta.original_model.as_deref(), Some("gpt-5.4"));
     });
 }
 

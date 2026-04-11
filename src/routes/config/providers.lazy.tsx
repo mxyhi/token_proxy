@@ -1,7 +1,7 @@
 import { createLazyFileRoute } from "@tanstack/react-router";
 
-import { ConfigRoutePage } from "@/features/config/ConfigRoutePage";
+import { ProvidersPage } from "@/features/providers/pages/providers-page";
 
 export const Route = createLazyFileRoute("/config/providers")({
-  component: () => <ConfigRoutePage sectionId="providers" />,
+  component: ProvidersPage,
 });

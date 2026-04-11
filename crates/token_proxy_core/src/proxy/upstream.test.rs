@@ -1,3 +1,5 @@
+use axum::http::StatusCode;
+
 use super::utils::is_retryable_status;
 use super::*;
 

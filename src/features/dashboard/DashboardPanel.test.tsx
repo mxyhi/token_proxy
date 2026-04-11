@@ -7,7 +7,7 @@ import type { DashboardSnapshotQuery } from "@/features/dashboard/types";
 import { I18nProvider } from "@/lib/i18n";
 import { m } from "@/paraglide/messages.js";
 
-vi.mock("@/components/section-cards", () => ({
+vi.mock("@/features/dashboard/components/section-cards", () => ({
   SectionCards: ({
     summary,
   }: {
@@ -19,7 +19,7 @@ vi.mock("@/components/section-cards", () => ({
   ),
 }));
 
-vi.mock("@/components/chart-area-interactive", () => ({
+vi.mock("@/features/dashboard/components/chart-area-interactive", () => ({
   ChartAreaInteractive: ({
     series,
   }: {

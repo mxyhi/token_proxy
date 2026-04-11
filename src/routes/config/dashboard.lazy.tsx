@@ -1,11 +1,11 @@
 import { createLazyFileRoute } from "@tanstack/react-router";
 
-import { ConfigRoutePage } from "@/features/config/ConfigRoutePage";
+import { DashboardPage } from "@/features/dashboard/pages/dashboard-page";
 
 export const Route = createLazyFileRoute("/config/dashboard")({
   component: ConfigDashboardRoute,
 });
 
 function ConfigDashboardRoute() {
-  return <ConfigRoutePage sectionId="dashboard" />;
+  return <DashboardPage />;
 }

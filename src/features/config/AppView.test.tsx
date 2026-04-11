@@ -6,11 +6,11 @@ import { EMPTY_FORM } from "@/features/config/form";
 import type { ProxyServiceStatus } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
-vi.mock("@/components/app-sidebar", () => ({
+vi.mock("@/layouts/app-sidebar", () => ({
   AppSidebar: () => <div data-testid="app-sidebar" />,
 }));
 
-vi.mock("@/components/site-header", () => ({
+vi.mock("@/layouts/site-header", () => ({
   SiteHeader: ({ title }: { title: string }) => <div data-testid="site-header">{title}</div>,
 }));
 

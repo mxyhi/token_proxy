@@ -2,711 +2,44 @@
 mod app_proxy;
 mod client_config;
 mod codex;
+mod commands;
 mod jsonc;
 mod kiro;
 mod logging;
 mod proxy;
 mod tray;
+mod window;
 
-use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
 use tauri::{Emitter, Manager};
 
+use commands::{
+    codex_fetch_quotas, codex_import_file, codex_list_accounts, codex_logout, codex_poll_login,
+    codex_refresh_account, codex_refresh_quota_cache, codex_refresh_quota_now,
+    codex_set_auto_refresh, codex_set_priority, codex_set_proxy_url, codex_set_status,
+    codex_start_login, kiro_fetch_quotas, kiro_handle_callback, kiro_import_ide, kiro_import_kam,
+    kiro_list_accounts, kiro_logout, kiro_poll_login, kiro_refresh_quota_cache,
+    kiro_refresh_quota_now, kiro_set_priority, kiro_set_proxy_url, kiro_set_status,
+    kiro_start_login, prepare_relaunch, preview_client_setup, providers_delete_accounts,
+    providers_list_accounts_page, proxy_reload, proxy_restart, proxy_start, proxy_status,
+    proxy_stop, read_dashboard_snapshot, read_proxy_config, read_request_detail_capture,
+    read_request_log_detail, save_proxy_config, set_request_detail_capture,
+    write_claude_code_settings, write_codex_config, write_opencode_config,
+};
+
 type ProxyServiceHandle = proxy::service::ProxyServiceHandle;
-type ProxyServiceStatus = proxy::service::ProxyServiceStatus;
 type LogLevel = logging::LogLevel;
 
-pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
 const REQUEST_DETAIL_CAPTURE_EVENT: &str = "request-detail-capture-changed";
 
 type RequestDetailCaptureEvent = proxy::request_detail::RequestDetailCaptureState;
-
-#[derive(Clone, Copy)]
-enum ManualAccountStatus {
-    Active,
-    Disabled,
-}
-
-impl From<ManualAccountStatus> for kiro::KiroAccountStatus {
-    fn from(value: ManualAccountStatus) -> Self {
-        match value {
-            ManualAccountStatus::Active => Self::Active,
-            ManualAccountStatus::Disabled => Self::Disabled,
-        }
-    }
-}
-
-impl From<ManualAccountStatus> for codex::CodexAccountStatus {
-    fn from(value: ManualAccountStatus) -> Self {
-        match value {
-            ManualAccountStatus::Active => Self::Active,
-            ManualAccountStatus::Disabled => Self::Disabled,
-        }
-    }
-}
-
-fn parse_manual_account_status(value: &str) -> Result<ManualAccountStatus, String> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "active" => Ok(ManualAccountStatus::Active),
-        "disabled" => Ok(ManualAccountStatus::Disabled),
-        other => Err(format!("Unsupported manual account status: {other}")),
-    }
-}
-
-async fn apply_runtime_account_cooldowns(
-    proxy_service: ProxyServiceHandle,
-    items: &mut [token_proxy_core::provider_accounts::ProviderAccountListItem],
-) {
-    let kiro_account_ids = items
-        .iter()
-        .filter(|item| {
-            item.provider_kind == token_proxy_core::provider_accounts::ProviderAccountKind::Kiro
-                && item.status == token_proxy_core::provider_accounts::ProviderAccountStatus::Active
-        })
-        .map(|item| item.account_id.clone())
-        .collect::<Vec<_>>();
-    let codex_account_ids = items
-        .iter()
-        .filter(|item| {
-            item.provider_kind == token_proxy_core::provider_accounts::ProviderAccountKind::Codex
-                && item.status == token_proxy_core::provider_accounts::ProviderAccountStatus::Active
-        })
-        .map(|item| item.account_id.clone())
-        .collect::<Vec<_>>();
-    let cooling_kiro = proxy_service
-        .cooling_account_ids("kiro", &kiro_account_ids)
-        .await;
-    let cooling_codex = proxy_service
-        .cooling_account_ids("codex", &codex_account_ids)
-        .await;
-
-    for item in items.iter_mut() {
-        if item.status != token_proxy_core::provider_accounts::ProviderAccountStatus::Active {
-            continue;
-        }
-        let is_cooling = match item.provider_kind {
-            token_proxy_core::provider_accounts::ProviderAccountKind::Kiro => {
-                cooling_kiro.contains(&item.account_id)
-            }
-            token_proxy_core::provider_accounts::ProviderAccountKind::Codex => {
-                cooling_codex.contains(&item.account_id)
-            }
-        };
-        if is_cooling {
-            item.status = token_proxy_core::provider_accounts::ProviderAccountStatus::CoolingDown;
-        }
-    }
-}
-
-// 主窗口显示/销毁时同步 Dock/任务栏展示状态。
-pub(crate) fn set_main_window_visibility(app: &tauri::AppHandle, visible: bool) {
-    #[cfg(target_os = "macos")]
-    {
-        let policy = if visible {
-            tauri::ActivationPolicy::Regular
-        } else {
-            tauri::ActivationPolicy::Accessory
-        };
-        if let Err(err) = app.set_activation_policy(policy) {
-            tracing::warn!(error = %err, visible, "set activation policy failed");
-        }
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) else {
-            return;
-        };
-        if let Err(err) = window.set_skip_taskbar(!visible) {
-            tracing::warn!(error = %err, visible, "set skip taskbar failed");
-        }
-    }
-}
-
-pub(crate) fn show_or_create_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        set_main_window_visibility(app, true);
-        let _ = window.unminimize();
-        let _ = window.show();
-        let _ = window.set_focus();
-        sync_main_window_menu_item(app);
-        return;
-    }
-
-    let Some(config) = app.config().app.windows.get(0).cloned() else {
-        tracing::warn!("main window config not found");
-        return;
-    };
-
-    // Windows 同步创建可能死锁，放到独立线程中。
-    let app_handle = app.clone();
-    std::thread::spawn(move || {
-        let result =
-            tauri::WebviewWindowBuilder::from_config(&app_handle, &config).and_then(|builder| {
-                let window = builder.build()?;
-                set_main_window_visibility(&app_handle, true);
-                let _ = window.unminimize();
-                let _ = window.show();
-                let _ = window.set_focus();
-                Ok(())
-            });
-        if let Err(err) = result {
-            tracing::warn!(error = %err, "create main window failed");
-            return;
-        }
-        sync_main_window_menu_item(&app_handle);
-    });
-}
-
-pub(crate) fn hide_main_window(app: &tauri::AppHandle) {
-    set_main_window_visibility(app, false);
-    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-        let _ = window.hide();
-        if let Err(err) = window.destroy() {
-            tracing::warn!(error = %err, "destroy window failed");
-        }
-    }
-
-    if let Some(tray_state) = app.try_state::<tray::TrayState>() {
-        tray_state.mark_main_window_hidden();
-    } else {
-        sync_main_window_menu_item(app);
-    }
-}
-
-pub(crate) fn toggle_main_window(app: &tauri::AppHandle) {
-    let visible = app
-        .get_webview_window(MAIN_WINDOW_LABEL)
-        .and_then(|window| window.is_visible().ok())
-        .unwrap_or(false);
-    if visible {
-        hide_main_window(app);
-    } else {
-        show_or_create_main_window(app);
-    }
-}
-
-fn sync_main_window_menu_item(app: &tauri::AppHandle) {
-    if let Some(tray_state) = app.try_state::<tray::TrayState>() {
-        tray_state.sync_main_window_menu_item(app);
-    }
-}
-
-fn is_autostart_launch() -> bool {
-    std::env::args().any(|arg| arg == "--autostart")
-}
-
-#[tauri::command]
-async fn read_proxy_config(app: tauri::AppHandle) -> Result<proxy::config::ConfigResponse, String> {
-    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
-    proxy::config::read_config(paths.inner().as_ref()).await
-}
-
-#[tauri::command]
-async fn preview_client_setup(
-    app: tauri::AppHandle,
-) -> Result<client_config::ClientSetupInfo, String> {
-    client_config::preview(app).await
-}
-
-#[tauri::command]
-async fn write_claude_code_settings(
-    app: tauri::AppHandle,
-) -> Result<client_config::ClientConfigWriteResult, String> {
-    client_config::write_claude_code_settings(app).await
-}
-
-#[tauri::command]
-async fn write_codex_config(
-    app: tauri::AppHandle,
-) -> Result<client_config::ClientConfigWriteResult, String> {
-    client_config::write_codex_config(app).await
-}
-
-#[tauri::command]
-async fn write_opencode_config(
-    app: tauri::AppHandle,
-) -> Result<client_config::ClientConfigWriteResult, String> {
-    client_config::write_opencode_config(app).await
-}
-
-#[tauri::command]
-async fn save_proxy_config(
-    app: tauri::AppHandle,
-    proxy_service: tauri::State<'_, ProxyServiceHandle>,
-    tray_state: tauri::State<'_, tray::TrayState>,
-    logging_state: tauri::State<'_, logging::LoggingState>,
-    app_proxy_state: tauri::State<'_, app_proxy::AppProxyState>,
-    config: proxy::config::ProxyConfigFile,
-) -> Result<proxy::service::ProxyConfigSaveResult, String> {
-    tracing::debug!("save_proxy_config start");
-    let start = Instant::now();
-    tracing::debug!("save_proxy_config apply_config start");
-    let apply_start = Instant::now();
-    tray_state.apply_config(&config.tray_token_rate).await;
-    tracing::debug!(
-        elapsed_ms = apply_start.elapsed().as_millis(),
-        "save_proxy_config apply_config done"
-    );
-    let log_level = config.log_level;
-    let app_proxy_url = proxy::config::app_proxy_url_from_config(&config)
-        .ok()
-        .flatten();
-    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
-    if let Err(err) = proxy::config::write_config(paths.inner().as_ref(), config).await {
-        tracing::error!(error = %err, "save_proxy_config save failed");
-        tray_state.apply_error("保存失败", &err);
-        return Err(err);
-    }
-    tracing::debug!(
-        elapsed_ms = start.elapsed().as_millis(),
-        "save_proxy_config saved"
-    );
-    logging_state.apply_level(log_level);
-    app_proxy::set(&app_proxy_state, app_proxy_url).await;
-    let proxy_context = app.state::<proxy::service::ProxyContext>();
-    let result = proxy_service
-        .apply_saved_config(proxy_context.inner())
-        .await;
-    tray_state.apply_status(&result.status);
-    if let Some(error) = result.apply_error.as_deref() {
-        tray_state.apply_error("应用失败", error);
-    }
-    Ok(result)
-}
-
-#[tauri::command]
-async fn read_dashboard_snapshot(
-    app: tauri::AppHandle,
-    range: proxy::dashboard::DashboardRange,
-    offset: Option<u32>,
-    upstream_id: Option<String>,
-) -> Result<proxy::dashboard::DashboardSnapshot, String> {
-    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
-    let pool = proxy::sqlite::open_read_pool(paths.inner().as_ref()).await?;
-    proxy::dashboard::read_snapshot(&pool, range, offset, upstream_id).await
-}
-
-#[tauri::command]
-async fn read_request_log_detail(
-    app: tauri::AppHandle,
-    id: u64,
-) -> Result<proxy::logs::RequestLogDetail, String> {
-    let paths = app.state::<Arc<token_proxy_core::paths::TokenProxyPaths>>();
-    let pool = proxy::sqlite::open_read_pool(paths.inner().as_ref()).await?;
-    proxy::logs::read_request_log_detail(&pool, id).await
-}
-
-#[tauri::command]
-fn read_request_detail_capture(
-    capture_state: tauri::State<'_, Arc<proxy::request_detail::RequestDetailCapture>>,
-) -> proxy::request_detail::RequestDetailCaptureState {
-    capture_state.snapshot()
-}
-
-#[tauri::command]
-fn set_request_detail_capture(
-    capture_state: tauri::State<'_, Arc<proxy::request_detail::RequestDetailCapture>>,
-    enabled: bool,
-) -> proxy::request_detail::RequestDetailCaptureState {
-    if enabled {
-        capture_state.arm()
-    } else {
-        capture_state.disarm()
-    }
-}
-
-#[tauri::command]
-async fn kiro_list_accounts(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-) -> Result<Vec<kiro::KiroAccountSummary>, String> {
-    kiro_store.list_accounts().await
-}
-
-#[tauri::command]
-async fn kiro_import_ide(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-    directory: String,
-) -> Result<Vec<kiro::KiroAccountSummary>, String> {
-    let trimmed = directory.trim();
-    if trimmed.is_empty() {
-        return Err("Directory is required.".to_string());
-    }
-    kiro_store.import_ide_tokens(PathBuf::from(trimmed)).await
-}
-
-#[tauri::command]
-async fn kiro_import_kam(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-    path: String,
-) -> Result<Vec<kiro::KiroAccountSummary>, String> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return Err("File path is required.".to_string());
-    }
-    kiro_store.import_kam_export(PathBuf::from(trimmed)).await
-}
-
-#[tauri::command]
-async fn kiro_start_login(
-    kiro_login: tauri::State<'_, Arc<kiro::KiroLoginManager>>,
-    method: String,
-) -> Result<kiro::KiroLoginStartResponse, String> {
-    let parsed = method.parse::<kiro::KiroLoginMethod>()?;
-    kiro_login.start_login(parsed).await
-}
-
-#[tauri::command]
-async fn kiro_poll_login(
-    kiro_login: tauri::State<'_, Arc<kiro::KiroLoginManager>>,
-    state: String,
-) -> Result<kiro::KiroLoginPollResponse, String> {
-    kiro_login.poll_login(&state).await
-}
-
-#[tauri::command]
-async fn kiro_logout(
-    kiro_login: tauri::State<'_, Arc<kiro::KiroLoginManager>>,
-    account_id: String,
-) -> Result<(), String> {
-    kiro_login.logout(&account_id).await
-}
-
-#[tauri::command]
-async fn kiro_handle_callback(
-    kiro_login: tauri::State<'_, Arc<kiro::KiroLoginManager>>,
-    url: String,
-) -> Result<(), String> {
-    kiro_login.handle_callback_url(&url).await
-}
-
-#[tauri::command]
-async fn kiro_fetch_quotas(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-) -> Result<Vec<kiro::KiroQuotaSummary>, String> {
-    kiro::fetch_quotas(kiro_store.as_ref()).await
-}
-
-#[tauri::command]
-async fn kiro_refresh_quota_cache(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-    account_ids: Option<Vec<String>>,
-) -> Result<Vec<String>, String> {
-    kiro_store.refresh_quota_cache(account_ids.as_deref()).await
-}
-
-#[tauri::command]
-async fn kiro_refresh_quota_now(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-    account_id: String,
-) -> Result<(), String> {
-    kiro_store.refresh_quota_cache_now(&account_id).await
-}
-
-#[tauri::command]
-async fn kiro_set_status(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-    account_id: String,
-    status: String,
-) -> Result<kiro::KiroAccountSummary, String> {
-    let status = parse_manual_account_status(&status)?;
-    kiro_store.set_status(&account_id, status.into()).await
-}
-
-#[tauri::command]
-async fn kiro_set_proxy_url(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-    account_id: String,
-    proxy_url: Option<String>,
-) -> Result<kiro::KiroAccountSummary, String> {
-    kiro_store
-        .set_proxy_url(&account_id, proxy_url.as_deref())
-        .await
-}
-
-#[tauri::command]
-async fn kiro_set_priority(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-    account_id: String,
-    priority: i32,
-) -> Result<kiro::KiroAccountSummary, String> {
-    kiro_store.set_priority(&account_id, priority).await
-}
-
-#[tauri::command]
-async fn codex_list_accounts(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-) -> Result<Vec<codex::CodexAccountSummary>, String> {
-    codex_store.list_accounts().await
-}
-
-#[tauri::command]
-async fn codex_import_file(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    path: String,
-) -> Result<Vec<codex::CodexAccountSummary>, String> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        return Err("Import path is required.".to_string());
-    }
-    codex_store.import_file(PathBuf::from(trimmed)).await
-}
-
-#[tauri::command]
-async fn codex_fetch_quotas(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-) -> Result<Vec<codex::CodexQuotaSummary>, String> {
-    codex::fetch_quotas(codex_store.as_ref()).await
-}
-
-#[tauri::command]
-async fn codex_refresh_quota_cache(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    account_ids: Option<Vec<String>>,
-) -> Result<Vec<String>, String> {
-    codex_store
-        .refresh_quota_cache(account_ids.as_deref())
-        .await
-}
-
-#[tauri::command]
-async fn codex_refresh_quota_now(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    account_id: String,
-) -> Result<(), String> {
-    codex_store.refresh_quota_cache_now(&account_id).await
-}
-
-#[tauri::command]
-async fn codex_refresh_account(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    account_id: String,
-) -> Result<(), String> {
-    codex_store.refresh_account(&account_id).await
-}
-
-#[tauri::command]
-async fn codex_set_auto_refresh(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    account_id: String,
-    enabled: bool,
-) -> Result<codex::CodexAccountSummary, String> {
-    codex_store.set_auto_refresh(&account_id, enabled).await
-}
-
-#[tauri::command]
-async fn codex_set_status(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    account_id: String,
-    status: String,
-) -> Result<codex::CodexAccountSummary, String> {
-    let status = parse_manual_account_status(&status)?;
-    codex_store.set_status(&account_id, status.into()).await
-}
-
-#[tauri::command]
-async fn codex_set_proxy_url(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    account_id: String,
-    proxy_url: Option<String>,
-) -> Result<codex::CodexAccountSummary, String> {
-    codex_store
-        .set_proxy_url(&account_id, proxy_url.as_deref())
-        .await
-}
-
-#[tauri::command]
-async fn codex_set_priority(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    account_id: String,
-    priority: i32,
-) -> Result<codex::CodexAccountSummary, String> {
-    codex_store.set_priority(&account_id, priority).await
-}
-
-#[tauri::command]
-async fn codex_start_login(
-    codex_login: tauri::State<'_, Arc<codex::CodexLoginManager>>,
-) -> Result<codex::CodexLoginStartResponse, String> {
-    codex_login.start_login().await
-}
-
-#[tauri::command]
-async fn codex_poll_login(
-    codex_login: tauri::State<'_, Arc<codex::CodexLoginManager>>,
-    state: String,
-) -> Result<codex::CodexLoginPollResponse, String> {
-    codex_login.poll_login(&state).await
-}
-
-#[tauri::command]
-async fn codex_logout(
-    codex_login: tauri::State<'_, Arc<codex::CodexLoginManager>>,
-    account_id: String,
-) -> Result<(), String> {
-    codex_login.logout(&account_id).await
-}
-
-#[tauri::command]
-async fn providers_list_accounts_page(
-    paths: tauri::State<'_, Arc<token_proxy_core::paths::TokenProxyPaths>>,
-    proxy_service: tauri::State<'_, ProxyServiceHandle>,
-    page: u32,
-    page_size: u32,
-    provider_kind: Option<String>,
-    status: Option<String>,
-    search: Option<String>,
-) -> Result<token_proxy_core::provider_accounts::ProviderAccountsPage, String> {
-    let provider_kind = provider_kind
-        .as_deref()
-        .map(token_proxy_core::provider_accounts::ProviderAccountKind::parse)
-        .transpose()?;
-    let status = status
-        .as_deref()
-        .map(token_proxy_core::provider_accounts::ProviderAccountStatus::parse)
-        .transpose()?;
-
-    let mut items = token_proxy_core::provider_accounts::list_accounts_snapshot(
-        paths.inner().as_ref(),
-        token_proxy_core::provider_accounts::ProviderAccountsQueryParams {
-            provider_kind,
-            search: search.unwrap_or_default(),
-        },
-    )
-    .await?;
-    apply_runtime_account_cooldowns(proxy_service.inner().clone(), &mut items).await;
-    if let Some(status) = status {
-        items.retain(|item| item.status == status);
-    }
-
-    let page = page.max(1);
-    let page_size = page_size.clamp(1, token_proxy_core::provider_accounts::MAX_PAGE_SIZE);
-    let total = u32::try_from(items.len()).unwrap_or(u32::MAX);
-    let start = usize::try_from((page - 1) * page_size).unwrap_or(usize::MAX);
-    let end = start.saturating_add(usize::try_from(page_size).unwrap_or(usize::MAX));
-    let items = if start >= items.len() {
-        Vec::new()
-    } else {
-        items[start..items.len().min(end)].to_vec()
-    };
-
-    Ok(token_proxy_core::provider_accounts::ProviderAccountsPage {
-        items,
-        total,
-        page,
-        page_size,
-    })
-}
-
-#[tauri::command]
-async fn providers_delete_accounts(
-    paths: tauri::State<'_, Arc<token_proxy_core::paths::TokenProxyPaths>>,
-    account_ids: Vec<String>,
-) -> Result<(), String> {
-    token_proxy_core::provider_accounts::delete_accounts(paths.inner().as_ref(), &account_ids).await
-}
-
-#[tauri::command]
-async fn proxy_status(
-    proxy_service: tauri::State<'_, ProxyServiceHandle>,
-    tray_state: tauri::State<'_, tray::TrayState>,
-) -> Result<ProxyServiceStatus, String> {
-    let status = proxy_service.status().await;
-    tray_state.apply_status(&status);
-    Ok(status)
-}
-
-#[tauri::command]
-async fn proxy_start(
-    app: tauri::AppHandle,
-    proxy_service: tauri::State<'_, ProxyServiceHandle>,
-    tray_state: tauri::State<'_, tray::TrayState>,
-) -> Result<ProxyServiceStatus, String> {
-    let proxy_context = app.state::<proxy::service::ProxyContext>();
-    match proxy_service.start(proxy_context.inner()).await {
-        Ok(status) => {
-            tray_state.apply_status(&status);
-            Ok(status)
-        }
-        Err(err) => {
-            tray_state.apply_error("启动失败", &err);
-            Err(err)
-        }
-    }
-}
-
-#[tauri::command]
-async fn proxy_stop(
-    proxy_service: tauri::State<'_, ProxyServiceHandle>,
-    tray_state: tauri::State<'_, tray::TrayState>,
-) -> Result<ProxyServiceStatus, String> {
-    match proxy_service.stop().await {
-        Ok(status) => {
-            tray_state.apply_status(&status);
-            Ok(status)
-        }
-        Err(err) => {
-            tray_state.apply_error("停止失败", &err);
-            Err(err)
-        }
-    }
-}
-
-#[tauri::command]
-async fn prepare_relaunch(
-    proxy_service: tauri::State<'_, ProxyServiceHandle>,
-    tray_state: tauri::State<'_, tray::TrayState>,
-) -> Result<(), String> {
-    // Allow the app to exit even if the window is closed during relaunch.
-    tray_state.mark_quit();
-    proxy_service.stop().await.map(|_| ())
-}
-
-#[tauri::command]
-async fn proxy_restart(
-    app: tauri::AppHandle,
-    proxy_service: tauri::State<'_, ProxyServiceHandle>,
-    tray_state: tauri::State<'_, tray::TrayState>,
-) -> Result<ProxyServiceStatus, String> {
-    let proxy_context = app.state::<proxy::service::ProxyContext>();
-    match proxy_service.restart(proxy_context.inner()).await {
-        Ok(status) => {
-            tray_state.apply_status(&status);
-            Ok(status)
-        }
-        Err(err) => {
-            tray_state.apply_error("重启失败", &err);
-            Err(err)
-        }
-    }
-}
-
-#[tauri::command]
-async fn proxy_reload(
-    app: tauri::AppHandle,
-    proxy_service: tauri::State<'_, ProxyServiceHandle>,
-    tray_state: tauri::State<'_, tray::TrayState>,
-) -> Result<ProxyServiceStatus, String> {
-    let proxy_context = app.state::<proxy::service::ProxyContext>();
-    match proxy_service.reload(proxy_context.inner()).await {
-        Ok(status) => {
-            tray_state.apply_status(&status);
-            Ok(status)
-        }
-        Err(err) => {
-            tray_state.apply_error("重载失败", &err);
-            Err(err)
-        }
-    }
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 默认 silent；后续加载配置后按需调整。
     let logging_state = logging::LoggingState::init(LogLevel::Silent);
     tracing::info!("starting token_proxy application");
-    let autostart_launch = is_autostart_launch();
+    let autostart_launch = window::is_autostart_launch();
 
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -734,7 +67,7 @@ pub fn run() {
                     }
                 }
             }
-            show_or_create_main_window(app);
+            window::show_or_create_main_window(app);
         }));
     }
 
@@ -837,21 +170,23 @@ pub fn run() {
             });
 
             if autostart_launch {
-                set_main_window_visibility(&app_handle, false);
-                if let Some(window) = app_handle.get_webview_window(MAIN_WINDOW_LABEL) {
+                window::set_main_window_visibility(&app_handle, false);
+                if let Some(window) = app_handle.get_webview_window(window::MAIN_WINDOW_LABEL) {
                     let _ = window.hide();
                 }
-                sync_main_window_menu_item(&app_handle);
+                tray_state.sync_main_window_menu_item(&app_handle);
             } else {
-                show_or_create_main_window(&app_handle);
+                window::show_or_create_main_window(&app_handle);
             }
             Ok(())
         })
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::Focused(true) => {
-                if window.label() == MAIN_WINDOW_LABEL {
-                    set_main_window_visibility(window.app_handle(), true);
-                    sync_main_window_menu_item(window.app_handle());
+                if window.label() == window::MAIN_WINDOW_LABEL {
+                    crate::window::set_main_window_visibility(window.app_handle(), true);
+                    if let Some(tray_state) = window.app_handle().try_state::<tray::TrayState>() {
+                        tray_state.sync_main_window_menu_item(window.app_handle());
+                    }
                 }
             }
             tauri::WindowEvent::CloseRequested { api, .. } => {
@@ -865,8 +200,8 @@ pub fn run() {
                 }
                 // 关闭即销毁 WebView，后台核心继续运行。
                 api.prevent_close();
-                if window.label() == MAIN_WINDOW_LABEL {
-                    hide_main_window(window.app_handle());
+                if window.label() == window::MAIN_WINDOW_LABEL {
+                    crate::window::hide_main_window(window.app_handle());
                     return;
                 }
                 if let Err(err) = window.destroy() {
@@ -944,7 +279,7 @@ pub fn run() {
         } => {
             // 点击 Dock 重新打开时，恢复主窗口。
             if !has_visible_windows {
-                show_or_create_main_window(app_handle);
+                window::show_or_create_main_window(app_handle);
             }
         }
         _ => {}

@@ -2318,7 +2318,7 @@ fn messages_request_failovers_to_next_kiro_account_before_next_upstream() {
 }
 
 #[test]
-fn messages_request_falls_back_to_next_kiro_upstream_after_all_kiro_accounts_fail() {
+fn messages_request_stops_after_all_kiro_accounts_fail_and_does_not_retry_next_upstream() {
     run_async(async {
         let kiro = spawn_mock_upstream(
             StatusCode::FORBIDDEN,
@@ -2329,7 +2329,7 @@ fn messages_request_falls_back_to_next_kiro_upstream_after_all_kiro_accounts_fai
             }),
         )
         .await;
-        let fallback = spawn_mock_raw_upstream(
+        let next_upstream = spawn_mock_raw_upstream(
             StatusCode::OK,
             build_kiro_event_stream("from downstream fallback"),
             "application/vnd.amazon.eventstream",
@@ -2348,7 +2348,7 @@ fn messages_request_falls_back_to_next_kiro_upstream_after_all_kiro_accounts_fai
                 PROVIDER_KIRO,
                 0,
                 "kiro-fallback-upstream",
-                fallback.base_url.as_str(),
+                next_upstream.base_url.as_str(),
                 FORMATS_MESSAGES,
             ),
         ]);
@@ -2373,16 +2373,16 @@ fn messages_request_falls_back_to_next_kiro_upstream_after_all_kiro_accounts_fai
 
         let (status, json) = send_messages_request(state).await;
         let kiro_requests = kiro.requests();
-        let fallback_requests = fallback.requests();
+        let next_upstream_requests = next_upstream.requests();
 
         kiro.abort();
-        fallback.abort();
+        next_upstream.abort();
         let _ = std::fs::remove_dir_all(&data_dir);
 
-        assert_eq!(status, StatusCode::OK);
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert_eq!(
-            json["content"][0]["text"].as_str(),
-            Some("from downstream fallback")
+            json["error"]["message"].as_str(),
+            Some("Kiro account is not configured.")
         );
         assert_eq!(kiro_requests.len(), 2);
         assert_eq!(
@@ -2394,9 +2394,9 @@ fn messages_request_falls_back_to_next_kiro_upstream_after_all_kiro_accounts_fai
             Some("Bearer kiro-access-b")
         );
         assert_eq!(
-            fallback_requests.len(),
-            1,
-            "next upstream should only run after same-upstream kiro accounts are exhausted"
+            next_upstream_requests.len(),
+            0,
+            "same provider account cooldown now blocks reusing a later kiro upstream in the same request"
         );
     });
 }

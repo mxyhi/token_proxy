@@ -1,10 +1,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use axum::http::StatusCode;
+use axum::{http::StatusCode, response::Response};
 
+use super::dispatch::ForwardAttemptState;
 use super::utils::{is_retryable_error, is_retryable_status, sanitize_upstream_error};
 use super::AttemptOutcome;
+use crate::proxy::config::ProviderUpstreams;
 use crate::proxy::http;
 use crate::proxy::log::{build_log_entry, LogContext, LogWriter, UsageSnapshot};
 use crate::proxy::openai_compat::FormatTransform;
@@ -15,6 +17,13 @@ use crate::proxy::response::{
 use crate::proxy::token_rate::TokenRateTracker;
 use crate::proxy::ProxyState;
 use crate::proxy::RequestMeta;
+
+const LOCAL_UPSTREAM_ID: &str = "local";
+
+pub(crate) struct ForwardUpstreamResult {
+    pub(crate) response: Response,
+    pub(crate) should_fallback: bool,
+}
 
 pub(super) fn should_cooldown_retryable_status(status: StatusCode) -> bool {
     // cooldown 只用于“更像上游账号/节点短时异常”的错误，避免把请求内容问题扩散到后续请求。
@@ -178,6 +187,106 @@ pub(super) async fn handle_upstream_result(
             ))
         }
     }
+}
+
+pub(super) fn resolve_provider_upstreams<'a>(
+    state: &'a ProxyState,
+    provider: &str,
+    inbound_path: &str,
+    meta: &RequestMeta,
+    request_detail: Option<&RequestDetailSnapshot>,
+) -> Result<&'a ProviderUpstreams, Response> {
+    match state.config.provider_upstreams(provider) {
+        Some(upstreams) => Ok(upstreams),
+        None => {
+            log_upstream_error_if_needed(
+                &state.log,
+                request_detail,
+                meta,
+                provider,
+                LOCAL_UPSTREAM_ID,
+                None,
+                inbound_path,
+                StatusCode::BAD_GATEWAY,
+                "No available upstream configured.".to_string(),
+                Instant::now(),
+            );
+            Err(http::error_response(
+                StatusCode::BAD_GATEWAY,
+                "No available upstream configured.",
+            ))
+        }
+    }
+}
+
+pub(super) fn finalize_forward_result(
+    state: &ProxyState,
+    provider: &str,
+    inbound_path: &str,
+    meta: &RequestMeta,
+    request_detail: Option<&RequestDetailSnapshot>,
+    summary: ForwardAttemptState,
+) -> ForwardUpstreamResult {
+    if let Some(response) = summary.response {
+        return ForwardUpstreamResult {
+            response,
+            should_fallback: false,
+        };
+    }
+    let should_fallback = summary.last_retry_response.is_some()
+        || summary.last_timeout_error.is_some()
+        || summary.last_retry_error.is_some()
+        || summary.attempted == 0;
+    let response = finalize_forward_response(
+        &state.log,
+        provider,
+        inbound_path,
+        meta,
+        request_detail,
+        summary,
+    );
+    ForwardUpstreamResult {
+        response,
+        should_fallback,
+    }
+}
+
+fn finalize_forward_response(
+    log: &Arc<LogWriter>,
+    provider: &str,
+    inbound_path: &str,
+    meta: &RequestMeta,
+    request_detail: Option<&RequestDetailSnapshot>,
+    summary: ForwardAttemptState,
+) -> Response {
+    if summary.attempted == 0 && summary.missing_auth {
+        log_upstream_error_if_needed(
+            log,
+            request_detail,
+            meta,
+            provider,
+            LOCAL_UPSTREAM_ID,
+            None,
+            inbound_path,
+            StatusCode::UNAUTHORIZED,
+            "Missing upstream API key.".to_string(),
+            Instant::now(),
+        );
+        return http::error_response(StatusCode::UNAUTHORIZED, "Missing upstream API key.");
+    }
+    if let Some(response) = summary.last_retry_response {
+        return response;
+    }
+    if let Some(err) = summary.last_timeout_error {
+        return http::error_response(StatusCode::GATEWAY_TIMEOUT, err);
+    }
+    if let Some(err) = summary.last_retry_error {
+        return http::error_response(
+            StatusCode::BAD_GATEWAY,
+            format!("Upstream request failed: {err}"),
+        );
+    }
+    http::error_response(StatusCode::BAD_GATEWAY, "No available upstream configured.")
 }
 
 fn update_account_cooldown_from_status(

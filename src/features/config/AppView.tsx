@@ -1,8 +1,7 @@
 import { AlertCircle, RefreshCw } from "lucide-react";
-import { useMemo, type CSSProperties } from "react";
+import { useMemo } from "react";
 
-import { AppSidebar } from "@/components/app-sidebar";
-import { SiteHeader } from "@/components/site-header";
+import { AppShell } from "@/layouts/app-shell";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   AlertDialog,
@@ -16,8 +15,6 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import {
   ClientSetupCard,
   ConfigFileCard,
@@ -363,32 +360,12 @@ export function AppView(props: AppViewProps) {
   const proxyService = toProxyServiceViewProps(props);
 
   return (
-    <SidebarProvider
-      className="h-full"
-      style={
-        {
-          "--sidebar-width": "calc(var(--spacing) * 48)",
-          "--header-height": "calc(var(--spacing) * 12)",
-        } as CSSProperties
-      }
-    >
-      <AppSidebar />
-      <SidebarInset className="min-h-0 md:m-0 md:ml-0 md:rounded-none md:shadow-none">
-        <div className="flex flex-1 min-h-0 flex-col">
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="@container/main flex flex-1 flex-col gap-1">
-              <SiteHeader title={sectionMeta.label()} />
-              <div className="flex flex-col gap-2.5 py-2.5 md:gap-3.5 md:py-3.5">
-                <ConfigSectionContent
-                  {...viewProps}
-                  activeSectionId={activeSectionId}
-                  proxyService={proxyService}
-                />
-              </div>
-            </div>
-          </ScrollArea>
-        </div>
-      </SidebarInset>
-    </SidebarProvider>
+    <AppShell title={sectionMeta.label()}>
+      <ConfigSectionContent
+        {...viewProps}
+        activeSectionId={activeSectionId}
+        proxyService={proxyService}
+      />
+    </AppShell>
   );
 }

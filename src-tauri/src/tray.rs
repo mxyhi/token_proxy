@@ -134,7 +134,7 @@ impl TrayState {
 
     pub(crate) fn sync_main_window_menu_item(&self, app: &AppHandle) {
         let visible = resolve_main_window_menu_visible(
-            app.get_webview_window(crate::MAIN_WINDOW_LABEL)
+            app.get_webview_window(crate::window::MAIN_WINDOW_LABEL)
                 .and_then(|window| window.is_visible().ok()),
             false,
         );
@@ -312,7 +312,7 @@ pub(crate) fn init_tray(
         let id = event.id().as_ref();
         match id {
             MENU_SHOW => {
-                crate::toggle_main_window(app);
+                crate::window::toggle_main_window(app);
             }
             MENU_START => {
                 let app = app.clone();

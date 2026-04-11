@@ -1,12 +1,7 @@
-import { createFileRoute, useLocation } from "@tanstack/react-router";
-
-import { ConfigScreen } from "@/features/config/ConfigScreen";
-import { getSectionIdFromPathname } from "@/features/config/sections";
+import { Outlet, createFileRoute } from "@tanstack/react-router";
 
 function ConfigLayoutRoute() {
-  const location = useLocation();
-  const sectionId = getSectionIdFromPathname(location.pathname);
-  return <ConfigScreen activeSectionId={sectionId} />;
+  return <Outlet />;
 }
 
 export const Route = createFileRoute("/config")({

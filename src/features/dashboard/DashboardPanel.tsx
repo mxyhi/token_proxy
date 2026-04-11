@@ -1,7 +1,7 @@
 import { AlertCircle } from "lucide-react"
 
-import { ChartAreaInteractive } from "@/components/chart-area-interactive"
-import { SectionCards } from "@/components/section-cards"
+import { ChartAreaInteractive } from "@/features/dashboard/components/chart-area-interactive"
+import { SectionCards } from "@/features/dashboard/components/section-cards"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   DashboardFilters,

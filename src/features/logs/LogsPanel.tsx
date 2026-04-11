@@ -4,7 +4,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { AlertCircle, Check, Copy } from "lucide-react";
 import { toast } from "sonner";
 
-import { DataTable } from "@/components/data-table";
+import { DataTable } from "@/features/dashboard/components/data-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

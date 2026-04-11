@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactNode } from "react";
 
-import { AppSidebar } from "@/components/app-sidebar";
-import { SiteHeader } from "@/components/site-header";
+import { AppSidebar } from "@/layouts/app-sidebar";
+import { SiteHeader } from "@/layouts/site-header";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 
@@ -38,4 +38,3 @@ export function AppShell({ title, children, actions }: AppShellProps) {
     </SidebarProvider>
   );
 }
-

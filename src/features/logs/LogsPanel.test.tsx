@@ -7,7 +7,7 @@ import type { DashboardSnapshotQuery } from "@/features/dashboard/types";
 import { I18nProvider } from "@/lib/i18n";
 import { m } from "@/paraglide/messages.js";
 
-vi.mock("@/components/data-table", () => ({
+vi.mock("@/features/dashboard/components/data-table", () => ({
   DataTable: ({
     items,
     onSelectItem,

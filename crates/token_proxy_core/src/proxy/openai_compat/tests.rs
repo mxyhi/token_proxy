@@ -44,7 +44,7 @@ fn transform_response_value(
 }
 
 // Split the test suite to keep each file below the project's line limit.
-#[path = "openai_compat.test.part1.rs"]
+#[path = "tests_part1.rs"]
 mod part1;
-#[path = "openai_compat.test.part2.rs"]
+#[path = "tests_part2.rs"]
 mod part2;

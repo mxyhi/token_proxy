@@ -525,5 +525,4 @@ fn classify_reload_behavior(
 }
 
 #[cfg(test)]
-#[path = "service.test.rs"]
 mod tests;

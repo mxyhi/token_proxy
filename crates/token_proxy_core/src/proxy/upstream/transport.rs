@@ -4,7 +4,7 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use reqwest::{Client, Proxy};
 use tokio::time::timeout;
 
-use super::request;
+use super::request_body;
 use super::result;
 use super::retry::mark_account_retryable_failure;
 use super::utils::{is_retryable_error, sanitize_upstream_error};
@@ -155,7 +155,7 @@ async fn send_upstream_request_once(
             AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_GATEWAY, message))
         })?;
     let upstream_body =
-        request::build_upstream_body(provider, upstream, upstream_path_with_query, body, meta)
+        request_body::build_upstream_body(provider, upstream, upstream_path_with_query, body, meta)
             .await?;
     match send_request_once(
         client,
@@ -280,7 +280,7 @@ async fn send_codex_attempt(
         },
     )?;
     let upstream_body =
-        request::build_upstream_body(provider, upstream, upstream_path_with_query, body, meta)
+        request_body::build_upstream_body(provider, upstream, upstream_path_with_query, body, meta)
             .await
             .map_err(CodexAttemptError::Fatal)?;
     match send_request_once(

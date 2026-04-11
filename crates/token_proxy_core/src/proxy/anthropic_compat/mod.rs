@@ -34,5 +34,4 @@ pub(crate) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。
 #[cfg(test)]
-#[path = "anthropic_compat.test.rs"]
 mod tests;

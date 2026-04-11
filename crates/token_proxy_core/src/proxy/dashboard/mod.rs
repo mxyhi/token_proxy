@@ -622,5 +622,4 @@ fn i64_to_u16(value: i64) -> u16 {
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。
 #[cfg(test)]
-#[path = "dashboard.test.rs"]
 mod tests;

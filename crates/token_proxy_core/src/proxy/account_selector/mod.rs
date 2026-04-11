@@ -175,5 +175,4 @@ fn instant_to_epoch_ms(until: Instant) -> Option<u128> {
 }
 
 #[cfg(test)]
-#[path = "account_selector.test.rs"]
 mod tests;

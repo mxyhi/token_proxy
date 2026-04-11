@@ -64,7 +64,7 @@ fn parse_anthropic_sse(bytes: &Bytes) -> Option<(String, Value)> {
 }
 
 // Split the test suite to keep each file below the project's line limit.
-#[path = "response.test.part2.rs"]
+#[path = "tests_part2.rs"]
 mod part2;
 
 async fn setup_responses_stream() -> (Arc<LogWriter>, LogContext, SqlitePool) {

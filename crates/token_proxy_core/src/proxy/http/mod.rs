@@ -404,5 +404,4 @@ pub(crate) fn extract_request_id(headers: &ReqwestHeaderMap) -> Option<String> {
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。
 #[cfg(test)]
-#[path = "http.test.rs"]
 mod tests;

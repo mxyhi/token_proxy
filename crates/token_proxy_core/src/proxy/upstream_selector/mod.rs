@@ -129,5 +129,4 @@ impl UpstreamSelectorRuntime {
 
 // 单元测试拆到独立文件，保持 `.test.rs` 命名约定。
 #[cfg(test)]
-#[path = "upstream_selector.test.rs"]
 mod tests;

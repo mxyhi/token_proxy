@@ -12,8 +12,11 @@ mod dispatch;
 mod kiro;
 mod kiro_headers;
 mod kiro_http;
+mod kiro_prepare;
+mod kiro_result;
 mod prepare;
 mod request;
+mod request_body;
 mod result;
 mod retry;
 mod transport;
@@ -150,5 +153,4 @@ struct ResolvedUpstreamAuth {
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。
 #[cfg(test)]
-#[path = "upstream.test.rs"]
 mod tests;

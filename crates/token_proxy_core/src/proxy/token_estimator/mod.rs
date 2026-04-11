@@ -278,5 +278,4 @@ fn math_symbol_set() -> &'static HashSet<char> {
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。
 #[cfg(test)]
-#[path = "token_estimator.test.rs"]
 mod tests;

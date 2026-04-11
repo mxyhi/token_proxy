@@ -193,5 +193,4 @@ impl ReplayableBody {
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。
 #[cfg(test)]
-#[path = "request_body.test.rs"]
 mod tests;

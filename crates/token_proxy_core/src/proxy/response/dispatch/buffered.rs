@@ -3,6 +3,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Response,
 };
+use serde_json::Value;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -19,7 +20,7 @@ use super::super::super::{
 };
 use super::super::{
     kiro_to_anthropic, kiro_to_responses, token_count, upstream_read, upstream_stream,
-    PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
+    RetryableStreamResponse, PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
 };
 
 const DEBUG_BODY_LOG_LIMIT_BYTES: usize = usize::MAX;
@@ -73,6 +74,19 @@ pub(super) async fn build_buffered_response(
     } else {
         bytes
     };
+    if let Some(message) =
+        empty_chat_completion_retry_message(&output, &context, response_transform)
+    {
+        context.status = StatusCode::BAD_GATEWAY.as_u16();
+        let entry = build_log_entry(&context, usage, Some(message.clone()));
+        log.clone().write_detached(entry);
+        let mut response = http::error_response(StatusCode::BAD_GATEWAY, &message);
+        response.extensions_mut().insert(RetryableStreamResponse {
+            message,
+            should_cooldown: false,
+        });
+        return response;
+    }
 
     let entry = build_log_entry(&context, usage, response_error);
     log.clone().write_detached(entry);
@@ -242,6 +256,65 @@ fn convert_generic_body(
         output: converted,
         usage,
     })
+}
+
+pub(super) fn empty_chat_completion_retry_message(
+    bytes: &Bytes,
+    context: &LogContext,
+    transform: FormatTransform,
+) -> Option<String> {
+    if context.path != "/v1/chat/completions" || !produces_chat_completion(transform) {
+        return None;
+    }
+
+    let value: Value = serde_json::from_slice(bytes).ok()?;
+    let choice = value
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| choices.first())
+        .and_then(Value::as_object)?;
+    if choice.get("finish_reason").and_then(Value::as_str) != Some("stop") {
+        return None;
+    }
+
+    let message = choice.get("message").and_then(Value::as_object)?;
+    if !value_is_absent(message.get("content"))
+        || !value_is_absent(message.get("reasoning_content"))
+        || !value_is_absent(message.get("tool_calls"))
+        || !value_is_absent(message.get("refusal"))
+        || !value_is_absent(message.get("audio"))
+    {
+        return None;
+    }
+
+    if message
+        .get("annotations")
+        .is_some_and(|value| value.as_array().is_none_or(|items| !items.is_empty()))
+    {
+        return None;
+    }
+
+    Some("Upstream returned empty chat completion content for stop response.".to_string())
+}
+
+fn produces_chat_completion(transform: FormatTransform) -> bool {
+    matches!(
+        transform,
+        FormatTransform::None
+            | FormatTransform::ResponsesToChat
+            | FormatTransform::AnthropicToChat
+            | FormatTransform::GeminiToChat
+            | FormatTransform::CodexToChat
+    )
+}
+
+pub(super) fn value_is_absent(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::Null) => true,
+        Some(Value::String(text)) => text.trim().is_empty(),
+        Some(Value::Array(items)) => items.is_empty(),
+        _ => false,
+    }
 }
 
 async fn read_upstream_bytes(

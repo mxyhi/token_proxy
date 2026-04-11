@@ -63,3 +63,7 @@ pub(super) async fn build_buffered_response(
     )
     .await
 }
+
+#[cfg(test)]
+#[path = "buffered.test.rs"]
+mod buffered_tests;

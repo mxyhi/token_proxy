@@ -4,7 +4,7 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, Uri},
     response::Response,
 };
-use std::{sync::Arc, time::Instant};
+use std::{collections::HashSet, sync::Arc, time::Instant};
 use tokio::sync::RwLock;
 use url::form_urlencoded;
 
@@ -672,14 +672,18 @@ fn resolve_retry_fallback_provider(
     }
 
     match (detect_inbound_api_format(path), primary_provider) {
-        (Some(InboundApiFormat::OpenaiChat), PROVIDER_RESPONSES | PROVIDER_CODEX) => Some((
-            if primary_provider == PROVIDER_RESPONSES {
-                PROVIDER_CODEX
-            } else {
-                PROVIDER_RESPONSES
-            },
+        (
             Some(InboundApiFormat::OpenaiChat),
-        )),
+            PROVIDER_CHAT | PROVIDER_RESPONSES | PROVIDER_CODEX,
+        ) => {
+            let fallback = match primary_provider {
+                PROVIDER_CHAT => PROVIDER_RESPONSES,
+                PROVIDER_RESPONSES => PROVIDER_CODEX,
+                PROVIDER_CODEX => PROVIDER_RESPONSES,
+                _ => unreachable!("guarded by match arm"),
+            };
+            Some((fallback, Some(InboundApiFormat::OpenaiChat)))
+        }
         (Some(InboundApiFormat::OpenaiResponses), PROVIDER_RESPONSES | PROVIDER_CODEX) => Some((
             if primary_provider == PROVIDER_RESPONSES {
                 PROVIDER_CODEX
@@ -702,7 +706,16 @@ fn resolve_retry_fallback_plan(
     // 不能复用主请求已经变换过的计划或 payload。
     let (fallback_provider, inbound_format) =
         resolve_retry_fallback_provider(path, primary_provider)?;
-    if provider_rank_for_inbound(config, fallback_provider, inbound_format).is_none() {
+    let is_available = match (inbound_format, fallback_provider) {
+        // Cross-provider fallback is an internal retry path, not a user-facing routing decision.
+        // For chat -> responses/codex we can synthesize request transforms ourselves, so requiring
+        // `convert_from_map += openai_chat` is unnecessarily strict.
+        (Some(InboundApiFormat::OpenaiChat), PROVIDER_RESPONSES | PROVIDER_CODEX) => {
+            config.provider_upstreams(fallback_provider).is_some()
+        }
+        _ => provider_rank_for_inbound(config, fallback_provider, inbound_format).is_some(),
+    };
+    if !is_available {
         return None;
     }
     build_retry_fallback_plan(path, fallback_provider)
@@ -718,6 +731,7 @@ async fn forward_retry_fallback_request(
     plan: &DispatchPlan,
 ) -> Result<super::upstream::ForwardUpstreamResult, Response> {
     let outbound_path = resolve_outbound_path(&prepared.path, plan, &prepared.meta);
+    let dispatch_inbound_format = detect_inbound_api_format(&outbound_path);
     let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, uri);
     let outbound_body = build_outbound_body_or_respond(
         &state.http_clients,
@@ -735,6 +749,7 @@ async fn forward_retry_fallback_request(
         method,
         plan.provider,
         &prepared.path,
+        dispatch_inbound_format,
         &outbound_path_with_query,
         headers,
         &outbound_body,
@@ -1288,6 +1303,7 @@ async fn proxy_request(
         method.clone(),
         prepared.plan.provider,
         &prepared.path,
+        None,
         &prepared.outbound_path_with_query,
         &headers,
         &prepared.outbound_body,
@@ -1299,42 +1315,60 @@ async fn proxy_request(
     )
     .await;
 
-    if primary.should_fallback {
-        if let Some(fallback_plan) =
-            resolve_retry_fallback_plan(&state.config, &prepared.path, prepared.plan.provider)
-        {
+    let mut current_response = primary.response;
+    let mut current_provider = prepared.plan.provider;
+    let mut should_fallback = primary.should_fallback;
+    let mut attempted_fallback_providers = HashSet::from([current_provider]);
+
+    while should_fallback {
+        let Some(fallback_plan) =
+            resolve_retry_fallback_plan(&state.config, &prepared.path, current_provider)
+        else {
+            break;
+        };
+        if !attempted_fallback_providers.insert(fallback_plan.provider) {
             tracing::warn!(
                 path = %prepared.path,
-                primary = %prepared.plan.provider,
-                fallback = %fallback_plan.provider,
-                "primary provider exhausted, falling back to alternate provider"
+                provider = %fallback_plan.provider,
+                "alternate provider fallback cycle detected"
             );
-            match forward_retry_fallback_request(
-                state,
-                method,
-                &uri,
-                &headers,
-                &prepared,
-                request_start,
-                &fallback_plan,
-            )
-            .await
-            {
-                Ok(fallback) if !fallback.should_fallback => return fallback.response,
-                Ok(_) => {}
-                Err(_) => {
-                    tracing::warn!(
-                        path = %prepared.path,
-                        primary = %prepared.plan.provider,
-                        fallback = %fallback_plan.provider,
-                        "alternate provider fallback aborted before dispatch"
-                    );
-                }
+            break;
+        }
+        tracing::warn!(
+            path = %prepared.path,
+            primary = %current_provider,
+            fallback = %fallback_plan.provider,
+            "primary provider exhausted, falling back to alternate provider"
+        );
+        match forward_retry_fallback_request(
+            state.clone(),
+            method.clone(),
+            &uri,
+            &headers,
+            &prepared,
+            request_start,
+            &fallback_plan,
+        )
+        .await
+        {
+            Ok(fallback) => {
+                current_provider = fallback_plan.provider;
+                should_fallback = fallback.should_fallback;
+                current_response = fallback.response;
+            }
+            Err(_) => {
+                tracing::warn!(
+                    path = %prepared.path,
+                    primary = %current_provider,
+                    fallback = %fallback_plan.provider,
+                    "alternate provider fallback aborted before dispatch"
+                );
+                break;
             }
         }
     }
 
-    primary.response
+    current_response
 }
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。

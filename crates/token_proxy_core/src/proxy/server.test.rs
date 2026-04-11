@@ -3541,6 +3541,48 @@ fn retry_fallback_plan_switches_chat_between_responses_family_providers() {
 }
 
 #[test]
+fn retry_fallback_plan_allows_openai_response_chat_to_native_codex_provider() {
+    let config = config_with_providers(&[
+        (PROVIDER_RESPONSES, FORMATS_RESPONSES),
+        (PROVIDER_CODEX, FORMATS_RESPONSES),
+    ]);
+    let plan = resolve_retry_fallback_plan(&config, CHAT_PATH, PROVIDER_RESPONSES)
+        .expect("should fallback to native codex provider");
+    assert_eq!(plan.provider, PROVIDER_CODEX);
+    assert_eq!(plan.outbound_path, Some(CODEX_RESPONSES_PATH));
+    assert_eq!(plan.request_transform, FormatTransform::ChatToCodex);
+    assert_eq!(plan.response_transform, FormatTransform::CodexToChat);
+}
+
+#[test]
+fn retry_fallback_plan_switches_chat_from_openai_to_responses() {
+    let config = config_with_providers(&[
+        (PROVIDER_CHAT, FORMATS_CHAT),
+        (PROVIDER_RESPONSES, FORMATS_ALL),
+    ]);
+    let plan = resolve_retry_fallback_plan(&config, CHAT_PATH, PROVIDER_CHAT)
+        .expect("should fallback to openai responses");
+    assert_eq!(plan.provider, PROVIDER_RESPONSES);
+    assert_eq!(plan.outbound_path, Some(RESPONSES_PATH));
+    assert_eq!(plan.request_transform, FormatTransform::ChatToResponses);
+    assert_eq!(plan.response_transform, FormatTransform::ResponsesToChat);
+}
+
+#[test]
+fn retry_fallback_plan_allows_openai_to_native_responses_provider() {
+    let config = config_with_providers(&[
+        (PROVIDER_CHAT, FORMATS_CHAT),
+        (PROVIDER_RESPONSES, FORMATS_RESPONSES),
+    ]);
+    let plan = resolve_retry_fallback_plan(&config, CHAT_PATH, PROVIDER_CHAT)
+        .expect("should fallback to native responses provider");
+    assert_eq!(plan.provider, PROVIDER_RESPONSES);
+    assert_eq!(plan.outbound_path, Some(RESPONSES_PATH));
+    assert_eq!(plan.request_transform, FormatTransform::ChatToResponses);
+    assert_eq!(plan.response_transform, FormatTransform::ResponsesToChat);
+}
+
+#[test]
 fn retry_fallback_plan_keeps_messages_pairing() {
     let config = config_with_providers(&[
         (PROVIDER_ANTHROPIC, FORMATS_MESSAGES),

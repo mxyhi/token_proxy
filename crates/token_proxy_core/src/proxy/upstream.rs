@@ -142,6 +142,7 @@ pub(super) async fn forward_upstream_request(
     method: Method,
     provider: &str,
     inbound_path: &str,
+    dispatch_inbound_format: Option<InboundApiFormat>,
     upstream_path_with_query: &str,
     headers: &HeaderMap,
     body: &ReplayableBody,
@@ -151,7 +152,8 @@ pub(super) async fn forward_upstream_request(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> ForwardUpstreamResult {
-    let inbound_format = detect_inbound_api_format(inbound_path);
+    let inbound_format =
+        dispatch_inbound_format.or_else(|| detect_inbound_api_format(inbound_path));
     let upstreams = match resolve_provider_upstreams(
         &state,
         provider,

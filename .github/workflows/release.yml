@@ -233,6 +233,7 @@ jobs:
           tagName: "${{ needs.stable_tag.outputs.tag }}"
           releaseName: "Release ${{ needs.stable_tag.outputs.version }}"
           releaseBody: ${{ needs.stable_tag.outputs.release_notes }}
+          releaseDraft: ${{ needs.stable_release_bootstrap.outputs.release_draft }}
           prerelease: false
           generateReleaseNotes: false
 
@@ -288,8 +289,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      release_draft: ${{ steps.ensure_release.outputs.release_draft }}
+      release_id: ${{ steps.ensure_release.outputs.release_id }}
     steps:
       - name: Ensure GitHub Release exists
+        id: ensure_release
         uses: actions/github-script@v7
         env:
           RELEASE_TAG: ${{ needs.stable_tag.outputs.tag }}
@@ -298,6 +303,7 @@ jobs:
         with:
           script: |
             const tag = process.env.RELEASE_TAG;
+            const createAsDraft = context.eventName === "workflow_run";
 
             try {
               const { data } = await github.rest.repos.getReleaseByTag({
@@ -305,7 +311,11 @@ jobs:
                 repo: context.repo.repo,
                 tag,
               });
-              core.info(`Release ${tag} already exists (#${data.id}).`);
+              core.setOutput("release_draft", String(Boolean(data.draft)));
+              core.setOutput("release_id", String(data.id));
+              core.info(
+                `Release ${tag} already exists (#${data.id}, draft=${Boolean(data.draft)}).`
+              );
               return;
             } catch (error) {
               if (error.status !== 404) {
@@ -319,11 +329,15 @@ jobs:
               tag_name: tag,
               name: process.env.RELEASE_NAME,
               body: process.env.RELEASE_BODY ?? "",
-              draft: false,
+              draft: createAsDraft,
               prerelease: false,
             });
 
-            core.info(`Release ${tag} created (#${data.id}) before parallel asset uploads.`);
+            core.setOutput("release_draft", String(Boolean(data.draft)));
+            core.setOutput("release_id", String(data.id));
+            core.info(
+              `Release ${tag} created (#${data.id}, draft=${Boolean(data.draft)}) before parallel asset uploads.`
+            );
 
   stable_cli_release:
     name: Release CLI (${{ matrix.platform }} / ${{ matrix.target }})
@@ -431,6 +445,47 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_NAME: ${{ needs.stable_tag.outputs.tag }}
+
+  stable_release_publish:
+    name: Publish GitHub Release
+    needs:
+      [
+        stable_tag,
+        stable_release_bootstrap,
+        stable_release,
+        stable_cli_release,
+        stable_updater_json,
+      ]
+    if: |
+      needs.stable_tag.outputs.tag != '' &&
+      needs.stable_release_bootstrap.outputs.release_draft == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish release after all assets are ready
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ needs.stable_release_bootstrap.outputs.release_id }}
+          RELEASE_TAG: ${{ needs.stable_tag.outputs.tag }}
+        with:
+          script: |
+            const releaseId = Number(process.env.RELEASE_ID);
+            if (!Number.isFinite(releaseId) || releaseId <= 0) {
+              throw new Error(`Invalid RELEASE_ID: ${process.env.RELEASE_ID}`);
+            }
+
+            const { data } = await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseId,
+              draft: false,
+              prerelease: false,
+            });
+
+            core.info(
+              `Release ${process.env.RELEASE_TAG} published (#${data.id}) after updater assets and latest.json were ready.`
+            );
 
   prepare_release_pr:
     name: Prepare release PR

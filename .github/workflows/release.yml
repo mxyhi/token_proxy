@@ -244,14 +244,14 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ needs.stable_tag.outputs.tag }}
+          RELEASE_ID: ${{ needs.stable_release_bootstrap.outputs.release_id }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           expected=(
             "Token.Proxy_aarch64.app.tar.gz"
             "Token.Proxy_aarch64.app.tar.gz.sig"
           )
-          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/${TAG_NAME}"
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}/assets?per_page=100"
 
           for attempt in {1..12}; do
             names="$(
@@ -259,7 +259,7 @@ jobs:
                 -H "Authorization: Bearer ${GITHUB_TOKEN}" \
                 -H "Accept: application/vnd.github+json" \
                 "$api" \
-              | node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8")); console.log((r.assets ?? []).map(a => a.name).join("\n"));'
+              | node -e 'const assets=JSON.parse(require("fs").readFileSync(0,"utf8")); console.log((assets ?? []).map(a => a.name).join("\n"));'
             )"
 
             missing=()
@@ -425,26 +425,296 @@ jobs:
 
   stable_updater_json:
     name: Generate updater latest.json
-    needs: [stable_tag, stable_release]
+    needs: [stable_tag, stable_release_bootstrap, stable_release]
     if: needs.stable_tag.outputs.tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.stable_tag.outputs.tag }}
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Generate and upload latest.json
-        run: node scripts/generate-updater-json.mjs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.stable_release_bootstrap.outputs.release_id }}
           TAG_NAME: ${{ needs.stable_tag.outputs.tag }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs/promises";
+
+          function requireEnv(name) {
+            const value = process.env[name];
+            if (!value) {
+              throw new Error(`Missing env: ${name}`);
+            }
+            return value;
+          }
+
+          function parseOwnerRepo(value) {
+            const [owner, repo] = value.split("/", 2);
+            if (!owner || !repo) {
+              throw new Error(`Invalid GITHUB_REPOSITORY: ${value}`);
+            }
+            return { owner, repo };
+          }
+
+          async function githubRequest(url, token, accept = "application/vnd.github+json") {
+            const response = await fetch(url, {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: accept,
+                "User-Agent": "token-proxy-updater-json",
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+            });
+            if (!response.ok) {
+              throw new Error(`GitHub API ${response.status} ${response.statusText}: ${url}`);
+            }
+            return response;
+          }
+
+          async function githubRequestJson(url, token) {
+            return githubRequest(url, token).then((response) => response.json());
+          }
+
+          async function githubRequestText(url, token, accept) {
+            const response = await githubRequest(url, token, accept);
+            const buffer = Buffer.from(await response.arrayBuffer());
+            return buffer.toString("utf8");
+          }
+
+          function findSingleAsset(assets, pattern, label) {
+            const matches = assets.filter((asset) => pattern.test(asset.name));
+            if (matches.length === 0) {
+              throw new Error(`Missing release asset for ${label} (${pattern})`);
+            }
+            if (matches.length > 1) {
+              const names = matches.map((asset) => asset.name).join(", ");
+              throw new Error(`Multiple release assets matched for ${label}: ${names}`);
+            }
+            return matches[0];
+          }
+
+          function resolveSignatureAsset(assetsByName, updaterAssetName) {
+            const sigName = `${updaterAssetName}.sig`;
+            const sigAsset = assetsByName.get(sigName);
+            if (!sigAsset) {
+              throw new Error(`Missing signature asset: ${sigName}`);
+            }
+            return sigAsset;
+          }
+
+          function stripTagPrefix(tagName) {
+            return tagName.startsWith("v") ? tagName.slice(1) : tagName;
+          }
+
+          function pickPrimaryBundle(os) {
+            if (os === "windows") return ["msi", "nsis"];
+            if (os === "linux") return ["appimage", "deb", "rpm"];
+            if (os === "darwin") return ["app"];
+            return [];
+          }
+
+          function buildUpdaterRules(version) {
+            return [
+              {
+                os: "darwin",
+                arch: "aarch64",
+                bundle: "app",
+                label: "macOS (aarch64) app.tar.gz",
+                assetPattern: /^Token\.Proxy_aarch64\.app\.tar\.gz$/,
+              },
+              {
+                os: "darwin",
+                arch: "x86_64",
+                bundle: "app",
+                label: "macOS (x86_64) app.tar.gz",
+                assetPattern: /^Token\.Proxy_x64\.app\.tar\.gz$/,
+              },
+              {
+                os: "windows",
+                arch: "x86_64",
+                bundle: "msi",
+                label: "Windows (x86_64) msi",
+                assetPattern: new RegExp(`^Token\\.Proxy_${version}_x64_.*\\.msi$`),
+              },
+              {
+                os: "windows",
+                arch: "x86_64",
+                bundle: "nsis",
+                label: "Windows (x86_64) nsis exe",
+                assetPattern: new RegExp(`^Token\\.Proxy_${version}_x64-setup\\.exe$`),
+              },
+              {
+                os: "linux",
+                arch: "x86_64",
+                bundle: "appimage",
+                label: "Linux (x86_64) AppImage",
+                assetPattern: new RegExp(`^Token\\.Proxy_${version}_amd64\\.AppImage$`),
+              },
+              {
+                os: "linux",
+                arch: "aarch64",
+                bundle: "appimage",
+                label: "Linux (aarch64) AppImage",
+                assetPattern: new RegExp(`^Token\\.Proxy_${version}_aarch64\\.AppImage$`),
+              },
+              {
+                os: "linux",
+                arch: "x86_64",
+                bundle: "deb",
+                label: "Linux (x86_64) deb",
+                assetPattern: new RegExp(`^Token\\.Proxy_${version}_amd64\\.deb$`),
+              },
+              {
+                os: "linux",
+                arch: "aarch64",
+                bundle: "deb",
+                label: "Linux (aarch64) deb",
+                assetPattern: new RegExp(`^Token\\.Proxy_${version}_arm64\\.deb$`),
+              },
+              {
+                os: "linux",
+                arch: "x86_64",
+                bundle: "rpm",
+                label: "Linux (x86_64) rpm",
+                assetPattern: new RegExp(`^Token\\.Proxy-${version}-\\d+\\.x86_64\\.rpm$`),
+              },
+              {
+                os: "linux",
+                arch: "aarch64",
+                bundle: "rpm",
+                label: "Linux (aarch64) rpm",
+                assetPattern: new RegExp(`^Token\\.Proxy-${version}-\\d+\\.aarch64\\.rpm$`),
+              },
+            ];
+          }
+
+          const token = requireEnv("GITHUB_TOKEN");
+          const releaseId = Number(requireEnv("RELEASE_ID"));
+          const tagName = requireEnv("TAG_NAME");
+          const { owner, repo } = parseOwnerRepo(requireEnv("GITHUB_REPOSITORY"));
+
+          if (!Number.isFinite(releaseId) || releaseId <= 0) {
+            throw new Error(`Invalid RELEASE_ID: ${process.env.RELEASE_ID}`);
+          }
+
+          const apiBase = process.env.GITHUB_API_URL || "https://api.github.com";
+          const release = await githubRequestJson(
+            `${apiBase}/repos/${owner}/${repo}/releases/${releaseId}`,
+            token
+          );
+
+          const version = stripTagPrefix(release.tag_name || tagName);
+          const notes = typeof release.body === "string" ? release.body : "";
+          const pubDate =
+            typeof release.published_at === "string" && release.published_at
+              ? release.published_at
+              : new Date().toISOString();
+
+          const assets = await githubRequestJson(
+            `${apiBase}/repos/${owner}/${repo}/releases/${releaseId}/assets?per_page=100`,
+            token
+          );
+          const assetsByName = new Map(assets.map((asset) => [asset.name, asset]));
+          const rules = buildUpdaterRules(version);
+
+          const platforms = {};
+          const candidatesByPlatform = new Map();
+
+          for (const rule of rules) {
+            const updaterAsset = findSingleAsset(assets, rule.assetPattern, rule.label);
+            const signatureAsset = resolveSignatureAsset(assetsByName, updaterAsset.name);
+
+            const signature = (
+              await githubRequestText(
+                `${apiBase}/repos/${owner}/${repo}/releases/assets/${signatureAsset.id}`,
+                token,
+                "application/octet-stream"
+              )
+            ).trimEnd();
+
+            const key = `${rule.os}-${rule.arch}-${rule.bundle}`;
+            platforms[key] = {
+              signature,
+              url: updaterAsset.browser_download_url,
+            };
+
+            const baseKey = `${rule.os}-${rule.arch}`;
+            if (!candidatesByPlatform.has(baseKey)) {
+              candidatesByPlatform.set(baseKey, []);
+            }
+            candidatesByPlatform.get(baseKey).push({ bundle: rule.bundle, key });
+          }
+
+          for (const [baseKey, candidates] of candidatesByPlatform.entries()) {
+            const [os] = baseKey.split("-", 1);
+            const bundlePriority = pickPrimaryBundle(os);
+            const preferred = bundlePriority
+              .map((bundle) => candidates.find((item) => item.bundle === bundle))
+              .find(Boolean);
+
+            if (!preferred) {
+              throw new Error(`No primary bundle candidate for ${baseKey}`);
+            }
+
+            platforms[baseKey] = platforms[preferred.key];
+          }
+
+          const latestJson = {
+            version,
+            notes,
+            pub_date: pubDate,
+            platforms,
+          };
+
+          const filePath = "latest.json";
+          await fs.writeFile(filePath, `${JSON.stringify(latestJson, null, 2)}\n`);
+
+          const existing = assets.find((asset) => asset.name === "latest.json");
+          if (existing) {
+            await fetch(`${apiBase}/repos/${owner}/${repo}/releases/assets/${existing.id}`, {
+              method: "DELETE",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/vnd.github+json",
+                "User-Agent": "token-proxy-updater-json",
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+            });
+          }
+
+          const uploadUrl = String(release.upload_url || "").replace(
+            "{?name,label}",
+            `?name=${encodeURIComponent("latest.json")}`
+          );
+          if (!uploadUrl.startsWith("http")) {
+            throw new Error("Invalid release.upload_url");
+          }
+
+          const fileBytes = await fs.readFile(filePath);
+          const uploadResponse = await fetch(uploadUrl, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/vnd.github+json",
+              "Content-Type": "application/octet-stream",
+              "Content-Length": String(fileBytes.length),
+              "User-Agent": "token-proxy-updater-json",
+              "X-GitHub-Api-Version": "2022-11-28",
+            },
+            body: fileBytes,
+          });
+          if (!uploadResponse.ok) {
+            throw new Error(
+              `Upload failed: ${uploadResponse.status} ${uploadResponse.statusText}`
+            );
+          }
+          NODE
 
   stable_release_publish:
     name: Publish GitHub Release
@@ -486,6 +756,11 @@ jobs:
             core.info(
               `Release ${process.env.RELEASE_TAG} published (#${data.id}) after updater assets and latest.json were ready.`
             );
+
+      - name: Mark release as latest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ needs.stable_tag.outputs.tag }}" --latest
 
   prepare_release_pr:
     name: Prepare release PR

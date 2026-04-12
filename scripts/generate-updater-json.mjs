@@ -81,6 +81,12 @@ function stripTagPrefix(tagName) {
   return tagName.startsWith("v") ? tagName.slice(1) : tagName;
 }
 
+function buildTaggedAssetUrl(owner, repo, tagName, assetName) {
+  // Draft release 阶段的 browser_download_url 可能仍指向 untagged 临时路径；
+  // latest.json 需要直接写稳定的 tag 下载地址，等 release publish 后即可生效。
+  return `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(tagName)}/${encodeURIComponent(assetName)}`;
+}
+
 function pickPrimaryBundle(os) {
   // 与 tauri-action 的默认策略保持一致：Windows 优先 MSI，Linux 优先 AppImage。
   if (os === "windows") return ["msi", "nsis"];
@@ -214,7 +220,7 @@ async function main() {
     const key = `${rule.os}-${rule.arch}-${rule.bundle}`;
     platforms[key] = {
       signature,
-      url: updaterAsset.browser_download_url,
+      url: buildTaggedAssetUrl(owner, repo, tagName, updaterAsset.name),
     };
 
     const baseKey = `${rule.os}-${rule.arch}`;

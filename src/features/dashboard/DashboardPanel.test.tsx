@@ -51,8 +51,8 @@ describe("dashboard/DashboardPanel", () => {
   beforeEach(() => {
     readDashboardSnapshotMock.mockReset();
     readDashboardSnapshotMock.mockImplementation(
-      async ({ upstreamId }: DashboardSnapshotQuery) => {
-        if (upstreamId === "alpha") {
+      async ({ upstreamId, accountId, publicOnly }: DashboardSnapshotQuery) => {
+        if (upstreamId === "alpha" && accountId === "codex-a.json") {
           return {
             summary: {
               totalRequests: 1,
@@ -76,14 +76,35 @@ describe("dashboard/DashboardPanel", () => {
             upstreams: [
               {
                 upstreamId: "alpha",
-                provider: "openai",
+                requests: 2,
+                totalTokens: 35,
+                cachedTokens: 6,
+              },
+              {
+                upstreamId: "beta",
+                requests: 1,
+                totalTokens: 7,
+                cachedTokens: 1,
+              },
+            ],
+            accounts: [
+              {
+                upstreamId: "alpha",
+                accountId: "codex-a.json",
                 requests: 1,
                 totalTokens: 30,
                 cachedTokens: 5,
               },
               {
+                upstreamId: "alpha",
+                accountId: null,
+                requests: 1,
+                totalTokens: 5,
+                cachedTokens: 1,
+              },
+              {
                 upstreamId: "beta",
-                provider: "anthropic",
+                accountId: null,
                 requests: 1,
                 totalTokens: 7,
                 cachedTokens: 1,
@@ -107,6 +128,211 @@ describe("dashboard/DashboardPanel", () => {
                 path: "/v1/chat/completions",
                 provider: "openai",
                 upstreamId: "alpha",
+                accountId: "codex-a.json",
+                model: "gpt-5",
+                mappedModel: null,
+                stream: false,
+                status: 200,
+                totalTokens: 30,
+                cachedTokens: 5,
+                latencyMs: 30,
+                upstreamRequestId: null,
+              },
+            ],
+            truncated: false,
+          };
+        }
+
+        if (upstreamId === "alpha" && publicOnly) {
+          return {
+            summary: {
+              totalRequests: 1,
+              successRequests: 1,
+              errorRequests: 0,
+              totalTokens: 30,
+              inputTokens: 10,
+              outputTokens: 20,
+              cachedTokens: 5,
+              avgLatencyMs: 30,
+              medianLatencyMs: 30,
+            },
+            providers: [
+              {
+                provider: "openai",
+                requests: 1,
+                totalTokens: 30,
+                cachedTokens: 5,
+              },
+            ],
+            upstreams: [
+              {
+                upstreamId: "alpha",
+                requests: 2,
+                totalTokens: 35,
+                cachedTokens: 6,
+              },
+              {
+                upstreamId: "beta",
+                requests: 1,
+                totalTokens: 7,
+                cachedTokens: 1,
+              },
+            ],
+            accounts: [
+              {
+                upstreamId: "alpha",
+                accountId: "codex-a.json",
+                requests: 1,
+                totalTokens: 30,
+                cachedTokens: 5,
+              },
+              {
+                upstreamId: "alpha",
+                accountId: null,
+                requests: 1,
+                totalTokens: 5,
+                cachedTokens: 1,
+              },
+              {
+                upstreamId: "beta",
+                accountId: null,
+                requests: 1,
+                totalTokens: 7,
+                cachedTokens: 1,
+              },
+            ],
+            series: [
+              {
+                tsMs: 100,
+                totalRequests: 1,
+                errorRequests: 0,
+                inputTokens: 10,
+                outputTokens: 20,
+                cachedTokens: 5,
+                totalTokens: 30,
+              },
+            ],
+            recent: [
+              {
+                id: 1,
+                tsMs: 100,
+                path: "/v1/chat/completions",
+                provider: "openai-response",
+                upstreamId: "alpha",
+                accountId: null,
+                model: "gpt-5",
+                mappedModel: null,
+                stream: false,
+                status: 200,
+                totalTokens: 5,
+                cachedTokens: 1,
+                latencyMs: 40,
+                upstreamRequestId: null,
+              },
+            ],
+            truncated: false,
+          };
+        }
+
+        if (upstreamId === "alpha") {
+          return {
+            summary: {
+              totalRequests: 2,
+              successRequests: 2,
+              errorRequests: 0,
+              totalTokens: 35,
+              inputTokens: 12,
+              outputTokens: 23,
+              cachedTokens: 6,
+              avgLatencyMs: 35,
+              medianLatencyMs: 35,
+            },
+            providers: [
+              {
+                provider: "openai",
+                requests: 1,
+                totalTokens: 30,
+                cachedTokens: 5,
+              },
+              {
+                provider: "openai-response",
+                requests: 1,
+                totalTokens: 5,
+                cachedTokens: 1,
+              },
+            ],
+            upstreams: [
+              {
+                upstreamId: "alpha",
+                requests: 2,
+                totalTokens: 35,
+                cachedTokens: 6,
+              },
+              {
+                upstreamId: "beta",
+                requests: 1,
+                totalTokens: 7,
+                cachedTokens: 1,
+              },
+            ],
+            accounts: [
+              {
+                upstreamId: "alpha",
+                accountId: "codex-a.json",
+                requests: 1,
+                totalTokens: 30,
+                cachedTokens: 5,
+              },
+              {
+                upstreamId: "alpha",
+                accountId: null,
+                requests: 1,
+                totalTokens: 5,
+                cachedTokens: 1,
+              },
+              {
+                upstreamId: "beta",
+                accountId: null,
+                requests: 1,
+                totalTokens: 7,
+                cachedTokens: 1,
+              },
+            ],
+            series: [
+              {
+                tsMs: 100,
+                totalRequests: 2,
+                errorRequests: 0,
+                inputTokens: 12,
+                outputTokens: 23,
+                cachedTokens: 6,
+                totalTokens: 35,
+              },
+            ],
+            recent: [
+              {
+                id: 2,
+                tsMs: 110,
+                path: "/v1/responses",
+                provider: "openai-response",
+                upstreamId: "alpha",
+                accountId: null,
+                model: "gpt-5",
+                mappedModel: null,
+                stream: false,
+                status: 200,
+                totalTokens: 5,
+                cachedTokens: 1,
+                latencyMs: 40,
+                upstreamRequestId: null,
+              },
+              {
+                id: 1,
+                tsMs: 100,
+                path: "/v1/chat/completions",
+                provider: "openai",
+                upstreamId: "alpha",
+                accountId: "codex-a.json",
                 model: "gpt-5",
                 mappedModel: null,
                 stream: false,
@@ -123,15 +349,15 @@ describe("dashboard/DashboardPanel", () => {
 
         return {
           summary: {
-            totalRequests: 2,
-            successRequests: 1,
+            totalRequests: 3,
+            successRequests: 2,
             errorRequests: 1,
-            totalTokens: 37,
-            inputTokens: 13,
-            outputTokens: 24,
-            cachedTokens: 6,
-            avgLatencyMs: 60,
-            medianLatencyMs: 60,
+            totalTokens: 42,
+            inputTokens: 15,
+            outputTokens: 27,
+            cachedTokens: 7,
+            avgLatencyMs: 53,
+            medianLatencyMs: 40,
           },
           providers: [
             {
@@ -146,18 +372,45 @@ describe("dashboard/DashboardPanel", () => {
               totalTokens: 7,
               cachedTokens: 1,
             },
+            {
+              provider: "openai-response",
+              requests: 1,
+              totalTokens: 5,
+              cachedTokens: 1,
+            },
           ],
           upstreams: [
             {
               upstreamId: "alpha",
-              provider: "openai",
+              requests: 2,
+              totalTokens: 35,
+              cachedTokens: 6,
+            },
+            {
+              upstreamId: "beta",
+              requests: 1,
+              totalTokens: 7,
+              cachedTokens: 1,
+            },
+          ],
+          accounts: [
+            {
+              upstreamId: "alpha",
+              accountId: "codex-a.json",
               requests: 1,
               totalTokens: 30,
               cachedTokens: 5,
             },
             {
+              upstreamId: "alpha",
+              accountId: null,
+              requests: 1,
+              totalTokens: 5,
+              cachedTokens: 1,
+            },
+            {
               upstreamId: "beta",
-              provider: "anthropic",
+              accountId: null,
               requests: 1,
               totalTokens: 7,
               cachedTokens: 1,
@@ -166,12 +419,12 @@ describe("dashboard/DashboardPanel", () => {
           series: [
             {
               tsMs: 100,
-              totalRequests: 2,
+              totalRequests: 3,
               errorRequests: 1,
-              inputTokens: 13,
-              outputTokens: 24,
-              cachedTokens: 6,
-              totalTokens: 37,
+              inputTokens: 15,
+              outputTokens: 27,
+              cachedTokens: 7,
+              totalTokens: 42,
             },
           ],
           recent: [],
@@ -181,22 +434,24 @@ describe("dashboard/DashboardPanel", () => {
     );
   });
 
-  it("defaults to all upstream data and refetches when an upstream is selected", async () => {
+  it("defaults to all upstream data and refetches when an upstream and account are selected", async () => {
     const user = userEvent.setup();
 
     renderPanel();
 
     await waitFor(() => {
       expect(screen.getByTestId("dashboard-summary-total")).toHaveTextContent(
-        "2"
+        "3"
       );
     });
-    expect(screen.getByTestId("dashboard-chart-total")).toHaveTextContent("37");
+    expect(screen.getByTestId("dashboard-chart-total")).toHaveTextContent("42");
     expect(readDashboardSnapshotMock).toHaveBeenCalledWith(
       {
         range: { fromTsMs: expect.any(Number), toTsMs: expect.any(Number) },
         offset: 0,
         upstreamId: null,
+        accountId: null,
+        publicOnly: false,
       }
     );
 
@@ -204,7 +459,30 @@ describe("dashboard/DashboardPanel", () => {
       screen.getByRole("combobox", { name: m.dashboard_upstream_label() })
     );
     await user.click(
-      await screen.findByRole("option", { name: "alpha · openai" })
+      await screen.findByRole("option", { name: "alpha" })
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("dashboard-summary-total")).toHaveTextContent(
+        "2"
+      );
+    });
+    expect(screen.getByTestId("dashboard-chart-total")).toHaveTextContent("35");
+    expect(readDashboardSnapshotMock).toHaveBeenLastCalledWith(
+      {
+        range: { fromTsMs: expect.any(Number), toTsMs: expect.any(Number) },
+        offset: 0,
+        upstreamId: "alpha",
+        accountId: null,
+        publicOnly: false,
+      }
+    );
+
+    await user.click(
+      screen.getByRole("combobox", { name: m.dashboard_account_label() })
+    );
+    await user.click(
+      await screen.findByRole("option", { name: "codex-a.json" })
     );
 
     await waitFor(() => {
@@ -218,6 +496,8 @@ describe("dashboard/DashboardPanel", () => {
         range: { fromTsMs: expect.any(Number), toTsMs: expect.any(Number) },
         offset: 0,
         upstreamId: "alpha",
+        accountId: "codex-a.json",
+        publicOnly: false,
       }
     );
   });

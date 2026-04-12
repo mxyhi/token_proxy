@@ -24,7 +24,14 @@ export type DashboardProviderStat = {
 
 export type DashboardUpstreamOption = {
   upstreamId: string;
-  provider: string;
+  requests: number;
+  totalTokens: number;
+  cachedTokens: number;
+};
+
+export type DashboardAccountOption = {
+  upstreamId: string;
+  accountId: string | null;
   requests: number;
   totalTokens: number;
   cachedTokens: number;
@@ -62,6 +69,7 @@ export type DashboardSnapshot = {
   summary: DashboardSummary;
   providers: DashboardProviderStat[];
   upstreams: DashboardUpstreamOption[];
+  accounts: DashboardAccountOption[];
   series: DashboardSeriesPoint[];
   recent: DashboardRequestItem[];
   truncated: boolean;
@@ -71,4 +79,6 @@ export type DashboardSnapshotQuery = {
   range: DashboardRange;
   offset?: number;
   upstreamId?: string | null;
+  accountId?: string | null;
+  publicOnly?: boolean;
 };

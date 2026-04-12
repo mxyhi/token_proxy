@@ -171,7 +171,9 @@ async fn insert_request(
 #[tokio::test]
 async fn median_latency_empty_table_returns_zero() {
     let pool = setup_test_db().await;
-    let result = query_median_latency(&pool, None, None, None).await.unwrap();
+    let result = query_median_latency(&pool, None, None, None, None, false)
+        .await
+        .unwrap();
     assert_eq!(result, 0, "Empty table should return 0");
 }
 
@@ -180,7 +182,9 @@ async fn median_latency_single_value() {
     let pool = setup_test_db().await;
     insert_latency(&pool, 100).await;
 
-    let result = query_median_latency(&pool, None, None, None).await.unwrap();
+    let result = query_median_latency(&pool, None, None, None, None, false)
+        .await
+        .unwrap();
     assert_eq!(result, 100, "Single value should be the median");
 }
 
@@ -192,7 +196,9 @@ async fn median_latency_odd_count() {
     insert_latency(&pool, 30).await;
     insert_latency(&pool, 20).await;
 
-    let result = query_median_latency(&pool, None, None, None).await.unwrap();
+    let result = query_median_latency(&pool, None, None, None, None, false)
+        .await
+        .unwrap();
     assert_eq!(result, 20, "Odd count median should be middle value");
 }
 
@@ -205,7 +211,9 @@ async fn median_latency_even_count() {
     insert_latency(&pool, 20).await;
     insert_latency(&pool, 30).await;
 
-    let result = query_median_latency(&pool, None, None, None).await.unwrap();
+    let result = query_median_latency(&pool, None, None, None, None, false)
+        .await
+        .unwrap();
     assert_eq!(
         result, 25,
         "Even count median should be average of two middle values"
@@ -219,7 +227,9 @@ async fn median_latency_even_count_rounds_down() {
     insert_latency(&pool, 10).await;
     insert_latency(&pool, 21).await;
 
-    let result = query_median_latency(&pool, None, None, None).await.unwrap();
+    let result = query_median_latency(&pool, None, None, None, None, false)
+        .await
+        .unwrap();
     assert_eq!(result, 15, "Median should use integer division");
 }
 
@@ -250,18 +260,20 @@ async fn median_latency_with_time_range_filter() {
     .unwrap();
 
     // 只查询 ts_ms 在 150-250 范围内的数据，应该只有 latency_ms=100 的记录
-    let result = query_median_latency(&pool, Some(150), Some(250), None)
+    let result = query_median_latency(&pool, Some(150), Some(250), None, None, false)
         .await
         .unwrap();
     assert_eq!(result, 100, "Should filter by time range");
 
     // 查询所有数据，中位数应为 100
-    let result_all = query_median_latency(&pool, None, None, None).await.unwrap();
+    let result_all = query_median_latency(&pool, None, None, None, None, false)
+        .await
+        .unwrap();
     assert_eq!(result_all, 100, "All data median should be 100");
 }
 
 #[tokio::test]
-async fn read_snapshot_filters_by_upstream_and_keeps_all_upstream_options() {
+async fn read_snapshot_filters_by_upstream_and_keeps_merged_upstream_and_account_options() {
     let pool = setup_test_db().await;
     insert_request(
         &pool,
@@ -275,6 +287,20 @@ async fn read_snapshot_filters_by_upstream_and_keeps_all_upstream_options() {
         None,
         Some(5),
         30,
+    )
+    .await;
+    insert_request(
+        &pool,
+        150,
+        "openai-response",
+        "alpha",
+        None,
+        200,
+        Some(2),
+        Some(3),
+        None,
+        Some(1),
+        40,
     )
     .await;
     insert_request(
@@ -300,29 +326,32 @@ async fn read_snapshot_filters_by_upstream_and_keeps_all_upstream_options() {
         },
         Some(0),
         Some(String::from("alpha")),
+        None,
+        false,
     )
     .await
     .unwrap();
 
-    assert_eq!(snapshot.summary.total_requests, 1);
-    assert_eq!(snapshot.summary.success_requests, 1);
+    assert_eq!(snapshot.summary.total_requests, 2);
+    assert_eq!(snapshot.summary.success_requests, 2);
     assert_eq!(snapshot.summary.error_requests, 0);
-    assert_eq!(snapshot.summary.total_tokens, 30);
-    assert_eq!(snapshot.summary.cached_tokens, 5);
-    assert_eq!(snapshot.summary.avg_latency_ms, 30);
-    assert_eq!(snapshot.summary.median_latency_ms, 30);
+    assert_eq!(snapshot.summary.total_tokens, 35);
+    assert_eq!(snapshot.summary.cached_tokens, 6);
+    assert_eq!(snapshot.summary.avg_latency_ms, 35);
+    assert_eq!(snapshot.summary.median_latency_ms, 35);
 
-    assert_eq!(snapshot.providers.len(), 1);
+    assert_eq!(snapshot.providers.len(), 2);
     assert_eq!(snapshot.providers[0].provider, "openai");
     assert_eq!(snapshot.providers[0].requests, 1);
 
-    assert_eq!(snapshot.recent.len(), 1);
+    assert_eq!(snapshot.recent.len(), 2);
     assert_eq!(snapshot.recent[0].upstream_id, "alpha");
+    assert_eq!(snapshot.recent[0].account_id, None);
     assert_eq!(
-        snapshot.recent[0].account_id.as_deref(),
+        snapshot.recent[1].account_id.as_deref(),
         Some("codex-a.json")
     );
-    assert_eq!(snapshot.recent[0].output_tokens, Some(20));
+    assert_eq!(snapshot.recent[1].output_tokens, Some(20));
     assert!(
         snapshot
             .series
@@ -336,9 +365,105 @@ async fn read_snapshot_filters_by_upstream_and_keeps_all_upstream_options() {
     assert!(snapshot
         .upstreams
         .iter()
-        .any(|item| item.upstream_id == "alpha" && item.provider == "openai"));
+        .any(|item| item.upstream_id == "alpha" && item.requests == 2));
     assert!(snapshot
         .upstreams
         .iter()
-        .any(|item| item.upstream_id == "beta" && item.provider == "anthropic"));
+        .any(|item| item.upstream_id == "beta" && item.requests == 1));
+
+    assert_eq!(snapshot.accounts.len(), 2);
+    assert!(snapshot.accounts.iter().any(|item| {
+        item.upstream_id == "alpha"
+            && item.account_id.as_deref() == Some("codex-a.json")
+            && item.requests == 1
+    }));
+    assert!(snapshot.accounts.iter().any(|item| {
+        item.upstream_id == "alpha" && item.account_id.is_none() && item.requests == 1
+    }));
+}
+
+#[tokio::test]
+async fn read_snapshot_filters_by_account_and_public_requests() {
+    let pool = setup_test_db().await;
+    insert_request(
+        &pool,
+        100,
+        "openai",
+        "alpha",
+        Some("codex-a.json"),
+        200,
+        Some(10),
+        Some(20),
+        None,
+        Some(5),
+        30,
+    )
+    .await;
+    insert_request(
+        &pool,
+        150,
+        "openai-response",
+        "alpha",
+        None,
+        200,
+        Some(2),
+        Some(3),
+        None,
+        Some(1),
+        40,
+    )
+    .await;
+    insert_request(
+        &pool,
+        200,
+        "anthropic",
+        "beta",
+        Some("claude-a.json"),
+        200,
+        Some(3),
+        Some(4),
+        None,
+        Some(1),
+        90,
+    )
+    .await;
+
+    let account_snapshot = read_snapshot(
+        &pool,
+        DashboardRange {
+            from_ts_ms: None,
+            to_ts_ms: None,
+        },
+        Some(0),
+        Some(String::from("alpha")),
+        Some(String::from("codex-a.json")),
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(account_snapshot.summary.total_requests, 1);
+    assert_eq!(account_snapshot.recent.len(), 1);
+    assert_eq!(
+        account_snapshot.recent[0].account_id.as_deref(),
+        Some("codex-a.json")
+    );
+
+    let public_snapshot = read_snapshot(
+        &pool,
+        DashboardRange {
+            from_ts_ms: None,
+            to_ts_ms: None,
+        },
+        Some(0),
+        Some(String::from("alpha")),
+        None,
+        true,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(public_snapshot.summary.total_requests, 1);
+    assert_eq!(public_snapshot.recent.len(), 1);
+    assert_eq!(public_snapshot.recent[0].account_id, None);
 }

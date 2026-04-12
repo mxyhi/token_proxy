@@ -17,10 +17,14 @@ export function DashboardPanel() {
     activeRange,
     rangePreset,
     selectedUpstreamId,
+    selectedAccountId,
+    selectedPublicOnly,
     upstreamOptions,
+    accountOptions,
     refresh,
     onRangeChange,
     onUpstreamChange,
+    onAccountChange,
   } = useDashboardSnapshot()
 
   const isLoading = status === "loading"
@@ -41,9 +45,13 @@ export function DashboardPanel() {
         range={rangePreset}
         upstreamId={selectedUpstreamId}
         upstreamOptions={upstreamOptions}
+        accountId={selectedAccountId}
+        publicOnly={selectedPublicOnly}
+        accountOptions={accountOptions}
         loading={isLoading}
         onRangeChange={onRangeChange}
         onUpstreamChange={onUpstreamChange}
+        onAccountChange={onAccountChange}
         onRefresh={refresh}
       />
 

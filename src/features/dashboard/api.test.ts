@@ -20,6 +20,7 @@ describe("dashboard/api", () => {
       },
       providers: [],
       upstreams: [],
+      accounts: [],
       series: [],
       recent: [],
       truncated: false,
@@ -30,12 +31,16 @@ describe("dashboard/api", () => {
       range,
       offset: 10,
       upstreamId: "alpha",
+      accountId: "codex-a.json",
+      publicOnly: false,
     });
 
     expect(invokeMock).toHaveBeenCalledWith("read_dashboard_snapshot", {
       range,
       offset: 10,
       upstreamId: "alpha",
+      accountId: "codex-a.json",
+      publicOnly: false,
     });
   });
 });

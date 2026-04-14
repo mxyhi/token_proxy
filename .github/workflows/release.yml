@@ -323,6 +323,21 @@ jobs:
               }
             }
 
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const existingDraft = releases.find((release) => release.tag_name === tag);
+            if (existingDraft) {
+              core.setOutput("release_draft", String(Boolean(existingDraft.draft)));
+              core.setOutput("release_id", String(existingDraft.id));
+              core.info(
+                `Resolved existing release ${tag} from release list (#${existingDraft.id}, draft=${Boolean(existingDraft.draft)}).`
+              );
+              return;
+            }
+
             const { data } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -443,6 +458,7 @@ jobs:
       - name: Generate and upload latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_ID: ${{ needs.stable_release_bootstrap.outputs.release_id }}
           TAG_NAME: ${{ needs.stable_tag.outputs.tag }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: node scripts/generate-updater-json.mjs

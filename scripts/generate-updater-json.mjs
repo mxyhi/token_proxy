@@ -177,13 +177,20 @@ function buildUpdaterRules(version) {
 async function main() {
   const token = requireEnv("GITHUB_TOKEN");
   const tagName = requireEnv("TAG_NAME");
+  const releaseId = process.env.RELEASE_ID?.trim() || "";
   const { owner, repo } = parseOwnerRepo(requireEnv("GITHUB_REPOSITORY"));
 
   const apiBase = process.env.GITHUB_API_URL || "https://api.github.com";
-  const release = await githubRequestJson(
-    `${apiBase}/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tagName)}`,
-    token
-  );
+  const release =
+    releaseId !== ""
+      ? await githubRequestJson(
+          `${apiBase}/repos/${owner}/${repo}/releases/${encodeURIComponent(releaseId)}`,
+          token
+        )
+      : await githubRequestJson(
+          `${apiBase}/repos/${owner}/${repo}/releases/tags/${encodeURIComponent(tagName)}`,
+          token
+        );
 
   const version = stripTagPrefix(release.tag_name || tagName);
   const notes = typeof release.body === "string" ? release.body : "";

@@ -2706,6 +2706,40 @@ async fn send_anthropic_messages_request(
     (status, json)
 }
 
+async fn send_anthropic_count_tokens_request(
+    state: ProxyStateHandle,
+    headers: HeaderMap,
+) -> (StatusCode, Value) {
+    let response = proxy_request(
+        State(state),
+        Method::POST,
+        Uri::from_static("/v1/messages/count_tokens"),
+        headers,
+        Body::from(
+            json!({
+                "model": "claude-sonnet-4-5",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            { "type": "text", "text": "hi from claude" }
+                        ]
+                    }
+                ]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("proxy response bytes");
+    let json = serde_json::from_slice(&body).expect("proxy response json");
+    (status, json)
+}
+
 #[test]
 fn responses_request_uses_chat_compat_for_coding_plan_runtime_upstream() {
     run_async(async {
@@ -3811,6 +3845,43 @@ fn gemini_count_tokens_route_dispatches_to_gemini() {
     assert_eq!(plan.provider, PROVIDER_GEMINI);
     assert_eq!(plan.request_transform, FormatTransform::None);
     assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn anthropic_count_tokens_preserves_authorization_header_name_for_upstream() {
+    run_async(async {
+        let upstream = spawn_mock_upstream(StatusCode::OK, json!({ "input_tokens": 12 })).await;
+        let config = config_with_runtime_upstreams(&[(
+            PROVIDER_ANTHROPIC,
+            0,
+            "anthropic-auth-relay",
+            upstream.base_url.as_str(),
+            FORMATS_MESSAGES,
+        )]);
+        let data_dir = next_test_data_dir("anthropic_count_tokens_authorization_header");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer local-debug-key"),
+        );
+        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+
+        let (status, body) = send_anthropic_count_tokens_request(state, headers).await;
+        let requests = upstream.requests();
+
+        upstream.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["input_tokens"].as_u64(), Some(12));
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/v1/messages/count_tokens");
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer test-key")
+        );
+    });
 }
 
 #[test]

@@ -148,11 +148,76 @@ fn anthropic_upstream_auth_accepts_authorization_bearer_fallback() {
         HeaderValue::from_static("Bearer anthropic-request-key"),
     );
 
-    let request_auth = resolve_request_auth(&config, &headers).expect("request auth");
+    let request_auth =
+        resolve_request_auth(&config, &headers, "/v1/messages").expect("request auth");
+    let auth = resolve_upstream_auth("anthropic", &upstream_without_key(), &request_auth)
+        .expect("upstream auth")
+        .expect("anthropic auth header");
+
+    assert_eq!(auth.name, AUTHORIZATION);
+    assert_eq!(
+        auth.value.to_str().ok(),
+        Some("Bearer anthropic-request-key")
+    );
+}
+
+#[test]
+fn anthropic_upstream_auth_defaults_to_x_api_key_for_non_native_inbound_requests() {
+    let config = config_without_local();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer anthropic-request-key"),
+    );
+
+    let request_auth =
+        resolve_request_auth(&config, &headers, "/v1/chat/completions").expect("request auth");
     let auth = resolve_upstream_auth("anthropic", &upstream_without_key(), &request_auth)
         .expect("upstream auth")
         .expect("anthropic auth header");
 
     assert_eq!(auth.name.as_str(), "x-api-key");
     assert_eq!(auth.value.to_str().ok(), Some("anthropic-request-key"));
+}
+
+#[test]
+fn anthropic_upstream_auth_reuses_authorization_header_name_with_upstream_key() {
+    let config = config_without_local();
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        AUTHORIZATION,
+        HeaderValue::from_static("Bearer local-debug-key"),
+    );
+
+    let request_auth =
+        resolve_request_auth(&config, &headers, "/v1/messages").expect("request auth");
+    let mut upstream = upstream_without_key();
+    upstream.api_key = Some("upstream-anthropic-key".to_string());
+    let auth = resolve_upstream_auth("anthropic", &upstream, &request_auth)
+        .expect("upstream auth")
+        .expect("anthropic auth header");
+
+    assert_eq!(auth.name, AUTHORIZATION);
+    assert_eq!(
+        auth.value.to_str().ok(),
+        Some("Bearer upstream-anthropic-key")
+    );
+}
+
+#[test]
+fn anthropic_upstream_auth_reuses_x_api_key_header_name_with_upstream_key() {
+    let config = config_without_local();
+    let mut headers = HeaderMap::new();
+    headers.insert("x-api-key", HeaderValue::from_static("local-debug-key"));
+
+    let request_auth =
+        resolve_request_auth(&config, &headers, "/v1/messages").expect("request auth");
+    let mut upstream = upstream_without_key();
+    upstream.api_key = Some("upstream-anthropic-key".to_string());
+    let auth = resolve_upstream_auth("anthropic", &upstream, &request_auth)
+        .expect("upstream auth")
+        .expect("anthropic auth header");
+
+    assert_eq!(auth.name.as_str(), "x-api-key");
+    assert_eq!(auth.value.to_str().ok(), Some("upstream-anthropic-key"));
 }

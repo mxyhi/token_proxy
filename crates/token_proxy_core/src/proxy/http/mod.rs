@@ -175,11 +175,12 @@ fn parse_query_key(query: Option<&str>) -> Result<Option<String>, String> {
 #[derive(Clone, Default)]
 pub(crate) struct RequestAuth {
     pub(crate) openai_bearer: Option<HeaderValue>,
-    pub(crate) anthropic_api_key: Option<HeaderValue>,
+    pub(crate) anthropic_request_auth: Option<UpstreamAuthHeader>,
     pub(crate) gemini_api_key: Option<String>,
     pub(crate) authorization_fallback: Option<HeaderValue>,
 }
 
+#[derive(Clone)]
 pub(crate) struct UpstreamAuthHeader {
     pub(crate) name: HeaderName,
     pub(crate) value: HeaderValue,
@@ -188,6 +189,7 @@ pub(crate) struct UpstreamAuthHeader {
 pub(crate) fn resolve_request_auth(
     config: &ProxyConfig,
     headers: &HeaderMap,
+    path: &str,
 ) -> Result<RequestAuth, String> {
     let mut auth = RequestAuth::default();
     // When local auth is enabled, request auth headers are reserved for local access and not used upstream.
@@ -202,15 +204,8 @@ pub(crate) fn resolve_request_auth(
             );
         }
 
-        // Anthropic uses `x-api-key`; allow explicit overrides as well.
-        if let Some(value) = headers
-            .get(X_API_KEY)
-            .or_else(|| headers.get(X_ANTHROPIC_API_KEY))
-        {
-            let Ok(_) = value.to_str() else {
-                return Err("Upstream API key is invalid.".to_string());
-            };
-            auth.anthropic_api_key = Some(value.clone());
+        if is_anthropic_path(path) {
+            auth.anthropic_request_auth = resolve_anthropic_request_auth(headers)?;
         }
 
         if let Some(value) = headers.get(AUTHORIZATION) {
@@ -230,6 +225,44 @@ pub(crate) fn resolve_request_auth(
     Ok(auth)
 }
 
+fn resolve_anthropic_request_auth(
+    headers: &HeaderMap,
+) -> Result<Option<UpstreamAuthHeader>, String> {
+    if let Some(value) = headers.get(X_API_KEY) {
+        let Ok(_) = value.to_str() else {
+            return Err("Upstream API key is invalid.".to_string());
+        };
+        return Ok(Some(UpstreamAuthHeader {
+            name: HeaderName::from_static(X_API_KEY),
+            value: value.clone(),
+        }));
+    }
+
+    if let Some(value) = headers.get(X_ANTHROPIC_API_KEY) {
+        let Ok(_) = value.to_str() else {
+            return Err("Upstream API key is invalid.".to_string());
+        };
+        return Ok(Some(UpstreamAuthHeader {
+            name: HeaderName::from_static(X_ANTHROPIC_API_KEY),
+            value: value.clone(),
+        }));
+    }
+
+    let Some(value) = headers.get(AUTHORIZATION) else {
+        return Ok(None);
+    };
+    let Ok(value_str) = value.to_str() else {
+        return Err("Upstream API key is invalid.".to_string());
+    };
+    if extract_bearer_token(value_str).is_none() {
+        return Err("Upstream API key is invalid.".to_string());
+    }
+    Ok(Some(UpstreamAuthHeader {
+        name: AUTHORIZATION,
+        value: value.clone(),
+    }))
+}
+
 pub(crate) fn resolve_upstream_auth(
     provider: &str,
     upstream: &UpstreamRuntime,
@@ -240,40 +273,66 @@ pub(crate) fn resolve_upstream_auth(
         upstream_id = %upstream.id,
         has_upstream_key = upstream.api_key.is_some(),
         has_openai_bearer = request_auth.openai_bearer.is_some(),
-        has_anthropic_key = request_auth.anthropic_api_key.is_some(),
+        has_anthropic_key = request_auth.anthropic_request_auth.is_some(),
         has_auth_fallback = request_auth.authorization_fallback.is_some(),
         "resolving upstream auth"
     );
 
     match provider {
         "anthropic" => {
-            let value = match upstream.api_key.as_ref() {
-                Some(key) => {
-                    tracing::debug!("using upstream.api_key for Anthropic");
-                    HeaderValue::from_str(key).map_err(|_| {
-                        error_response(
-                            StatusCode::UNAUTHORIZED,
-                            "Upstream API key contains invalid characters.",
-                        )
-                    })?
-                }
-                None => {
-                    let Some(value) = request_auth.anthropic_api_key.clone().or_else(|| {
-                        request_auth
-                            .authorization_fallback
-                            .as_ref()
-                            .and_then(|value| value.to_str().ok())
-                            .and_then(extract_bearer_token)
-                            .and_then(|value| HeaderValue::from_str(value).ok())
-                    }) else {
-                        tracing::warn!("no API key for Anthropic");
-                        return Ok(None);
+            if let Some(key) = upstream.api_key.as_ref() {
+                tracing::debug!("using upstream.api_key for Anthropic");
+                if let Some(request_header) = request_auth.anthropic_request_auth.as_ref() {
+                    let value = if request_header.name == AUTHORIZATION {
+                        bearer_header(key).ok_or_else(|| {
+                            error_response(
+                                StatusCode::UNAUTHORIZED,
+                                "Upstream API key contains invalid characters.",
+                            )
+                        })?
+                    } else {
+                        HeaderValue::from_str(key).map_err(|_| {
+                            error_response(
+                                StatusCode::UNAUTHORIZED,
+                                "Upstream API key contains invalid characters.",
+                            )
+                        })?
                     };
-                    tracing::debug!("using request auth fallback for Anthropic");
-                    value
+                    return Ok(Some(UpstreamAuthHeader {
+                        name: request_header.name.clone(),
+                        value,
+                    }));
                 }
+
+                let value = HeaderValue::from_str(key).map_err(|_| {
+                    error_response(
+                        StatusCode::UNAUTHORIZED,
+                        "Upstream API key contains invalid characters.",
+                    )
+                })?;
+                return Ok(Some(UpstreamAuthHeader {
+                    name: HeaderName::from_static(X_API_KEY),
+                    value,
+                }));
+            }
+
+            if let Some(header) = request_auth.anthropic_request_auth.clone() {
+                tracing::debug!("using native anthropic request auth header");
+                return Ok(Some(header));
+            }
+
+            let Some(value) = request_auth
+                .authorization_fallback
+                .as_ref()
+                .and_then(|value| value.to_str().ok())
+                .and_then(extract_bearer_token)
+                .and_then(|value| HeaderValue::from_str(value).ok())
+            else {
+                tracing::warn!("no API key for Anthropic");
+                return Ok(None);
             };
 
+            tracing::debug!("using request auth fallback for Anthropic");
             Ok(Some(UpstreamAuthHeader {
                 name: HeaderName::from_static(X_API_KEY),
                 value,

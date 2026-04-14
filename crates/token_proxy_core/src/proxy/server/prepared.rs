@@ -54,7 +54,7 @@ pub(super) fn resolve_request_auth_or_respond(
     provider: &str,
     request_start: Instant,
 ) -> Result<http::RequestAuth, Response> {
-    match http::resolve_request_auth(config, headers) {
+    match http::resolve_request_auth(config, headers, path) {
         Ok(auth) => Ok(auth),
         Err(message) => {
             log_request_error(

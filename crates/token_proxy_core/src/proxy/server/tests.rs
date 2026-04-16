@@ -191,6 +191,10 @@ struct MockAuthSwitchState {
     primary_status: StatusCode,
 }
 
+struct MockCodexEmptyChatSwitchState {
+    requests: Arc<Mutex<Vec<RecordedRequest>>>,
+}
+
 #[derive(Clone)]
 struct MockKiroAuthSwitchState {
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
@@ -473,6 +477,89 @@ async fn auth_switch_upstream_handler(
         .into_response()
 }
 
+async fn codex_empty_chat_switch_upstream_handler(
+    State(state): State<Arc<MockCodexEmptyChatSwitchState>>,
+    headers: HeaderMap,
+    uri: Uri,
+    body: Body,
+) -> axum::response::Response {
+    let bytes = to_bytes(body, usize::MAX).await.expect("read mock body");
+    let json_body = serde_json::from_slice::<Value>(&bytes).expect("mock request json");
+    let authorization = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let chatgpt_account_id = headers
+        .get("chatgpt-account-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+
+    state
+        .requests
+        .lock()
+        .expect("requests lock")
+        .push(RecordedRequest {
+            path: uri.path().to_string(),
+            body: json_body,
+            authorization: authorization.clone(),
+            chatgpt_account_id: chatgpt_account_id.clone(),
+        });
+
+    let body = match authorization.as_deref() {
+        Some("Bearer codex-access-a") => json!({
+            "id": "resp_codex_empty_chat",
+            "object": "response",
+            "created_at": 123,
+            "model": "gpt-5-codex",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_empty",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": []
+                }
+            ],
+            "usage": { "input_tokens": 1, "output_tokens": 0, "total_tokens": 1 }
+        }),
+        Some("Bearer codex-access-b") => json!({
+            "id": "resp_codex_failover_after_empty",
+            "object": "response",
+            "created_at": 123,
+            "model": "gpt-5-codex",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_ok",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        { "type": "output_text", "text": "from codex failover after empty chat" }
+                    ]
+                }
+            ],
+            "usage": { "input_tokens": 1, "output_tokens": 5, "total_tokens": 6 }
+        }),
+        _ => json!({
+            "error": {
+                "message": "unexpected account",
+                "type": "invalid_request_error",
+                "code": "token_invalidated",
+                "param": null
+            }
+        }),
+    };
+
+    (
+        StatusCode::OK,
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        body.to_string(),
+    )
+        .into_response()
+}
+
 async fn spawn_auth_switch_mock_upstream() -> MockUpstream {
     let requests = Arc::new(Mutex::new(Vec::new()));
     let state = Arc::new(MockAuthSwitchState {
@@ -490,6 +577,30 @@ async fn spawn_auth_switch_mock_upstream() -> MockUpstream {
         axum::serve(listener, app)
             .await
             .expect("auth switch mock upstream server should run");
+    });
+    MockUpstream {
+        base_url: format!("http://{addr}"),
+        requests,
+        task,
+    }
+}
+
+async fn spawn_codex_empty_chat_switch_mock_upstream() -> MockUpstream {
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let state = Arc::new(MockCodexEmptyChatSwitchState {
+        requests: requests.clone(),
+    });
+    let app = Router::new()
+        .route("/{*path}", any(codex_empty_chat_switch_upstream_handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind empty chat switch mock upstream");
+    let addr: SocketAddr = listener.local_addr().expect("mock local addr");
+    let task = tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("empty chat switch mock upstream server should run");
     });
     MockUpstream {
         base_url: format!("http://{addr}"),
@@ -1376,6 +1487,35 @@ async fn send_responses_request(state: ProxyStateHandle) -> (StatusCode, Value) 
     (status, json)
 }
 
+async fn send_chat_request(state: ProxyStateHandle) -> (StatusCode, Value) {
+    let response = proxy_request(
+        State(state),
+        Method::POST,
+        Uri::from_static("/v1/chat/completions"),
+        axum::http::HeaderMap::new(),
+        Body::from(
+            json!({
+                "model": "gpt-5",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "hi"
+                    }
+                ]
+            })
+            .to_string(),
+        ),
+    )
+    .await;
+
+    let status = response.status();
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("proxy response bytes");
+    let json = serde_json::from_slice(&body).expect("proxy response json");
+    (status, json)
+}
+
 async fn send_messages_request(state: ProxyStateHandle) -> (StatusCode, Value) {
     let response = proxy_request(
         State(state),
@@ -1972,6 +2112,69 @@ fn responses_request_failovers_to_next_codex_account_after_proxy_error() {
             Some("Bearer codex-access-b")
         );
         assert_eq!(requests[0].chatgpt_account_id.as_deref(), Some("chatgpt-b"));
+    });
+}
+
+#[test]
+fn chat_request_failovers_to_next_codex_account_after_empty_2xx_response() {
+    run_async(async {
+        let codex = spawn_codex_empty_chat_switch_mock_upstream().await;
+
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_CODEX,
+            0,
+            "codex-auto-empty-chat-failover",
+            codex.base_url.as_str(),
+            FORMATS_CHAT,
+        )]);
+        let provider_upstreams = config
+            .upstreams
+            .get_mut(PROVIDER_CODEX)
+            .expect("codex upstreams");
+        provider_upstreams.groups[0].items[0].codex_account_id = None;
+
+        let data_dir = next_test_data_dir("chat_codex_account_empty_response_failover");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+            .format(&time::format_description::well_known::Rfc3339)
+            .expect("format expires_at");
+        seed_codex_account(
+            &state,
+            "codex-a.json",
+            "codex-access-a",
+            "chatgpt-a",
+            &expires_at,
+        )
+        .await;
+        seed_codex_account(
+            &state,
+            "codex-b.json",
+            "codex-access-b",
+            "chatgpt-b",
+            &expires_at,
+        )
+        .await;
+
+        let (status, json) = send_chat_request(state).await;
+        let requests = codex.requests();
+
+        codex.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["choices"][0]["message"]["content"].as_str(),
+            Some("from codex failover after empty chat")
+        );
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer codex-access-a")
+        );
+        assert_eq!(
+            requests[1].authorization.as_deref(),
+            Some("Bearer codex-access-b")
+        );
     });
 }
 

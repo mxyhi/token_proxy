@@ -144,7 +144,8 @@ pub(super) async fn retry_with_next_codex_account(
     request_detail: Option<RequestDetailSnapshot>,
     first: Result<UpstreamAttempt, UpstreamAttemptFailure>,
 ) -> CodexFailoverResult {
-    let Some(first_selected_account_id) = failover_selected_account_id(provider, upstream, &first)
+    let Some(first_selected_account_id) =
+        codex_failover_selected_account_id(provider, upstream, &first)
     else {
         return match first {
             Ok(attempt) => CodexFailoverResult::Pending(attempt),
@@ -153,21 +154,25 @@ pub(super) async fn retry_with_next_codex_account(
     };
 
     let mut excluded_account_ids = vec![first_selected_account_id];
-    let mut last_outcome = Some(
-        finalize_codex_failover_attempt(
+    let mut current_upstream = upstream.clone();
+    let mut current_attempt = first;
+
+    loop {
+        let outcome = finalize_codex_failover_attempt(
             state,
             provider,
-            upstream,
+            &current_upstream,
             inbound_path,
             client_gemini_api_key,
             response_transform,
             request_detail.clone(),
-            first,
+            current_attempt,
         )
-        .await,
-    );
+        .await;
+        if !should_failover_codex_outcome(&outcome) {
+            return CodexFailoverResult::Resolved(outcome);
+        }
 
-    loop {
         let ordered_account_ids = state
             .codex_accounts
             .list_accounts()
@@ -191,17 +196,7 @@ pub(super) async fn retry_with_next_codex_account(
             .await
         {
             Ok(Some((account_id, _))) => account_id,
-            Ok(None) => match last_outcome {
-                Some(outcome) => return CodexFailoverResult::Resolved(outcome),
-                None => {
-                    return CodexFailoverResult::Resolved(AttemptOutcome::Fatal(
-                        http::error_response(
-                            StatusCode::BAD_GATEWAY,
-                            "No available Codex account remained after failover.",
-                        ),
-                    ));
-                }
-            },
+            Ok(None) => return CodexFailoverResult::Resolved(outcome),
             Err(err) => {
                 return CodexFailoverResult::Resolved(AttemptOutcome::Fatal(http::error_response(
                     StatusCode::UNAUTHORIZED,
@@ -210,13 +205,14 @@ pub(super) async fn retry_with_next_codex_account(
             }
         };
 
-        let mut retry_upstream = upstream.clone();
-        retry_upstream.codex_account_id = Some(next_account_id.clone());
-        let retry = attempt::attempt_send(
+        excluded_account_ids.push(next_account_id.clone());
+        current_upstream = upstream.clone();
+        current_upstream.codex_account_id = Some(next_account_id);
+        current_attempt = attempt::attempt_send(
             state,
             method.clone(),
             provider,
-            &retry_upstream,
+            &current_upstream,
             inbound_path,
             upstream_path_with_query,
             headers,
@@ -226,40 +222,6 @@ pub(super) async fn retry_with_next_codex_account(
             request_detail.as_ref(),
         )
         .await;
-        excluded_account_ids.push(next_account_id);
-
-        let should_retry_again = failover_selected_account_id(provider, upstream, &retry).is_some();
-        if !should_retry_again {
-            return match retry {
-                Ok(attempt) => CodexFailoverResult::Resolved(
-                    finalize_attempt(
-                        state,
-                        provider,
-                        &retry_upstream,
-                        inbound_path,
-                        client_gemini_api_key,
-                        response_transform,
-                        request_detail,
-                        attempt,
-                    )
-                    .await,
-                ),
-                Err(failure) => CodexFailoverResult::Resolved(failure.outcome),
-            };
-        }
-        last_outcome = Some(
-            finalize_codex_failover_attempt(
-                state,
-                provider,
-                &retry_upstream,
-                inbound_path,
-                client_gemini_api_key,
-                response_transform,
-                request_detail.clone(),
-                retry,
-            )
-            .await,
-        );
     }
 }
 
@@ -291,7 +253,7 @@ async fn finalize_codex_failover_attempt(
     }
 }
 
-fn failover_selected_account_id(
+fn codex_failover_selected_account_id(
     provider: &str,
     upstream: &UpstreamRuntime,
     attempt: &Result<UpstreamAttempt, UpstreamAttemptFailure>,
@@ -307,16 +269,17 @@ fn failover_selected_account_id(
     }
 
     match attempt {
-        Ok(attempt) if should_failover_codex_account(provider, &attempt.response) => {
-            attempt.selected_account_id.clone()
-        }
+        Ok(attempt) => attempt.selected_account_id.clone(),
         Err(failure) => failure.selected_account_id.clone(),
-        _ => None,
     }
 }
 
-fn should_failover_codex_account(provider: &str, response: &reqwest::Response) -> bool {
-    provider == "codex" && !response.status().is_success()
+fn should_failover_codex_outcome(outcome: &AttemptOutcome) -> bool {
+    match outcome {
+        AttemptOutcome::Success(response) => !response.status().is_success(),
+        AttemptOutcome::Retryable { .. } => true,
+        AttemptOutcome::Fatal(_) | AttemptOutcome::SkippedAuth => false,
+    }
 }
 
 fn schedule_account_quota_refresh(

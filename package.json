@@ -2,7 +2,7 @@
   "name": "token_proxy",
   "description": "Local AI API proxy for OpenAI/Gemini/Anthropic with token usage tracking, load balancing, and priority routing.",
   "private": true,
-  "version": "0.1.76",
+  "version": "0.1.77",
   "type": "module",
   "scripts": {
     "dev": "vite",

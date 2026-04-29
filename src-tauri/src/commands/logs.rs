@@ -25,9 +25,14 @@ pub fn read_request_detail_capture(
 pub fn set_request_detail_capture(
     capture_state: tauri::State<'_, Arc<proxy::request_detail::RequestDetailCapture>>,
     enabled: bool,
+    permanent: bool,
 ) -> proxy::request_detail::RequestDetailCaptureState {
     if enabled {
-        capture_state.arm()
+        if permanent {
+            capture_state.arm_permanent()
+        } else {
+            capture_state.arm()
+        }
     } else {
         capture_state.disarm()
     }

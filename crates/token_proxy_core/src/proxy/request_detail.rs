@@ -7,7 +7,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use super::request_body::ReplayableBody;
 
 const BODY_TOO_LARGE_MESSAGE: &str = "[body omitted: too large]";
-const REQUEST_DETAIL_CAPTURE_WINDOW: Duration = Duration::from_secs(30);
+const DEFAULT_CAPTURE_WINDOW_SECS: u64 = 600; // 10 minutes
+const PERMANENT_WINDOW_SECS: u64 = 0;
 const DISARMED_AT_MS: u64 = 0;
 
 #[derive(Clone, Default)]
@@ -21,6 +22,7 @@ pub struct RequestDetailSnapshot {
 pub struct RequestDetailCaptureState {
     pub enabled: bool,
     pub expires_at_ms: Option<u64>,
+    pub is_permanent: bool,
 }
 
 impl RequestDetailCaptureState {
@@ -28,19 +30,23 @@ impl RequestDetailCaptureState {
         Self {
             enabled: false,
             expires_at_ms: None,
+            is_permanent: false,
         }
     }
 
-    fn active(expires_at_ms: u64) -> Self {
+    fn active(expires_at_ms: u64, is_permanent: bool) -> Self {
         Self {
             enabled: true,
             expires_at_ms: Some(expires_at_ms),
+            is_permanent,
         }
     }
 }
 
 pub struct RequestDetailCapture {
+    #[allow(dead_code)]
     expires_at_ms: AtomicU64,
+    #[allow(dead_code)]
     window_ms: u64,
     now_ms: Arc<dyn Fn() -> u64 + Send + Sync>,
     on_change: Option<Arc<dyn Fn(RequestDetailCaptureState) + Send + Sync>>,
@@ -50,7 +56,7 @@ impl RequestDetailCapture {
     pub fn new(on_change: Option<Arc<dyn Fn(RequestDetailCaptureState) + Send + Sync>>) -> Self {
         Self {
             expires_at_ms: AtomicU64::new(DISARMED_AT_MS),
-            window_ms: duration_to_millis(REQUEST_DETAIL_CAPTURE_WINDOW),
+            window_ms: duration_to_millis(Duration::from_secs(DEFAULT_CAPTURE_WINDOW_SECS)),
             now_ms: Arc::new(current_time_millis),
             on_change,
         }
@@ -71,8 +77,21 @@ impl RequestDetailCapture {
     }
 
     pub fn arm(&self) -> RequestDetailCaptureState {
-        let expires_at_ms = (self.now_ms)().saturating_add(self.window_ms);
-        let state = RequestDetailCaptureState::active(expires_at_ms);
+        self.arm_with_window_secs(DEFAULT_CAPTURE_WINDOW_SECS)
+    }
+
+    pub fn arm_permanent(&self) -> RequestDetailCaptureState {
+        self.arm_with_window_secs(PERMANENT_WINDOW_SECS)
+    }
+
+    fn arm_with_window_secs(&self, window_secs: u64) -> RequestDetailCaptureState {
+        let window_ms = if window_secs == 0 {
+            u64::MAX
+        } else {
+            duration_to_millis(Duration::from_secs(window_secs))
+        };
+        let expires_at_ms = (self.now_ms)().saturating_add(window_ms);
+        let state = RequestDetailCaptureState::active(expires_at_ms, window_secs == 0);
         self.expires_at_ms.store(expires_at_ms, Ordering::SeqCst);
         self.notify(state);
         state
@@ -100,8 +119,9 @@ impl RequestDetailCapture {
                 return RequestDetailCaptureState::idle();
             }
 
-            if (self.now_ms)() <= expires_at_ms {
-                return RequestDetailCaptureState::active(expires_at_ms);
+            let is_permanent = expires_at_ms == u64::MAX;
+            if is_permanent || (self.now_ms)() <= expires_at_ms {
+                return RequestDetailCaptureState::active(expires_at_ms, is_permanent);
             }
 
             // 窗口过期后仅第一个观察者负责清空并广播关闭，避免并发重复通知。

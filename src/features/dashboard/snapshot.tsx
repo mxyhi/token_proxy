@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { HelpCircle, RefreshCcw } from "lucide-react"
+import { HelpCircle, Power, PowerOff, RefreshCcw } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -11,8 +11,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { cn } from "@/lib/utils"
 import {
   readDashboardSnapshot,
   refreshDashboardModelDiscovery,
@@ -30,7 +30,6 @@ import type {
   DashboardUpstreamOption,
 } from "@/features/dashboard/types"
 import { parseError } from "@/lib/error"
-import { cn } from "@/lib/utils"
 import { m } from "@/paraglide/messages.js"
 
 export const RECENT_PAGE_SIZE = 50
@@ -276,9 +275,10 @@ type DashboardFiltersProps = {
   /** 请求详情捕获相关，仅 LogsPanel 使用 */
   capture?: {
     enabled: boolean
+    isPermanent: boolean
     loading: boolean
     statusText?: string
-    onToggle: (enabled: boolean) => void
+    onToggle: (enabled: boolean, permanent: boolean) => void
   }
 }
 
@@ -296,6 +296,10 @@ export function DashboardFilters({
   onRefresh,
   capture,
 }: DashboardFiltersProps) {
+  const [captureMode, setCaptureMode] = useState<"temporary" | "permanent">(
+    capture?.isPermanent ? "permanent" : "temporary"
+  );
+
   return (
     <div
       data-slot="dashboard-filters"
@@ -390,7 +394,10 @@ export function DashboardFilters({
             {capture ? (
               <div className="flex items-center gap-2">
                 <span
-                  className={`size-2 rounded-full ${capture.enabled ? "bg-green-500" : "bg-muted-foreground/40"}`}
+                  className={cn(
+                    "size-2 rounded-full",
+                    capture.enabled ? "bg-green-500" : "bg-muted-foreground/40"
+                  )}
                   aria-hidden="true"
                 />
                 <Label htmlFor="logs-capture" className="text-xs text-muted-foreground">
@@ -401,16 +408,70 @@ export function DashboardFilters({
                     <HelpCircle className="size-3.5 text-muted-foreground cursor-help" />
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="max-w-xs">
-                    {m.logs_capture_desc()}
+                    {capture.isPermanent
+                      ? m.logs_capture_permanent_desc()
+                      : capture.enabled
+                        ? m.logs_capture_desc()
+                        : m.logs_capture_idle_desc()}
                   </TooltipContent>
                 </Tooltip>
-                <Switch
-                  id="logs-capture"
-                  checked={capture.enabled}
+                <Select
+                  value={captureMode}
                   disabled={capture.loading}
-                  onCheckedChange={capture.onToggle}
-                />
-                {capture.statusText ? (
+                  onValueChange={(value) => {
+                    setCaptureMode(value as "temporary" | "permanent");
+                  }}
+                >
+                  <SelectTrigger id="logs-capture-mode" className="h-7 w-[90px] text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="temporary">{m.logs_capture_mode_temporary()}</SelectItem>
+                    <SelectItem value="permanent">{m.logs_capture_mode_permanent()}</SelectItem>
+                  </SelectContent>
+                </Select>
+                {capture.enabled ? (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 text-destructive"
+                        onClick={() => capture.onToggle(false, captureMode === "permanent")}
+                        disabled={capture.loading}
+                      >
+                        <PowerOff className="size-3.5" />
+                        <span className="sr-only">{m.logs_capture_stop()}</span>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{m.logs_capture_stop()}</TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-7 text-green-600"
+                        onClick={() => {
+                          capture.onToggle(true, captureMode === "permanent");
+                        }}
+                        disabled={capture.loading}
+                      >
+                        <Power className="size-3.5" />
+                        <span className="sr-only">{m.logs_capture_start()}</span>
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {captureMode === "permanent"
+                        ? m.logs_capture_start_permanent()
+                        : m.logs_capture_start_temporary()}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                {capture.enabled && !capture.isPermanent && capture.statusText ? (
                   <span className="text-xs text-muted-foreground tabular-nums">
                     {capture.statusText}
                   </span>

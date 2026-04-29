@@ -17,15 +17,15 @@ use commands::{
     codex_fetch_quotas, codex_import_file, codex_list_accounts, codex_logout, codex_poll_login,
     codex_refresh_account, codex_refresh_quota_cache, codex_refresh_quota_now,
     codex_set_auto_refresh, codex_set_priority, codex_set_proxy_url, codex_set_status,
-    codex_start_login, kiro_fetch_quotas, kiro_handle_callback, kiro_import_ide, kiro_import_kam,
-    kiro_list_accounts, kiro_logout, kiro_poll_login, kiro_refresh_quota_cache,
-    kiro_refresh_quota_now, kiro_set_priority, kiro_set_proxy_url, kiro_set_status,
-    kiro_start_login, prepare_relaunch, preview_client_setup, providers_delete_accounts,
-    providers_list_accounts_page, proxy_reload, proxy_restart, proxy_start, proxy_status,
-    proxy_stop, read_dashboard_snapshot, read_default_hot_model_mappings, read_proxy_config,
-    read_request_detail_capture, read_request_log_detail, refresh_dashboard_model_discovery,
-    save_proxy_config, set_request_detail_capture, write_claude_code_settings, write_codex_config,
-    write_opencode_config,
+    codex_start_login, fetch_upstream_models, kiro_fetch_quotas, kiro_handle_callback,
+    kiro_import_ide, kiro_import_kam, kiro_list_accounts, kiro_logout, kiro_poll_login,
+    kiro_refresh_quota_cache, kiro_refresh_quota_now, kiro_set_priority, kiro_set_proxy_url,
+    kiro_set_status, kiro_start_login, prepare_relaunch, preview_client_setup,
+    providers_delete_accounts, providers_list_accounts_page, proxy_reload, proxy_restart,
+    proxy_start, proxy_status, proxy_stop, read_dashboard_snapshot, read_default_hot_model_mappings,
+    read_proxy_config, read_request_detail_capture, read_request_log_detail,
+    refresh_dashboard_model_discovery, save_proxy_config, set_request_detail_capture,
+    write_claude_code_settings, write_codex_config, write_opencode_config,
 };
 
 type ProxyServiceHandle = proxy::service::ProxyServiceHandle;
@@ -258,6 +258,7 @@ pub fn run() {
             prepare_relaunch,
             proxy_restart,
             proxy_reload,
+            fetch_upstream_models,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

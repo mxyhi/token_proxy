@@ -2,6 +2,78 @@ use crate::{proxy, tray};
 use tauri::Manager;
 
 #[tauri::command]
+pub async fn fetch_upstream_models(
+    provider: String,
+    base_url: String,
+    api_key: String,
+) -> Result<Vec<String>, String> {
+    let url = match provider.as_str() {
+        "openai" | "openai-response" => format!("{}/v1/models", base_url.trim_end_matches('/')),
+        "anthropic" => format!("{}/v1/models", base_url.trim_end_matches('/')),
+        "gemini" => format!("{}/v1beta/models", base_url.trim_end_matches('/')),
+        _ => {
+            return Err(format!("不支持的 provider: {}", provider));
+        }
+    };
+
+    let client = reqwest::Client::new();
+    let mut request = client.get(&url);
+    if !api_key.is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", api_key));
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|err| format!("请求失败: {}", err))?;
+
+    if !response.status().is_success() {
+        return Err(format!("返回错误: {}", response.status()));
+    }
+
+    let body: serde_json::Value = response
+        .json()
+        .await
+        .map_err(|err| format!("解析失败: {}", err))?;
+
+    let mut models: Vec<String> = Vec::new();
+
+    if let Some(data) = body.get("data").and_then(|v| v.as_array()) {
+        for item in data {
+            if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                models.push(id.to_string());
+            }
+        }
+    }
+
+    if models.is_empty() {
+        if let Some(m) = body.get("models").and_then(|v| v.as_array()) {
+            for item in m {
+                if let Some(id) = item.get("id").and_then(|v| v.as_str()) {
+                    models.push(id.to_string());
+                }
+            }
+        }
+    }
+
+    if models.is_empty() {
+        if let Some(m) = body.get("modelNames").and_then(|v| v.as_array()) {
+            for item in m {
+                if let Some(id) = item.as_str() {
+                    models.push(id.to_string());
+                }
+            }
+        }
+    }
+
+    if models.is_empty() {
+        return Err(format!("返回为空，body: {}", body));
+    }
+
+    Ok(models)
+}
+
+#[tauri::command]
 pub async fn proxy_status(
     proxy_service: tauri::State<'_, proxy::service::ProxyServiceHandle>,
     tray_state: tauri::State<'_, tray::TrayState>,

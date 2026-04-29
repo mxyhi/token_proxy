@@ -1,4 +1,5 @@
-import { CirclePlus, HelpCircle } from "lucide-react";
+import { CirclePlus, HelpCircle, Loader2, RefreshCw } from "lucide-react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +28,7 @@ import type {
   UpstreamForm,
 } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
+import { invoke } from "@tauri-apps/api/core";
 
 const KIRO_ENDPOINT_INHERIT = "inherit";
 
@@ -394,8 +396,59 @@ function UpstreamModelMappingFields({
   draft,
   onChangeDraft,
 }: UpstreamModelMappingFieldsProps) {
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState("");
+
   const handleAdd = () => {
     onChangeDraft({ modelMappings: [...draft.modelMappings, createModelMapping()] });
+  };
+
+const provider = draft.providers[0]?.trim() || "";
+  const baseUrl = draft.baseUrl;
+  const apiKey = draft.apiKeys.trim();
+
+  const canFetch =
+    (provider === "openai" ||
+      provider === "openai-response" ||
+      provider === "anthropic" ||
+      provider === "gemini") &&
+    !!baseUrl;
+
+  const handleFetchModels = async () => {
+    if (!baseUrl) {
+      setFetchError("请填写 Base URL");
+      return;
+    }
+    setFetching(true);
+    setFetchError("");
+    try {
+      const models = await invoke<string[]>("fetch_upstream_models", {
+        provider,
+        baseUrl,
+        apiKey,
+      });
+      if (models.length === 0) {
+        setFetchError("未获取到模型");
+        return;
+      }
+      const existingTargets = new Set(
+        draft.modelMappings.map((m) => m.target).filter(Boolean)
+      );
+      const newMappings = models
+        .filter((model) => !existingTargets.has(model))
+        .map((model) => ({
+          id: `mapping-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          pattern: model,
+          target: model,
+        }));
+      onChangeDraft({
+        modelMappings: [...draft.modelMappings, ...newMappings],
+      });
+    } catch (error) {
+      setFetchError(String(error));
+    } finally {
+      setFetching(false);
+    }
   };
 
   return (
@@ -412,6 +465,22 @@ function UpstreamModelMappingFields({
             </TooltipContent>
           </Tooltip>
         </Label>
+        {canFetch && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="从上游获取模型列表"
+            onClick={handleFetchModels}
+            disabled={fetching}
+          >
+            {fetching ? (
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <RefreshCw className="size-4" aria-hidden="true" />
+            )}
+          </Button>
+        )}
         <Button
           type="button"
           variant="ghost"
@@ -422,6 +491,9 @@ function UpstreamModelMappingFields({
           <CirclePlus className="size-4" aria-hidden="true" />
         </Button>
       </div>
+      {fetchError && (
+        <p className="text-xs text-destructive">{fetchError}</p>
+      )}
       {draft.modelMappings.length > 0 ? (
         <ModelMappingsEditor
           mappings={draft.modelMappings}

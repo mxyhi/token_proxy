@@ -198,6 +198,7 @@ struct ChatCompletionBuffer {
     finish_reason: Option<Value>,
     usage: Option<Value>,
     saw_chunk: bool,
+    saw_choice: bool,
 }
 
 impl ChatCompletionBuffer {
@@ -208,9 +209,6 @@ impl ChatCompletionBuffer {
             return;
         }
 
-        let Some(choice) = choices.and_then(|items| items.first()) else {
-            return;
-        };
         self.saw_chunk = true;
         self.id = self
             .id
@@ -227,6 +225,10 @@ impl ChatCompletionBuffer {
                 .map(str::to_string)
         });
         self.usage = value.get("usage").filter(|usage| !usage.is_null()).cloned();
+        let Some(choice) = choices.and_then(|items| items.first()) else {
+            return;
+        };
+        self.saw_choice = true;
         if let Some(reason) = choice
             .get("finish_reason")
             .filter(|reason| !reason.is_null())
@@ -262,7 +264,13 @@ impl ChatCompletionBuffer {
         choice.insert("message".to_string(), Value::Object(message));
         choice.insert(
             "finish_reason".to_string(),
-            self.finish_reason.unwrap_or(Value::Null),
+            self.finish_reason.unwrap_or_else(|| {
+                if self.saw_choice {
+                    Value::Null
+                } else {
+                    json!("stop")
+                }
+            }),
         );
 
         let mut output = Map::new();

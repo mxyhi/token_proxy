@@ -77,6 +77,32 @@ fn buffer_event_stream_response_converts_chat_completion_chunks_to_json() {
 }
 
 #[test]
+fn buffer_event_stream_response_converts_empty_choices_chunk_to_empty_stop() {
+    let sse = Bytes::from(
+        [
+            "data: {\"id\":\"\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-5.5\",\"system_fingerprint\":\"\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":0,\"total_tokens\":12}}\n\n",
+            "data: [DONE]\n\n",
+        ]
+        .concat(),
+    );
+
+    let output = buffer_event_stream_response(&sse).expect("buffer SSE");
+    let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
+
+    assert_eq!(value["object"], json!("chat.completion"));
+    assert_eq!(value["model"], json!("gpt-5.5"));
+    assert_eq!(value["choices"][0]["message"]["role"], json!("assistant"));
+    assert_eq!(value["choices"][0]["message"]["content"], json!(""));
+    assert_eq!(value["choices"][0]["finish_reason"], json!("stop"));
+    assert_eq!(value["usage"]["total_tokens"], json!(12));
+    assert_eq!(
+        empty_chat_completion_retry_message(&output, &test_context(), FormatTransform::None)
+            .as_deref(),
+        Some("Upstream returned empty chat completion content for stop response.")
+    );
+}
+
+#[test]
 fn buffer_event_stream_response_returns_completed_responses_object() {
     let completed = json!({
         "type": "response.completed",

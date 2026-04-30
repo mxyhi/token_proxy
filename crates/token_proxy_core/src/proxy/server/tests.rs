@@ -2306,6 +2306,72 @@ fn chat_request_failovers_to_next_codex_account_after_empty_2xx_response() {
 }
 
 #[test]
+fn chat_request_retries_empty_choices_event_stream_on_responses_provider() {
+    run_async(async {
+        let primary = spawn_mock_raw_upstream(
+            StatusCode::OK,
+            Bytes::from(
+                "data: {\"id\":\"\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"gpt-5.5\",\"system_fingerprint\":\"\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":0,\"total_tokens\":12}}\n\n\
+data: [DONE]\n\n",
+            ),
+            "text/event-stream",
+        )
+        .await;
+        let fallback = spawn_mock_raw_upstream(
+            StatusCode::OK,
+            Bytes::from(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"from responses fallback\"}\n\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_fallback\",\"object\":\"response\",\"created_at\":123,\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"msg_1\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"from responses fallback\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n\
+data: [DONE]\n\n",
+            ),
+            "text/event-stream",
+        )
+        .await;
+        let config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CHAT,
+                10,
+                "airouter-chat-empty",
+                primary.base_url.as_str(),
+                FORMATS_CHAT,
+            ),
+            (
+                PROVIDER_RESPONSES,
+                5,
+                "airouter-responses-fallback",
+                fallback.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        let data_dir = next_test_data_dir("chat_empty_choices_stream_responses_fallback");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+
+        let (status, json) = send_chat_request(state).await;
+        let primary_requests = primary.requests();
+        let fallback_requests = fallback.requests();
+
+        primary.abort();
+        fallback.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            json["choices"][0]["message"]["content"].as_str(),
+            Some("from responses fallback")
+        );
+        assert_eq!(primary_requests.len(), 1);
+        assert_eq!(primary_requests[0].path, "/v1/chat/completions");
+        assert_eq!(fallback_requests.len(), 1);
+        assert_eq!(fallback_requests[0].path, RESPONSES_PATH);
+        assert_eq!(fallback_requests[0].body["model"].as_str(), Some("gpt-5"));
+        assert_eq!(
+            fallback_requests[0].body["input"][0]["content"][0]["text"].as_str(),
+            Some("hi")
+        );
+    });
+}
+
+#[test]
 fn responses_request_cooldowns_same_codex_account_after_401() {
     run_async(async {
         let codex =

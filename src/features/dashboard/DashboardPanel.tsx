@@ -26,7 +26,7 @@ export function DashboardPanel() {
     onRangeChange,
     onUpstreamChange,
     onAccountChange,
-  } = useDashboardSnapshot()
+  } = useDashboardSnapshot({ refreshModelDiscoveryOnRefresh: true })
 
   const isLoading = status === "loading"
 

@@ -40,6 +40,10 @@ const PUBLIC_ACCOUNT_VALUE = "__public_account__"
 
 type DashboardStatus = "idle" | "loading" | "error"
 
+type UseDashboardSnapshotOptions = {
+  refreshModelDiscoveryOnRefresh?: boolean
+}
+
 function hasUpstreamOption(
   upstreams: DashboardUpstreamOption[],
   upstreamId: string
@@ -88,7 +92,9 @@ function usePagination(totalRequests: number) {
   }
 }
 
-export function useDashboardSnapshot() {
+export function useDashboardSnapshot({
+  refreshModelDiscoveryOnRefresh = false,
+}: UseDashboardSnapshotOptions = {}) {
   const [rangePreset, setRangePreset] = useState<DashboardTimeRange>("today")
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null)
   const [selectedUpstreamId, setSelectedUpstreamId] = useState<string | null>(null)
@@ -201,16 +207,18 @@ export function useDashboardSnapshot() {
   const refresh = useCallback(() => {
     markLoading()
     void (async () => {
-      try {
-        await refreshDashboardModelDiscovery()
-      } catch (error) {
-        setStatus("error")
-        setStatusMessage(parseError(error))
-        return
+      if (refreshModelDiscoveryOnRefresh) {
+        try {
+          await refreshDashboardModelDiscovery()
+        } catch (error) {
+          setStatus("error")
+          setStatusMessage(parseError(error))
+          return
+        }
       }
       await loadSnapshot()
     })()
-  }, [loadSnapshot, markLoading])
+  }, [loadSnapshot, markLoading, refreshModelDiscoveryOnRefresh])
 
   return {
     snapshot,

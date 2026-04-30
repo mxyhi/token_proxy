@@ -36,11 +36,13 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const {
   readDashboardSnapshotMock,
+  refreshDashboardModelDiscoveryMock,
   readRequestDetailCaptureMock,
   setRequestDetailCaptureMock,
   readRequestLogDetailMock,
 } = vi.hoisted(() => ({
   readDashboardSnapshotMock: vi.fn(),
+  refreshDashboardModelDiscoveryMock: vi.fn(),
   readRequestDetailCaptureMock: vi.fn(),
   setRequestDetailCaptureMock: vi.fn(),
   readRequestLogDetailMock: vi.fn(),
@@ -48,6 +50,7 @@ const {
 
 vi.mock("@/features/dashboard/api", () => ({
   readDashboardSnapshot: readDashboardSnapshotMock,
+  refreshDashboardModelDiscovery: refreshDashboardModelDiscoveryMock,
 }));
 
 vi.mock("@/features/logs/api", () => ({
@@ -71,10 +74,12 @@ describe("logs/LogsPanel", () => {
 
   beforeEach(() => {
     readDashboardSnapshotMock.mockReset();
+    refreshDashboardModelDiscoveryMock.mockReset();
     readRequestDetailCaptureMock.mockReset();
     setRequestDetailCaptureMock.mockReset();
     readRequestLogDetailMock.mockReset();
 
+    refreshDashboardModelDiscoveryMock.mockResolvedValue(undefined);
     readRequestDetailCaptureMock.mockResolvedValue({
       enabled: false,
       expiresAtMs: null,
@@ -389,6 +394,24 @@ describe("logs/LogsPanel", () => {
         publicOnly: false,
       }
     );
+  });
+
+  it("refreshes logs without refreshing dashboard model discovery", async () => {
+    const user = userEvent.setup();
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("logs-items")).toHaveTextContent("alpha · openai · codex-a.json");
+    });
+    expect(readDashboardSnapshotMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: m.common_refresh() }));
+
+    await waitFor(() => {
+      expect(readDashboardSnapshotMock).toHaveBeenCalledTimes(2);
+    });
+    expect(refreshDashboardModelDiscoveryMock).not.toHaveBeenCalled();
   });
 
   it("narrows logs again after selecting account under chosen upstream", async () => {

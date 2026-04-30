@@ -89,7 +89,7 @@ function HookHarness() {
     onAccountChange,
     refresh,
   } =
-    useDashboardSnapshot()
+    useDashboardSnapshot({ refreshModelDiscoveryOnRefresh: true })
 
   return (
     <div>

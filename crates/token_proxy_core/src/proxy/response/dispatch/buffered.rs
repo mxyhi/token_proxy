@@ -7,8 +7,11 @@ use axum::{
     response::Response,
 };
 use serde_json::{json, Map, Value};
-use std::sync::Arc;
-use std::time::Duration;
+use std::{
+    collections::BTreeMap,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use super::super::super::{
     codex_compat, http,
@@ -42,6 +45,7 @@ pub(super) async fn build_buffered_response(
     upstream_no_data_timeout: Duration,
 ) -> Response {
     let mut context = context;
+    let mut response_transform = response_transform;
     let response_headers = upstream_res.headers().clone();
     let bytes =
         match read_upstream_bytes(upstream_res, &mut context, &log, upstream_no_data_timeout).await
@@ -57,11 +61,17 @@ pub(super) async fn build_buffered_response(
     )
     .await;
     let bytes = if status.is_success() && is_event_stream_response(&response_headers) {
-        match buffer_event_stream_response(&bytes) {
+        match buffer_event_stream_response_with_kind(&bytes) {
             Ok(buffered) => {
+                if buffered.kind == BufferedEventStreamKind::Responses
+                    && response_transform == FormatTransform::None
+                    && is_chat_completions_path(&context.path)
+                {
+                    response_transform = FormatTransform::ResponsesToChat;
+                }
                 headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
                 headers.remove(CONTENT_LENGTH);
-                buffered
+                buffered.bytes
             }
             Err(message) => {
                 let usage = UsageSnapshot {
@@ -130,12 +140,30 @@ pub(super) async fn build_buffered_response(
 }
 
 pub(super) fn buffer_event_stream_response(bytes: &Bytes) -> Result<Bytes, String> {
+    buffer_event_stream_response_with_kind(bytes).map(|payload| payload.bytes)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BufferedEventStreamKind {
+    ChatCompletion,
+    Responses,
+}
+
+struct BufferedEventStreamBody {
+    bytes: Bytes,
+    kind: BufferedEventStreamKind,
+}
+
+fn buffer_event_stream_response_with_kind(
+    bytes: &Bytes,
+) -> Result<BufferedEventStreamBody, String> {
     let mut parser = SseEventParser::new();
     let mut events = Vec::new();
     parser.push_chunk(bytes.as_ref(), |event| events.push(event));
     parser.finish(|event| events.push(event));
 
     let mut chat_buffer = ChatCompletionBuffer::default();
+    let mut responses_buffer = ResponsesStreamBuffer::default();
     for event in events {
         if event == "[DONE]" {
             continue;
@@ -143,13 +171,18 @@ pub(super) fn buffer_event_stream_response(bytes: &Bytes) -> Result<Bytes, Strin
         let value: Value = serde_json::from_str(&event)
             .map_err(|err| format!("Invalid event-stream JSON payload: {err}"))?;
         if let Some(response) = completed_response_from_event(&value) {
-            return serialize_buffered_event(response);
+            return serialize_buffered_event(response, BufferedEventStreamKind::Responses);
         }
         chat_buffer.push_event(&value);
+        responses_buffer.push_event(&value);
     }
 
     if let Some(value) = chat_buffer.into_value() {
-        return serialize_buffered_event(value);
+        return serialize_buffered_event(value, BufferedEventStreamKind::ChatCompletion);
+    }
+
+    if let Some(value) = responses_buffer.into_value() {
+        return serialize_buffered_event(value, BufferedEventStreamKind::Responses);
     }
 
     Err("No supported event-stream payload found".to_string())
@@ -260,6 +293,143 @@ impl ChatCompletionBuffer {
     }
 }
 
+/// Some OpenAI-compatible gateways occasionally close after item-level Responses
+/// events without sending the terminal `response.completed` object. The buffered
+/// non-stream path still has enough data to synthesize the final Responses JSON.
+#[derive(Default)]
+struct ResponsesStreamBuffer {
+    response: Map<String, Value>,
+    output: BTreeMap<i64, Value>,
+    text: String,
+    saw_response_event: bool,
+}
+
+impl ResponsesStreamBuffer {
+    fn push_event(&mut self, value: &Value) {
+        let Some(event_type) = value.get("type").and_then(Value::as_str) else {
+            return;
+        };
+        if !event_type.starts_with("response.") {
+            return;
+        }
+        self.saw_response_event = true;
+        match event_type {
+            "response.created" | "response.in_progress" => {
+                self.merge_response(value.get("response"));
+            }
+            "response.output_item.added" | "response.output_item.done" => {
+                self.push_output_item(value);
+            }
+            "response.function_call_arguments.done" => {
+                self.push_function_call_arguments(value);
+            }
+            "response.output_text.delta" => {
+                if let Some(delta) = value.get("delta").and_then(Value::as_str) {
+                    self.text.push_str(delta);
+                }
+            }
+            "response.output_text.done" => {
+                if let Some(text) = value.get("text").and_then(Value::as_str) {
+                    self.text = text.to_string();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn merge_response(&mut self, response: Option<&Value>) {
+        let Some(response) = response.and_then(Value::as_object) else {
+            return;
+        };
+        for (key, value) in response {
+            self.response.insert(key.clone(), value.clone());
+        }
+    }
+
+    fn push_output_item(&mut self, event: &Value) {
+        let Some(item) = event.get("item").filter(|item| item.is_object()).cloned() else {
+            return;
+        };
+        let index = self.event_output_index(event);
+        self.output.insert(index, item);
+    }
+
+    fn push_function_call_arguments(&mut self, event: &Value) {
+        let index = self.event_output_index(event);
+        let mut item = self
+            .output
+            .remove(&index)
+            .and_then(|value| match value {
+                Value::Object(object) => Some(object),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        insert_string_if_missing(&mut item, "type", "function_call");
+        copy_string_field(event, &mut item, "name");
+        copy_string_field(event, &mut item, "arguments");
+        if let Some(item_id) = event.get("item_id").and_then(Value::as_str) {
+            insert_string_if_missing(&mut item, "id", item_id);
+            insert_string_if_missing(&mut item, "call_id", item_id);
+        }
+        insert_string_if_missing(&mut item, "status", "completed");
+        self.output.insert(index, Value::Object(item));
+    }
+
+    fn event_output_index(&self, event: &Value) -> i64 {
+        event
+            .get("output_index")
+            .and_then(Value::as_i64)
+            .unwrap_or(self.output.len() as i64)
+    }
+
+    fn into_value(mut self) -> Option<Value> {
+        if !self.saw_response_event {
+            return None;
+        }
+        if self.output.is_empty() && !self.text.is_empty() {
+            self.output.insert(
+                0,
+                json!({
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [
+                        { "type": "output_text", "text": self.text }
+                    ]
+                }),
+            );
+        }
+        if self.output.is_empty() {
+            return None;
+        }
+
+        insert_string_if_missing(&mut self.response, "id", "resp_buffered");
+        insert_string_if_missing(&mut self.response, "object", "response");
+        self.response
+            .insert("status".to_string(), Value::String("completed".to_string()));
+        self.response
+            .entry("created_at".to_string())
+            .or_insert_with(|| Value::Number(now_unix_seconds().into()));
+        self.response.insert(
+            "output".to_string(),
+            Value::Array(self.output.into_values().collect()),
+        );
+        Some(Value::Object(self.response))
+    }
+}
+
+fn copy_string_field(source: &Value, target: &mut Map<String, Value>, key: &str) {
+    if let Some(value) = source.get(key).and_then(Value::as_str) {
+        target.insert(key.to_string(), Value::String(value.to_string()));
+    }
+}
+
+fn insert_string_if_missing(target: &mut Map<String, Value>, key: &str, value: &str) {
+    target
+        .entry(key.to_string())
+        .or_insert_with(|| Value::String(value.to_string()));
+}
+
 fn completed_response_from_event(value: &Value) -> Option<Value> {
     let event_type = value.get("type").and_then(Value::as_str)?;
     let is_terminal_response = matches!(
@@ -279,10 +449,25 @@ fn completed_response_from_event(value: &Value) -> Option<Value> {
         .cloned()
 }
 
-fn serialize_buffered_event(value: Value) -> Result<Bytes, String> {
+fn serialize_buffered_event(
+    value: Value,
+    kind: BufferedEventStreamKind,
+) -> Result<BufferedEventStreamBody, String> {
     serde_json::to_vec(&value)
         .map(Bytes::from)
+        .map(|bytes| BufferedEventStreamBody { bytes, kind })
         .map_err(|err| format!("Failed to serialize buffered event-stream payload: {err}"))
+}
+
+fn is_chat_completions_path(path: &str) -> bool {
+    path.split_once('?').map(|(path, _)| path).unwrap_or(path) == "/v1/chat/completions"
+}
+
+fn now_unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 fn is_event_stream_response(headers: &HeaderMap) -> bool {

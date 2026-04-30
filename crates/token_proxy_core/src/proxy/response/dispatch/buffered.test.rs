@@ -107,6 +107,26 @@ fn buffer_event_stream_response_returns_completed_responses_object() {
     assert_eq!(value["output"][0]["content"][0]["text"], json!("done"));
 }
 
+#[test]
+fn buffer_event_stream_response_synthesizes_response_from_done_item() {
+    let sse = Bytes::from(
+        [
+            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":1770000000,\"status\":\"in_progress\",\"model\":\"gpt-5.5\"}}\n\n",
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"AgentOutput\",\"arguments\":\"{}\",\"status\":\"completed\"}}\n\n",
+            "data: [DONE]\n\n",
+        ]
+        .concat(),
+    );
+
+    let output = buffer_event_stream_response(&sse).expect("buffer SSE");
+    let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
+
+    assert_eq!(value["object"], json!("response"));
+    assert_eq!(value["status"], json!("completed"));
+    assert_eq!(value["output"][0]["type"], json!("function_call"));
+    assert_eq!(value["output"][0]["name"], json!("AgentOutput"));
+}
+
 #[tokio::test]
 async fn buffered_non_stream_event_stream_chat_completion_returns_json() {
     let sse = [
@@ -146,6 +166,52 @@ async fn buffered_non_stream_event_stream_chat_completion_returns_json() {
     assert!(parts.headers.get(CONTENT_LENGTH).is_none());
     assert_eq!(value["choices"][0]["message"]["content"], json!("ok"));
     assert!(!String::from_utf8_lossy(&body).contains("data:"));
+}
+
+#[tokio::test]
+async fn buffered_non_stream_responses_event_stream_chat_request_returns_json() {
+    let sse = [
+        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"created_at\":1770000000,\"status\":\"in_progress\",\"model\":\"gpt-5.5\"}}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"AgentOutput\",\"arguments\":\"{}\",\"status\":\"completed\"}}\n\n",
+        "data: [DONE]\n\n",
+    ]
+    .concat();
+    let upstream_res = axum::http::Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/event-stream")
+        .body(reqwest::Body::from(sse))
+        .expect("response")
+        .into();
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+    headers.insert(CONTENT_LENGTH, HeaderValue::from_static("999"));
+    let tracker = TokenRateTracker::new().register(None, None).await;
+
+    let response = build_buffered_response(
+        StatusCode::OK,
+        upstream_res,
+        headers,
+        test_context(),
+        Arc::new(LogWriter::new(None)),
+        tracker,
+        FormatTransform::None,
+        None,
+        None,
+        Duration::from_secs(1),
+    )
+    .await;
+    let (parts, body) = response.into_parts();
+    let body = to_bytes(body, usize::MAX).await.expect("body");
+    let value: serde_json::Value = serde_json::from_slice(&body).expect("json");
+
+    assert_eq!(parts.status, StatusCode::OK);
+    assert_eq!(parts.headers.get(CONTENT_TYPE).unwrap(), "application/json");
+    assert_eq!(value["object"], json!("chat.completion"));
+    assert_eq!(value["choices"][0]["finish_reason"], json!("tool_calls"));
+    assert_eq!(
+        value["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
+        json!("AgentOutput")
+    );
 }
 
 #[test]

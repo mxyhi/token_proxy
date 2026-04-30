@@ -213,6 +213,8 @@ pub struct ProxyConfigFile {
     pub port: u16,
     pub local_api_key: Option<String>,
     pub app_proxy_url: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cors_enabled: bool,
     #[serde(
         default = "default_model_list_prefix",
         skip_serializing_if = "is_false"
@@ -254,6 +256,7 @@ impl Default for ProxyConfigFile {
             port: default_proxy_port(),
             local_api_key: None,
             app_proxy_url: None,
+            cors_enabled: false,
             model_list_prefix: default_model_list_prefix(),
             kiro_preferred_endpoint: None,
             log_level: LogLevel::default(),
@@ -301,6 +304,7 @@ pub struct ProxyConfig {
     pub host: String,
     pub port: u16,
     pub local_api_key: Option<String>,
+    pub cors_enabled: bool,
     pub model_list_prefix: bool,
     pub log_level: LogLevel,
     pub max_request_body_bytes: usize,

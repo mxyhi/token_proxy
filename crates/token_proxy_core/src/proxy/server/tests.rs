@@ -126,6 +126,7 @@ fn config_with_runtime_upstreams(
         host: "127.0.0.1".to_string(),
         port: 9208,
         local_api_key: None,
+        cors_enabled: false,
         model_list_prefix: false,
         log_level: LogLevel::Silent,
         max_request_body_bytes: 20 * 1024 * 1024,

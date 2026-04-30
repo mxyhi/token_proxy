@@ -8,6 +8,7 @@ fn config_with_local(key: &str) -> ProxyConfig {
         host: "127.0.0.1".to_string(),
         port: 9208,
         local_api_key: Some(key.to_string()),
+        cors_enabled: true,
         model_list_prefix: false,
         log_level: LogLevel::Silent,
         max_request_body_bytes: 1024,
@@ -25,6 +26,7 @@ fn config_without_local() -> ProxyConfig {
         host: "127.0.0.1".to_string(),
         port: 9208,
         local_api_key: None,
+        cors_enabled: true,
         model_list_prefix: false,
         log_level: LogLevel::Silent,
         max_request_body_bytes: 1024,
@@ -191,6 +193,123 @@ fn local_auth_rejects_post_models_index_without_key() {
     let headers = HeaderMap::new();
     let result = ensure_local_auth(&config, &headers, &Method::POST, "/v1/models", None);
     assert_eq!(result, Err("Missing local access key.".to_string()));
+}
+
+#[test]
+fn local_auth_allows_cors_preflight_without_key_when_enabled() {
+    let config = config_with_local("local-key");
+    let mut headers = HeaderMap::new();
+    headers.insert("origin", HeaderValue::from_static("http://localhost:9021"));
+    headers.insert(
+        "access-control-request-method",
+        HeaderValue::from_static("POST"),
+    );
+    headers.insert(
+        "access-control-request-headers",
+        HeaderValue::from_static("authorization,content-type"),
+    );
+
+    let result = ensure_local_auth(
+        &config,
+        &headers,
+        &Method::OPTIONS,
+        "/v1/chat/completions",
+        None,
+    );
+
+    assert!(result.is_ok());
+}
+
+#[test]
+fn local_auth_rejects_cors_preflight_without_key_when_disabled() {
+    let mut config = config_with_local("local-key");
+    config.cors_enabled = false;
+    let mut headers = HeaderMap::new();
+    headers.insert("origin", HeaderValue::from_static("http://localhost:9021"));
+    headers.insert(
+        "access-control-request-method",
+        HeaderValue::from_static("POST"),
+    );
+
+    let result = ensure_local_auth(
+        &config,
+        &headers,
+        &Method::OPTIONS,
+        "/v1/chat/completions",
+        None,
+    );
+
+    assert_eq!(result, Err("Missing local access key.".to_string()));
+}
+
+#[test]
+fn cors_preflight_response_echoes_loopback_origin_and_requested_headers() {
+    let config = config_with_local("local-key");
+    let mut headers = HeaderMap::new();
+    headers.insert("origin", HeaderValue::from_static("http://localhost:9021"));
+    headers.insert(
+        "access-control-request-method",
+        HeaderValue::from_static("POST"),
+    );
+    headers.insert(
+        "access-control-request-headers",
+        HeaderValue::from_static("authorization,content-type"),
+    );
+
+    let response =
+        cors_preflight_response(&config, &headers, &Method::OPTIONS).expect("preflight response");
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("http://localhost:9021")
+    );
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-headers")
+            .and_then(|value| value.to_str().ok()),
+        Some("authorization,content-type")
+    );
+}
+
+#[test]
+fn cors_preflight_response_rejects_non_loopback_origin() {
+    let config = config_with_local("local-key");
+    let mut headers = HeaderMap::new();
+    headers.insert("origin", HeaderValue::from_static("https://example.com"));
+    headers.insert(
+        "access-control-request-method",
+        HeaderValue::from_static("POST"),
+    );
+
+    let response = cors_preflight_response(&config, &headers, &Method::OPTIONS);
+
+    assert!(response.is_none());
+}
+
+#[test]
+fn with_cors_headers_adds_loopback_origin_to_actual_response() {
+    let config = config_with_local("local-key");
+    let mut headers = HeaderMap::new();
+    headers.insert("origin", HeaderValue::from_static("http://127.0.0.1:9021"));
+    let response = Response::builder()
+        .status(StatusCode::OK)
+        .body(Body::empty())
+        .expect("response");
+
+    let response = with_cors_headers(&config, &headers, response);
+
+    assert_eq!(
+        response
+            .headers()
+            .get("access-control-allow-origin")
+            .and_then(|value| value.to_str().ok()),
+        Some("http://127.0.0.1:9021")
+    );
 }
 
 #[test]

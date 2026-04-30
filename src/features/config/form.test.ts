@@ -121,12 +121,14 @@ describe("config/form", () => {
       ...EMPTY_FORM,
       host: " 127.0.0.1 ",
       localApiKey: " ",
+      corsEnabled: true,
       modelListPrefix: true,
       upstreams: [upstream],
     });
 
     expect(payload.host).toBe("127.0.0.1");
     expect(payload.local_api_key).toBeNull();
+    expect(payload.cors_enabled).toBe(true);
     expect(payload.model_list_prefix).toBe(true);
     expect(payload.retryable_failure_cooldown_secs).toBe(15);
     expect(payload.upstream_no_data_timeout_secs).toBe(120);
@@ -194,6 +196,7 @@ describe("config/form", () => {
     });
 
     expect(form.upstreamNoDataTimeoutSecs).toBe("120");
+    expect(form.corsEnabled).toBe(false);
     expect(form.modelListPrefix).toBe(false);
     expect(form.upstreams[0]?.apiKeys).toBe("key-a, key-b");
     expect(form.upstreamStrategy).toEqual({

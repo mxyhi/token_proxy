@@ -75,6 +75,7 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
         host: config.host,
         port: config.port,
         local_api_key: config.local_api_key,
+        cors_enabled: config.cors_enabled,
         model_list_prefix: config.model_list_prefix,
         log_level,
         max_request_body_bytes,

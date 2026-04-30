@@ -97,7 +97,20 @@ function ProxyCoreFields({
           {m.proxy_core_app_proxy_url_help({ placeholder: "$app_proxy_url" })}
         </p>
       </div>
-      <div className="flex items-start justify-between gap-4 rounded-lg border border-border/60 p-3">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="cors-enabled">允许浏览器跨域调用本地代理</Label>
+          <p className="text-xs text-muted-foreground">
+            开启后，loopback 页面可从浏览器访问本地代理；实际请求仍需要本地访问 key。
+          </p>
+        </div>
+        <Switch
+          id="cors-enabled"
+          checked={form.corsEnabled}
+          onCheckedChange={(checked) => onChange({ corsEnabled: checked })}
+        />
+      </div>
+      <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
           <Label htmlFor="model-list-prefix">模型列表显示渠道前缀</Label>
           <p className="text-xs text-muted-foreground">
@@ -110,7 +123,7 @@ function ProxyCoreFields({
           onCheckedChange={(checked) => onChange({ modelListPrefix: checked })}
         />
       </div>
-      <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-border/60 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <Label>{m.proxy_core_hot_model_mappings_title()}</Label>
           <p className="text-xs text-muted-foreground">
@@ -195,10 +208,8 @@ type ProxyCoreServiceSectionProps = {
 
 function ProxyCoreServiceSection({ proxyService }: ProxyCoreServiceSectionProps) {
   return (
-    <div className="space-y-4">
-      <div className="rounded-lg border border-border/60 bg-background/60 p-4">
-        <ProxyServicePanel {...proxyService} />
-      </div>
+    <div className="pt-1">
+      <ProxyServicePanel {...proxyService} />
     </div>
   );
 }

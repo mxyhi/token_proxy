@@ -8,8 +8,8 @@ use std::{sync::Arc, time::Instant};
 use tokio::sync::RwLock;
 
 use super::{
-    server_helpers::extract_request_path, upstream::aggregate_model_catalog_request, ProxyState,
-    RequestMeta,
+    http, server_helpers::extract_request_path, upstream::aggregate_model_catalog_request,
+    ProxyState, RequestMeta,
 };
 
 const PROVIDER_ANTHROPIC: &str = "anthropic";
@@ -72,6 +72,10 @@ async fn proxy_request(
     tracing::info!(method = %method, path = %path, "incoming request");
     tracing::debug!(headers = ?headers.keys().collect::<Vec<_>>(), "request headers");
 
+    if let Some(response) = http::cors_preflight_response(&state.config, &headers, &method) {
+        return response;
+    }
+
     if method == Method::GET
         && (is_openai_models_index_path(&path) || is_openai_compatible_models_index_path(&path))
     {
@@ -90,7 +94,7 @@ async fn proxy_request(
         .await
         {
             Ok(body) => body,
-            Err(response) => return response,
+            Err(response) => return http::with_cors_headers(&state.config, &headers, response),
         };
         let (plan, _body) = match resolve_plan_or_respond(
             &state.config,
@@ -106,7 +110,7 @@ async fn proxy_request(
         .await
         {
             Ok(result) => result,
-            Err(response) => return response,
+            Err(response) => return http::with_cors_headers(&state.config, &headers, response),
         };
         let request_auth = match resolve_request_auth_or_respond(
             &state.config,
@@ -118,7 +122,7 @@ async fn proxy_request(
             request_start,
         ) {
             Ok(request_auth) => request_auth,
-            Err(response) => return response,
+            Err(response) => return http::with_cors_headers(&state.config, &headers, response),
         };
         let meta = RequestMeta {
             stream: false,
@@ -129,8 +133,8 @@ async fn proxy_request(
         };
         let outbound_path = resolve_outbound_path(&path, &plan, &meta);
         let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, &uri);
-        return aggregate_model_catalog_request(
-            state,
+        let response = aggregate_model_catalog_request(
+            state.clone(),
             plan.provider,
             &path,
             &outbound_path_with_query,
@@ -138,6 +142,7 @@ async fn proxy_request(
             &request_auth,
         )
         .await;
+        return http::with_cors_headers(&state.config, &headers, response);
     }
 
     let inbound = match prepare_inbound_request(
@@ -154,14 +159,23 @@ async fn proxy_request(
     .await
     {
         Ok(inbound) => inbound,
-        Err(response) => return response,
+        Err(response) => return http::with_cors_headers(&state.config, &headers, response),
     };
     let prepared =
         match finalize_prepared_request(&state, &headers, &uri, inbound, request_start).await {
             Ok(prepared) => prepared,
-            Err(response) => return response,
+            Err(response) => return http::with_cors_headers(&state.config, &headers, response),
         };
-    forward_with_provider_fallbacks(state, method, &uri, &headers, &prepared, request_start).await
+    let response = forward_with_provider_fallbacks(
+        state.clone(),
+        method,
+        &uri,
+        &headers,
+        &prepared,
+        request_start,
+    )
+    .await;
+    http::with_cors_headers(&state.config, &headers, response)
 }
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。

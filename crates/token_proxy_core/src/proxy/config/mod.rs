@@ -8,7 +8,7 @@ mod types;
 use crate::paths::TokenProxyPaths;
 use std::time::{Duration, Instant};
 
-const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 20 * 1024 * 1024;
+const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 100 * 1024 * 1024;
 const MIN_UPSTREAM_NO_DATA_TIMEOUT_SECS: u64 = 3;
 
 pub use hot_model_mappings::default_hot_model_mappings;
@@ -75,12 +75,14 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
         host: config.host,
         port: config.port,
         local_api_key: config.local_api_key,
+        cors_enabled: config.cors_enabled,
         model_list_prefix: config.model_list_prefix,
         log_level,
         max_request_body_bytes,
         retryable_failure_cooldown: resolve_retryable_failure_cooldown(
             config.retryable_failure_cooldown_secs,
         )?,
+        codex_session_scoped_cooldown_enabled: config.codex_session_scoped_cooldown_enabled,
         upstream_no_data_timeout: resolve_upstream_no_data_timeout(
             config.upstream_no_data_timeout_secs,
         )?,

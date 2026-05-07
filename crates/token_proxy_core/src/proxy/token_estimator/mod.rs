@@ -2,6 +2,8 @@ use std::{collections::HashSet, sync::OnceLock};
 
 use tiktoken_rs::{cl100k_base, o200k_base, CoreBPE};
 
+const OPENAI_BPE_MAX_TEXT_BYTES: usize = 128 * 1024;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TokenProvider {
     OpenAI,
@@ -92,6 +94,9 @@ pub(crate) fn estimate_text_tokens(model: Option<&str>, text: &str) -> u64 {
 }
 
 fn estimate_text_tokens_openai(model: Option<&str>, text: &str) -> u64 {
+    if text.len() > OPENAI_BPE_MAX_TEXT_BYTES {
+        return estimate_text_tokens_by_provider(TokenProvider::OpenAI, text);
+    }
     let bpe = bpe_for_model(model);
     bpe.encode_with_special_tokens(text).len() as u64
 }

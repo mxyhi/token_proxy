@@ -9,6 +9,9 @@ use super::{
     dispatch::resolve_retry_fallback_plan, execute::forward_retry_fallback_request,
     prepared::PreparedRequest, ProxyState,
 };
+use crate::proxy::{cooldown_scope::CooldownScope, inbound::detect_inbound_api_format};
+
+const CODEX_PROVIDER: &str = "codex";
 
 pub(super) async fn forward_with_provider_fallbacks(
     state: Arc<ProxyState>,
@@ -18,6 +21,11 @@ pub(super) async fn forward_with_provider_fallbacks(
     prepared: &PreparedRequest,
     request_start: Instant,
 ) -> Response {
+    let codex_cooldown_scope = CooldownScope::codex_responses_request(
+        &state.config,
+        detect_inbound_api_format(&prepared.path),
+        headers,
+    );
     let primary = forward_upstream_request(
         state.clone(),
         method.clone(),
@@ -32,6 +40,7 @@ pub(super) async fn forward_with_provider_fallbacks(
         prepared.client_gemini_api_key.clone(),
         prepared.plan.response_transform,
         prepared.request_detail.clone(),
+        &codex_cooldown_scope,
     )
     .await;
 
@@ -68,6 +77,7 @@ pub(super) async fn forward_with_provider_fallbacks(
             prepared,
             request_start,
             &fallback_plan,
+            &codex_cooldown_scope,
         )
         .await
         {
@@ -88,5 +98,24 @@ pub(super) async fn forward_with_provider_fallbacks(
         }
     }
 
+    finalize_codex_responses_cooldown(&state, &codex_cooldown_scope, current_response.status());
     current_response
+}
+
+fn finalize_codex_responses_cooldown(
+    state: &ProxyState,
+    scope: &CooldownScope,
+    status: axum::http::StatusCode,
+) {
+    // Session-scoped cooldown follows the final client-visible result, not
+    // intermediate same-turn failover attempts. Request scopes are always cleared.
+    if scope.is_global() || (!status.is_success() && !scope.is_request()) {
+        return;
+    }
+    state
+        .account_selector
+        .clear_provider_scope(CODEX_PROVIDER, scope);
+    state
+        .upstream_selector
+        .clear_provider_scope(CODEX_PROVIDER, scope);
 }

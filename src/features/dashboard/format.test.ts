@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   createDashboardTimeFormatter,
   formatCompact,
+  formatDashboardClockTime,
   formatDashboardProviderLabel,
   formatDashboardTimestamp,
   formatInteger,
+  formatNanoUsdCost,
 } from "@/features/dashboard/format";
 import { setLocale } from "@/paraglide/runtime.js";
 
@@ -19,6 +21,12 @@ describe("dashboard/format", () => {
   it("renders placeholder for invalid timestamps", () => {
     const formatter = createDashboardTimeFormatter("en-US");
     expect(formatDashboardTimestamp(Number.NaN, formatter)).toBe("—");
+    expect(formatDashboardClockTime(Number.NaN)).toBe("—");
+  });
+
+  it("formats dashboard table timestamps as clock time only", () => {
+    const timestamp = new Date(2026, 4, 2, 15, 28, 43).getTime();
+    expect(formatDashboardClockTime(timestamp)).toBe("15:28:43");
   });
 
   it("formats compact numbers with K suffix for thousands", () => {
@@ -38,6 +46,12 @@ describe("dashboard/format", () => {
   it("formats compact numbers with B suffix for billions", () => {
     expect(formatCompact(1000000000)).toBe("1B");
     expect(formatCompact(2500000000)).toBe("2.5B");
+  });
+
+  it("formats cost amounts without a currency unit", () => {
+    expect(formatNanoUsdCost(1_210_000_000)).toBe("1.21");
+    expect(formatNanoUsdCost(4_325_000_000)).toBe("4.33");
+    expect(formatNanoUsdCost(null)).toBe("—");
   });
 
   it("keeps provider when it adds new information", () => {

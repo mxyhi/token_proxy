@@ -7,6 +7,7 @@ use super::dispatch::ForwardAttemptState;
 use super::utils::{is_retryable_error, is_retryable_status, sanitize_upstream_error};
 use super::AttemptOutcome;
 use crate::proxy::config::ProviderUpstreams;
+use crate::proxy::cooldown_scope::CooldownScope;
 use crate::proxy::http;
 use crate::proxy::log::{build_log_entry, LogContext, LogWriter, RequestTimings, UsageSnapshot};
 use crate::proxy::openai_compat::FormatTransform;
@@ -52,6 +53,7 @@ pub(super) async fn handle_upstream_result(
     client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
+    cooldown_scope: &CooldownScope,
 ) -> AttemptOutcome {
     let account_id_value = account_id.as_deref().map(str::to_string);
     let proxy_base_url = http::local_proxy_base_url(&state.config);
@@ -64,6 +66,7 @@ pub(super) async fn handle_upstream_result(
                 account_id_value.as_deref(),
                 status,
                 res.headers(),
+                cooldown_scope,
             );
             let response = build_proxy_response_buffered(
                 meta,
@@ -121,6 +124,7 @@ pub(super) async fn handle_upstream_result(
                     provider,
                     account_id_value.as_deref(),
                     Some(retryable.message.clone()),
+                    cooldown_scope,
                 );
                 return AttemptOutcome::Retryable {
                     message: retryable.message,
@@ -135,6 +139,7 @@ pub(super) async fn handle_upstream_result(
                 account_id_value.as_deref(),
                 status,
                 &response_headers,
+                cooldown_scope,
             );
             AttemptOutcome::Success(response)
         }
@@ -150,6 +155,7 @@ pub(super) async fn handle_upstream_result(
                 provider,
                 account_id_value.as_deref(),
                 Some(message.clone()),
+                cooldown_scope,
             );
             log_upstream_error_if_needed(
                 &log,
@@ -298,17 +304,24 @@ fn update_account_cooldown_from_status(
     account_id: Option<&str>,
     status: StatusCode,
     headers: &reqwest::header::HeaderMap,
+    cooldown_scope: &CooldownScope,
 ) {
     let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
     };
     if status.is_success() {
-        state.account_selector.clear_cooldown(provider, account_id);
+        state
+            .account_selector
+            .clear_cooldown_scoped(provider, account_id, cooldown_scope);
         return;
     }
-    let _ = state
-        .account_selector
-        .mark_response_status(provider, account_id, status, headers);
+    let _ = state.account_selector.mark_response_status_scoped(
+        provider,
+        account_id,
+        status,
+        headers,
+        cooldown_scope,
+    );
 }
 
 fn mark_retryable_account_failure(
@@ -316,13 +329,15 @@ fn mark_retryable_account_failure(
     provider: &str,
     account_id: Option<&str>,
     _reason_detail: Option<String>,
+    cooldown_scope: &CooldownScope,
 ) {
     let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
     };
-    let _ = state
-        .account_selector
-        .mark_retryable_failure(provider, account_id);
+    let _ =
+        state
+            .account_selector
+            .mark_retryable_failure_scoped(provider, account_id, cooldown_scope);
 }
 
 pub(super) fn log_upstream_error_if_needed(

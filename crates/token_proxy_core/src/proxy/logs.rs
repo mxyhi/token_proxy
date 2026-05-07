@@ -20,6 +20,10 @@ pub struct RequestLogDetail {
     pub output_tokens: Option<i64>,
     pub total_tokens: Option<i64>,
     pub cached_tokens: Option<i64>,
+    pub cost_nano_usd: Option<i64>,
+    pub pricing_version: Option<String>,
+    pub pricing_model: Option<String>,
+    pub pricing_context_tier: Option<String>,
     pub latency_ms: i64,
     pub upstream_first_byte_ms: Option<i64>,
     pub upstream_response_headers_ms: Option<i64>,
@@ -55,6 +59,10 @@ SELECT
   output_tokens,
   total_tokens,
   cached_tokens,
+  cost_nano_usd,
+  pricing_version,
+  pricing_model,
+  pricing_context_tier,
   latency_ms,
   upstream_first_byte_ms,
   upstream_response_headers_ms,
@@ -105,6 +113,22 @@ LIMIT 1;
         total_tokens: row.try_get::<Option<i64>, _>("total_tokens").ok().flatten(),
         cached_tokens: row
             .try_get::<Option<i64>, _>("cached_tokens")
+            .ok()
+            .flatten(),
+        cost_nano_usd: row
+            .try_get::<Option<i64>, _>("cost_nano_usd")
+            .ok()
+            .flatten(),
+        pricing_version: row
+            .try_get::<Option<String>, _>("pricing_version")
+            .ok()
+            .flatten(),
+        pricing_model: row
+            .try_get::<Option<String>, _>("pricing_model")
+            .ok()
+            .flatten(),
+        pricing_context_tier: row
+            .try_get::<Option<String>, _>("pricing_context_tier")
             .ok()
             .flatten(),
         latency_ms: row.try_get::<i64, _>("latency_ms").unwrap_or_default(),
@@ -178,8 +202,25 @@ mod tests {
               account_id,
               stream,
               status,
+              cost_nano_usd,
+              pricing_version,
+              pricing_model,
+              pricing_context_tier,
               latency_ms
-            ) VALUES (123, '/responses', 'codex', 'codex-default', 'codex-a.json', 0, 200, 30);
+            ) VALUES (
+              123,
+              '/responses',
+              'codex',
+              'codex-default',
+              'codex-a.json',
+              0,
+              200,
+              1210000000,
+              '2026-05-02.openai-openrouter-v1',
+              'gpt-5.5',
+              'short',
+              30
+            );
             "#,
         )
         .execute(&pool)
@@ -191,5 +232,12 @@ mod tests {
             .expect("read request log detail");
 
         assert_eq!(detail.account_id.as_deref(), Some("codex-a.json"));
+        assert_eq!(detail.cost_nano_usd, Some(1_210_000_000));
+        assert_eq!(
+            detail.pricing_version.as_deref(),
+            Some("2026-05-02.openai-openrouter-v1")
+        );
+        assert_eq!(detail.pricing_model.as_deref(), Some("gpt-5.5"));
+        assert_eq!(detail.pricing_context_tier.as_deref(), Some("short"));
     }
 }

@@ -38,3 +38,11 @@ fn estimate_tokens_treats_plus_as_symbol() {
     // Symbol 0.4 -> ceil => 1
     assert_eq!(tokens, 1);
 }
+
+#[test]
+fn estimate_openai_large_repeated_text_without_panicking() {
+    let text = "x".repeat(1024 * 1024);
+    let tokens = estimate_text_tokens(Some("gpt-realtest"), &text);
+
+    assert!(tokens > 0);
+}

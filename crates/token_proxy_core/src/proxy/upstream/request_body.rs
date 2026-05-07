@@ -7,7 +7,7 @@ use super::{request::split_path_query, AttemptOutcome};
 const OPENAI_CHAT_PATH: &str = "/v1/chat/completions";
 const OPENAI_RESPONSES_PATH: &str = "/v1/responses";
 const REQUEST_MODEL_MAPPING_LIMIT_BYTES: usize = 4 * 1024 * 1024;
-const REQUEST_REASONING_LIMIT_BYTES: usize = 99 * 1024 * 1024;
+const REQUEST_REASONING_LIMIT_BYTES: usize = 100 * 1024 * 1024;
 const REQUEST_FILTER_LIMIT_BYTES: usize = 20 * 1024 * 1024;
 
 pub(super) async fn build_upstream_body(

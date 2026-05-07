@@ -10,6 +10,7 @@ use super::{
     resolve_outbound_path, DispatchPlan, ProxyState,
 };
 use crate::logging::LogLevel;
+use crate::proxy::cooldown_scope::CooldownScope;
 
 pub(super) async fn forward_retry_fallback_request(
     state: Arc<ProxyState>,
@@ -19,6 +20,7 @@ pub(super) async fn forward_retry_fallback_request(
     prepared: &PreparedRequest,
     request_start: Instant,
     plan: &DispatchPlan,
+    codex_cooldown_scope: &CooldownScope,
 ) -> Result<super::super::upstream::ForwardUpstreamResult, Response> {
     let outbound_path = resolve_outbound_path(&prepared.path, plan, &prepared.meta);
     let dispatch_inbound_format = detect_inbound_api_format(&outbound_path);
@@ -48,6 +50,7 @@ pub(super) async fn forward_retry_fallback_request(
         prepared.client_gemini_api_key.clone(),
         plan.response_transform,
         prepared.request_detail.clone(),
+        codex_cooldown_scope,
     )
     .await)
 }

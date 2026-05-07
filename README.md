@@ -99,8 +99,9 @@ Notes:
 | `local_api_key` | `null` | When set: local auth uses format-specific headers (see Auth rules); local auth inputs are **not** forwarded upstream. |
 | `app_proxy_url` | `null` | Proxy for app updater & as placeholder for upstreams (`"$app_proxy_url"`). Supports `http/https/socks5/socks5h`. |
 | `log_level` | `silent` | `silent|error|warn|info|debug|trace`; debug/trace log request headers (auth redacted) and small bodies (≤64KiB). Release builds force `silent`. |
-| `max_request_body_bytes` | `20971520` (20 MiB) | 0 = fallback to default. Protects inbound body size. |
+| `max_request_body_bytes` | `104857600` (100 MiB) | 0 = fallback to default. Protects inbound body size. |
 | `retryable_failure_cooldown_secs` | `15` | Cooldown window after retryable failures that should temporarily sideline an upstream. `0` disables cooldown. Reloading or restarting the running proxy resets current cooldown state. |
+| `codex_session_scoped_cooldown_enabled` | `false` | Only applies to Codex account-backed OpenAI Responses requests. When enabled, cooldown is isolated by `session_id`; final success clears that session, and requests without `session_id` do not share cooldown. |
 | `tray_token_rate.enabled` | `true` | macOS tray live rate; harmless elsewhere. |
 | `tray_token_rate.format` | `split` | `combined` (`total`), `split` (`↑in ↓out`), `both` (`total | ↑in ↓out`). |
 | `upstream_strategy` | `{ "order": "fill_first", "dispatch": { "type": "serial" } }` | Structured strategy object. `order` controls candidate ordering inside one priority group; `dispatch` controls serial / hedged / race execution. |
@@ -158,7 +159,7 @@ Notes:
   - `{"type":"hedged","delay_ms":2000,"max_parallel":2}`: launch the first candidate immediately, then add one more attempt after `delay_ms` if the prior attempt is still unresolved, up to `max_parallel`.
   - `{"type":"race","max_parallel":3}`: launch up to `max_parallel` candidates immediately and take the first successful result.
 - Retryable conditions: network timeout/connect errors, or status 400/401/403/404/408/422/429/307/5xx (including 504/524). Retries stay within the same provider's priority groups.
-- Cooldown conditions: `401/403/408/429/5xx` will temporarily move the failed upstream behind ready peers for `retryable_failure_cooldown_secs` (default `15`); `400/404/422/307` stay retryable but do not trigger cross-request cooldown.
+- Cooldown conditions: `401/403/408/429/5xx` will temporarily move the failed upstream behind ready peers for `retryable_failure_cooldown_secs` (default `15`); `400/404/422/307` stay retryable but do not trigger cross-request cooldown. With `codex_session_scoped_cooldown_enabled=true`, Codex account-backed OpenAI Responses cooldown is isolated by `session_id`; final successful requests do not keep same-session cooldown, and requests without `session_id` do not share cooldown.
 - `/v1/messages` only: after the chosen native provider is exhausted (retryable errors), the proxy can fall back to the other native provider (`anthropic` ↔ `kiro`) if it is configured.
 
 ## Observability
@@ -180,5 +181,5 @@ Notes:
 - **Port already in use?** Change `port` in `config.jsonc`; remember to update your client base URL.
 - **Got 401?** If `local_api_key` is set, you must send the format-specific local key (OpenAI/Responses: `Authorization`, Anthropic: `x-api-key`, Gemini: `x-goog-api-key` or `?key=`). With local auth enabled, configure upstream keys in `upstreams[].api_key`.
 - **Got 504?** Upstream did not send response headers or the first body chunk within 120s. For streaming responses, a 120s idle timeout between chunks may also close the connection.
-- **413 Payload Too Large?** Body exceeded `max_request_body_bytes` (default 20 MiB) or the 4 MiB transform limit for format-conversion requests.
+- **413 Payload Too Large?** Body exceeded `max_request_body_bytes` (default 100 MiB) or the transform limit for format-conversion requests.
 - **Why no system proxy?** By design, `reqwest` is built with `.no_proxy()`; set per-upstream `proxy_url` if needed.

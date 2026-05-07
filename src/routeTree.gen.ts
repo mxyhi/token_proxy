@@ -12,6 +12,7 @@ import { Route as ConfigIndexRouteImport } from "./routes/config/index"
 const ConfigUpstreamsLazyRouteImport = createFileRoute("/config/upstreams")()
 const ConfigSettingsLazyRouteImport = createFileRoute("/config/settings")()
 const ConfigProvidersLazyRouteImport = createFileRoute("/config/providers")()
+const ConfigPricingLazyRouteImport = createFileRoute("/config/pricing")()
 const ConfigLogsLazyRouteImport = createFileRoute("/config/logs")()
 const ConfigDashboardLazyRouteImport = createFileRoute("/config/dashboard")()
 const ConfigCoreLazyRouteImport = createFileRoute("/config/core")()
@@ -53,6 +54,13 @@ const ConfigProvidersLazyRoute = ConfigProvidersLazyRouteImport.update({
 } as any).lazy(() =>
   import("./routes/config/providers.lazy").then((d) => d.Route),
 )
+const ConfigPricingLazyRoute = ConfigPricingLazyRouteImport.update({
+  id: "/pricing",
+  path: "/pricing",
+  getParentRoute: () => ConfigRouteRoute,
+} as any).lazy(() =>
+  import("./routes/config/pricing.lazy").then((d) => d.Route),
+)
 const ConfigLogsLazyRoute = ConfigLogsLazyRouteImport.update({
   id: "/logs",
   path: "/logs",
@@ -83,6 +91,7 @@ export interface FileRoutesByFullPath {
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
+  "/config/pricing": typeof ConfigPricingLazyRoute
   "/config/providers": typeof ConfigProvidersLazyRoute
   "/config/settings": typeof ConfigSettingsLazyRoute
   "/config/upstreams": typeof ConfigUpstreamsLazyRoute
@@ -94,6 +103,7 @@ export interface FileRoutesByTo {
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
+  "/config/pricing": typeof ConfigPricingLazyRoute
   "/config/providers": typeof ConfigProvidersLazyRoute
   "/config/settings": typeof ConfigSettingsLazyRoute
   "/config/upstreams": typeof ConfigUpstreamsLazyRoute
@@ -107,6 +117,7 @@ export interface FileRoutesById {
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
+  "/config/pricing": typeof ConfigPricingLazyRoute
   "/config/providers": typeof ConfigProvidersLazyRoute
   "/config/settings": typeof ConfigSettingsLazyRoute
   "/config/upstreams": typeof ConfigUpstreamsLazyRoute
@@ -121,6 +132,7 @@ export interface FileRouteTypes {
     | "/config/core"
     | "/config/dashboard"
     | "/config/logs"
+    | "/config/pricing"
     | "/config/providers"
     | "/config/settings"
     | "/config/upstreams"
@@ -132,6 +144,7 @@ export interface FileRouteTypes {
     | "/config/core"
     | "/config/dashboard"
     | "/config/logs"
+    | "/config/pricing"
     | "/config/providers"
     | "/config/settings"
     | "/config/upstreams"
@@ -144,6 +157,7 @@ export interface FileRouteTypes {
     | "/config/core"
     | "/config/dashboard"
     | "/config/logs"
+    | "/config/pricing"
     | "/config/providers"
     | "/config/settings"
     | "/config/upstreams"
@@ -199,6 +213,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ConfigProvidersLazyRouteImport
       parentRoute: typeof ConfigRouteRoute
     }
+    "/config/pricing": {
+      id: "/config/pricing"
+      path: "/pricing"
+      fullPath: "/config/pricing"
+      preLoaderRoute: typeof ConfigPricingLazyRouteImport
+      parentRoute: typeof ConfigRouteRoute
+    }
     "/config/logs": {
       id: "/config/logs"
       path: "/logs"
@@ -235,6 +256,7 @@ interface ConfigRouteRouteChildren {
   ConfigCoreLazyRoute: typeof ConfigCoreLazyRoute
   ConfigDashboardLazyRoute: typeof ConfigDashboardLazyRoute
   ConfigLogsLazyRoute: typeof ConfigLogsLazyRoute
+  ConfigPricingLazyRoute: typeof ConfigPricingLazyRoute
   ConfigProvidersLazyRoute: typeof ConfigProvidersLazyRoute
   ConfigSettingsLazyRoute: typeof ConfigSettingsLazyRoute
   ConfigUpstreamsLazyRoute: typeof ConfigUpstreamsLazyRoute
@@ -246,6 +268,7 @@ const ConfigRouteRouteChildren: ConfigRouteRouteChildren = {
   ConfigCoreLazyRoute: ConfigCoreLazyRoute,
   ConfigDashboardLazyRoute: ConfigDashboardLazyRoute,
   ConfigLogsLazyRoute: ConfigLogsLazyRoute,
+  ConfigPricingLazyRoute: ConfigPricingLazyRoute,
   ConfigProvidersLazyRoute: ConfigProvidersLazyRoute,
   ConfigSettingsLazyRoute: ConfigSettingsLazyRoute,
   ConfigUpstreamsLazyRoute: ConfigUpstreamsLazyRoute,

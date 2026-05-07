@@ -137,6 +137,16 @@ fn build_runtime_config_maps_upstream_no_data_timeout_secs() {
 }
 
 #[test]
+fn build_runtime_config_maps_codex_session_scoped_cooldown_switch() {
+    let mut config = ProxyConfigFile::default();
+    config.codex_session_scoped_cooldown_enabled = true;
+
+    let runtime = build_runtime_config(config).expect("runtime config");
+
+    assert!(runtime.codex_session_scoped_cooldown_enabled);
+}
+
+#[test]
 fn build_runtime_config_maps_hedged_strategy() {
     let mut config = ProxyConfigFile::default();
     config.upstream_strategy = UpstreamStrategy {

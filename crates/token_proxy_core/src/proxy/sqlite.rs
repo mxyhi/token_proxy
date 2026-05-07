@@ -104,7 +104,11 @@ CREATE TABLE IF NOT EXISTS request_logs (
   upstream_response_headers_ms INTEGER,
   upstream_first_body_chunk_ms INTEGER,
   first_client_flush_ms INTEGER,
-  first_output_ms INTEGER
+  first_output_ms INTEGER,
+  cost_nano_usd INTEGER,
+  pricing_version TEXT,
+  pricing_model TEXT,
+  pricing_context_tier TEXT
 );
 "#,
     )
@@ -113,6 +117,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
     .map_err(|err| format!("Failed to create request_logs table: {err}"))?;
 
     ensure_request_logs_columns(pool).await?;
+    super::pricing::init_model_pricing_table(pool).await?;
+    super::pricing::backfill_request_log_costs(pool).await?;
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_request_logs_ts_ms ON request_logs(ts_ms);")
         .execute(pool)
@@ -280,6 +286,34 @@ async fn ensure_request_logs_columns(pool: &SqlitePool) -> Result<(), String> {
             .map_err(|err| format!("Failed to add first_output_ms column: {err}"))?;
     }
 
+    if !columns.contains("cost_nano_usd") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN cost_nano_usd INTEGER;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add cost_nano_usd column: {err}"))?;
+    }
+
+    if !columns.contains("pricing_version") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN pricing_version TEXT;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add pricing_version column: {err}"))?;
+    }
+
+    if !columns.contains("pricing_model") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN pricing_model TEXT;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add pricing_model column: {err}"))?;
+    }
+
+    if !columns.contains("pricing_context_tier") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN pricing_context_tier TEXT;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add pricing_context_tier column: {err}"))?;
+    }
+
     Ok(())
 }
 
@@ -400,7 +434,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn request_logs_schema_includes_stream_timing_columns() {
+    async fn request_logs_schema_includes_timing_and_cost_columns() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -422,6 +456,99 @@ mod tests {
         assert!(columns.contains("upstream_first_body_chunk_ms"));
         assert!(columns.contains("first_client_flush_ms"));
         assert!(columns.contains("first_output_ms"));
+        assert!(columns.contains("cost_nano_usd"));
+        assert!(columns.contains("pricing_version"));
+        assert!(columns.contains("pricing_model"));
+        assert!(columns.contains("pricing_context_tier"));
+
+        let pricing_table = sqlx::query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'model_pricing_settings';",
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("query sqlite_master");
+        assert!(pricing_table.is_some());
+    }
+
+    #[tokio::test]
+    async fn init_schema_backfills_request_log_costs_when_pricing_version_changes() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite");
+
+        init_schema(&pool).await.expect("init schema");
+        sqlx::query(
+            r#"
+INSERT INTO request_logs (
+  ts_ms,
+  path,
+  provider,
+  upstream_id,
+  model,
+  mapped_model,
+  stream,
+  status,
+  input_tokens,
+  output_tokens,
+  total_tokens,
+  cached_tokens,
+  latency_ms,
+  pricing_version
+) VALUES (
+  1,
+  '/v1/responses',
+  'openai-response',
+  'airouter',
+  'alias',
+  'gpt-5.4',
+  0,
+  200,
+  1000000,
+  10000,
+  1010000,
+  200000,
+  30,
+  'old'
+);
+"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("insert old request log");
+
+        init_schema(&pool).await.expect("backfill schema");
+
+        let row = sqlx::query(
+            r#"
+SELECT cost_nano_usd, pricing_version, pricing_model, pricing_context_tier
+FROM request_logs
+LIMIT 1;
+"#,
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("select backfilled cost");
+
+        assert_eq!(
+            row.try_get::<i64, _>("cost_nano_usd").ok(),
+            Some(4_325_000_000)
+        );
+        assert_eq!(
+            row.try_get::<String, _>("pricing_version").ok().as_deref(),
+            Some(crate::proxy::pricing::DEFAULT_PRICING_VERSION)
+        );
+        assert_eq!(
+            row.try_get::<String, _>("pricing_model").ok().as_deref(),
+            Some("gpt-5.4")
+        );
+        assert_eq!(
+            row.try_get::<String, _>("pricing_context_tier")
+                .ok()
+                .as_deref(),
+            Some("long")
+        );
     }
 
     #[tokio::test]

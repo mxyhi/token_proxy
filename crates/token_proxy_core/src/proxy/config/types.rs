@@ -213,6 +213,8 @@ pub struct ProxyConfigFile {
     pub port: u16,
     pub local_api_key: Option<String>,
     pub app_proxy_url: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cors_enabled: bool,
     #[serde(
         default = "default_model_list_prefix",
         skip_serializing_if = "is_false"
@@ -232,6 +234,8 @@ pub struct ProxyConfigFile {
         skip_serializing_if = "is_default_retryable_failure_cooldown_secs"
     )]
     pub retryable_failure_cooldown_secs: u64,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub codex_session_scoped_cooldown_enabled: bool,
     #[serde(
         default = "default_upstream_no_data_timeout_secs",
         skip_serializing_if = "is_default_upstream_no_data_timeout_secs"
@@ -254,11 +258,13 @@ impl Default for ProxyConfigFile {
             port: default_proxy_port(),
             local_api_key: None,
             app_proxy_url: None,
+            cors_enabled: false,
             model_list_prefix: default_model_list_prefix(),
             kiro_preferred_endpoint: None,
             log_level: LogLevel::default(),
             max_request_body_bytes: None,
             retryable_failure_cooldown_secs: default_retryable_failure_cooldown_secs(),
+            codex_session_scoped_cooldown_enabled: false,
             upstream_no_data_timeout_secs: default_upstream_no_data_timeout_secs(),
             tray_token_rate: TrayTokenRateConfig::default(),
             upstream_strategy: UpstreamStrategy::default(),
@@ -301,10 +307,12 @@ pub struct ProxyConfig {
     pub host: String,
     pub port: u16,
     pub local_api_key: Option<String>,
+    pub cors_enabled: bool,
     pub model_list_prefix: bool,
     pub log_level: LogLevel,
     pub max_request_body_bytes: usize,
     pub retryable_failure_cooldown: std::time::Duration,
+    pub codex_session_scoped_cooldown_enabled: bool,
     pub upstream_no_data_timeout: std::time::Duration,
     pub upstream_strategy: UpstreamStrategyRuntime,
     pub hot_model_mappings: HashMap<String, String>,

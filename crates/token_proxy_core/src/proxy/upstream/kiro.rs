@@ -285,7 +285,12 @@ async fn resolve_next_kiro_account_id(
     state: &ProxyState,
     excluded_account_ids: &[String],
 ) -> Option<String> {
-    let ordered_account_ids = super::ordered_runtime_account_ids(state, "kiro").await;
+    let ordered_account_ids = super::ordered_runtime_account_ids(
+        state,
+        "kiro",
+        &crate::proxy::cooldown_scope::CooldownScope::Global,
+    )
+    .await;
     let ordered_account_ids = ordered_account_ids
         .into_iter()
         .filter(|account_id| !excluded_account_ids.iter().any(|value| value == account_id))

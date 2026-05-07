@@ -54,6 +54,22 @@ export function formatDashboardTimestamp(tsMs: number, formatter: Intl.DateTimeF
   return Number.isNaN(date.getTime()) ? "—" : formatter.format(date);
 }
 
+function padClockPart(value: number) {
+  return value.toString().padStart(2, "0");
+}
+
+export function formatDashboardClockTime(tsMs: number) {
+  const date = new Date(tsMs);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+  return [
+    padClockPart(date.getHours()),
+    padClockPart(date.getMinutes()),
+    padClockPart(date.getSeconds()),
+  ].join(":");
+}
+
 export function formatDashboardProviderLabel(
   upstreamId: string,
   provider: string,
@@ -87,4 +103,16 @@ const COMPACT_FORMAT = new Intl.NumberFormat("en-US", {
 
 export function formatCompact(value: number) {
   return COMPACT_FORMAT.format(value);
+}
+
+const COST_AMOUNT_FORMAT = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+export function formatNanoUsdCost(value: number | null | undefined) {
+  if (value == null) {
+    return "—";
+  }
+  return COST_AMOUNT_FORMAT.format(value / 1_000_000_000);
 }

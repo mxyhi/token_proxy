@@ -283,6 +283,13 @@ fn proxy_config_file_defaults_retryable_failure_cooldown_to_15_seconds() {
 }
 
 #[test]
+fn proxy_config_file_defaults_codex_session_scoped_cooldown_disabled() {
+    let config = ProxyConfigFile::default();
+
+    assert!(!config.codex_session_scoped_cooldown_enabled);
+}
+
+#[test]
 fn proxy_config_file_defaults_upstream_strategy_to_fill_first_serial() {
     let config = ProxyConfigFile::default();
 

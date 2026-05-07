@@ -106,6 +106,7 @@ pub(super) async fn finalize_response(
         None,
         response_transform,
         request_detail,
+        &crate::proxy::cooldown_scope::CooldownScope::Global,
     )
     .await
 }

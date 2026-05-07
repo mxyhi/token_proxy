@@ -3,6 +3,7 @@ use axum::http::{header::AUTHORIZATION, HeaderMap, StatusCode};
 use super::super::http::RequestAuth;
 use super::super::{
     config::{ProviderUpstreams, UpstreamRuntime},
+    cooldown_scope::CooldownScope,
     gemini, http, ProxyState, RequestMeta,
 };
 use super::{request, AttemptOutcome, PreparedUpstreamRequest, ResolvedUpstreamAuth};
@@ -16,6 +17,7 @@ pub(super) async fn prepare_upstream_request(
     headers: &HeaderMap,
     meta: &RequestMeta,
     request_auth: &RequestAuth,
+    cooldown_scope: &CooldownScope,
 ) -> Result<PreparedUpstreamRequest, AttemptOutcome> {
     let mapped_meta = build_mapped_meta(meta, upstream);
     let upstream_path_with_query =
@@ -26,6 +28,7 @@ pub(super) async fn prepare_upstream_request(
         provider,
         upstream,
         request_auth,
+        cooldown_scope,
         &upstream_path_with_query,
         &upstream_url,
     )
@@ -60,6 +63,7 @@ async fn resolve_upstream_auth(
     provider: &str,
     upstream: &UpstreamRuntime,
     request_auth: &RequestAuth,
+    cooldown_scope: &CooldownScope,
     upstream_path_with_query: &str,
     upstream_url: &str,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
@@ -82,7 +86,7 @@ async fn resolve_upstream_auth(
         return resolve_kiro_upstream(state, upstream, upstream_url).await;
     }
     if provider == "codex" {
-        return resolve_codex_upstream(state, upstream, upstream_url).await;
+        return resolve_codex_upstream(state, upstream, upstream_url, cooldown_scope).await;
     }
     let auth = match http::resolve_upstream_auth(provider, upstream, request_auth) {
         Ok(Some(auth)) => auth,
@@ -111,7 +115,7 @@ async fn resolve_kiro_upstream(
     {
         None
     } else {
-        Some(ordered_runtime_account_ids(state, "kiro").await)
+        Some(ordered_runtime_account_ids(state, "kiro", &CooldownScope::Global).await)
     };
     let (selected_account_id, record) = state
         .kiro_accounts
@@ -151,6 +155,7 @@ async fn resolve_codex_upstream(
     state: &ProxyState,
     upstream: &UpstreamRuntime,
     upstream_url: &str,
+    cooldown_scope: &CooldownScope,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
     let has_pinned_account = upstream
         .codex_account_id
@@ -160,7 +165,7 @@ async fn resolve_codex_upstream(
     let ordered_account_ids = if has_pinned_account {
         None
     } else {
-        Some(ordered_runtime_account_ids(state, "codex").await)
+        Some(ordered_runtime_account_ids(state, "codex", cooldown_scope).await)
     };
     let (selected_account_id, record) = state
         .codex_accounts
@@ -221,7 +226,11 @@ fn codex_account_resolution_outcome(has_pinned_account: bool, err: String) -> At
     }
 }
 
-pub(super) async fn ordered_runtime_account_ids(state: &ProxyState, provider: &str) -> Vec<String> {
+pub(super) async fn ordered_runtime_account_ids(
+    state: &ProxyState,
+    provider: &str,
+    cooldown_scope: &CooldownScope,
+) -> Vec<String> {
     let account_ids = match provider {
         "kiro" => state.kiro_accounts.list_accounts().await.map(|items| {
             items
@@ -240,7 +249,7 @@ pub(super) async fn ordered_runtime_account_ids(state: &ProxyState, provider: &s
     .unwrap_or_default();
     state
         .account_selector
-        .order_accounts(provider, &account_ids)
+        .order_accounts_scoped(provider, &account_ids, cooldown_scope)
 }
 
 pub(super) fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) -> RequestMeta {

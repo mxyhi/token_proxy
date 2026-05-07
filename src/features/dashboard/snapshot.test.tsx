@@ -22,6 +22,7 @@ function createSnapshot(
       totalRequests: 2,
       successRequests: 1,
       errorRequests: 1,
+      costNanoUsd: 0,
       totalTokens: 37,
       inputTokens: 13,
       outputTokens: 24,
@@ -89,7 +90,7 @@ function HookHarness() {
     onAccountChange,
     refresh,
   } =
-    useDashboardSnapshot()
+    useDashboardSnapshot({ refreshModelDiscoveryOnRefresh: true })
 
   return (
     <div>
@@ -145,6 +146,7 @@ describe("dashboard/useDashboardSnapshot", () => {
             totalRequests: 1,
             successRequests: 1,
             errorRequests: 0,
+            costNanoUsd: 0,
             totalTokens: 30,
             inputTokens: 10,
             outputTokens: 20,
@@ -185,6 +187,10 @@ describe("dashboard/useDashboardSnapshot", () => {
               totalTokens: 30,
               outputTokens: 20,
               cachedTokens: 5,
+              costNanoUsd: null,
+              pricingVersion: null,
+              pricingModel: null,
+              pricingContextTier: null,
               latencyMs: 30,
               upstreamRequestId: "req-alpha",
             },

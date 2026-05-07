@@ -19,6 +19,7 @@ pub struct DashboardSummary {
     pub total_requests: u64,
     pub success_requests: u64,
     pub error_requests: u64,
+    pub cost_nano_usd: u64,
     pub total_tokens: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -83,6 +84,10 @@ pub struct DashboardRequestItem {
     pub total_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub cached_tokens: Option<u64>,
+    pub cost_nano_usd: Option<u64>,
+    pub pricing_version: Option<String>,
+    pub pricing_model: Option<String>,
+    pub pricing_context_tier: Option<String>,
     pub latency_ms: u64,
     pub upstream_first_byte_ms: Option<u64>,
     pub upstream_response_headers_ms: Option<u64>,
@@ -200,6 +205,7 @@ SELECT
   COUNT(*) AS total_requests,
   COALESCE(SUM(CASE WHEN status BETWEEN 200 AND 299 THEN 1 ELSE 0 END), 0) AS success_requests,
   COALESCE(SUM(CASE WHEN status >= 400 THEN 1 ELSE 0 END), 0) AS error_requests,
+  COALESCE(SUM(COALESCE(cost_nano_usd, 0)), 0) AS cost_nano_usd,
   COALESCE(SUM(CASE
     WHEN total_tokens IS NOT NULL THEN total_tokens
     WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
@@ -229,6 +235,7 @@ WHERE (?1 IS NULL OR ts_ms >= ?1)
     let total_requests = i64_to_u64(row.try_get("total_requests").unwrap_or(0));
     let success_requests = i64_to_u64(row.try_get("success_requests").unwrap_or(0));
     let error_requests = i64_to_u64(row.try_get("error_requests").unwrap_or(0));
+    let cost_nano_usd = i64_to_u64(row.try_get("cost_nano_usd").unwrap_or(0));
     let total_tokens = i64_to_u64(row.try_get("total_tokens").unwrap_or(0));
     let input_tokens = i64_to_u64(row.try_get("input_tokens").unwrap_or(0));
     let output_tokens = i64_to_u64(row.try_get("output_tokens").unwrap_or(0));
@@ -256,6 +263,7 @@ WHERE (?1 IS NULL OR ts_ms >= ?1)
         total_requests,
         success_requests,
         error_requests,
+        cost_nano_usd,
         total_tokens,
         input_tokens,
         output_tokens,
@@ -647,6 +655,10 @@ SELECT
   END AS total_tokens,
   output_tokens,
   cached_tokens,
+  cost_nano_usd,
+  pricing_version,
+  pricing_model,
+  pricing_context_tier,
   latency_ms,
   upstream_first_byte_ms,
   upstream_response_headers_ms,
@@ -689,6 +701,10 @@ LIMIT ?3 OFFSET ?4;
         let total_tokens: Option<i64> = row.try_get("total_tokens").ok()?;
         let output_tokens: Option<i64> = row.try_get("output_tokens").ok()?;
         let cached_tokens: Option<i64> = row.try_get("cached_tokens").ok()?;
+        let cost_nano_usd: Option<i64> = row.try_get("cost_nano_usd").ok()?;
+        let pricing_version: Option<String> = row.try_get("pricing_version").ok()?;
+        let pricing_model: Option<String> = row.try_get("pricing_model").ok()?;
+        let pricing_context_tier: Option<String> = row.try_get("pricing_context_tier").ok()?;
         let latency_ms: i64 = row.try_get("latency_ms").unwrap_or(0);
         let upstream_first_byte_ms: Option<i64> = row.try_get("upstream_first_byte_ms").ok()?;
         let upstream_response_headers_ms: Option<i64> =
@@ -712,6 +728,10 @@ LIMIT ?3 OFFSET ?4;
             total_tokens: total_tokens.map(i64_to_u64),
             output_tokens: output_tokens.map(i64_to_u64),
             cached_tokens: cached_tokens.map(i64_to_u64),
+            cost_nano_usd: cost_nano_usd.map(i64_to_u64),
+            pricing_version,
+            pricing_model,
+            pricing_context_tier,
             latency_ms: i64_to_u64(latency_ms),
             upstream_first_byte_ms: upstream_first_byte_ms.map(i64_to_u64),
             upstream_response_headers_ms: upstream_response_headers_ms.map(i64_to_u64),

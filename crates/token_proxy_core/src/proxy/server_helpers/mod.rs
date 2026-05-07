@@ -16,9 +16,9 @@ use super::{
 
 const ANTHROPIC_MESSAGES_PREFIX: &str = "/v1/messages";
 const ANTHROPIC_COMPLETE_PATH: &str = "/v1/complete";
-const REQUEST_META_LIMIT_BYTES: usize = 99 * 1024 * 1024;
-// Format conversion needs the full JSON body; allow up to the default max_request_body_bytes (99 MiB).
-const REQUEST_TRANSFORM_LIMIT_BYTES: usize = 99 * 1024 * 1024;
+const REQUEST_META_LIMIT_BYTES: usize = 100 * 1024 * 1024;
+// Format conversion needs the full JSON body; keep this aligned with the default max_request_body_bytes.
+const REQUEST_TRANSFORM_LIMIT_BYTES: usize = 100 * 1024 * 1024;
 const DEBUG_BODY_LOG_LIMIT_BYTES: usize = usize::MAX;
 const OPENAI_REASONING_MODEL_SUFFIX_PREFIX: &str = "-reasoning-";
 

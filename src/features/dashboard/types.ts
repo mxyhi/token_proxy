@@ -7,6 +7,7 @@ export type DashboardSummary = {
   totalRequests: number;
   successRequests: number;
   errorRequests: number;
+  costNanoUsd: number;
   totalTokens: number;
   inputTokens: number;
   outputTokens: number;
@@ -77,6 +78,10 @@ export type DashboardRequestItem = {
   totalTokens: number | null;
   outputTokens: number | null;
   cachedTokens: number | null;
+  costNanoUsd: number | null;
+  pricingVersion: string | null;
+  pricingModel: string | null;
+  pricingContextTier: string | null;
   latencyMs: number;
   upstreamFirstByteMs?: number | null;
   upstreamResponseHeadersMs?: number | null;

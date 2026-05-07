@@ -14,6 +14,7 @@ describe("dashboard/api", () => {
         totalRequests: 0,
         successRequests: 0,
         errorRequests: 0,
+        costNanoUsd: 0,
         totalTokens: 0,
         inputTokens: 0,
         outputTokens: 0,

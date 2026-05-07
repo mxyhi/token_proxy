@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  CircleDollarSign,
   LayoutDashboard,
   ShieldCheck,
   Server,
@@ -16,6 +17,7 @@ export type ConfigSectionId =
   | "logs"
   | "core"
   | "upstreams"
+  | "pricing"
   | "providers"
   | "agents"
   | "settings";
@@ -51,6 +53,13 @@ export const CONFIG_SECTIONS: readonly ConfigSection[] = [
     label: () => m.config_section_upstreams_label(),
     description: () => m.config_section_upstreams_desc(),
     icon: Server,
+  },
+  {
+    id: "pricing",
+    route: "/config/pricing",
+    label: () => m.config_section_pricing_label(),
+    description: () => m.config_section_pricing_desc(),
+    icon: CircleDollarSign,
   },
   {
     id: "agents",

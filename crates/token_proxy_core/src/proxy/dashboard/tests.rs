@@ -101,7 +101,11 @@ async fn setup_test_db() -> SqlitePool {
             upstream_response_headers_ms INTEGER,
             upstream_first_body_chunk_ms INTEGER,
             first_client_flush_ms INTEGER,
-            first_output_ms INTEGER
+            first_output_ms INTEGER,
+            cost_nano_usd INTEGER,
+            pricing_version TEXT,
+            pricing_model TEXT,
+            pricing_context_tier TEXT
         );
         "#,
     )
@@ -171,6 +175,50 @@ async fn insert_request(
     .execute(pool)
     .await
     .expect("Failed to insert request");
+}
+
+async fn insert_priced_request(
+    pool: &SqlitePool,
+    ts_ms: i64,
+    upstream_id: &str,
+    cost_nano_usd: Option<i64>,
+    pricing_version: Option<&str>,
+    pricing_model: Option<&str>,
+    pricing_context_tier: Option<&str>,
+) {
+    sqlx::query(
+        r#"
+        INSERT INTO request_logs (
+            ts_ms,
+            path,
+            provider,
+            upstream_id,
+            model,
+            mapped_model,
+            stream,
+            status,
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            cached_tokens,
+            latency_ms,
+            cost_nano_usd,
+            pricing_version,
+            pricing_model,
+            pricing_context_tier
+        )
+        VALUES (?, '/test', 'openai', ?, 'gpt-5.4', 'gpt-5.4', 0, 200, 100, 50, 150, 10, 30, ?, ?, ?, ?)
+        "#,
+    )
+    .bind(ts_ms)
+    .bind(upstream_id)
+    .bind(cost_nano_usd)
+    .bind(pricing_version)
+    .bind(pricing_model)
+    .bind(pricing_context_tier)
+    .execute(pool)
+    .await
+    .expect("Failed to insert priced request");
 }
 
 #[tokio::test]
@@ -340,6 +388,7 @@ async fn read_snapshot_filters_by_upstream_and_keeps_merged_upstream_and_account
     assert_eq!(snapshot.summary.total_requests, 2);
     assert_eq!(snapshot.summary.success_requests, 2);
     assert_eq!(snapshot.summary.error_requests, 0);
+    assert_eq!(snapshot.summary.cost_nano_usd, 0);
     assert_eq!(snapshot.summary.total_tokens, 35);
     assert_eq!(snapshot.summary.cached_tokens, 6);
     assert_eq!(snapshot.summary.avg_latency_ms, 35);
@@ -357,6 +406,7 @@ async fn read_snapshot_filters_by_upstream_and_keeps_merged_upstream_and_account
         Some("codex-a.json")
     );
     assert_eq!(snapshot.recent[1].output_tokens, Some(20));
+    assert_eq!(snapshot.recent[1].cost_nano_usd, None);
     assert!(
         snapshot
             .series
@@ -385,6 +435,71 @@ async fn read_snapshot_filters_by_upstream_and_keeps_merged_upstream_and_account
     assert!(snapshot.accounts.iter().any(|item| {
         item.upstream_id == "alpha" && item.account_id.is_none() && item.requests == 1
     }));
+}
+
+#[tokio::test]
+async fn read_snapshot_sums_logged_costs_and_returns_recent_pricing_fields() {
+    let pool = setup_test_db().await;
+    insert_priced_request(
+        &pool,
+        100,
+        "alpha",
+        Some(1_210_000_000),
+        Some("2026-05-02.openai-openrouter-v1"),
+        Some("gpt-5.5"),
+        Some("short"),
+    )
+    .await;
+    insert_priced_request(
+        &pool,
+        200,
+        "alpha",
+        Some(4_325_000_000),
+        Some("2026-05-02.openai-openrouter-v1"),
+        Some("gpt-5.4"),
+        Some("long"),
+    )
+    .await;
+    insert_priced_request(
+        &pool,
+        300,
+        "beta",
+        Some(42),
+        Some("other"),
+        Some("gpt-5.4-mini"),
+        None,
+    )
+    .await;
+
+    let snapshot = read_snapshot(
+        &pool,
+        DashboardRange {
+            from_ts_ms: None,
+            to_ts_ms: None,
+        },
+        Some(0),
+        Some(String::from("alpha")),
+        None,
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(snapshot.summary.total_requests, 2);
+    assert_eq!(snapshot.summary.cost_nano_usd, 5_535_000_000);
+    assert_eq!(snapshot.recent.len(), 2);
+    assert_eq!(snapshot.recent[0].cost_nano_usd, Some(4_325_000_000));
+    assert_eq!(
+        snapshot.recent[0].pricing_version.as_deref(),
+        Some("2026-05-02.openai-openrouter-v1")
+    );
+    assert_eq!(snapshot.recent[0].pricing_model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(
+        snapshot.recent[0].pricing_context_tier.as_deref(),
+        Some("long")
+    );
+    assert_eq!(snapshot.recent[1].cost_nano_usd, Some(1_210_000_000));
+    assert_eq!(snapshot.recent[1].pricing_model.as_deref(), Some("gpt-5.5"));
 }
 
 #[tokio::test]

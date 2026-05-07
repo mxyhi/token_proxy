@@ -6,6 +6,7 @@ use super::super::{
     request_detail::RequestDetailSnapshot, ProxyState, RequestMeta,
 };
 use super::{attempt, result, AttemptOutcome};
+use crate::proxy::cooldown_scope::CooldownScope;
 use crate::proxy::http;
 use crate::proxy::log::RequestTimings;
 
@@ -42,6 +43,7 @@ pub(super) async fn retry_after_kiro_refresh(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     first: &UpstreamAttempt,
+    cooldown_scope: &CooldownScope,
 ) -> Option<AttemptOutcome> {
     if !should_refresh_kiro(provider, &first.response) {
         return None;
@@ -61,6 +63,7 @@ pub(super) async fn retry_after_kiro_refresh(
         meta,
         request_auth,
         request_detail.as_ref(),
+        cooldown_scope,
     )
     .await
     {
@@ -77,6 +80,7 @@ pub(super) async fn retry_after_kiro_refresh(
             response_transform,
             request_detail,
             retry,
+            cooldown_scope,
         )
         .await,
     )
@@ -91,6 +95,7 @@ pub(super) async fn finalize_attempt(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     attempt: UpstreamAttempt,
+    cooldown_scope: &CooldownScope,
 ) -> AttemptOutcome {
     schedule_account_quota_refresh(
         state,
@@ -113,6 +118,7 @@ pub(super) async fn finalize_attempt(
         client_gemini_api_key,
         response_transform,
         request_detail,
+        cooldown_scope,
     )
     .await
 }
@@ -122,13 +128,15 @@ pub(super) fn mark_account_retryable_failure(
     provider: &str,
     account_id: Option<&str>,
     _reason_detail: Option<String>,
+    cooldown_scope: &CooldownScope,
 ) {
     let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
     };
-    let _ = state
-        .account_selector
-        .mark_retryable_failure(provider, account_id);
+    let _ =
+        state
+            .account_selector
+            .mark_retryable_failure_scoped(provider, account_id, cooldown_scope);
 }
 
 pub(super) async fn retry_with_next_codex_account(
@@ -146,6 +154,7 @@ pub(super) async fn retry_with_next_codex_account(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     first: Result<UpstreamAttempt, UpstreamAttemptFailure>,
+    cooldown_scope: &CooldownScope,
 ) -> CodexFailoverResult {
     let Some(first_selected_account_id) =
         codex_failover_selected_account_id(provider, upstream, &first)
@@ -170,6 +179,7 @@ pub(super) async fn retry_with_next_codex_account(
             response_transform,
             request_detail.clone(),
             current_attempt,
+            cooldown_scope,
         )
         .await;
         if !should_failover_codex_outcome(&outcome) {
@@ -187,9 +197,11 @@ pub(super) async fn retry_with_next_codex_account(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let ordered_account_ids = state
-            .account_selector
-            .order_accounts(provider, &ordered_account_ids);
+        let ordered_account_ids = state.account_selector.order_accounts_scoped(
+            provider,
+            &ordered_account_ids,
+            cooldown_scope,
+        );
         let next_account_id = match state
             .codex_accounts
             .resolve_next_account_record_with_order(
@@ -223,6 +235,7 @@ pub(super) async fn retry_with_next_codex_account(
             meta,
             request_auth,
             request_detail.as_ref(),
+            cooldown_scope,
         )
         .await;
     }
@@ -237,6 +250,7 @@ async fn finalize_codex_failover_attempt(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     attempt: Result<UpstreamAttempt, UpstreamAttemptFailure>,
+    cooldown_scope: &CooldownScope,
 ) -> AttemptOutcome {
     match attempt {
         Ok(attempt) => {
@@ -249,6 +263,7 @@ async fn finalize_codex_failover_attempt(
                 response_transform,
                 request_detail,
                 attempt,
+                cooldown_scope,
             )
             .await
         }

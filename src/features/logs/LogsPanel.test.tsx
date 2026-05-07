@@ -36,11 +36,13 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const {
   readDashboardSnapshotMock,
+  refreshDashboardModelDiscoveryMock,
   readRequestDetailCaptureMock,
   setRequestDetailCaptureMock,
   readRequestLogDetailMock,
 } = vi.hoisted(() => ({
   readDashboardSnapshotMock: vi.fn(),
+  refreshDashboardModelDiscoveryMock: vi.fn(),
   readRequestDetailCaptureMock: vi.fn(),
   setRequestDetailCaptureMock: vi.fn(),
   readRequestLogDetailMock: vi.fn(),
@@ -48,6 +50,7 @@ const {
 
 vi.mock("@/features/dashboard/api", () => ({
   readDashboardSnapshot: readDashboardSnapshotMock,
+  refreshDashboardModelDiscovery: refreshDashboardModelDiscoveryMock,
 }));
 
 vi.mock("@/features/logs/api", () => ({
@@ -71,10 +74,12 @@ describe("logs/LogsPanel", () => {
 
   beforeEach(() => {
     readDashboardSnapshotMock.mockReset();
+    refreshDashboardModelDiscoveryMock.mockReset();
     readRequestDetailCaptureMock.mockReset();
     setRequestDetailCaptureMock.mockReset();
     readRequestLogDetailMock.mockReset();
 
+    refreshDashboardModelDiscoveryMock.mockResolvedValue(undefined);
     readRequestDetailCaptureMock.mockResolvedValue({
       enabled: false,
       expiresAtMs: null,
@@ -98,6 +103,10 @@ describe("logs/LogsPanel", () => {
       outputTokens: 20,
       totalTokens: 30,
       cachedTokens: 5,
+      costNanoUsd: 1_210_000_000,
+      pricingVersion: "2026-05-02.openai-openrouter-v1",
+      pricingModel: "gpt-5.5",
+      pricingContextTier: "short",
       latencyMs: 30,
       upstreamRequestId: "req-1",
       usageJson: null,
@@ -177,6 +186,7 @@ describe("logs/LogsPanel", () => {
               totalRequests: 1,
               successRequests: 1,
               errorRequests: 0,
+              costNanoUsd: 0,
               totalTokens: 30,
               inputTokens: 10,
               outputTokens: 20,
@@ -212,6 +222,7 @@ describe("logs/LogsPanel", () => {
               totalRequests: 1,
               successRequests: 1,
               errorRequests: 0,
+              costNanoUsd: 0,
               totalTokens: 5,
               inputTokens: 2,
               outputTokens: 3,
@@ -247,6 +258,7 @@ describe("logs/LogsPanel", () => {
               totalRequests: 2,
               successRequests: 2,
               errorRequests: 0,
+              costNanoUsd: 0,
               totalTokens: 35,
               inputTokens: 12,
               outputTokens: 23,
@@ -297,6 +309,7 @@ describe("logs/LogsPanel", () => {
             totalRequests: 3,
             successRequests: 2,
             errorRequests: 1,
+            costNanoUsd: 0,
             totalTokens: 42,
             inputTokens: 15,
             outputTokens: 27,
@@ -391,6 +404,35 @@ describe("logs/LogsPanel", () => {
     );
   });
 
+  it("lets the logs table area inherit the remaining app viewport height", async () => {
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("logs-items")).toHaveTextContent("alpha");
+    });
+
+    const panel = screen.getByTestId("logs-panel");
+    expect(panel).toHaveClass("flex", "min-h-0", "flex-1", "flex-col");
+  });
+
+  it("refreshes logs without refreshing dashboard model discovery", async () => {
+    const user = userEvent.setup();
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("logs-items")).toHaveTextContent("alpha · openai · codex-a.json");
+    });
+    expect(readDashboardSnapshotMock).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: m.common_refresh() }));
+
+    await waitFor(() => {
+      expect(readDashboardSnapshotMock).toHaveBeenCalledTimes(2);
+    });
+    expect(refreshDashboardModelDiscoveryMock).not.toHaveBeenCalled();
+  });
+
   it("narrows logs again after selecting account under chosen upstream", async () => {
     const user = userEvent.setup();
 
@@ -476,6 +518,34 @@ describe("logs/LogsPanel", () => {
 
     const latencyLabel = screen.getByText(m.dashboard_table_latency_ms());
     expect(latencyLabel.closest("div")).toHaveClass("grid", "grid-cols-[11rem_minmax(0,1fr)]");
+  });
+
+  it("shows logged cost and pricing metadata inside request detail", async () => {
+    const user = userEvent.setup();
+
+    renderPanel();
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "alpha · openai · codex-a.json" })
+      ).toBeInTheDocument();
+    });
+
+    await user.click(
+      screen.getByRole("button", { name: "alpha · openai · codex-a.json" })
+    );
+
+    await waitFor(() => {
+      expect(readRequestLogDetailMock).toHaveBeenCalledWith(1);
+    });
+
+    expect(await screen.findByText(m.dashboard_table_cost())).toBeInTheDocument();
+    expect(screen.getByText("1.21")).toBeInTheDocument();
+    expect(screen.queryByText("$1.21")).not.toBeInTheDocument();
+    expect(screen.getByText(m.logs_detail_pricing_model())).toBeInTheDocument();
+    expect(screen.getByText("gpt-5.5")).toBeInTheDocument();
+    expect(screen.getByText(m.logs_detail_pricing_context_short())).toBeInTheDocument();
+    expect(screen.getByText("2026-05-02.openai-openrouter-v1")).toBeInTheDocument();
   });
 
 });

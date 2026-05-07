@@ -6,6 +6,8 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+use super::pricing::{calculate_request_cost, default_model_pricing_settings};
+
 #[cfg(debug_assertions)]
 macro_rules! debug_log_error {
     ($($arg:tt)*) => {
@@ -56,6 +58,10 @@ pub(crate) struct LogEntry {
     pub(crate) upstream_first_body_chunk_ms: Option<u128>,
     pub(crate) first_client_flush_ms: Option<u128>,
     pub(crate) first_output_ms: Option<u128>,
+    pub(crate) cost_nano_usd: Option<u64>,
+    pub(crate) pricing_version: String,
+    pub(crate) pricing_model: Option<String>,
+    pub(crate) pricing_context_tier: Option<String>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -201,6 +207,16 @@ pub(crate) fn build_log_entry(
         .or(upstream_first_body_chunk_ms)
         .or(timing.upstream_response_headers_ms)
         .unwrap_or_else(|| context.start.elapsed().as_millis());
+    let usage_ref = usage.usage.as_ref();
+    let pricing_settings = default_model_pricing_settings();
+    let request_cost = calculate_request_cost(
+        &pricing_settings,
+        context.model.as_deref(),
+        context.mapped_model.as_deref(),
+        usage_ref.and_then(|usage| usage.input_tokens),
+        usage_ref.and_then(|usage| usage.output_tokens),
+        usage.cached_tokens,
+    );
     LogEntry {
         ts_ms: now_ms(),
         path: context.path.clone(),
@@ -224,6 +240,12 @@ pub(crate) fn build_log_entry(
         upstream_first_body_chunk_ms,
         first_client_flush_ms: timing.first_client_flush_ms,
         first_output_ms: timing.first_output_ms,
+        cost_nano_usd: request_cost.as_ref().map(|cost| cost.cost_nano_usd),
+        pricing_version: pricing_settings.version,
+        pricing_model: request_cost.as_ref().map(|cost| cost.pricing_model.clone()),
+        pricing_context_tier: request_cost
+            .as_ref()
+            .map(|cost| cost.context_tier.as_str().to_string()),
     }
 }
 
@@ -240,6 +262,24 @@ async fn insert_log_entry(pool: &SqlitePool, entry: &LogEntry) -> Result<(), sql
     let output_tokens = usage.and_then(|usage| usage.output_tokens).map(to_i64_u64);
     let total_tokens = usage.and_then(|usage| usage.total_tokens).map(to_i64_u64);
     let cached_tokens = entry.cached_tokens.map(to_i64_u64);
+    let pricing_settings = super::pricing::read_model_pricing_settings(pool)
+        .await
+        .unwrap_or_else(|_| default_model_pricing_settings());
+    let request_cost = calculate_request_cost(
+        &pricing_settings,
+        entry.model.as_deref(),
+        entry.mapped_model.as_deref(),
+        usage.and_then(|usage| usage.input_tokens),
+        usage.and_then(|usage| usage.output_tokens),
+        entry.cached_tokens,
+    );
+    let cost_nano_usd = request_cost
+        .as_ref()
+        .map(|cost| to_i64_u64(cost.cost_nano_usd));
+    let pricing_model = request_cost
+        .as_ref()
+        .map(|cost| cost.pricing_model.as_str());
+    let pricing_context_tier = request_cost.as_ref().map(|cost| cost.context_tier.as_str());
     let usage_json = entry.usage_json.as_ref().map(Value::to_string);
 
     sqlx::query(
@@ -268,8 +308,12 @@ INSERT INTO request_logs (
   upstream_response_headers_ms,
   upstream_first_body_chunk_ms,
   first_client_flush_ms,
-  first_output_ms
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+  first_output_ms,
+  cost_nano_usd,
+  pricing_version,
+  pricing_model,
+  pricing_context_tier
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 "#,
     )
     .bind(to_i64_u128(entry.ts_ms))
@@ -296,6 +340,10 @@ INSERT INTO request_logs (
     .bind(entry.upstream_first_body_chunk_ms.map(to_i64_u128))
     .bind(entry.first_client_flush_ms.map(to_i64_u128))
     .bind(entry.first_output_ms.map(to_i64_u128))
+    .bind(cost_nano_usd)
+    .bind(pricing_settings.version.as_str())
+    .bind(pricing_model)
+    .bind(pricing_context_tier)
     .execute(pool)
     .await?;
 
@@ -313,6 +361,10 @@ fn to_i64_u64(value: u64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proxy::pricing::{
+        save_model_pricing_settings, ModelPricingModel, ModelPricingSettingsInput, ModelPricingTier,
+    };
+    use sqlx::{sqlite::SqlitePoolOptions, Row};
     use std::time::{Duration, Instant};
 
     #[test]
@@ -347,5 +399,124 @@ mod tests {
         assert_eq!(entry.upstream_first_byte_ms, Some(120));
         assert_eq!(entry.first_output_ms, Some(220));
         assert_eq!(entry.latency_ms, 220);
+    }
+
+    #[test]
+    fn build_log_entry_calculates_request_cost() {
+        let context = LogContext {
+            path: "/v1/responses".to_string(),
+            provider: "openai-response".to_string(),
+            upstream_id: "airouter".to_string(),
+            account_id: None,
+            model: Some("alias".to_string()),
+            mapped_model: Some("gpt-5.4".to_string()),
+            stream: false,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            timings: RequestTimings::default(),
+            start: Instant::now(),
+        };
+
+        let entry = build_log_entry(
+            &context,
+            UsageSnapshot {
+                usage: Some(TokenUsage {
+                    input_tokens: Some(1_000_000),
+                    output_tokens: Some(10_000),
+                    total_tokens: Some(1_010_000),
+                }),
+                cached_tokens: Some(200_000),
+                usage_json: None,
+            },
+            None,
+        );
+
+        assert_eq!(entry.cost_nano_usd, Some(4_325_000_000));
+        assert_eq!(entry.pricing_model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(entry.pricing_context_tier.as_deref(), Some("long"));
+        assert_eq!(
+            entry.pricing_version,
+            crate::proxy::pricing::DEFAULT_PRICING_VERSION
+        );
+    }
+
+    #[tokio::test]
+    async fn log_writer_uses_saved_model_pricing_settings() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite");
+        crate::proxy::sqlite::init_schema(&pool)
+            .await
+            .expect("init sqlite");
+        let snapshot = save_model_pricing_settings(
+            &pool,
+            ModelPricingSettingsInput {
+                models: vec![ModelPricingModel {
+                    model_id: "custom-model".to_string(),
+                    aliases: vec!["openai/custom-model".to_string()],
+                    short: ModelPricingTier {
+                        input_nano_usd_per_token: 100,
+                        cached_input_nano_usd_per_token: 10,
+                        output_nano_usd_per_token: 200,
+                    },
+                    long: None,
+                    long_context_input_token_threshold: None,
+                }],
+            },
+        )
+        .await
+        .expect("save pricing");
+        let context = LogContext {
+            path: "/v1/chat/completions".to_string(),
+            provider: "openai".to_string(),
+            upstream_id: "test".to_string(),
+            account_id: None,
+            model: Some("openai/custom-model".to_string()),
+            mapped_model: None,
+            stream: false,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            timings: RequestTimings::default(),
+            start: Instant::now(),
+        };
+        let entry = build_log_entry(
+            &context,
+            UsageSnapshot {
+                usage: Some(TokenUsage {
+                    input_tokens: Some(100),
+                    output_tokens: Some(10),
+                    total_tokens: Some(110),
+                }),
+                cached_tokens: Some(20),
+                usage_json: None,
+            },
+            None,
+        );
+
+        LogWriter::new(Some(pool.clone())).write(&entry).await;
+
+        let row = sqlx::query(
+            "SELECT cost_nano_usd, pricing_version, pricing_model FROM request_logs LIMIT 1;",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("request log");
+        assert_eq!(row.try_get::<i64, _>("cost_nano_usd").ok(), Some(10_200));
+        assert_eq!(
+            row.try_get::<String, _>("pricing_version").ok().as_deref(),
+            Some(snapshot.settings.version.as_str())
+        );
+        assert_eq!(
+            row.try_get::<String, _>("pricing_model").ok().as_deref(),
+            Some("custom-model")
+        );
     }
 }

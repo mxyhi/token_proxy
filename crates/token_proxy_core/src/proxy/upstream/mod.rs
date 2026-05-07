@@ -36,9 +36,9 @@ use result::{finalize_forward_result, resolve_provider_upstreams};
 use crate::proxy::redact::redact_query_param_value;
 
 use super::{
-    config::InboundApiFormat, http, http::RequestAuth, inbound::detect_inbound_api_format,
-    openai_compat::FormatTransform, request_body::ReplayableBody,
-    request_detail::RequestDetailSnapshot, ProxyState, RequestMeta,
+    config::InboundApiFormat, cooldown_scope::CooldownScope, http, http::RequestAuth,
+    inbound::detect_inbound_api_format, openai_compat::FormatTransform,
+    request_body::ReplayableBody, request_detail::RequestDetailSnapshot, ProxyState, RequestMeta,
 };
 
 pub(super) async fn aggregate_model_catalog_request(
@@ -78,9 +78,11 @@ pub(super) async fn forward_upstream_request(
     client_gemini_api_key: Option<String>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
+    codex_cooldown_scope: &CooldownScope,
 ) -> ForwardUpstreamResult {
     let inbound_format =
         dispatch_inbound_format.or_else(|| detect_inbound_api_format(inbound_path));
+    let cooldown_scope = codex_cooldown_scope.for_provider(provider, inbound_format);
     let upstreams = match resolve_provider_upstreams(
         &state,
         provider,
@@ -112,6 +114,7 @@ pub(super) async fn forward_upstream_request(
         response_transform,
         request_detail.clone(),
         upstreams,
+        &cooldown_scope,
     )
     .await;
     finalize_forward_result(

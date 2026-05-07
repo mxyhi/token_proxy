@@ -25,10 +25,16 @@ export function AppShell({ title, children, actions }: AppShellProps) {
       <AppSidebar />
       <SidebarInset className="min-h-0 md:m-0 md:ml-0 md:rounded-none md:shadow-none">
         <div className="flex flex-1 min-h-0 flex-col">
-          <ScrollArea className="flex-1 min-h-0">
-            <div className="@container/main flex flex-1 flex-col gap-1">
+          <ScrollArea
+            className="flex-1 min-h-0"
+            viewportClassName="[&>div]:!block [&>div]:!h-full"
+          >
+            <div className="@container/main flex h-full min-h-0 flex-col gap-1">
               <SiteHeader title={title} actions={actions} />
-              <div className="flex flex-col gap-2.5 py-2.5 md:gap-3.5 md:py-3.5">
+              <div
+                data-slot="app-shell-content"
+                className="flex min-h-0 flex-1 flex-col gap-2.5 py-2.5 md:gap-3.5 md:py-3.5"
+              >
                 {children}
               </div>
             </div>

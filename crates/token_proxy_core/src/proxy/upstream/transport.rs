@@ -9,6 +9,7 @@ use super::result;
 use super::retry::mark_account_retryable_failure;
 use super::utils::{is_retryable_error, sanitize_upstream_error};
 use super::AttemptOutcome;
+use crate::proxy::cooldown_scope::CooldownScope;
 use crate::proxy::http;
 use crate::proxy::log::RequestTimings;
 use crate::proxy::request_body::ReplayableBody;
@@ -34,6 +35,7 @@ pub(super) async fn send_upstream_request(
     request_detail: Option<&RequestDetailSnapshot>,
     start_time: Instant,
     timings: RequestTimings,
+    cooldown_scope: &CooldownScope,
 ) -> Result<reqwest::Response, AttemptOutcome> {
     if provider == "codex" {
         return send_codex_request(
@@ -52,6 +54,7 @@ pub(super) async fn send_upstream_request(
             request_detail,
             start_time,
             timings,
+            cooldown_scope,
         )
         .await;
     }
@@ -71,6 +74,7 @@ pub(super) async fn send_upstream_request(
         request_detail,
         start_time,
         timings,
+        cooldown_scope,
     )
     .await
 }
@@ -91,6 +95,7 @@ async fn send_codex_request(
     request_detail: Option<&RequestDetailSnapshot>,
     start_time: Instant,
     timings: RequestTimings,
+    cooldown_scope: &CooldownScope,
 ) -> Result<reqwest::Response, AttemptOutcome> {
     send_codex_with_fallback(
         state,
@@ -108,6 +113,7 @@ async fn send_codex_request(
         start_time,
         timings,
         proxy_url,
+        cooldown_scope,
     )
     .await
 }
@@ -128,6 +134,7 @@ async fn send_upstream_request_once(
     request_detail: Option<&RequestDetailSnapshot>,
     start_time: Instant,
     timings: RequestTimings,
+    cooldown_scope: &CooldownScope,
 ) -> Result<reqwest::Response, AttemptOutcome> {
     log_debug_headers_body(
         "upstream.request",
@@ -168,6 +175,7 @@ async fn send_upstream_request_once(
             request_detail,
             err,
             start_time,
+            cooldown_scope,
         )),
         Err(SendFailure::Timeout) => Err(handle_upstream_timeout(
             state,
@@ -178,6 +186,7 @@ async fn send_upstream_request_once(
             selected_account_id,
             request_detail,
             start_time,
+            cooldown_scope,
         )),
     }
 }
@@ -198,6 +207,7 @@ async fn send_codex_with_fallback(
     start_time: Instant,
     timings: RequestTimings,
     proxy_url: Option<&str>,
+    cooldown_scope: &CooldownScope,
 ) -> Result<reqwest::Response, AttemptOutcome> {
     // Codex 代理回退：socks5h / http1_only，缓解 DNS/ALPN/TLS 兼容问题。
     let attempts = build_codex_send_attempts(proxy_url);
@@ -219,6 +229,7 @@ async fn send_codex_with_fallback(
             start_time,
             timings.clone(),
             &attempt,
+            cooldown_scope,
         )
         .await
         {
@@ -237,6 +248,7 @@ async fn send_codex_with_fallback(
         request_detail,
         start_time,
         last_error,
+        cooldown_scope,
     ))
 }
 
@@ -256,6 +268,7 @@ async fn send_codex_attempt(
     start_time: Instant,
     timings: RequestTimings,
     attempt: &CodexSendAttempt,
+    cooldown_scope: &CooldownScope,
 ) -> Result<reqwest::Response, CodexAttemptError> {
     log_debug_headers_body(
         "upstream.request",
@@ -299,6 +312,7 @@ async fn send_codex_attempt(
             selected_account_id,
             request_detail,
             start_time,
+            cooldown_scope,
         ))),
         Err(SendFailure::Transport(err)) => {
             if should_retry_codex_send(&err) {
@@ -314,6 +328,7 @@ async fn send_codex_attempt(
                 request_detail,
                 err,
                 start_time,
+                cooldown_scope,
             )))
         }
     }
@@ -329,6 +344,7 @@ fn finalize_codex_fallback(
     request_detail: Option<&RequestDetailSnapshot>,
     start_time: Instant,
     last_error: Option<reqwest::Error>,
+    cooldown_scope: &CooldownScope,
 ) -> AttemptOutcome {
     let Some(err) = last_error else {
         return AttemptOutcome::Fatal(http::error_response(
@@ -346,6 +362,7 @@ fn finalize_codex_fallback(
         request_detail,
         err,
         start_time,
+        cooldown_scope,
     )
 }
 
@@ -443,12 +460,19 @@ fn handle_upstream_timeout(
     selected_account_id: Option<&str>,
     request_detail: Option<&RequestDetailSnapshot>,
     start_time: Instant,
+    cooldown_scope: &CooldownScope,
 ) -> AttemptOutcome {
     let message = format!(
         "Upstream did not respond within {}s.",
         state.config.upstream_no_data_timeout.as_secs()
     );
-    mark_account_retryable_failure(state, provider, selected_account_id, Some(message.clone()));
+    mark_account_retryable_failure(
+        state,
+        provider,
+        selected_account_id,
+        Some(message.clone()),
+        cooldown_scope,
+    );
     result::log_upstream_error_if_needed(
         &state.log,
         request_detail,
@@ -479,6 +503,7 @@ fn map_upstream_error(
     request_detail: Option<&RequestDetailSnapshot>,
     err: reqwest::Error,
     start_time: Instant,
+    cooldown_scope: &CooldownScope,
 ) -> AttemptOutcome {
     let message = sanitize_upstream_error(provider, &err);
     if is_retryable_error(&err) {
@@ -487,7 +512,13 @@ fn map_upstream_error(
         } else {
             StatusCode::BAD_GATEWAY
         };
-        mark_account_retryable_failure(state, provider, selected_account_id, Some(message.clone()));
+        mark_account_retryable_failure(
+            state,
+            provider,
+            selected_account_id,
+            Some(message.clone()),
+            cooldown_scope,
+        );
         result::log_upstream_error_if_needed(
             &state.log,
             request_detail,

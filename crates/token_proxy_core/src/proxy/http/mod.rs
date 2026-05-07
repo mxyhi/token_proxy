@@ -11,6 +11,7 @@ use axum::{
 };
 use reqwest::header::HeaderMap as ReqwestHeaderMap;
 use serde_json::json;
+use std::net::IpAddr;
 
 use super::{
     config::{ProxyConfig, StaticApiKeyHeaders, UpstreamRuntime},
@@ -26,6 +27,29 @@ const X_ANTHROPIC_API_KEY: &str = "x-anthropic-api-key";
 const X_GOOG_API_KEY: &str = "x-goog-api-key";
 const OPENAI_MODELS_INDEX_PATH: &str = "/v1/models";
 const OPENAI_COMPATIBLE_MODELS_INDEX_PATH: &str = "/v1beta/openai/models";
+const ORIGIN: HeaderName = HeaderName::from_static("origin");
+const VARY: HeaderName = HeaderName::from_static("vary");
+const ACCESS_CONTROL_REQUEST_METHOD: HeaderName =
+    HeaderName::from_static("access-control-request-method");
+const ACCESS_CONTROL_REQUEST_HEADERS: HeaderName =
+    HeaderName::from_static("access-control-request-headers");
+const ACCESS_CONTROL_ALLOW_ORIGIN: HeaderName =
+    HeaderName::from_static("access-control-allow-origin");
+const ACCESS_CONTROL_ALLOW_METHODS: HeaderName =
+    HeaderName::from_static("access-control-allow-methods");
+const ACCESS_CONTROL_ALLOW_HEADERS: HeaderName =
+    HeaderName::from_static("access-control-allow-headers");
+const ACCESS_CONTROL_MAX_AGE: HeaderName = HeaderName::from_static("access-control-max-age");
+const CORS_ALLOW_METHODS: HeaderValue =
+    HeaderValue::from_static("GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD");
+const CORS_DEFAULT_ALLOW_HEADERS: HeaderValue = HeaderValue::from_static(
+    "authorization,content-type,x-api-key,x-goog-api-key,x-openai-api-key,x-anthropic-api-key",
+);
+const CORS_PREFLIGHT_VARY: HeaderValue = HeaderValue::from_static(
+    "origin, access-control-request-method, access-control-request-headers",
+);
+const CORS_ACTUAL_VARY: HeaderValue = HeaderValue::from_static("origin");
+const CORS_MAX_AGE: HeaderValue = HeaderValue::from_static("86400");
 
 pub(crate) fn ensure_local_auth(
     config: &ProxyConfig,
@@ -40,6 +64,10 @@ pub(crate) fn ensure_local_auth(
     };
     if is_public_model_catalog_request(method, path) {
         tracing::debug!(method = %method, path = %path, "public model catalog request skips local auth");
+        return Ok(());
+    }
+    if is_allowed_cors_preflight_request(config, headers, method) {
+        tracing::debug!(method = %method, path = %path, "cors preflight skips local auth");
         return Ok(());
     }
     tracing::debug!(path = %path, "local auth required, resolving local key");
@@ -66,6 +94,99 @@ fn is_public_model_catalog_request(method: &Method, path: &str) -> bool {
             path,
             OPENAI_MODELS_INDEX_PATH | OPENAI_COMPATIBLE_MODELS_INDEX_PATH
         )
+}
+
+pub(crate) fn cors_preflight_response(
+    config: &ProxyConfig,
+    headers: &HeaderMap,
+    method: &Method,
+) -> Option<Response> {
+    if !is_cors_preflight_request(headers, method) {
+        return None;
+    }
+    let allow_origin = resolve_allowed_cors_origin(config, headers)?;
+    let mut response = Response::builder()
+        .status(StatusCode::NO_CONTENT)
+        .body(Body::empty())
+        .unwrap_or_else(|_| Response::new(Body::empty()));
+    insert_cors_preflight_headers(response.headers_mut(), allow_origin, headers);
+    Some(response)
+}
+
+pub(crate) fn with_cors_headers(
+    config: &ProxyConfig,
+    request_headers: &HeaderMap,
+    mut response: Response,
+) -> Response {
+    let Some(allow_origin) = resolve_allowed_cors_origin(config, request_headers) else {
+        return response;
+    };
+    response
+        .headers_mut()
+        .insert(ACCESS_CONTROL_ALLOW_ORIGIN, allow_origin);
+    response.headers_mut().insert(VARY, CORS_ACTUAL_VARY);
+    response
+}
+
+fn is_allowed_cors_preflight_request(
+    config: &ProxyConfig,
+    headers: &HeaderMap,
+    method: &Method,
+) -> bool {
+    is_cors_preflight_request(headers, method)
+        && resolve_allowed_cors_origin(config, headers).is_some()
+}
+
+fn is_cors_preflight_request(headers: &HeaderMap, method: &Method) -> bool {
+    method == Method::OPTIONS
+        && headers.contains_key(&ORIGIN)
+        && headers.contains_key(&ACCESS_CONTROL_REQUEST_METHOD)
+}
+
+fn resolve_allowed_cors_origin(config: &ProxyConfig, headers: &HeaderMap) -> Option<HeaderValue> {
+    if !config.cors_enabled {
+        return None;
+    }
+    let origin = headers.get(&ORIGIN)?.to_str().ok()?.trim();
+    if origin.is_empty() || !is_loopback_origin(origin) {
+        return None;
+    }
+    HeaderValue::from_str(origin).ok()
+}
+
+fn is_loopback_origin(origin: &str) -> bool {
+    let Ok(url) = url::Url::parse(origin) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    // 本地代理 CORS 只给 loopback 浏览器源开放，避免任意公网 origin 调用本机代理。
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<IpAddr>()
+        .map(|addr| addr.is_loopback())
+        .unwrap_or(false)
+}
+
+fn insert_cors_preflight_headers(
+    response_headers: &mut HeaderMap,
+    allow_origin: HeaderValue,
+    request_headers: &HeaderMap,
+) {
+    response_headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, allow_origin);
+    response_headers.insert(ACCESS_CONTROL_ALLOW_METHODS, CORS_ALLOW_METHODS);
+    let allow_headers = request_headers
+        .get(&ACCESS_CONTROL_REQUEST_HEADERS)
+        .cloned()
+        .unwrap_or(CORS_DEFAULT_ALLOW_HEADERS);
+    response_headers.insert(ACCESS_CONTROL_ALLOW_HEADERS, allow_headers);
+    response_headers.insert(ACCESS_CONTROL_MAX_AGE, CORS_MAX_AGE);
+    response_headers.insert(VARY, CORS_PREFLIGHT_VARY);
 }
 
 pub(crate) fn resolve_client_gemini_api_key(

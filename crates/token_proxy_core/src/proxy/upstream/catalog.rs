@@ -294,6 +294,7 @@ async fn fetch_upstream_model_catalog(
         headers,
         meta,
         request_auth,
+        &crate::proxy::cooldown_scope::CooldownScope::Global,
     )
     .await
     .map_err(model_catalog_prepare_error)?;

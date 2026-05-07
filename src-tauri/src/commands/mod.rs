@@ -3,6 +3,7 @@ pub mod config;
 pub mod dashboard;
 pub mod kiro;
 pub mod logs;
+pub mod pricing;
 pub mod providers;
 pub mod proxy;
 
@@ -23,6 +24,9 @@ pub use kiro::{
     kiro_set_priority, kiro_set_proxy_url, kiro_set_status, kiro_start_login,
 };
 pub use logs::{read_request_detail_capture, read_request_log_detail, set_request_detail_capture};
+pub use pricing::{
+    read_model_pricing_settings, reset_model_pricing_settings, save_model_pricing_settings,
+};
 pub use providers::{providers_delete_accounts, providers_list_accounts_page};
 pub use proxy::{
     fetch_upstream_models, prepare_relaunch, proxy_reload, proxy_restart, proxy_start,

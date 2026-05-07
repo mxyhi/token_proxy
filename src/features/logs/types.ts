@@ -21,6 +21,10 @@ export type RequestLogDetail = {
   outputTokens: number | null;
   totalTokens: number | null;
   cachedTokens: number | null;
+  costNanoUsd: number | null;
+  pricingVersion: string | null;
+  pricingModel: string | null;
+  pricingContextTier: string | null;
   latencyMs: number;
   upstreamFirstByteMs?: number | null;
   upstreamResponseHeadersMs?: number | null;

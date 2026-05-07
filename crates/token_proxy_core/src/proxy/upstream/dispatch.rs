@@ -7,6 +7,7 @@ use std::{future::Future, pin::Pin, time::Duration};
 
 use super::super::{
     config::{InboundApiFormat, ProviderUpstreams, UpstreamDispatchRuntime, UpstreamRuntime},
+    cooldown_scope::CooldownScope,
     http::RequestAuth,
     openai_compat::FormatTransform,
     request_body::ReplayableBody,
@@ -173,6 +174,7 @@ pub(super) async fn run_upstream_groups(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     upstreams: &ProviderUpstreams,
+    cooldown_scope: &CooldownScope,
 ) -> ForwardAttemptState {
     let target_upstream_id =
         requested_target_upstream_id(upstreams, meta.original_model.as_deref());
@@ -207,6 +209,7 @@ pub(super) async fn run_upstream_groups(
             client_gemini_api_key,
             response_transform,
             request_detail.clone(),
+            cooldown_scope,
         )
         .await;
         if merge_group_result(&mut summary, result) {
@@ -233,13 +236,15 @@ async fn try_group_upstreams(
     client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
+    cooldown_scope: &CooldownScope,
 ) -> GroupAttemptResult {
     let start = resolve_group_start(state, provider, group_index, items.len());
-    let order = state.upstream_selector.order_group(
+    let order = state.upstream_selector.order_group_scoped(
         state.config.upstream_strategy.order,
         provider,
         items,
         start,
+        cooldown_scope,
     );
     let eligible_order =
         filter_eligible_upstreams(order, items, inbound_format, target_upstream_id);
@@ -262,6 +267,7 @@ async fn try_group_upstreams(
         response_transform,
         request_detail,
         GroupDispatchPlan::from_dispatch(&state.config.upstream_strategy.dispatch),
+        cooldown_scope,
     )
     .await
 }
@@ -287,20 +293,25 @@ fn apply_group_attempt_outcome(
     upstream: &UpstreamRuntime,
     result: &mut GroupAttemptResult,
     outcome: AttemptOutcome,
+    cooldown_scope: &CooldownScope,
 ) -> bool {
     match &outcome {
         AttemptOutcome::Success(_) => {
-            state
-                .upstream_selector
-                .clear_cooldown(provider, upstream.selector_key.as_str());
+            state.upstream_selector.clear_cooldown_scoped(
+                provider,
+                upstream.selector_key.as_str(),
+                cooldown_scope,
+            );
         }
         AttemptOutcome::Retryable {
             should_cooldown: true,
             ..
         } => {
-            state
-                .upstream_selector
-                .mark_retryable_failure(provider, upstream.selector_key.as_str());
+            state.upstream_selector.mark_retryable_failure_scoped(
+                provider,
+                upstream.selector_key.as_str(),
+                cooldown_scope,
+            );
         }
         _ => {}
     }
@@ -326,6 +337,7 @@ async fn dispatch_group_upstreams(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
     dispatch_plan: GroupDispatchPlan,
+    cooldown_scope: &CooldownScope,
 ) -> GroupAttemptResult {
     let mut result = GroupAttemptResult::new();
     let mut in_flight: FuturesUnordered<GroupAttemptFuture<'_>> = FuturesUnordered::new();
@@ -349,6 +361,7 @@ async fn dispatch_group_upstreams(
         client_gemini_api_key,
         response_transform,
         &request_detail,
+        cooldown_scope,
     );
 
     let mut hedge_timer = next_hedge_timer(
@@ -378,6 +391,7 @@ async fn dispatch_group_upstreams(
                 client_gemini_api_key,
                 response_transform,
                 &request_detail,
+                cooldown_scope,
             );
             hedge_timer = next_hedge_timer(
                 dispatch_plan.hedge_delay,
@@ -410,6 +424,7 @@ async fn dispatch_group_upstreams(
                         client_gemini_api_key,
                         response_transform,
                         &request_detail,
+                        cooldown_scope,
                     );
                     None
                 }
@@ -420,7 +435,14 @@ async fn dispatch_group_upstreams(
 
         if let Some((item_index, outcome)) = completed {
             let upstream = &items[item_index];
-            if apply_group_attempt_outcome(state, provider, upstream, &mut result, outcome) {
+            if apply_group_attempt_outcome(
+                state,
+                provider,
+                upstream,
+                &mut result,
+                outcome,
+                cooldown_scope,
+            ) {
                 return result;
             }
             let immediate_slots = dispatch_plan
@@ -445,6 +467,7 @@ async fn dispatch_group_upstreams(
                     client_gemini_api_key,
                     response_transform,
                     &request_detail,
+                    cooldown_scope,
                 );
             }
         }
@@ -478,6 +501,7 @@ fn launch_group_attempts<'a>(
     client_gemini_api_key: Option<&'a str>,
     response_transform: FormatTransform,
     request_detail: &Option<RequestDetailSnapshot>,
+    cooldown_scope: &'a CooldownScope,
 ) {
     for _ in 0..slots {
         let Some(item_index) = order.get(*next_to_launch).copied() else {
@@ -500,6 +524,7 @@ fn launch_group_attempts<'a>(
             client_gemini_api_key,
             response_transform,
             request_detail,
+            cooldown_scope,
         );
     }
 }
@@ -520,6 +545,7 @@ fn enqueue_group_attempt<'a>(
     client_gemini_api_key: Option<&'a str>,
     response_transform: FormatTransform,
     request_detail: &Option<RequestDetailSnapshot>,
+    cooldown_scope: &'a CooldownScope,
 ) {
     let upstream = &items[item_index];
     let method = method.clone();
@@ -539,6 +565,7 @@ fn enqueue_group_attempt<'a>(
             client_gemini_api_key,
             response_transform,
             request_detail,
+            cooldown_scope,
         )
         .await;
         (item_index, outcome)

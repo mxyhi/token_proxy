@@ -38,9 +38,9 @@ export function DataTable({
   onSelectItem,
 }: DataTableProps) {
   return (
-    <div className="px-4 lg:px-6">
-      <Card data-slot="dashboard-recent">
-        <CardHeader>
+    <div className="flex min-h-0 flex-1 flex-col px-4 lg:px-6">
+      <Card data-slot="dashboard-recent" className="min-h-0 flex-1 gap-4">
+        <CardHeader className="shrink-0">
           <CardTitle className="text-base">{m.dashboard_recent_title()}</CardTitle>
           <CardDescription>
             {m.dashboard_recent_desc({
@@ -77,7 +77,7 @@ export function DataTable({
             </p>
           </CardAction>
         </CardHeader>
-        <CardContent className="pt-0">
+        <CardContent className="flex min-h-0 flex-1 flex-col pt-0">
           {items.length ? (
             <RecentRequestsTable
               items={items}

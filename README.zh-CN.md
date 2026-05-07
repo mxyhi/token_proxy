@@ -99,8 +99,9 @@ pnpm exec tsc --noEmit
 | `local_api_key` | `null` | 设置后，本地鉴权按接口格式生效（见“鉴权规则”）；本地鉴权不会转给上游 |
 | `app_proxy_url` | `null` | 应用更新 & 上游可复用的代理；支持 `http/https/socks5/socks5h`；可在 upstream `proxy_url` 用 `"$app_proxy_url"` 占位 |
 | `log_level` | `silent` | `silent|error|warn|info|debug|trace`；debug/trace 会记录请求头（鉴权打码）与小体积请求体（≤64KiB）；release 强制 `silent` |
-| `max_request_body_bytes` | `20971520` (20 MiB) | 0 表示回落到默认；保护入站体积 |
+| `max_request_body_bytes` | `104857600` (100 MiB) | 0 表示回落到默认；保护入站体积 |
 | `retryable_failure_cooldown_secs` | `15` | 对适合短时降级的可重试失败施加冷却窗口；`0` 表示关闭冷却。重载或重启运行中的代理会重置当前冷却状态 |
+| `codex_session_scoped_cooldown_enabled` | `false` | 仅对 Codex 账号 + OpenAI Responses 请求生效；开启后按 `session_id` 隔离冷却，最终成功会清除本会话冷却，缺少 `session_id` 的请求不共享冷却 |
 | `tray_token_rate.enabled` | `true` | macOS 托盘实时速率；其他平台无害 |
 | `tray_token_rate.format` | `split` | `combined`(总数) / `split`(↑入 ↓出) / `both`(总数 | ↑入 ↓出) |
 | `upstream_strategy` | `{ "order": "fill_first", "dispatch": { "type": "serial" } }` | 结构化策略对象。`order` 控制同一优先级组内的候选顺序；`dispatch` 控制串行 / hedged / race 派发方式 |
@@ -158,7 +159,7 @@ pnpm exec tsc --noEmit
   - `{"type":"hedged","delay_ms":2000,"max_parallel":2}`：先立即发第一个；若 `delay_ms` 后仍未决，再补发下一个，最多并发到 `max_parallel`。
   - `{"type":"race","max_parallel":3}`：立即并发发起最多 `max_parallel` 个候选，谁先成功就返回谁。
 - 可重试条件：网络超时/连接错误，或状态码 400/401/403/404/408/422/429/307/5xx（包含 504/524）；重试只在同一 provider 的优先级组内进行
-- 冷却条件：`401/403/408/429/5xx` 会让失败 upstream 在 `retryable_failure_cooldown_secs`（默认 `15`）内被暂时后置；`400/404/422/307` 仍可重试，但不会触发跨请求冷却
+- 冷却条件：`401/403/408/429/5xx` 会让失败 upstream 在 `retryable_failure_cooldown_secs`（默认 `15`）内被暂时后置；`400/404/422/307` 仍可重试，但不会触发跨请求冷却。`codex_session_scoped_cooldown_enabled=true` 时，Codex 账号的 OpenAI Responses 冷却按 `session_id` 隔离；最终成功的请求不会保留本会话冷却，缺少 `session_id` 的请求不共享冷却
 - 仅 `/v1/messages`：当命中的 native provider（`anthropic`/`kiro`）被耗尽（仍是可重试错误）时，若另一个 native provider 已配置，会自动 fallback（Anthropic ↔ Kiro）
 
 ## 可观测性
@@ -180,5 +181,5 @@ pnpm exec tsc --noEmit
 - **端口被占用？** 修改 `config.jsonc` 里的 `port`，并同步更新客户端 base URL
 - **返回 401？** 设置了 `local_api_key` 就必须按接口格式发送本地 key（OpenAI/Responses 用 `Authorization`；Anthropic 用 `x-api-key`；Gemini 用 `x-goog-api-key` 或 `?key=`）；开启本地鉴权后，上游密钥请配置在 `upstreams[].api_key`
 - **返回 504？** 上游在 120 秒内未返回响应头或首个 body chunk。对于流式响应，若相邻 chunk 间空闲超过 120 秒，连接也可能被关闭。
-- **413 Payload Too Large？** 请求体超过 `max_request_body_bytes`（默认 20 MiB）或格式转换场景的 4 MiB 处理上限
+- **413 Payload Too Large？** 请求体超过 `max_request_body_bytes`（默认 100 MiB）或格式转换处理上限
 - **为什么不走系统代理？** `reqwest` 默认 `no_proxy()`；如需代理，请在每个 upstream 设置 `proxy_url`

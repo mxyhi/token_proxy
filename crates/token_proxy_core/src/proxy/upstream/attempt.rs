@@ -12,7 +12,9 @@ use crate::proxy::log::RequestTimings;
 use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_body::ReplayableBody;
 use crate::proxy::request_detail::RequestDetailSnapshot;
-use crate::proxy::{config::UpstreamRuntime, ProxyState, RequestMeta};
+use crate::proxy::{
+    config::UpstreamRuntime, cooldown_scope::CooldownScope, ProxyState, RequestMeta,
+};
 
 pub(super) async fn attempt_upstream(
     state: &ProxyState,
@@ -28,6 +30,7 @@ pub(super) async fn attempt_upstream(
     client_gemini_api_key: Option<&str>,
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
+    cooldown_scope: &CooldownScope,
 ) -> AttemptOutcome {
     if provider == "kiro" {
         return super::kiro::attempt_kiro_upstream(
@@ -55,6 +58,7 @@ pub(super) async fn attempt_upstream(
         meta,
         request_auth,
         request_detail.as_ref(),
+        cooldown_scope,
     )
     .await;
     let first = match retry_with_next_codex_account(
@@ -72,6 +76,7 @@ pub(super) async fn attempt_upstream(
         response_transform,
         request_detail.clone(),
         first,
+        cooldown_scope,
     )
     .await
     {
@@ -93,6 +98,7 @@ pub(super) async fn attempt_upstream(
         response_transform,
         request_detail.clone(),
         &first,
+        cooldown_scope,
     )
     .await
     {
@@ -107,6 +113,7 @@ pub(super) async fn attempt_upstream(
         response_transform,
         request_detail,
         first,
+        cooldown_scope,
     )
     .await
 }
@@ -123,6 +130,7 @@ pub(super) async fn attempt_send(
     meta: &RequestMeta,
     request_auth: &crate::proxy::http::RequestAuth,
     request_detail: Option<&RequestDetailSnapshot>,
+    cooldown_scope: &CooldownScope,
 ) -> Result<UpstreamAttempt, UpstreamAttemptFailure> {
     let prepared = super::prepare_upstream_request(
         state,
@@ -133,6 +141,7 @@ pub(super) async fn attempt_send(
         headers,
         meta,
         request_auth,
+        cooldown_scope,
     )
     .await
     .map_err(|outcome| UpstreamAttemptFailure {
@@ -165,6 +174,7 @@ pub(super) async fn attempt_send(
         request_detail,
         start_time,
         timings.clone(),
+        cooldown_scope,
     )
     .await
     .map_err(|outcome| UpstreamAttemptFailure {

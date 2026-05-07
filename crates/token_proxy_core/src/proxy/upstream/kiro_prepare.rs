@@ -62,7 +62,14 @@ pub(super) async fn prepare_kiro_context<'a>(
     {
         None
     } else {
-        Some(super::ordered_runtime_account_ids(state, "kiro").await)
+        Some(
+            super::ordered_runtime_account_ids(
+                state,
+                "kiro",
+                &crate::proxy::cooldown_scope::CooldownScope::Global,
+            )
+            .await,
+        )
     };
     let (account_id, record) = state
         .kiro_accounts

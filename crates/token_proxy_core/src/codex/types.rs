@@ -43,6 +43,8 @@ pub struct CodexTokenRecord {
     #[serde(default = "default_account_status")]
     pub status: CodexAccountStatus,
     pub account_id: Option<String>,
+    #[serde(default)]
+    pub user_id: Option<String>,
     pub email: Option<String>,
     pub expires_at: String,
     pub last_refresh: Option<String>,

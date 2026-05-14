@@ -8,7 +8,8 @@ use tokio::sync::{Mutex, RwLock};
 use crate::app_proxy::AppProxyState;
 use crate::oauth_util::{
     decode_jwt_payload, expires_at_from_seconds, extract_chatgpt_account_id_from_jwt,
-    extract_email_from_jwt, normalize_proxy_url, now_rfc3339, sanitize_id_part,
+    extract_chatgpt_user_id_from_jwt, extract_email_from_jwt, normalize_proxy_url, now_rfc3339,
+    sanitize_id_part,
 };
 use crate::paths::TokenProxyPaths;
 use crate::provider_accounts;
@@ -299,6 +300,7 @@ impl CodexAccountStore {
             auto_refresh_enabled: record.auto_refresh_enabled,
             status: record.status,
             account_id: record.account_id.clone(),
+            user_id: record.user_id.clone(),
             email: record.email.clone(),
             expires_at: expires_at_from_seconds(response.expires_in),
             last_refresh: Some(now_rfc3339()),
@@ -517,41 +519,58 @@ impl CodexAccountStore {
         imported: &CodexTokenRecord,
     ) -> Result<Option<(String, CodexTokenRecord)>, String> {
         self.refresh_cache().await?;
-        let imported_account_id = normalize_optional_identity(imported.account_id.as_deref());
-        let imported_email = normalize_optional_identity(imported.email.as_deref());
+        let imported_account_id = normalize_optional_id(imported.account_id.as_deref());
+        let imported_user_id = normalize_optional_id(imported.user_id.as_deref());
+        let imported_email = normalize_optional_email(imported.email.as_deref());
         let cache = self.cache.read().await;
 
-        if let Some(account_id) = imported_account_id.as_ref() {
+        if let Some(user_id) = imported_user_id.as_ref() {
             if let Some((local_account_id, existing_record)) =
                 cache.iter().find(|(_, existing_record)| {
-                    normalize_optional_identity(existing_record.account_id.as_deref()).as_deref()
-                        == Some(account_id.as_str())
+                    if normalize_optional_id(existing_record.user_id.as_deref()).as_deref()
+                        != Some(user_id.as_str())
+                    {
+                        return false;
+                    }
+                    account_ids_are_compatible(imported_account_id.as_deref(), existing_record)
                 })
             {
+                tracing::debug!(
+                    identity = "user",
+                    "codex import reuses existing local account"
+                );
                 return Ok(Some((local_account_id.clone(), existing_record.clone())));
             }
         }
 
-        if let Some(email) = imported_email {
+        if let Some(email) = imported_email.as_ref() {
             if let Some((local_account_id, existing_record)) =
                 cache.iter().find(|(_, existing_record)| {
-                    let existing_email =
-                        normalize_optional_identity(existing_record.email.as_deref());
+                    let existing_email = normalize_optional_email(existing_record.email.as_deref());
                     if existing_email.as_deref() != Some(email.as_str()) {
                         return false;
                     }
-                    let existing_account_id =
-                        normalize_optional_identity(existing_record.account_id.as_deref());
-                    // Email-only fallback should never collapse two explicit workspace/account ids
-                    // into one local record. We only reuse by email when at least one side lacks
-                    // a stable account id.
-                    !matches!(
-                        (&imported_account_id, existing_account_id.as_deref()),
-                        (Some(imported_account_id), Some(existing_account_id))
-                            if imported_account_id != existing_account_id
-                    )
+                    let existing_user_id =
+                        normalize_optional_id(existing_record.user_id.as_deref());
+                    if matches!(
+                        (&imported_user_id, existing_user_id.as_deref()),
+                        (Some(imported_user_id), Some(existing_user_id))
+                            if imported_user_id != existing_user_id
+                    ) {
+                        return false;
+                    }
+                    if imported_user_id.is_some() && existing_user_id.is_some() {
+                        return false;
+                    }
+                    // Email fallback is only safe when the workspace context is also unambiguous:
+                    // both account ids match, or both sides lack an account id.
+                    account_ids_are_compatible(imported_account_id.as_deref(), existing_record)
                 })
             {
+                tracing::debug!(
+                    identity = "email",
+                    "codex import reuses existing local account"
+                );
                 return Ok(Some((local_account_id.clone(), existing_record.clone())));
             }
         }
@@ -560,11 +579,32 @@ impl CodexAccountStore {
     }
 }
 
-fn normalize_optional_identity(value: Option<&str>) -> Option<String> {
+fn normalize_optional_id(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn normalize_optional_email(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(|value| value.to_ascii_lowercase())
+}
+
+fn account_ids_are_compatible(
+    imported_account_id: Option<&str>,
+    existing_record: &CodexTokenRecord,
+) -> bool {
+    let existing_account_id = normalize_optional_id(existing_record.account_id.as_deref());
+    match (imported_account_id, existing_account_id.as_deref()) {
+        (Some(imported_account_id), Some(existing_account_id)) => {
+            imported_account_id == existing_account_id
+        }
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => false,
+    }
 }
 
 fn sorted_account_ids(cache: &HashMap<String, CodexTokenRecord>) -> Vec<String> {
@@ -635,11 +675,21 @@ async fn collect_json_files(root: &Path) -> Result<Vec<PathBuf>, String> {
 }
 
 fn fill_record_from_jwt(record: &mut CodexTokenRecord) {
-    if record.account_id.is_none() {
-        record.account_id = extract_chatgpt_account_id_from_jwt(&record.id_token);
+    // JWT claims are the authority; wrapper fields from exported files are fallbacks.
+    if let Some(account_id) = extract_chatgpt_account_id_from_jwt(&record.id_token)
+        .or_else(|| extract_chatgpt_account_id_from_jwt(&record.access_token))
+    {
+        record.account_id = Some(account_id);
     }
-    if record.email.is_none() {
-        record.email = extract_email_from_jwt(&record.id_token);
+    if let Some(user_id) = extract_chatgpt_user_id_from_jwt(&record.id_token)
+        .or_else(|| extract_chatgpt_user_id_from_jwt(&record.access_token))
+    {
+        record.user_id = Some(user_id);
+    }
+    if let Some(email) = extract_email_from_jwt(&record.id_token)
+        .or_else(|| extract_email_from_jwt(&record.access_token))
+    {
+        record.email = Some(email);
     }
 }
 
@@ -799,6 +849,20 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
             &["data", "account_id"],
         ],
     );
+    let user_id = find_string(
+        value,
+        &[
+            &["user_id"],
+            &["chatgpt_user_id"],
+            &["user", "id"],
+            &["user", "uuid"],
+            &["account", "user_id"],
+            &["token_data", "user_id"],
+            &["token_data", "chatgpt_user_id"],
+            &["data", "user_id"],
+            &["data", "chatgpt_user_id"],
+        ],
+    );
     let email = find_string(
         value,
         &[
@@ -830,6 +894,7 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
         auto_refresh_enabled,
         status: CodexAccountStatus::Active,
         account_id,
+        user_id,
         email,
         expires_at,
         last_refresh,
@@ -965,11 +1030,60 @@ mod tests {
     }
 
     fn build_id_token(email: &str, account_id: &str) -> String {
+        build_id_token_with_user(email, account_id, None)
+    }
+
+    fn build_id_token_with_user(email: &str, account_id: &str, user_id: Option<&str>) -> String {
+        build_id_token_with_user_claim(email, account_id, "chatgpt_user_id", user_id)
+    }
+
+    fn build_id_token_with_user_claim(
+        email: &str,
+        account_id: &str,
+        user_claim_name: &str,
+        user_id: Option<&str>,
+    ) -> String {
+        let mut auth = serde_json::Map::new();
+        auth.insert(
+            "chatgpt_account_id".to_string(),
+            Value::String(account_id.to_string()),
+        );
+        if let Some(user_id) = user_id {
+            auth.insert(
+                user_claim_name.to_string(),
+                Value::String(user_id.to_string()),
+            );
+        }
+        let payload = json!({
+            "email": email,
+            "https://api.openai.com/auth": Value::Object(auth),
+        });
+        let encoded =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("serialize payload"));
+        format!("header.{encoded}.signature")
+    }
+
+    fn build_id_token_with_profile_email(email: &str, account_id: &str, user_id: &str) -> String {
+        let payload = json!({
+            "https://api.openai.com/profile": {
+                "email": email,
+            },
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": account_id,
+                "chatgpt_user_id": user_id,
+            },
+        });
+        let encoded =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("serialize payload"));
+        format!("header.{encoded}.signature")
+    }
+
+    fn build_id_token_with_user_without_account(email: &str, user_id: &str) -> String {
         let payload = json!({
             "email": email,
             "https://api.openai.com/auth": {
-                "chatgpt_account_id": account_id,
-            }
+                "chatgpt_user_id": user_id,
+            },
         });
         let encoded =
             URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("serialize payload"));
@@ -987,6 +1101,19 @@ mod tests {
         format!("header.{encoded}.signature")
     }
 
+    fn build_access_token_with_identity(email: &str, account_id: &str, user_id: &str) -> String {
+        let payload = json!({
+            "email": email,
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": account_id,
+                "chatgpt_user_id": user_id,
+            },
+        });
+        let encoded =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&payload).expect("serialize payload"));
+        format!("header.{encoded}.signature")
+    }
+
     fn build_record_with_quota_and_access_claim(
         quota_plan_type: &str,
         access_claim_plan_type: &str,
@@ -998,6 +1125,7 @@ mod tests {
             auto_refresh_enabled: true,
             status: CodexAccountStatus::Active,
             account_id: Some("acct-paid".to_string()),
+            user_id: None,
             email: Some("paid@example.com".to_string()),
             expires_at: future_rfc3339(24),
             last_refresh: None,
@@ -1407,6 +1535,508 @@ mod tests {
                 .expect("second team record should exist");
             assert_eq!(first_record.account_id.as_deref(), Some("acct-team-a"));
             assert_eq!(second_record.account_id.as_deref(), Some("acct-team-b"));
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_keeps_distinct_emails_when_user_id_missing_and_chatgpt_account_shared() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let first_path = data_dir.join("codex-missing-user-a.json");
+            tokio::fs::write(
+                &first_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "missing-user-a-access-token",
+                    "refresh_token": "missing-user-a-refresh-token",
+                    "account_id": "acct-shared-without-user",
+                    "email": "missing-a@example.com",
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize first missing user json"),
+            )
+            .await
+            .expect("write first missing user json");
+
+            let second_path = data_dir.join("codex-missing-user-b.json");
+            tokio::fs::write(
+                &second_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "missing-user-b-access-token",
+                    "refresh_token": "missing-user-b-refresh-token",
+                    "account_id": "acct-shared-without-user",
+                    "email": "missing-b@example.com",
+                    "expired": future_rfc3339(12),
+                }))
+                .expect("serialize second missing user json"),
+            )
+            .await
+            .expect("write second missing user json");
+
+            let first_imported = store
+                .import_file(first_path)
+                .await
+                .expect("first missing user import should succeed");
+            let second_imported = store
+                .import_file(second_path)
+                .await
+                .expect("second missing user import should succeed");
+
+            assert_ne!(first_imported[0].account_id, second_imported[0].account_id);
+            let accounts = store
+                .list_accounts()
+                .await
+                .expect("list accounts should succeed");
+            assert_eq!(accounts.len(), 2);
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_keeps_distinct_users_from_same_chatgpt_account() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let first_path = data_dir.join("codex-user-a.json");
+            tokio::fs::write(
+                &first_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "user-a-access-token",
+                    "refresh_token": "user-a-refresh-token",
+                    "id_token": build_id_token_with_user(
+                        "user-a@example.com",
+                        "acct-shared-team",
+                        Some("user-a"),
+                    ),
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize first user json"),
+            )
+            .await
+            .expect("write first user json");
+
+            let second_path = data_dir.join("codex-user-b.json");
+            tokio::fs::write(
+                &second_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "user-b-access-token",
+                    "refresh_token": "user-b-refresh-token",
+                    "id_token": build_id_token_with_user(
+                        "user-b@example.com",
+                        "acct-shared-team",
+                        Some("user-b"),
+                    ),
+                    "expired": future_rfc3339(12),
+                }))
+                .expect("serialize second user json"),
+            )
+            .await
+            .expect("write second user json");
+
+            let first_imported = store
+                .import_file(first_path)
+                .await
+                .expect("first user import should succeed");
+            let second_imported = store
+                .import_file(second_path)
+                .await
+                .expect("second user import should succeed");
+
+            assert_eq!(first_imported.len(), 1);
+            assert_eq!(second_imported.len(), 1);
+            assert_ne!(first_imported[0].account_id, second_imported[0].account_id);
+
+            let accounts = store
+                .list_accounts()
+                .await
+                .expect("list accounts should succeed");
+            assert_eq!(accounts.len(), 2);
+            assert!(accounts
+                .iter()
+                .any(|account| account.email.as_deref() == Some("user-a@example.com")));
+            assert!(accounts
+                .iter()
+                .any(|account| account.email.as_deref() == Some("user-b@example.com")));
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_keeps_distinct_chatgpt_accounts_for_same_user() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let first_path = data_dir.join("codex-account-a.json");
+            tokio::fs::write(
+                &first_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "account-a-access-token",
+                    "refresh_token": "account-a-refresh-token",
+                    "id_token": build_id_token_with_user(
+                        "same-user@example.com",
+                        "acct-a",
+                        Some("same-user"),
+                    ),
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize first account json"),
+            )
+            .await
+            .expect("write first account json");
+
+            let second_path = data_dir.join("codex-account-b.json");
+            tokio::fs::write(
+                &second_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "account-b-access-token",
+                    "refresh_token": "account-b-refresh-token",
+                    "id_token": build_id_token_with_user(
+                        "same-user@example.com",
+                        "acct-b",
+                        Some("same-user"),
+                    ),
+                    "expired": future_rfc3339(12),
+                }))
+                .expect("serialize second account json"),
+            )
+            .await
+            .expect("write second account json");
+
+            let first_imported = store
+                .import_file(first_path)
+                .await
+                .expect("first account import should succeed");
+            let second_imported = store
+                .import_file(second_path)
+                .await
+                .expect("second account import should succeed");
+
+            assert_eq!(first_imported.len(), 1);
+            assert_eq!(second_imported.len(), 1);
+            assert_ne!(first_imported[0].account_id, second_imported[0].account_id);
+
+            let accounts = store
+                .list_accounts()
+                .await
+                .expect("list accounts should succeed");
+            assert_eq!(accounts.len(), 2);
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_uses_auth_user_id_claim_alias() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let first_path = data_dir.join("codex-user-alias-a.json");
+            tokio::fs::write(
+                &first_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "user-alias-a-access-token",
+                    "refresh_token": "user-alias-a-refresh-token",
+                    "id_token": build_id_token_with_user_claim(
+                        "alias-a@example.com",
+                        "acct-shared-alias-team",
+                        "user_id",
+                        Some("alias-user-a"),
+                    ),
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize first user json"),
+            )
+            .await
+            .expect("write first user json");
+
+            let second_path = data_dir.join("codex-user-alias-b.json");
+            tokio::fs::write(
+                &second_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "user-alias-b-access-token",
+                    "refresh_token": "user-alias-b-refresh-token",
+                    "id_token": build_id_token_with_user_claim(
+                        "alias-b@example.com",
+                        "acct-shared-alias-team",
+                        "user_id",
+                        Some("alias-user-b"),
+                    ),
+                    "expired": future_rfc3339(12),
+                }))
+                .expect("serialize second user json"),
+            )
+            .await
+            .expect("write second user json");
+
+            let first_imported = store
+                .import_file(first_path)
+                .await
+                .expect("first alias user import should succeed");
+            let second_imported = store
+                .import_file(second_path)
+                .await
+                .expect("second alias user import should succeed");
+
+            assert_ne!(first_imported[0].account_id, second_imported[0].account_id);
+            let accounts = store
+                .list_accounts()
+                .await
+                .expect("list accounts should succeed");
+            assert_eq!(accounts.len(), 2);
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_keeps_case_distinct_chatgpt_user_ids_separate() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let first_path = data_dir.join("codex-case-user-a.json");
+            tokio::fs::write(
+                &first_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "case-user-a-access-token",
+                    "refresh_token": "case-user-a-refresh-token",
+                    "id_token": build_id_token_with_user(
+                        "case-a@example.com",
+                        "acct-case-shared-team",
+                        Some("user-AbC"),
+                    ),
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize first case user json"),
+            )
+            .await
+            .expect("write first case user json");
+
+            let second_path = data_dir.join("codex-case-user-b.json");
+            tokio::fs::write(
+                &second_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "case-user-b-access-token",
+                    "refresh_token": "case-user-b-refresh-token",
+                    "id_token": build_id_token_with_user(
+                        "case-b@example.com",
+                        "acct-case-shared-team",
+                        Some("user-aBc"),
+                    ),
+                    "expired": future_rfc3339(12),
+                }))
+                .expect("serialize second case user json"),
+            )
+            .await
+            .expect("write second case user json");
+
+            let first_imported = store
+                .import_file(first_path)
+                .await
+                .expect("first case user import should succeed");
+            let second_imported = store
+                .import_file(second_path)
+                .await
+                .expect("second case user import should succeed");
+
+            assert_ne!(first_imported[0].account_id, second_imported[0].account_id);
+            let accounts = store
+                .list_accounts()
+                .await
+                .expect("list accounts should succeed");
+            assert_eq!(accounts.len(), 2);
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_keeps_same_user_separate_when_only_one_account_id_is_known() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let first_path = data_dir.join("codex-user-no-account.json");
+            tokio::fs::write(
+                &first_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "same-user-no-account-access-token",
+                    "refresh_token": "same-user-no-account-refresh-token",
+                    "id_token": build_id_token_with_user_without_account(
+                        "same-user-one-sided@example.com",
+                        "same-user-one-sided",
+                    ),
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize same user no account json"),
+            )
+            .await
+            .expect("write same user no account json");
+
+            let second_path = data_dir.join("codex-user-known-account.json");
+            tokio::fs::write(
+                &second_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "same-user-known-account-access-token",
+                    "refresh_token": "same-user-known-account-refresh-token",
+                    "id_token": build_id_token_with_user(
+                        "same-user-one-sided@example.com",
+                        "acct-known-for-same-user",
+                        Some("same-user-one-sided"),
+                    ),
+                    "expired": future_rfc3339(12),
+                }))
+                .expect("serialize same user known account json"),
+            )
+            .await
+            .expect("write same user known account json");
+
+            let first_imported = store
+                .import_file(first_path)
+                .await
+                .expect("first same user import should succeed");
+            let second_imported = store
+                .import_file(second_path)
+                .await
+                .expect("second same user import should succeed");
+
+            assert_ne!(first_imported[0].account_id, second_imported[0].account_id);
+            let accounts = store
+                .list_accounts()
+                .await
+                .expect("list accounts should succeed");
+            assert_eq!(accounts.len(), 2);
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_prefers_jwt_identity_over_outer_fields() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let input_path = data_dir.join("codex-jwt-authoritative.json");
+            tokio::fs::write(
+                &input_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "jwt-authoritative-access-token",
+                    "refresh_token": "jwt-authoritative-refresh-token",
+                    "id_token": build_id_token_with_user(
+                        "jwt-user@example.com",
+                        "acct-from-jwt",
+                        Some("user-from-jwt"),
+                    ),
+                    "account_id": "acct-from-wrapper",
+                    "user_id": "user-from-wrapper",
+                    "email": "wrapper@example.com",
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize jwt authoritative json"),
+            )
+            .await
+            .expect("write jwt authoritative json");
+
+            let imported = store
+                .import_file(input_path)
+                .await
+                .expect("jwt authoritative import should succeed");
+            assert_eq!(imported.len(), 1);
+
+            let record = store
+                .get_account_record(&imported[0].account_id)
+                .await
+                .expect("record should exist");
+            assert_eq!(record.account_id.as_deref(), Some("acct-from-jwt"));
+            assert_eq!(record.user_id.as_deref(), Some("user-from-jwt"));
+            assert_eq!(record.email.as_deref(), Some("jwt-user@example.com"));
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_reads_profile_email_claim_from_jwt() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let input_path = data_dir.join("codex-profile-email.json");
+            tokio::fs::write(
+                &input_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": "profile-email-access-token",
+                    "refresh_token": "profile-email-refresh-token",
+                    "id_token": build_id_token_with_profile_email(
+                        "profile@example.com",
+                        "acct-profile-email",
+                        "user-profile-email",
+                    ),
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize profile email json"),
+            )
+            .await
+            .expect("write profile email json");
+
+            let imported = store
+                .import_file(input_path)
+                .await
+                .expect("profile email import should succeed");
+            assert_eq!(imported.len(), 1);
+            assert_eq!(imported[0].email.as_deref(), Some("profile@example.com"));
+
+            let record = store
+                .get_account_record(&imported[0].account_id)
+                .await
+                .expect("record should exist");
+            assert_eq!(record.email.as_deref(), Some("profile@example.com"));
+
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    #[test]
+    fn import_file_reads_identity_from_access_token_when_id_token_missing() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let input_path = data_dir.join("codex-access-identity.json");
+            tokio::fs::write(
+                &input_path,
+                serde_json::to_string_pretty(&json!({
+                    "type": "codex",
+                    "access_token": build_access_token_with_identity(
+                        "access-identity@example.com",
+                        "acct-access-identity",
+                        "user-access-identity",
+                    ),
+                    "refresh_token": "access-identity-refresh-token",
+                    "expired": future_rfc3339(6),
+                }))
+                .expect("serialize access identity json"),
+            )
+            .await
+            .expect("write access identity json");
+
+            let imported = store
+                .import_file(input_path)
+                .await
+                .expect("access identity import should succeed");
+            let record = store
+                .get_account_record(&imported[0].account_id)
+                .await
+                .expect("record should exist");
+
+            assert_eq!(record.account_id.as_deref(), Some("acct-access-identity"));
+            assert_eq!(record.user_id.as_deref(), Some("user-access-identity"));
+            assert_eq!(record.email.as_deref(), Some("access-identity@example.com"));
 
             let _ = std::fs::remove_dir_all(data_dir);
         });
@@ -1881,6 +2511,7 @@ INSERT INTO provider_accounts (
                 auto_refresh_enabled: true,
                 status: CodexAccountStatus::Disabled,
                 account_id: Some("acct-disabled".to_string()),
+                user_id: None,
                 email: Some("aaa@example.com".to_string()),
                 expires_at: future_rfc3339(6),
                 last_refresh: None,
@@ -1895,6 +2526,7 @@ INSERT INTO provider_accounts (
                 auto_refresh_enabled: true,
                 status: CodexAccountStatus::Active,
                 account_id: Some("acct-enabled".to_string()),
+                user_id: None,
                 email: Some("zzz@example.com".to_string()),
                 expires_at: future_rfc3339(6),
                 last_refresh: None,

@@ -49,6 +49,12 @@ pub fn extract_email_from_jwt(token: &str) -> Option<String> {
     value
         .get("email")
         .and_then(|v| v.as_str())
+        .or_else(|| {
+            value
+                .get("https://api.openai.com/profile")
+                .and_then(|v| v.get("email"))
+                .and_then(|v| v.as_str())
+        })
         .or_else(|| value.get("preferred_username").and_then(|v| v.as_str()))
         .map(|s| s.to_string())
 }
@@ -64,6 +70,28 @@ pub fn extract_chatgpt_account_id_from_jwt(token: &str) -> Option<String> {
     }
     value
         .get("chatgpt_account_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+pub fn extract_chatgpt_user_id_from_jwt(token: &str) -> Option<String> {
+    let value = decode_jwt_payload(token)?;
+    if let Some(id) = value
+        .get("https://api.openai.com/auth")
+        .and_then(|v| v.get("chatgpt_user_id"))
+        .and_then(|v| v.as_str())
+    {
+        return Some(id.to_string());
+    }
+    if let Some(id) = value
+        .get("https://api.openai.com/auth")
+        .and_then(|v| v.get("user_id"))
+        .and_then(|v| v.as_str())
+    {
+        return Some(id.to_string());
+    }
+    value
+        .get("chatgpt_user_id")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
 }

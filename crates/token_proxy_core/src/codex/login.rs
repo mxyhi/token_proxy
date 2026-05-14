@@ -227,6 +227,7 @@ async fn run_auth_code_login(
         auto_refresh_enabled: true,
         status: super::types::CodexAccountStatus::Active,
         account_id: None,
+        user_id: None,
         email: None,
         expires_at: expires_at_from_seconds(token.expires_in),
         last_refresh: Some(now_rfc3339()),

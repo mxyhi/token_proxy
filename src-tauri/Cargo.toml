@@ -1,6 +1,6 @@
 [package]
 name = "token_proxy"
-version = "0.1.110"
+version = "0.1.111"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"

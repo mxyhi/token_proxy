@@ -532,6 +532,7 @@ fn handle_upstream_timeout(
         response: None,
         is_timeout: true,
         should_cooldown: true,
+        retry_same_upstream_once: false,
     }
 }
 
@@ -578,6 +579,7 @@ fn map_upstream_error(
             response: None,
             is_timeout: err.is_timeout(),
             should_cooldown: true,
+            retry_same_upstream_once: false,
         };
     }
     let error_message = format!("Upstream request failed: {message}");

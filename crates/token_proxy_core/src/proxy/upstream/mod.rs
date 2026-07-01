@@ -134,6 +134,7 @@ enum AttemptOutcome {
         response: Option<Response>,
         is_timeout: bool,
         should_cooldown: bool,
+        retry_same_upstream_once: bool,
     },
     Fatal(Response),
     SkippedAuth,

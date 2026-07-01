@@ -153,6 +153,7 @@ pub(super) async fn handle_send_error(
                 response: None,
                 is_timeout: true,
                 should_cooldown: true,
+                retry_same_upstream_once: false,
             }
         }
     }

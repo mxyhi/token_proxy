@@ -29,6 +29,7 @@ use super::super::{
     responses_to_chat, streaming, upstream_stream, RetryableStreamResponse, PROVIDER_CODEX,
     PROVIDER_GEMINI, PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES,
 };
+use super::buffered;
 
 type UpstreamBytesStream = futures_util::stream::BoxStream<
     'static,
@@ -972,6 +973,7 @@ fn stream_first_output_timeout_response(
     response.extensions_mut().insert(RetryableStreamResponse {
         message,
         should_cooldown: true,
+        retry_same_upstream_once: false,
     });
     response
 }
@@ -1015,9 +1017,11 @@ fn codex_prelude_retry_response(
         [error_chunk.as_ref(), b"data: [DONE]\n\n"].concat(),
     ));
     let mut response = http::build_response(status, headers.clone(), body);
+    let retry_same_upstream_once = buffered::is_capacity_retry_error(&message, &message);
     response.extensions_mut().insert(RetryableStreamResponse {
         message,
-        should_cooldown: true,
+        should_cooldown: !retry_same_upstream_once,
+        retry_same_upstream_once,
     });
     response
 }
@@ -1078,6 +1082,7 @@ fn stream_error_response(
         response.extensions_mut().insert(RetryableStreamResponse {
             message,
             should_cooldown: true,
+            retry_same_upstream_once: false,
         });
     }
     response

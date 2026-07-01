@@ -122,12 +122,16 @@ pub(super) async fn build_buffered_response(
         response.extensions_mut().insert(RetryableStreamResponse {
             message,
             should_cooldown: false,
+            retry_same_upstream_once: false,
         });
         return response;
     }
 
     let mut entry = build_log_entry(&context, usage, response_error);
     let response_text = String::from_utf8_lossy(output.as_ref());
+    let is_capacity_retry_error =
+        !status.is_success() && is_capacity_retry_error(response_text.as_ref(), &response_text);
+    let capacity_retry_message = is_capacity_retry_error.then(|| response_text.to_string());
     attach_response_body(&mut entry, response_text.as_ref());
     log.clone().write_detached(entry);
 
@@ -148,6 +152,12 @@ pub(super) async fn build_buffered_response(
         response
             .extensions_mut()
             .insert(NonRetryableSemanticResponse);
+    } else if let Some(message) = capacity_retry_message {
+        response.extensions_mut().insert(RetryableStreamResponse {
+            message,
+            should_cooldown: false,
+            retry_same_upstream_once: true,
+        });
     }
     response
 }
@@ -886,6 +896,7 @@ async fn read_upstream_bytes(
             response.extensions_mut().insert(RetryableStreamResponse {
                 message,
                 should_cooldown: true,
+                retry_same_upstream_once: false,
             });
             return Err(response);
         }
@@ -927,6 +938,7 @@ async fn read_upstream_bytes(
                 response.extensions_mut().insert(RetryableStreamResponse {
                     message,
                     should_cooldown: true,
+                    retry_same_upstream_once: false,
                 });
             }
             return Err(response);
@@ -963,6 +975,7 @@ fn respond_codex_images_transform_error(
         response.extensions_mut().insert(RetryableStreamResponse {
             message: error_message,
             should_cooldown: false,
+            retry_same_upstream_once: false,
         });
     }
     response
@@ -1042,6 +1055,48 @@ fn is_context_window_error(response_error: Option<&str>, bytes: &Bytes) -> bool 
     }
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
         return matches_text(String::from_utf8_lossy(bytes).as_ref());
+    };
+    for pointer in [
+        "/error/message",
+        "/response/error/message",
+        "/message",
+        "/error/code",
+        "/response/error/code",
+        "/code",
+    ] {
+        if value
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .is_some_and(matches_text)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+pub(super) fn is_capacity_retry_error(response_error: &str, body: &str) -> bool {
+    fn matches_text(text: &str) -> bool {
+        let lower = text.trim().to_ascii_lowercase();
+        if lower.is_empty() {
+            return false;
+        }
+        if lower.contains("selected model is at capacity") {
+            return true;
+        }
+        lower.contains("model")
+            && lower.contains("capacity")
+            && (lower.contains("try a different model")
+                || lower.contains("please try again")
+                || lower.contains("temporarily unavailable")
+                || lower.contains("at capacity"))
+    }
+
+    if matches_text(response_error) || matches_text(body) {
+        return true;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(body) else {
+        return false;
     };
     for pointer in [
         "/error/message",

@@ -232,6 +232,7 @@ fn codex_account_resolution_outcome(has_pinned_account: bool, err: String) -> At
         response: Some(response),
         is_timeout: false,
         should_cooldown: false,
+        retry_same_upstream_once: false,
     }
 }
 

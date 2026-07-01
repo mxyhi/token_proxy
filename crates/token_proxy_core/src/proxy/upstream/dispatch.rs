@@ -122,6 +122,7 @@ fn apply_attempt_outcome(result: &mut GroupAttemptResult, outcome: AttemptOutcom
             response,
             is_timeout,
             should_cooldown: _,
+            retry_same_upstream_once: _,
         } => {
             if is_timeout {
                 result.last_timeout_error = Some(message.clone());
@@ -342,6 +343,7 @@ async fn dispatch_group_upstreams(
     let mut result = GroupAttemptResult::new();
     let mut in_flight: FuturesUnordered<GroupAttemptFuture<'_>> = FuturesUnordered::new();
     let mut next_to_launch = 0usize;
+    let mut retried_same_upstreams = Vec::new();
 
     launch_group_attempts(
         &mut in_flight,
@@ -435,7 +437,48 @@ async fn dispatch_group_upstreams(
 
         if let Some((item_index, outcome)) = completed {
             let upstream = &items[item_index];
-            if apply_group_attempt_outcome(
+            if should_retry_same_upstream_once(&outcome)
+                && !retried_same_upstreams.contains(&item_index)
+            {
+                retried_same_upstreams.push(item_index);
+                if apply_group_attempt_outcome(
+                    state,
+                    provider,
+                    upstream,
+                    &mut result,
+                    outcome,
+                    cooldown_scope,
+                ) {
+                    return result;
+                }
+                let retry_outcome = retry_same_upstream_once(
+                    state,
+                    &method,
+                    provider,
+                    upstream,
+                    inbound_path,
+                    upstream_path_with_query,
+                    headers,
+                    body,
+                    meta,
+                    request_auth,
+                    client_gemini_api_key,
+                    response_transform,
+                    &request_detail,
+                    cooldown_scope,
+                )
+                .await;
+                if apply_group_attempt_outcome(
+                    state,
+                    provider,
+                    upstream,
+                    &mut result,
+                    retry_outcome,
+                    cooldown_scope,
+                ) {
+                    return result;
+                }
+            } else if apply_group_attempt_outcome(
                 state,
                 provider,
                 upstream,
@@ -481,6 +524,56 @@ async fn dispatch_group_upstreams(
     }
 
     result
+}
+
+fn should_retry_same_upstream_once(outcome: &AttemptOutcome) -> bool {
+    matches!(
+        outcome,
+        AttemptOutcome::Retryable {
+            retry_same_upstream_once: true,
+            ..
+        }
+    )
+}
+
+async fn retry_same_upstream_once(
+    state: &ProxyState,
+    method: &Method,
+    provider: &str,
+    upstream: &UpstreamRuntime,
+    inbound_path: &str,
+    upstream_path_with_query: &str,
+    headers: &HeaderMap,
+    body: &ReplayableBody,
+    meta: &RequestMeta,
+    request_auth: &RequestAuth,
+    client_gemini_api_key: Option<&str>,
+    response_transform: FormatTransform,
+    request_detail: &Option<RequestDetailSnapshot>,
+    cooldown_scope: &CooldownScope,
+) -> AttemptOutcome {
+    tracing::info!(
+        provider,
+        upstream = %upstream.id,
+        "retrying same upstream once after transient capacity response"
+    );
+    attempt::attempt_upstream(
+        state,
+        method.clone(),
+        provider,
+        upstream,
+        inbound_path,
+        upstream_path_with_query,
+        headers,
+        body,
+        meta,
+        request_auth,
+        client_gemini_api_key,
+        response_transform,
+        request_detail.clone(),
+        cooldown_scope,
+    )
+    .await
 }
 
 fn launch_group_attempts<'a>(

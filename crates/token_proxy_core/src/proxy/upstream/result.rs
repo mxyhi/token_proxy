@@ -94,11 +94,23 @@ pub(super) async fn handle_upstream_result(
             {
                 return AttemptOutcome::Success(response);
             }
+            let retryable_response = response
+                .extensions()
+                .get::<RetryableStreamResponse>()
+                .cloned();
+            let retry_same_upstream_once = retryable_response
+                .as_ref()
+                .is_some_and(|retryable| retryable.retry_same_upstream_once);
+            let should_cooldown = retryable_response.as_ref().map_or_else(
+                || should_cooldown_retryable_status(status),
+                |retryable| retryable.should_cooldown,
+            );
             AttemptOutcome::Retryable {
                 message: format!("Upstream responded with {}", response.status()),
                 response: Some(response),
                 is_timeout: false,
-                should_cooldown: should_cooldown_retryable_status(status),
+                should_cooldown,
+                retry_same_upstream_once,
             }
         }
         Ok(res) => {
@@ -140,6 +152,7 @@ pub(super) async fn handle_upstream_result(
                     response: Some(response),
                     is_timeout: false,
                     should_cooldown: retryable.should_cooldown,
+                    retry_same_upstream_once: retryable.retry_same_upstream_once,
                 };
             }
             update_account_cooldown_from_status(
@@ -183,6 +196,7 @@ pub(super) async fn handle_upstream_result(
                 response: None,
                 is_timeout: err.is_timeout(),
                 should_cooldown: true,
+                retry_same_upstream_once: false,
             }
         }
         Err(err) => {

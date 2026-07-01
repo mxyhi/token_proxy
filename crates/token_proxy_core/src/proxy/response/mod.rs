@@ -32,6 +32,7 @@ const IMAGE_GENERATION_MIN_NO_DATA_TIMEOUT: Duration = Duration::from_secs(300);
 pub(super) struct RetryableStreamResponse {
     pub(super) message: String,
     pub(super) should_cooldown: bool,
+    pub(super) retry_same_upstream_once: bool,
 }
 
 #[derive(Clone)]

@@ -16,6 +16,7 @@
   "common_disable": "禁用",
   "common_columns": "列",
   "common_actions": "操作",
+  "common_back": "返回",
   "common_refresh": "刷新",
   "common_reload": "Reload",
   "common_unknown": "未知",
@@ -114,6 +115,10 @@
   "upstreams_title": "上游",
   "upstreams_desc": "定义提供商池与凭据。provider 名称使用 openai、openai-response、anthropic、gemini、kiro、codex。",
   "upstreams_add": "添加上游",
+  "upstreams_add_kind_api_key": "API Key 上游",
+  "upstreams_add_kind_api_key_desc": "OpenAI / Anthropic / Gemini 等公开 API Key",
+  "upstreams_add_kind_account": "账户登录 / 导入",
+  "upstreams_add_kind_account_desc": "Kiro / Codex / xAI OAuth 账户",
   "upstreams_empty": "暂无上游。",
   "upstreams_tip": "提示：优先级按降序排序上游；同一优先级组内再应用顺序策略。",
   "upstreams_show_api_keys": "显示 API Key",
@@ -643,5 +648,5 @@
   "upstreams_account_needs_reconcile": "凭据库中未找到账户 {accountId}。请重新加载配置或重新登录以 reconcile。",
   "upstreams_account_quota_refreshed": "额度已刷新。",
   "upstreams_account_token_refreshed": "Token 已刷新。",
-  "error_upstream_account_required": "{id} 需要绑定 {provider} 账户。请使用「添加账户」，不要创建无账户的空上游。"
+  "error_upstream_account_required": "{id} 需要绑定 {provider} 账户。请使用「添加上游」→ 账户登录/导入，不要创建无账户的空上游。"
 }

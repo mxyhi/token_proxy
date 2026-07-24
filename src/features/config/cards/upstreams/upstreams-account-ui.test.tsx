@@ -143,14 +143,27 @@ describe("upstreams account UI (Phase D)", () => {
     expect(onRemove).toHaveBeenCalledWith(0);
   });
 
-  it("excludes Kiro/Codex/xAI from ordinary create provider options", async () => {
+  it("uses a single add button and routes API Key kind into create editor without account providers", async () => {
     const user = userEvent.setup();
 
     renderUpstreamsCard({
       providerOptions: ["openai", "kiro", "codex", "xai", "antigravity"],
     });
 
+    // 工具栏只保留一个「添加」入口（aria-label 仍为「添加上游」）。
+    expect(screen.getByRole("button", { name: m.upstreams_add() })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: m.upstreams_add_account() }),
+    ).not.toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: m.upstreams_add() }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", {
+        name: (accessibleName) => accessibleName.includes(m.upstreams_add_kind_api_key()),
+      }),
+    );
+
     // Upstream 编辑器使用 AlertDialog，role 为 alertdialog。
     expect(screen.getByRole("alertdialog")).toBeInTheDocument();
 
@@ -165,7 +178,7 @@ describe("upstreams account UI (Phase D)", () => {
     expect(screen.queryByRole("menuitemcheckbox", { name: "xai" })).not.toBeInTheDocument();
   });
 
-  it("opens add-account dialog and surfaces kiro login errors without deleted commands", async () => {
+  it("opens account step from unified add dialog and surfaces kiro login errors", async () => {
     const user = userEvent.setup();
     invokeMock.mockImplementation(async (command) => {
       if (command === "kiro_start_login") {
@@ -176,7 +189,12 @@ describe("upstreams account UI (Phase D)", () => {
 
     renderUpstreamsCard();
 
-    await user.click(screen.getByRole("button", { name: m.upstreams_add_account() }));
+    await user.click(screen.getByRole("button", { name: m.upstreams_add() }));
+    await user.click(
+      screen.getByRole("button", {
+        name: (accessibleName) => accessibleName.includes(m.upstreams_add_kind_account()),
+      }),
+    );
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: m.kiro_login_method_aws() }));
@@ -192,7 +210,7 @@ describe("upstreams account UI (Phase D)", () => {
     expect(commands).not.toContain("providers_delete_accounts");
   });
 
-  it("reloads config after successful kiro folder import", async () => {
+  it("reloads config after successful kiro folder import via unified add dialog", async () => {
     const user = userEvent.setup();
     const onConfigReload = vi.fn();
     openFileDialogMock.mockResolvedValue("/tmp/kiro-ide");
@@ -214,7 +232,12 @@ describe("upstreams account UI (Phase D)", () => {
 
     renderUpstreamsCard({ onConfigReload });
 
-    await user.click(screen.getByRole("button", { name: m.upstreams_add_account() }));
+    await user.click(screen.getByRole("button", { name: m.upstreams_add() }));
+    await user.click(
+      screen.getByRole("button", {
+        name: (accessibleName) => accessibleName.includes(m.upstreams_add_kind_account()),
+      }),
+    );
     await user.click(screen.getByRole("button", { name: m.kiro_login_method_import() }));
 
     await waitFor(() => {

@@ -68,7 +68,8 @@ export function UpstreamsCard({
     createDefaultColumnVisibility()
   );
   const [columnsOpen, setColumnsOpen] = useState(false);
-  const [addAccountOpen, setAddAccountOpen] = useState(false);
+  /** 统一添加弹窗：内部分流 API Key 编辑 / 账户登录导入。 */
+  const [addUpstreamOpen, setAddUpstreamOpen] = useState(false);
   const [editor, setEditor] = useState<UpstreamEditorState>({ open: false });
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>({ open: false });
   const columns = useMemo(
@@ -237,8 +238,10 @@ export function UpstreamsCard({
           apiKeyVisible={apiKeyVisible}
           showApiKeys={showApiKeys}
           onToggleApiKeys={onToggleApiKeys}
-          onAddClick={openCreateDialog}
-          onAddAccountClick={() => setAddAccountOpen(true)}
+          onAddClick={() => {
+            console.debug("[upstreams-card] open add-upstream dialog");
+            setAddUpstreamOpen(true);
+          }}
           onColumnsClick={() => setColumnsOpen(true)}
           strategy={strategy}
           onStrategyChange={onStrategyChange}
@@ -293,9 +296,15 @@ export function UpstreamsCard({
         onConfirm={confirmDelete}
       />
       <AddAccountDialog
-        open={addAccountOpen}
-        onOpenChange={setAddAccountOpen}
+        open={addUpstreamOpen}
+        onOpenChange={setAddUpstreamOpen}
         onAccountsChanged={onConfigReload}
+        onSelectApiKey={() => {
+          // 选 API Key 类型后关闭统一弹窗，进入现有上游编辑器。
+          console.debug("[upstreams-card] add-upstream kind=api_key");
+          setAddUpstreamOpen(false);
+          openCreateDialog();
+        }}
       />
     </Card>
   );

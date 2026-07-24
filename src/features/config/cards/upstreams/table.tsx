@@ -1,7 +1,7 @@
 import type { ReactElement } from "react";
 
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import { Ban, Check, Columns3, Copy, Eye, EyeOff, Pencil, Trash2 } from "lucide-react";
+import { Ban, Check, Columns3, Copy, Eye, EyeOff, Pencil, Plus, Trash2 } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,8 +38,8 @@ type UpstreamsToolbarProps = {
   strategy: ConfigForm["upstreamStrategy"];
   onToggleApiKeys: () => void;
   onStrategyChange: (value: ConfigForm["upstreamStrategy"]) => void;
+  /** 打开统一「添加上游」弹窗（API Key / 账户分流在弹窗内完成）。 */
   onAddClick: () => void;
-  onAddAccountClick: () => void;
   onColumnsClick: () => void;
 };
 
@@ -92,7 +92,6 @@ export function UpstreamsToolbar({
   onToggleApiKeys,
   onStrategyChange,
   onAddClick,
-  onAddAccountClick,
   onColumnsClick,
 }: UpstreamsToolbarProps) {
   const updateStrategy = (patch: Partial<ConfigForm["upstreamStrategy"]>) => {
@@ -105,123 +104,129 @@ export function UpstreamsToolbar({
   const showsMaxParallel = strategy.dispatchType !== "serial";
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" variant="outline" onClick={onAddClick}>
-            {m.upstreams_add()}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onAddAccountClick}
-            data-slot="upstreams-add-account"
-            aria-label={m.upstreams_add_account()}
-          >
-            {m.upstreams_add_account()}
-          </Button>
+    <div className="flex flex-col gap-2" data-slot="upstreams-toolbar">
+      {/* 左策略 / 右操作：对齐 dashboard 筛选条，label 横排避免与按钮高低错位 */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+          <div className="flex items-center gap-2">
+            <Label htmlFor="upstreams-order" className="shrink-0 text-xs text-muted-foreground">
+              {m.upstream_strategy_order_label()}
+            </Label>
+            <Select
+              value={strategy.order}
+              onValueChange={(value) => {
+                const nextOrder = toUpstreamOrderStrategy(value);
+                if (nextOrder) {
+                  updateStrategy({ order: nextOrder });
+                }
+              }}
+            >
+              <SelectTrigger id="upstreams-order" className="h-9 w-[120px]">
+                <SelectValue placeholder={m.upstream_strategy_order_placeholder()} />
+              </SelectTrigger>
+              <SelectContent>
+                {UPSTREAM_ORDER_STRATEGIES.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex items-center gap-2">
+            <Label htmlFor="upstreams-dispatch" className="shrink-0 text-xs text-muted-foreground">
+              {m.upstream_strategy_dispatch_label()}
+            </Label>
+            <Select
+              value={strategy.dispatchType}
+              onValueChange={(value) => {
+                const nextDispatchType = toUpstreamDispatchType(value);
+                if (nextDispatchType) {
+                  updateStrategy({ dispatchType: nextDispatchType });
+                }
+              }}
+            >
+              <SelectTrigger id="upstreams-dispatch" className="h-9 w-[120px]">
+                <SelectValue placeholder={m.upstream_strategy_dispatch_placeholder()} />
+              </SelectTrigger>
+              <SelectContent>
+                {UPSTREAM_DISPATCH_STRATEGIES.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {showsHedgeDelay ? (
+            <div className="flex items-center gap-2">
+              <Label
+                htmlFor="upstreams-hedge-delay"
+                className="shrink-0 text-xs text-muted-foreground"
+              >
+                {m.upstream_strategy_delay_ms_label()}
+              </Label>
+              <Input
+                id="upstreams-hedge-delay"
+                value={strategy.hedgeDelayMs}
+                onChange={(event) => updateStrategy({ hedgeDelayMs: event.target.value })}
+                placeholder="2000"
+                inputMode="numeric"
+                className="h-9 w-[104px]"
+              />
+            </div>
+          ) : null}
+          {showsMaxParallel ? (
+            <div className="flex items-center gap-2">
+              <Label
+                htmlFor="upstreams-max-parallel"
+                className="shrink-0 text-xs text-muted-foreground"
+              >
+                {m.upstream_strategy_max_parallel_label()}
+              </Label>
+              <Input
+                id="upstreams-max-parallel"
+                value={strategy.maxParallel}
+                onChange={(event) => updateStrategy({ maxParallel: event.target.value })}
+                placeholder="2"
+                inputMode="numeric"
+                className="h-9 w-[72px]"
+              />
+            </div>
+          ) : null}
+        </div>
+
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {apiKeyVisible ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onToggleApiKeys}
+              aria-label={showApiKeys ? m.upstreams_hide_api_keys() : m.upstreams_show_api_keys()}
+            >
+              {showApiKeys ? (
+                <EyeOff className="size-4" aria-hidden="true" />
+              ) : (
+                <Eye className="size-4" aria-hidden="true" />
+              )}
+            </Button>
+          ) : null}
           <Button type="button" variant="outline" onClick={onColumnsClick}>
             <Columns3 className="size-4" aria-hidden="true" />
             {m.common_columns()}
           </Button>
-        </div>
-        {apiKeyVisible ? (
           <Button
             type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={onToggleApiKeys}
-            aria-label={showApiKeys ? m.upstreams_hide_api_keys() : m.upstreams_show_api_keys()}
+            onClick={onAddClick}
+            data-slot="upstreams-add"
+            aria-label={m.upstreams_add()}
           >
-            {showApiKeys ? (
-              <EyeOff className="size-4" aria-hidden="true" />
-            ) : (
-              <Eye className="size-4" aria-hidden="true" />
-            )}
+            {/* 已在上游页，可见文案用「添加」即可；aria 保留完整名给读屏 */}
+            <Plus className="size-4" aria-hidden="true" />
+            {m.common_add()}
           </Button>
-        ) : null}
-      </div>
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="grid gap-1">
-          <Label htmlFor="upstreams-order" className="text-xs text-muted-foreground">
-            {m.upstream_strategy_order_label()}
-          </Label>
-          <Select
-            value={strategy.order}
-            onValueChange={(value) => {
-              const nextOrder = toUpstreamOrderStrategy(value);
-              if (nextOrder) {
-                updateStrategy({ order: nextOrder });
-              }
-            }}
-          >
-            <SelectTrigger id="upstreams-order" className="min-w-[180px]">
-              <SelectValue placeholder={m.upstream_strategy_order_placeholder()} />
-            </SelectTrigger>
-            <SelectContent>
-              {UPSTREAM_ORDER_STRATEGIES.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label()}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
-        <div className="grid gap-1">
-          <Label htmlFor="upstreams-dispatch" className="text-xs text-muted-foreground">
-            {m.upstream_strategy_dispatch_label()}
-          </Label>
-          <Select
-            value={strategy.dispatchType}
-            onValueChange={(value) => {
-              const nextDispatchType = toUpstreamDispatchType(value);
-              if (nextDispatchType) {
-                updateStrategy({ dispatchType: nextDispatchType });
-              }
-            }}
-          >
-            <SelectTrigger id="upstreams-dispatch" className="min-w-[180px]">
-              <SelectValue placeholder={m.upstream_strategy_dispatch_placeholder()} />
-            </SelectTrigger>
-            <SelectContent>
-              {UPSTREAM_DISPATCH_STRATEGIES.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label()}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        {showsHedgeDelay ? (
-          <div className="grid gap-1">
-            <Label htmlFor="upstreams-hedge-delay" className="text-xs text-muted-foreground">
-              {m.upstream_strategy_delay_ms_label()}
-            </Label>
-            <Input
-              id="upstreams-hedge-delay"
-              value={strategy.hedgeDelayMs}
-              onChange={(event) => updateStrategy({ hedgeDelayMs: event.target.value })}
-              placeholder="2000"
-              inputMode="numeric"
-              className="w-[120px]"
-            />
-          </div>
-        ) : null}
-        {showsMaxParallel ? (
-          <div className="grid gap-1">
-            <Label htmlFor="upstreams-max-parallel" className="text-xs text-muted-foreground">
-              {m.upstream_strategy_max_parallel_label()}
-            </Label>
-            <Input
-              id="upstreams-max-parallel"
-              value={strategy.maxParallel}
-              onChange={(event) => updateStrategy({ maxParallel: event.target.value })}
-              placeholder="2"
-              inputMode="numeric"
-              className="w-[96px]"
-            />
-          </div>
-        ) : null}
       </div>
       <p className="text-xs text-muted-foreground">{m.upstream_strategy_help()}</p>
     </div>

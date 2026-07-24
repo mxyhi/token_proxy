@@ -16,6 +16,7 @@
   "common_disable": "Disable",
   "common_columns": "Columns",
   "common_actions": "Actions",
+  "common_back": "Back",
   "common_refresh": "Refresh",
   "common_reload": "Reload",
   "common_unknown": "Unknown",
@@ -114,6 +115,10 @@
   "upstreams_title": "Upstreams",
   "upstreams_desc": "Define provider pools and credentials. Use provider names openai, openai-response, anthropic, gemini, kiro, and codex.",
   "upstreams_add": "Add Upstream",
+  "upstreams_add_kind_api_key": "API Key Upstream",
+  "upstreams_add_kind_api_key_desc": "OpenAI / Anthropic / Gemini and other public API keys",
+  "upstreams_add_kind_account": "Account login / import",
+  "upstreams_add_kind_account_desc": "Kiro / Codex / xAI OAuth accounts",
   "upstreams_empty": "No upstreams defined yet.",
   "upstreams_tip": "Tip: Priority sorts upstreams in descending order. Order applies within the same priority group.",
   "upstreams_show_api_keys": "Show API Keys",
@@ -643,5 +648,5 @@
   "upstreams_account_needs_reconcile": "Account {accountId} was not found in the credential store. Reload config or re-login to reconcile.",
   "upstreams_account_quota_refreshed": "Quota refreshed.",
   "upstreams_account_token_refreshed": "Token refreshed.",
-  "error_upstream_account_required": "{id} requires a bound {provider} account. Use Add Account instead of creating an empty account upstream."
+  "error_upstream_account_required": "{id} requires a bound {provider} account. Use Add Upstream → Account login/import instead of creating an empty account upstream."
 }

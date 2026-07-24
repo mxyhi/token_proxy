@@ -63,7 +63,7 @@ const DEFAULT_PROVIDER_OPTIONS = [
  * 合并普通 Upstream 编辑器可选 provider。
  * - 默认公开 API provider 优先
  * - 配置里已有的自定义/托管 provider 会并入（如 antigravity、legacy）
- * - Kiro/Codex/xAI 不进入普通「添加上游」选项：账户型必须走「添加账户」入口，
+ * - Kiro/Codex/xAI 不进入普通 API Key 编辑器选项：账户型走「添加上游」→ 账户登录/导入，
  *   避免生成空 account-backed draft；编辑既有账户 Upstream 时由 draft.providers 展示并锁定
  */
 export function mergeProviderOptions(values: readonly string[]) {

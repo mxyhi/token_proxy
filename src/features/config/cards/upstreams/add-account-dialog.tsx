@@ -1,10 +1,13 @@
 /**
- * Upstream 页「添加账户」弹窗：Kiro / Codex / xAI 登录与导入。
+ * Upstream 页统一「添加上游」弹窗（对标 sub2api：单入口 + 弹窗内选类型）。
+ * - kind 步：API Key 上游 / 账户登录导入
+ * - account 步：Kiro / Codex / xAI 登录与导入
  * 成功后由父级 reload config，让后端 reconcile 产出 account-backed Upstream。
  */
 import { useState } from "react";
 
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
+import { KeyRound, UserRound } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -24,8 +27,10 @@ import { XaiAddAccountPanel } from "@/features/config/cards/upstreams/xai-add-ac
 import { useXaiAccounts } from "@/features/xai/use-xai-accounts";
 import { useXaiLogin } from "@/features/xai/use-xai-login";
 import { parseError } from "@/lib/error";
+import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages.js";
 
+type AddDialogStep = "kind" | "account";
 type AddDialogProvider = "kiro" | "codex" | "xai";
 type CodexManualInputMode =
   | "login"
@@ -39,6 +44,8 @@ type AddAccountDialogProps = {
   onOpenChange: (open: boolean) => void;
   /** 登录/导入成功后刷新配置，使 account_upstreams reconcile 生效。 */
   onAccountsChanged: () => Promise<void> | void;
+  /** 用户选择 API Key 上游类型时回调（父级打开编辑器）。 */
+  onSelectApiKey: () => void;
 };
 
 function countInputLines(value: string) {
@@ -121,13 +128,16 @@ export function AddAccountDialog({
   open,
   onOpenChange,
   onAccountsChanged,
+  onSelectApiKey,
 }: AddAccountDialogProps) {
+  // 默认 kind 步；关闭弹窗后重置，避免下次打开仍停在账户面板。
+  const [step, setStep] = useState<AddDialogStep>("kind");
   const [activeProvider, setActiveProvider] = useState<AddDialogProvider>("kiro");
   const [codexMode, setCodexMode] = useState<CodexManualInputMode>("login");
   const [codexManualInput, setCodexManualInput] = useState("");
 
   const handleAccountsChanged = async () => {
-    console.debug("[upstream-add-account] accounts changed, reloading config");
+    console.debug("[upstream-add] accounts changed, reloading config");
     await Promise.resolve(onAccountsChanged());
   };
 
@@ -195,18 +205,20 @@ export function AddAccountDialog({
 
   const handleOpenChange = (nextOpen: boolean) => {
     if (!nextOpen) {
-      // 关闭时丢弃进行中的设备授权轮次，���免晚到回调污染下次打开。
+      // 关闭时丢弃进行中的设备授权轮次，避免晚到回调污染下次打开。
       kiroLogin.resetLogin();
       codexLogin.resetLogin();
       xaiLogin.resetLogin();
       setCodexMode("login");
       setCodexManualInput("");
+      setStep("kind");
+      setActiveProvider("kiro");
     }
     onOpenChange(nextOpen);
   };
 
   const runKiroLogin = async (method: KiroLoginMethod) => {
-    console.debug("[upstream-add-account] kiro login", { method });
+    console.debug("[upstream-add] kiro login", { method });
     await kiroLogin.beginLogin(method);
   };
 
@@ -216,7 +228,7 @@ export function AddAccountDialog({
       if (!directory || Array.isArray(directory)) {
         return;
       }
-      console.debug("[upstream-add-account] kiro import ide");
+      console.debug("[upstream-add] kiro import ide");
       await kiroAccounts.importIde(directory);
       toast.success(m.kiro_import_success());
       await handleAccountsChanged();
@@ -234,7 +246,7 @@ export function AddAccountDialog({
       if (!path || Array.isArray(path)) {
         return;
       }
-      console.debug("[upstream-add-account] kiro import kam");
+      console.debug("[upstream-add] kiro import kam");
       await kiroAccounts.importKam(path);
       toast.success(m.kiro_import_success());
       await handleAccountsChanged();
@@ -248,7 +260,7 @@ export function AddAccountDialog({
     clientKind: "codex" | "mobile",
   ) => {
     try {
-      console.debug("[upstream-add-account] codex import refresh tokens", {
+      console.debug("[upstream-add] codex import refresh tokens", {
         clientKind,
         lines: countInputLines(contents),
       });
@@ -262,7 +274,7 @@ export function AddAccountDialog({
 
   const importCodexText = async (contents: string) => {
     try {
-      console.debug("[upstream-add-account] codex import text", {
+      console.debug("[upstream-add] codex import text", {
         lines: countInputLines(contents),
       });
       await codexAccounts.importText(contents);
@@ -282,7 +294,7 @@ export function AddAccountDialog({
       if (!path || Array.isArray(path)) {
         return;
       }
-      console.debug("[upstream-add-account] codex import file");
+      console.debug("[upstream-add] codex import file");
       await codexAccounts.importFile(path);
       toast.success(m.codex_import_success());
       await handleAccountsChanged();
@@ -298,7 +310,7 @@ export function AddAccountDialog({
         return;
       }
       // 目录导入走 file 命令（后端按路径解析）；失败时 toast。
-      console.debug("[upstream-add-account] codex import directory path as file root");
+      console.debug("[upstream-add] codex import directory path as file root");
       await codexAccounts.importFile(directory);
       toast.success(m.codex_import_success());
       await handleAccountsChanged();
@@ -309,7 +321,7 @@ export function AddAccountDialog({
 
   const importXaiRefreshTokens = async (contents: string) => {
     try {
-      console.debug("[upstream-add-account] xai import refresh tokens", {
+      console.debug("[upstream-add] xai import refresh tokens", {
         lines: countInputLines(contents),
       });
       await xaiAccounts.importRefreshTokens(contents);
@@ -322,7 +334,7 @@ export function AddAccountDialog({
 
   const importXaiText = async (contents: string) => {
     try {
-      console.debug("[upstream-add-account] xai import text", {
+      console.debug("[upstream-add] xai import text", {
         lines: countInputLines(contents),
       });
       await xaiAccounts.importText(contents);
@@ -342,7 +354,7 @@ export function AddAccountDialog({
       if (!path || Array.isArray(path)) {
         return;
       }
-      console.debug("[upstream-add-account] xai import file");
+      console.debug("[upstream-add] xai import file");
       await xaiAccounts.importFile(path);
       toast.success(m.xai_import_success());
       await handleAccountsChanged();
@@ -357,7 +369,7 @@ export function AddAccountDialog({
       if (!directory || Array.isArray(directory)) {
         return;
       }
-      console.debug("[upstream-add-account] xai import directory path as file root");
+      console.debug("[upstream-add] xai import directory path as file root");
       await xaiAccounts.importFile(directory);
       toast.success(m.xai_import_success());
       await handleAccountsChanged();
@@ -388,40 +400,110 @@ export function AddAccountDialog({
 
   return (
     <Dialog modal open={open} onOpenChange={handleOpenChange}>
-      <DialogContent data-slot="upstream-add-account-dialog" aria-describedby={undefined}>
+      <DialogContent data-slot="upstream-add-dialog" aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>{m.upstreams_add_account()}</DialogTitle>
+          <DialogTitle>{m.upstreams_add()}</DialogTitle>
         </DialogHeader>
         <DialogBody className="space-y-4">
-          <div
-            data-slot="upstream-add-provider-switch"
-            className="inline-flex rounded-lg border border-border/60 bg-muted/30 p-1"
-          >
-            <Button
-              type="button"
-              size="sm"
-              variant={activeProvider === "kiro" ? "default" : "ghost"}
-              onClick={() => setActiveProvider("kiro")}
+          {step === "kind" ? (
+            <div
+              data-slot="upstream-add-kind"
+              className="grid grid-cols-1 gap-3 sm:grid-cols-2"
             >
-              {m.providers_kiro_title()}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant={activeProvider === "codex" ? "default" : "ghost"}
-              onClick={() => setActiveProvider("codex")}
-            >
-              {m.providers_codex_title()}
-            </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant={activeProvider === "xai" ? "default" : "ghost"}
-              onClick={() => setActiveProvider("xai")}
-            >
-              {m.providers_xai_title()}
-            </Button>
-          </div>
+              {/* 对标 sub2api：类型卡片在同一弹窗内选择，不拆两个工具栏按钮。 */}
+              <button
+                type="button"
+                data-slot="upstream-add-kind-api-key"
+                className={cn(
+                  "flex items-start gap-3 rounded-lg border-2 border-border/70 bg-background p-3 text-left transition-colors",
+                  "hover:border-primary/50 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+                onClick={() => {
+                  console.debug("[upstream-add] kind=api_key");
+                  onSelectApiKey();
+                }}
+              >
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                  <KeyRound className="size-4" aria-hidden="true" />
+                </span>
+                <span className="min-w-0 space-y-1">
+                  <span className="block text-sm font-medium text-foreground">
+                    {m.upstreams_add_kind_api_key()}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    {m.upstreams_add_kind_api_key_desc()}
+                  </span>
+                </span>
+              </button>
+              <button
+                type="button"
+                data-slot="upstream-add-kind-account"
+                className={cn(
+                  "flex items-start gap-3 rounded-lg border-2 border-border/70 bg-background p-3 text-left transition-colors",
+                  "hover:border-primary/50 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                )}
+                onClick={() => {
+                  console.debug("[upstream-add] kind=account");
+                  setStep("account");
+                }}
+              >
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground">
+                  <UserRound className="size-4" aria-hidden="true" />
+                </span>
+                <span className="min-w-0 space-y-1">
+                  <span className="block text-sm font-medium text-foreground">
+                    {m.upstreams_add_kind_account()}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    {m.upstreams_add_kind_account_desc()}
+                  </span>
+                </span>
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    console.debug("[upstream-add] back to kind");
+                    setStep("kind");
+                  }}
+                >
+                  {m.common_back()}
+                </Button>
+                <div
+                  data-slot="upstream-add-provider-switch"
+                  className="inline-flex rounded-lg border border-border/60 bg-muted/30 p-1"
+                >
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={activeProvider === "kiro" ? "default" : "ghost"}
+                    onClick={() => setActiveProvider("kiro")}
+                  >
+                    {m.providers_kiro_title()}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={activeProvider === "codex" ? "default" : "ghost"}
+                    onClick={() => setActiveProvider("codex")}
+                  >
+                    {m.providers_codex_title()}
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={activeProvider === "xai" ? "default" : "ghost"}
+                    onClick={() => setActiveProvider("xai")}
+                  >
+                    {m.providers_xai_title()}
+                  </Button>
+                </div>
+              </div>
 
           {activeProvider === "kiro" ? (
             <div
@@ -614,6 +696,8 @@ export function AddAccountDialog({
               onImportDirectory={importXaiDirectory}
             />
           ) : null}
+            </>
+          )}
         </DialogBody>
       </DialogContent>
     </Dialog>

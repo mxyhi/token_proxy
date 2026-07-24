@@ -14,3 +14,4 @@ url = "2.5.8"
 
 [dev-dependencies]
 token_proxy_account_xai = { path = "../token_proxy_account_xai" }
+tokio = { version = "1.53", features = ["macros", "rt", "rt-multi-thread", "fs"] }

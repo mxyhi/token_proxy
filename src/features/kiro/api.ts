@@ -28,10 +28,6 @@ export async function importKiroKamTokens(path: string) {
   return await invoke<KiroAccountSummary[]>("kiro_import_kam", { path });
 }
 
-export async function logoutKiroAccount(accountId: string) {
-  await invoke<void>("kiro_logout", { accountId });
-}
-
 export async function handleKiroCallback(url: string) {
   await invoke<void>("kiro_handle_callback", { url });
 }
@@ -48,25 +44,4 @@ export async function refreshKiroQuotaCache(accountIds?: string[]) {
 
 export async function refreshKiroQuotaNow(accountId: string) {
   return await invoke<void>("kiro_refresh_quota_now", { accountId });
-}
-
-export async function setKiroStatus(accountId: string, status: "active" | "disabled") {
-  return await invoke<KiroAccountSummary>("kiro_set_status", {
-    accountId,
-    status,
-  });
-}
-
-export async function setKiroProxyUrl(accountId: string, proxyUrl: string | null) {
-  return await invoke<KiroAccountSummary>("kiro_set_proxy_url", {
-    accountId,
-    proxyUrl,
-  });
-}
-
-export async function setKiroPriority(accountId: string, priority: number) {
-  return await invoke<KiroAccountSummary>("kiro_set_priority", {
-    accountId,
-    priority,
-  });
 }

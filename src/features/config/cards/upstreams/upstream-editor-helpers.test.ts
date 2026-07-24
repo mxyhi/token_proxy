@@ -4,7 +4,7 @@ import { createEmptyUpstream } from "@/features/config/form";
 import {
   coerceProviderSelection,
   isAccountBackedProviderSet,
-  isManagedAccountBackedUpstream,
+  isAccountCredentialUpstream,
   resolveUpstreamIdForProviderChange,
 } from "@/features/config/cards/upstreams/upstream-editor-helpers";
 
@@ -110,15 +110,24 @@ describe("upstreams/upstream-editor-helpers", () => {
     expect(coerceProviderSelection(["openai", "xai"])).toEqual(["xai"]);
   });
 
-  it("keeps existing managed providers locked but allows custom xai upstreams", () => {
-    const managedXai = createEmptyUpstream();
-    managedXai.id = "xai-default";
-    managedXai.providers = ["xai"];
-    const customXai = { ...managedXai, id: "xai-custom" };
-    const customKiro = { ...managedXai, id: "kiro-custom", providers: ["kiro"] };
+  it("marks all account credential upstreams (copy disabled, delete allowed)", () => {
+    const xaiDefault = createEmptyUpstream();
+    xaiDefault.id = "xai-default";
+    xaiDefault.providers = ["xai"];
+    xaiDefault.accountId = "xai-1";
+    const customXai = { ...xaiDefault, id: "xai-custom", accountId: "xai-2" };
+    const customKiro = {
+      ...xaiDefault,
+      id: "kiro-custom",
+      providers: ["kiro"] as string[],
+      accountId: "kiro-1",
+    };
+    const openai = createEmptyUpstream();
+    openai.providers = ["openai"];
 
-    expect(isManagedAccountBackedUpstream(managedXai)).toBe(true);
-    expect(isManagedAccountBackedUpstream(customXai)).toBe(false);
-    expect(isManagedAccountBackedUpstream(customKiro)).toBe(true);
+    expect(isAccountCredentialUpstream(xaiDefault)).toBe(true);
+    expect(isAccountCredentialUpstream(customXai)).toBe(true);
+    expect(isAccountCredentialUpstream(customKiro)).toBe(true);
+    expect(isAccountCredentialUpstream(openai)).toBe(false);
   });
 });

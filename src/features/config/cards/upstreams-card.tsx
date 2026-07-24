@@ -11,12 +11,14 @@ import {
   coerceProviderSelection,
   createCopiedUpstreamId,
   isAccountBackedProviderSet,
-  isManagedAccountBackedUpstream,
+  isAccountCredentialUpstream,
+  isAccountProviderKind,
   normalizeProviders,
   pruneConvertFromMap,
   providersEqual,
   resolveUpstreamIdForProviderChange,
 } from "@/features/config/cards/upstreams/upstream-editor-helpers";
+import { AddAccountDialog } from "@/features/config/cards/upstreams/add-account-dialog";
 import { ColumnsDialog } from "@/features/config/cards/upstreams/columns-dialog";
 import { DeleteUpstreamDialog } from "@/features/config/cards/upstreams/delete-dialog";
 import { UpstreamEditorDialog } from "@/features/config/cards/upstreams/editor-dialog";
@@ -41,6 +43,8 @@ type UpstreamsCardProps = {
   onAdd: (upstream: UpstreamForm) => void;
   onRemove: (index: number) => void;
   onChange: (index: number, patch: Partial<UpstreamForm>) => void;
+  /** 登录/导入账户后 reload config，使后端 reconcile 写入 account Upstream。 */
+  onConfigReload: () => void;
 };
 
 export function UpstreamsCard({
@@ -54,6 +58,7 @@ export function UpstreamsCard({
   onAdd,
   onRemove,
   onChange,
+  onConfigReload,
 }: UpstreamsCardProps) {
   const mergedProviderOptions = useMemo(
     () => mergeProviderOptions(providerOptions),
@@ -63,6 +68,7 @@ export function UpstreamsCard({
     createDefaultColumnVisibility()
   );
   const [columnsOpen, setColumnsOpen] = useState(false);
+  const [addAccountOpen, setAddAccountOpen] = useState(false);
   const [editor, setEditor] = useState<UpstreamEditorState>({ open: false });
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>({ open: false });
   const columns = useMemo(
@@ -70,7 +76,8 @@ export function UpstreamsCard({
     [columnVisibility]
   );
   const apiKeyVisible = columnVisibility.apiKeys;
-  // 更新 draft，处理 provider 变化时的自动逻辑
+
+  // 更新 draft：provider 变化时收敛 account 字段 / openai 专属开关。
   const updateDraft = useCallback(
     (patch: Partial<UpstreamForm>) => {
       setEditor((prev) => {
@@ -86,18 +93,13 @@ export function UpstreamsCard({
           patch.providers !== undefined &&
           !providersEqual(nextProviders, currentProviders);
 
-        // 如果 provider 变化，处理 ID / provider 专属字段的自动逻辑：
-        // - 新增：根据 provider 自动生成 ID
-        // - 编辑：保持现有 ID，避免统计/引用被拆分
         if (providersChanged) {
-          // openai-response 专属开关：切换到其它 provider 时清零，避免把无效字段写进配置。
           let filterPromptCacheRetention = prev.draft.filterPromptCacheRetention;
           let filterSafetyIdentifier = prev.draft.filterSafetyIdentifier;
           let useChatCompletionsForResponses = prev.draft.useChatCompletionsForResponses;
           let rewriteDeveloperRoleToSystem = prev.draft.rewriteDeveloperRoleToSystem;
-          let xaiAccountId = prev.draft.xaiAccountId;
+          let accountId = prev.draft.accountId;
           let baseUrl = patch.baseUrl ?? prev.draft.baseUrl;
-          let proxyUrl = patch.proxyUrl ?? prev.draft.proxyUrl;
           let convertFromMap = patch.convertFromMap ?? prev.draft.convertFromMap;
 
           if (!nextProviders.includes("openai-response")) {
@@ -108,12 +110,17 @@ export function UpstreamsCard({
           if (!nextProviders.some((provider) => provider === "openai" || provider === "openai-response")) {
             rewriteDeveloperRoleToSystem = false;
           }
-          if (!nextProviders.includes("xai")) {
-            xaiAccountId = "";
+          // 离开账户型 provider 时清空 accountId；进入账户型时清空 baseUrl/apiKeys。
+          const nextAccountProvider = nextProviders[0];
+          if (
+            nextProviders.length !== 1 ||
+            !nextAccountProvider ||
+            !isAccountProviderKind(nextAccountProvider)
+          ) {
+            accountId = "";
           }
           if (isAccountBackedProviderSet(nextProviders)) {
             baseUrl = "";
-            proxyUrl = "";
             patch.apiKeys = "";
           }
           if (patch.filterPromptCacheRetention !== undefined) {
@@ -127,6 +134,9 @@ export function UpstreamsCard({
           }
           if (patch.rewriteDeveloperRoleToSystem !== undefined) {
             rewriteDeveloperRoleToSystem = patch.rewriteDeveloperRoleToSystem;
+          }
+          if (patch.accountId !== undefined) {
+            accountId = patch.accountId;
           }
 
           convertFromMap = pruneConvertFromMap(convertFromMap, nextProviders);
@@ -152,8 +162,7 @@ export function UpstreamsCard({
               filterSafetyIdentifier,
               useChatCompletionsForResponses,
               rewriteDeveloperRoleToSystem,
-              xaiAccountId,
-              proxyUrl,
+              accountId,
               convertFromMap,
             },
           };
@@ -182,7 +191,8 @@ export function UpstreamsCard({
 
   const openCopyDialog = (index: number) => {
     const upstream = upstreams[index];
-    if (!upstream) {
+    if (!upstream || isAccountCredentialUpstream(upstream)) {
+      // 账户型禁止复制同 credential。
       return;
     }
     const nextId = createCopiedUpstreamId(upstream.id, upstreams);
@@ -210,9 +220,15 @@ export function UpstreamsCard({
     if (!deleteDialog.open) {
       return;
     }
+    console.debug("[upstreams-card] delete upstream", { index: deleteDialog.index });
     onRemove(deleteDialog.index);
     setDeleteDialog({ open: false });
   };
+
+  const deleteUpstream =
+    deleteDialog.open && deleteDialog.index >= 0
+      ? upstreams[deleteDialog.index]
+      : undefined;
 
   return (
     <Card data-slot="upstreams-card">
@@ -222,6 +238,7 @@ export function UpstreamsCard({
           showApiKeys={showApiKeys}
           onToggleApiKeys={onToggleApiKeys}
           onAddClick={openCreateDialog}
+          onAddAccountClick={() => setAddAccountOpen(true)}
           onColumnsClick={() => setColumnsOpen(true)}
           strategy={strategy}
           onStrategyChange={onStrategyChange}
@@ -232,8 +249,8 @@ export function UpstreamsCard({
             columns={columns}
             showApiKeys={showApiKeys}
             disableDelete={false}
-            isCopyDisabled={isManagedAccountBackedUpstream}
-            isDeleteDisabled={isManagedAccountBackedUpstream}
+            isCopyDisabled={isAccountCredentialUpstream}
+            isDeleteDisabled={() => false}
             onEdit={openEditDialog}
             onCopy={openCopyDialog}
             onToggleEnabled={(index) => {
@@ -271,8 +288,14 @@ export function UpstreamsCard({
       />
       <DeleteUpstreamDialog
         dialog={deleteDialog}
+        accountBacked={deleteUpstream ? isAccountCredentialUpstream(deleteUpstream) : false}
         onOpenChange={(open) => !open && setDeleteDialog({ open: false })}
         onConfirm={confirmDelete}
+      />
+      <AddAccountDialog
+        open={addAccountOpen}
+        onOpenChange={setAddAccountOpen}
+        onAccountsChanged={onConfigReload}
       />
     </Card>
   );

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AccountCredentialPanel } from "@/features/config/cards/upstreams/account-credential-panel";
 import { AvailableModelsEditor } from "@/features/config/cards/upstreams/available-models-editor";
 import { ConvertFromMapEditor } from "@/features/config/cards/upstreams/convert-from-map-editor";
 import {
@@ -22,10 +23,12 @@ import {
   ModelMappingsEditor,
 } from "@/features/config/cards/upstreams/editor-fields";
 import { ProviderMultiSelect } from "@/features/config/cards/upstreams/provider-multi-select";
-import { XaiAccountSelect } from "@/features/config/cards/upstreams/xai-account-select";
-import { isAccountBackedProviderSet } from "@/features/config/cards/upstreams/upstream-editor-helpers";
+import {
+  isAccountBackedProviderSet,
+  isAccountIdentityLocked,
+  isAccountProviderKind,
+} from "@/features/config/cards/upstreams/upstream-editor-helpers";
 import { createModelMapping } from "@/features/config/form";
-import { useXaiAccounts } from "@/features/xai/use-xai-accounts";
 import type {
   HeaderOverrideForm,
   KiroPreferredEndpoint,
@@ -46,16 +49,6 @@ const KIRO_ENDPOINT_OPTIONS: ReadonlyArray<{
 
 function isKiroPreferredEndpoint(value: string): value is KiroPreferredEndpoint {
   return value === "ide" || value === "cli";
-}
-
-function isLockedAccountBackedUpstream(draft: UpstreamForm) {
-  const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
-  return (
-    providers.length === 1 &&
-    ((providers[0] === "kiro" && draft.id.trim() === "kiro-default") ||
-      (providers[0] === "codex" && draft.id.trim() === "codex-default") ||
-      (providers[0] === "xai" && draft.id.trim() === "xai-default"))
-  );
 }
 
 export type UpstreamEditorFieldsProps = {
@@ -101,99 +94,99 @@ function UpstreamConnectionFields({
   onChangeDraft,
 }: UpstreamConnectionFieldsProps) {
   const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
-  const isAccountBackedProvider = isAccountBackedProviderSet(providers);
+  const isAccountBacked = isAccountBackedProviderSet(providers);
   const isKiro = providers.includes("kiro");
-  const isXai = providers.includes("xai");
-  const isLocked = isLockedAccountBackedUpstream(draft);
-  const xaiAccounts = useXaiAccounts({ autoLoad: isXai });
+  const identityLocked = isAccountIdentityLocked(draft);
+  // 编辑既有账户 Upstream 时，mergeProviderOptions 已排除 Kiro/Codex/xAI；
+  // 将当前 draft.providers 并回选项，保证展示与锁定身份一致。
+  const editorProviderOptions = (() => {
+    const seen = new Set(providerOptions);
+    const extras = providers.filter((provider) => !seen.has(provider));
+    return extras.length ? [...providerOptions, ...extras] : providerOptions;
+  })();
   const kiroEndpointValue = draft.preferredEndpoint.trim()
     ? draft.preferredEndpoint
     : KIRO_ENDPOINT_INHERIT;
 
   return (
-    <div className="grid grid-cols-[minmax(7rem,auto)_1fr] items-center gap-x-4 gap-y-4">
-      <EditorField label={m.field_provider()} tooltip={m.field_provider_tip()}>
-        <ProviderMultiSelect
-          providerOptions={providerOptions}
-          value={draft.providers}
-          disabled={isLocked}
-          onChange={(next) => onChangeDraft({ providers: next })}
-        />
-      </EditorField>
-
-      {isXai ? (
-        <XaiAccountSelect
-          accountId={draft.xaiAccountId}
-          accounts={xaiAccounts.accounts}
-          loading={xaiAccounts.loading}
-          error={xaiAccounts.error}
-          onRefresh={() => void xaiAccounts.refresh()}
-          onSelect={(xaiAccountId) => onChangeDraft({ xaiAccountId })}
-        />
-      ) : null}
-
-      {isKiro ? (
-        <EditorField
-          label={m.field_kiro_preferred_endpoint()}
-          tooltip={m.field_kiro_preferred_endpoint_tip()}
-          htmlFor="upstream-editor-kiro-endpoint"
-        >
-          <Select
-            value={kiroEndpointValue}
-            onValueChange={(value) => {
-              if (value === KIRO_ENDPOINT_INHERIT) {
-                onChangeDraft({ preferredEndpoint: "" });
-                return;
-              }
-              if (isKiroPreferredEndpoint(value)) {
-                onChangeDraft({ preferredEndpoint: value });
-              }
-            }}
-          >
-            <SelectTrigger id="upstream-editor-kiro-endpoint">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {KIRO_ENDPOINT_OPTIONS.map((option) => (
-                <SelectItem key={option.value} value={option.value}>
-                  {option.label()}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+    <div className="space-y-4">
+      <div className="grid grid-cols-[minmax(7rem,auto)_1fr] items-center gap-x-4 gap-y-4">
+        <EditorField label={m.field_provider()} tooltip={m.field_provider_tip()}>
+          <ProviderMultiSelect
+            providerOptions={editorProviderOptions}
+            value={draft.providers}
+            disabled={identityLocked}
+            onChange={(next) => onChangeDraft({ providers: next })}
+          />
         </EditorField>
-      ) : null}
 
-      {isAccountBackedProvider ? null : (
-        <>
+        {isKiro ? (
           <EditorField
-            label={m.field_base_url()}
-            tooltip={m.field_base_url_tip()}
-            htmlFor="upstream-editor-baseUrl"
+            label={m.field_kiro_preferred_endpoint()}
+            tooltip={m.field_kiro_preferred_endpoint_tip()}
+            htmlFor="upstream-editor-kiro-endpoint"
           >
-            <Input
-              id="upstream-editor-baseUrl"
-              value={draft.baseUrl}
-              onChange={(event) => onChangeDraft({ baseUrl: event.target.value })}
-              placeholder="https://api.openai.com"
-            />
+            <Select
+              value={kiroEndpointValue}
+              onValueChange={(value) => {
+                if (value === KIRO_ENDPOINT_INHERIT) {
+                  onChangeDraft({ preferredEndpoint: "" });
+                  return;
+                }
+                if (isKiroPreferredEndpoint(value)) {
+                  onChangeDraft({ preferredEndpoint: value });
+                }
+              }}
+            >
+              <SelectTrigger id="upstream-editor-kiro-endpoint">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {KIRO_ENDPOINT_OPTIONS.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    {option.label()}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </EditorField>
-          <EditorField
-            label={m.field_api_key()}
-            tooltip={m.field_api_key_tip()}
-            htmlFor="upstream-editor-apiKeys"
-          >
-            <PasswordInput
-              id="upstream-editor-apiKeys"
-              visible={showApiKeys}
-              onVisibilityChange={onToggleApiKeys}
-              value={draft.apiKeys}
-              onChange={(event) => onChangeDraft({ apiKeys: event.target.value })}
-              placeholder={m.common_optional()}
-            />
-          </EditorField>
-        </>
-      )}
+        ) : null}
+
+        {isAccountBacked ? null : (
+          <>
+            <EditorField
+              label={m.field_base_url()}
+              tooltip={m.field_base_url_tip()}
+              htmlFor="upstream-editor-baseUrl"
+            >
+              <Input
+                id="upstream-editor-baseUrl"
+                value={draft.baseUrl}
+                onChange={(event) => onChangeDraft({ baseUrl: event.target.value })}
+                placeholder="https://api.openai.com"
+              />
+            </EditorField>
+            <EditorField
+              label={m.field_api_key()}
+              tooltip={m.field_api_key_tip()}
+              htmlFor="upstream-editor-apiKeys"
+            >
+              <PasswordInput
+                id="upstream-editor-apiKeys"
+                visible={showApiKeys}
+                onVisibilityChange={onToggleApiKeys}
+                value={draft.apiKeys}
+                onChange={(event) => onChangeDraft({ apiKeys: event.target.value })}
+                placeholder={m.common_optional()}
+              />
+            </EditorField>
+          </>
+        )}
+      </div>
+
+      {providers.length === 1 && providers[0] && isAccountProviderKind(providers[0]) ? (
+        <AccountCredentialPanel draft={draft} />
+      ) : null}
     </div>
   );
 }
@@ -393,9 +386,7 @@ function UpstreamAdvancedFields({
   appProxyUrl,
   onChangeDraft,
 }: UpstreamAdvancedFieldsProps) {
-  const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
-  const isAccountBackedProvider = isAccountBackedProviderSet(providers);
-  const isLocked = isLockedAccountBackedUpstream(draft);
+  const identityLocked = isAccountIdentityLocked(draft);
   const canUseAppProxy = !!appProxyUrl.trim();
 
   return (
@@ -417,39 +408,37 @@ function UpstreamAdvancedFields({
           <Input
             id="upstream-editor-id"
             value={draft.id}
-            disabled={isLocked}
+            disabled={identityLocked}
             onChange={(event) => onChangeDraft({ id: event.target.value })}
             placeholder="openai-default"
           />
         </EditorField>
 
-        {isAccountBackedProvider ? null : (
-          <EditorField
-            label={m.field_proxy_url()}
-            tooltip={m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
-            htmlFor="upstream-editor-proxyUrl"
-          >
-            <div className="flex items-center gap-2">
-              <Input
-                id="upstream-editor-proxyUrl"
-                value={draft.proxyUrl}
-                onChange={(event) => onChangeDraft({ proxyUrl: event.target.value })}
-                placeholder="http://127.0.0.1:7890"
-                className="min-w-0 flex-1"
-              />
-              {canUseAppProxy ? (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => onChangeDraft({ proxyUrl: "$app_proxy_url" })}
-                >
-                  {m.upstreams_proxy_use_app()}
-                </Button>
-              ) : null}
-            </div>
-          </EditorField>
-        )}
+        <EditorField
+          label={m.field_proxy_url()}
+          tooltip={m.upstreams_proxy_tip({ placeholder: "$app_proxy_url" })}
+          htmlFor="upstream-editor-proxyUrl"
+        >
+          <div className="flex items-center gap-2">
+            <Input
+              id="upstream-editor-proxyUrl"
+              value={draft.proxyUrl}
+              onChange={(event) => onChangeDraft({ proxyUrl: event.target.value })}
+              placeholder="http://127.0.0.1:7890"
+              className="min-w-0 flex-1"
+            />
+            {canUseAppProxy ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => onChangeDraft({ proxyUrl: "$app_proxy_url" })}
+              >
+                {m.upstreams_proxy_use_app()}
+              </Button>
+            ) : null}
+          </div>
+        </EditorField>
 
         <EditorField
           label={m.field_priority()}

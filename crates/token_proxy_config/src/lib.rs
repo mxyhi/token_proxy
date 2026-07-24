@@ -21,11 +21,11 @@ pub use jsonc::sanitize_jsonc;
 pub use model_mapping::ModelMappingRules;
 pub use types::StaticApiKeyHeaders;
 pub use types::{
-    ConfigResponse, HeaderOverride, InboundApiFormat, InboundApiFormatMask, KiroPreferredEndpoint,
-    ProviderUpstreams, ProxyConfig, ProxyConfigFile, TrayTokenRateConfig, TrayTokenRateFormat,
-    UpstreamConfig, UpstreamDispatchRuntime, UpstreamDispatchStrategy, UpstreamGroup,
-    UpstreamOrderStrategy, UpstreamOverrides, UpstreamRuntime, UpstreamStrategy,
-    UpstreamStrategyRuntime,
+    AccountProvider, ConfigResponse, HeaderOverride, InboundApiFormat, InboundApiFormatMask,
+    KiroPreferredEndpoint, ProviderUpstreams, ProxyConfig, ProxyConfigFile, TrayTokenRateConfig,
+    TrayTokenRateFormat, UpstreamConfig, UpstreamCredential, UpstreamDispatchRuntime,
+    UpstreamDispatchStrategy, UpstreamGroup, UpstreamOrderStrategy, UpstreamOverrides,
+    UpstreamRuntime, UpstreamStrategy, UpstreamStrategyRuntime,
 };
 
 /// Global tracing level persisted in the application config.

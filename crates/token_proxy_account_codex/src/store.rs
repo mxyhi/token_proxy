@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 use serde::Deserialize;
 use serde_json::Value;
 use time::{Duration, OffsetDateTime};
-use tokio::sync::{Mutex, RwLock};
+#[cfg(any(test, feature = "test-support"))]
+use tokio::sync::Notify;
+use tokio::sync::{Mutex, MutexGuard, RwLock};
 
 use crate::persistence as provider_accounts;
 use token_proxy_account_store::app_proxy::AppProxyState;
@@ -27,12 +29,73 @@ pub struct CodexAccountStore {
     quota_refreshing: Mutex<HashSet<String>>,
     token_refreshing: StdMutex<HashSet<String>>,
     agent_task_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Provider 级 mutation gate：所有持久化写、cache 更新、snapshot/restore 共享。
+    provider_mutation: Mutex<()>,
+    /// 测试探针：即将 acquire provider_mutation 时通知（不含 secret）。
+    #[cfg(any(test, feature = "test-support"))]
+    gate_probe: StdMutex<Option<Arc<ProviderGateProbe>>>,
     #[cfg(any(test, feature = "test-support"))]
     token_url_override: RwLock<Option<String>>,
     #[cfg(any(test, feature = "test-support"))]
     agent_auth_url_override: RwLock<Option<String>>,
     #[cfg(any(test, feature = "test-support"))]
     agent_jwks_url_override: RwLock<Option<String>>,
+}
+
+/// provider gate 测试探针：about_to_lock 在阻塞前，acquired 在拿到锁后。
+#[cfg(any(test, feature = "test-support"))]
+pub struct ProviderGateProbe {
+    pub about_to_lock: Notify,
+    pub acquired: Notify,
+}
+
+/// Provider import/restore 事务会话：持有 `provider_mutation` 直至 drop。
+/// 不暴露裸 MutexGuard；事务内只走 unlocked 路径，避免 Tokio Mutex 自重入。
+pub struct CodexProviderMutation<'a> {
+    store: &'a CodexAccountStore,
+    _gate: MutexGuard<'a, ()>,
+}
+
+impl Drop for CodexProviderMutation<'_> {
+    fn drop(&mut self) {
+        tracing::debug!("codex provider mutation session end");
+    }
+}
+
+impl CodexProviderMutation<'_> {
+    /// 已持 gate：全量快照（含 secret，仅内存短时持有，禁止日志）。
+    pub async fn snapshot_all_records(&self) -> Result<HashMap<String, CodexTokenRecord>, String> {
+        self.store.snapshot_all_records_unlocked().await
+    }
+
+    /// 已持 gate：SQLite 事务全量恢复后替换 cache。
+    pub async fn restore_all_records(
+        &self,
+        snapshot: HashMap<String, CodexTokenRecord>,
+    ) -> Result<(), String> {
+        self.store.restore_all_records_unlocked(snapshot).await
+    }
+
+    /// 已持 gate：文件/目录导入。
+    pub async fn import_file(&self, path: PathBuf) -> Result<Vec<CodexAccountSummary>, String> {
+        self.store.import_file_unlocked(path).await
+    }
+
+    /// 已持 gate：文本导入。
+    pub async fn import_text(&self, contents: &str) -> Result<Vec<CodexAccountSummary>, String> {
+        self.store.import_text_unlocked(contents).await
+    }
+
+    /// 已持 gate：refresh token 导入（含网络 refresh）。
+    pub async fn import_refresh_tokens(
+        &self,
+        contents: &str,
+        client: CodexRefreshTokenClient,
+    ) -> Result<Vec<CodexAccountSummary>, String> {
+        self.store
+            .import_refresh_tokens_unlocked(contents, client)
+            .await
+    }
 }
 
 const CODEX_TOKEN_REFRESH_WINDOW: Duration = Duration::minutes(15);
@@ -61,6 +124,9 @@ impl CodexAccountStore {
             quota_refreshing: Mutex::new(HashSet::new()),
             token_refreshing: StdMutex::new(HashSet::new()),
             agent_task_locks: Mutex::new(HashMap::new()),
+            provider_mutation: Mutex::new(()),
+            #[cfg(any(test, feature = "test-support"))]
+            gate_probe: StdMutex::new(None),
             #[cfg(any(test, feature = "test-support"))]
             token_url_override: RwLock::new(None),
             #[cfg(any(test, feature = "test-support"))]
@@ -70,6 +136,57 @@ impl CodexAccountStore {
         })
     }
 
+    /// 开启 provider mutation 事务；session 存活期间独占 provider_mutation。
+    pub async fn begin_provider_mutation(&self) -> CodexProviderMutation<'_> {
+        tracing::debug!("codex provider mutation session begin");
+        let _gate = self.acquire_provider_mutation().await;
+        CodexProviderMutation { store: self, _gate }
+    }
+
+    /// 统一 acquire：外部写路径自动取 gate；测试探针在阻塞前/获锁后通知。
+    async fn acquire_provider_mutation(&self) -> MutexGuard<'_, ()> {
+        #[cfg(any(test, feature = "test-support"))]
+        self.notify_about_to_acquire_provider_gate();
+        let guard = self.provider_mutation.lock().await;
+        #[cfg(any(test, feature = "test-support"))]
+        self.notify_provider_gate_acquired();
+        guard
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn notify_about_to_acquire_provider_gate(&self) {
+        if let Ok(guard) = self.gate_probe.lock() {
+            if let Some(probe) = guard.as_ref() {
+                probe.about_to_lock.notify_one();
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn notify_provider_gate_acquired(&self) {
+        if let Ok(guard) = self.gate_probe.lock() {
+            if let Some(probe) = guard.as_ref() {
+                probe.acquired.notify_one();
+            }
+        }
+    }
+
+    /// 安装 gate 探针；返回 Arc 供测试 wait about_to_lock / acquired。
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn install_provider_gate_probe(&self) -> Arc<ProviderGateProbe> {
+        let probe = Arc::new(ProviderGateProbe {
+            about_to_lock: Notify::new(),
+            acquired: Notify::new(),
+        });
+        *self.gate_probe.lock().expect("codex gate probe lock") = Some(Arc::clone(&probe));
+        probe
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn clear_provider_gate_probe(&self) {
+        *self.gate_probe.lock().expect("codex gate probe lock") = None;
+    }
+
     pub async fn list_accounts(&self) -> Result<Vec<CodexAccountSummary>, String> {
         self.refresh_cache().await?;
         let cache = self.cache.read().await;
@@ -77,68 +194,18 @@ impl CodexAccountStore {
             .iter()
             .map(|(account_id, record)| account_summary(account_id.clone(), record))
             .collect();
-        items.sort_by(|left, right| {
-            right
-                .priority
-                .cmp(&left.priority)
-                .then_with(|| left.account_id.cmp(&right.account_id))
-        });
+        items.sort_by(|left, right| left.account_id.cmp(&right.account_id));
         Ok(items)
     }
 
     pub async fn import_file(&self, path: PathBuf) -> Result<Vec<CodexAccountSummary>, String> {
-        if path.as_os_str().is_empty() {
-            return Err("Import path is required.".to_string());
-        }
-        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            return Err("Selected import path not found.".to_string());
-        }
-        let mut imported = Vec::new();
-        let metadata = tokio::fs::metadata(&path)
-            .await
-            .map_err(|err| format!("Failed to read import path metadata: {err}"))?;
-        let candidate_files = if metadata.is_dir() {
-            collect_json_files(&path).await?
-        } else {
-            vec![path.clone()]
-        };
-
-        for file_path in candidate_files {
-            let contents = match tokio::fs::read_to_string(&file_path).await {
-                Ok(contents) => contents,
-                Err(err) if metadata.is_dir() => {
-                    let _ = err;
-                    continue;
-                }
-                Err(err) => return Err(format!("Failed to read JSON file: {err}")),
-            };
-            let records = match self.parse_import_records(&contents).await {
-                Ok(records) => records,
-                Err(err) if metadata.is_dir() => {
-                    let _ = err;
-                    continue;
-                }
-                Err(err) => return Err(err),
-            };
-            for record in records {
-                if let Ok(summary) = self.save_new_account(record).await {
-                    imported.push(summary);
-                }
-            }
-        }
-        if imported.is_empty() {
-            return Err(if metadata.is_dir() {
-                "No valid Codex accounts found in selected directory.".to_string()
-            } else {
-                "No valid Codex accounts found in JSON file.".to_string()
-            });
-        }
-        Ok(imported)
+        let _gate = self.acquire_provider_mutation().await;
+        self.import_file_unlocked(path).await
     }
 
     pub async fn import_text(&self, contents: &str) -> Result<Vec<CodexAccountSummary>, String> {
-        let records = self.parse_import_records(contents).await?;
-        self.import_records(records, "text").await
+        let _gate = self.acquire_provider_mutation().await;
+        self.import_text_unlocked(contents).await
     }
 
     async fn parse_import_records(&self, contents: &str) -> Result<Vec<CodexTokenRecord>, String> {
@@ -193,35 +260,8 @@ impl CodexAccountStore {
         contents: &str,
         client: CodexRefreshTokenClient,
     ) -> Result<Vec<CodexAccountSummary>, String> {
-        let refresh_tokens = parse_refresh_token_lines(contents)?;
-        if refresh_tokens.is_empty() {
-            return Err("Refresh token is required.".to_string());
-        }
-
-        let mut imported = Vec::new();
-        let mut errors = Vec::new();
-        for refresh_token in refresh_tokens {
-            match self
-                .import_refresh_token(refresh_token.as_str(), client)
-                .await
-            {
-                Ok(summary) => imported.push(summary),
-                Err(err) => errors.push(err),
-            }
-        }
-
-        tracing::info!(
-            client = client.as_str(),
-            imported = imported.len(),
-            failed = errors.len(),
-            "codex refresh token import finished"
-        );
-        if imported.is_empty() {
-            return Err(errors.into_iter().next().unwrap_or_else(|| {
-                "No valid Codex accounts found in refresh token input.".to_string()
-            }));
-        }
-        Ok(imported)
+        let _gate = self.acquire_provider_mutation().await;
+        self.import_refresh_tokens_unlocked(contents, client).await
     }
 
     pub async fn get_account_record(&self, account_id: &str) -> Result<CodexTokenRecord, String> {
@@ -292,7 +332,7 @@ impl CodexAccountStore {
             return Ok(record);
         }
 
-        let proxy_url = self.effective_proxy_url(record.proxy_url.as_deref()).await;
+        let proxy_url = self.effective_proxy_url(None).await;
         let client = token_proxy_account_store::oauth_util::build_reqwest_client(
             proxy_url.as_deref(),
             std::time::Duration::from_secs(30),
@@ -374,16 +414,6 @@ impl CodexAccountStore {
         self.save_record(account_id.to_string(), record).await
     }
 
-    pub async fn set_status(
-        &self,
-        account_id: &str,
-        status: CodexAccountStatus,
-    ) -> Result<CodexAccountSummary, String> {
-        let mut record = self.load_account(account_id).await?;
-        record.status = status;
-        self.save_record(account_id.to_string(), record).await
-    }
-
     pub(crate) async fn mark_invalid(
         &self,
         account_id: &str,
@@ -394,27 +424,16 @@ impl CodexAccountStore {
         self.save_record(account_id.to_string(), record).await
     }
 
-    pub async fn set_proxy_url(
-        &self,
-        account_id: &str,
-        proxy_url: Option<&str>,
-    ) -> Result<CodexAccountSummary, String> {
-        let mut record = self.load_account(account_id).await?;
-        record.proxy_url = normalize_proxy_url(proxy_url)?;
-        self.save_record(account_id.to_string(), record).await
-    }
-
-    pub async fn set_priority(
-        &self,
-        account_id: &str,
-        priority: i32,
-    ) -> Result<CodexAccountSummary, String> {
-        let mut record = self.load_account(account_id).await?;
-        record.priority = priority;
-        self.save_record(account_id.to_string(), record).await
-    }
-
     pub(crate) async fn save_record(
+        &self,
+        account_id: String,
+        record: CodexTokenRecord,
+    ) -> Result<CodexAccountSummary, String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.save_record_unlocked(account_id, record).await
+    }
+
+    async fn save_record_unlocked(
         &self,
         account_id: String,
         record: CodexTokenRecord,
@@ -435,6 +454,12 @@ impl CodexAccountStore {
         self.save_record(account_id, record).await
     }
 
+    /// Removes a seeded account for cross-crate integration tests (e.g. missing pin).
+    #[cfg(feature = "test-support")]
+    pub async fn delete_account_for_test(&self, account_id: &str) -> Result<(), String> {
+        self.delete_account(account_id).await
+    }
+
     pub(crate) async fn persist_quota_cache(
         &self,
         account_id: &str,
@@ -445,13 +470,24 @@ impl CodexAccountStore {
         Ok(record)
     }
 
+    /// 自动取 gate 的新建/覆盖入口；事务内请用 unlocked。
+    #[allow(dead_code)]
     pub(crate) async fn save_new_account(
+        &self,
+        record: CodexTokenRecord,
+    ) -> Result<CodexAccountSummary, String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.save_new_account_unlocked(record).await
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn save_new_account_unlocked(
         &self,
         mut record: CodexTokenRecord,
     ) -> Result<CodexAccountSummary, String> {
         fill_record_from_jwt(&mut record);
         if let Some((existing_local_account_id, existing_record)) =
-            self.find_existing_import_target(&record).await?
+            self.find_existing_import_target_unlocked(&record).await?
         {
             // Re-importing the same real Codex account should refresh credentials in place
             // instead of creating duplicate local entries. Keep app-local settings.
@@ -466,11 +502,9 @@ impl CodexAccountStore {
                     *imported.openai_device_id = existing.openai_device_id.map(str::to_string);
                 }
             }
-            if record.proxy_url.is_none() {
-                record.proxy_url = existing_record.proxy_url.clone();
-            }
-            record.priority = existing_record.priority;
-            return self.save_record(existing_local_account_id, record).await;
+            return self
+                .save_record_unlocked(existing_local_account_id, record)
+                .await;
         }
         let id_part_source = record
             .email
@@ -481,18 +515,19 @@ impl CodexAccountStore {
         if id_part.is_empty() {
             id_part = format!("{}", OffsetDateTime::now_utc().unix_timestamp());
         }
-        let account_id = self.unique_account_id(&id_part).await?;
-        self.save_record(account_id, record).await
+        let account_id = self.unique_account_id_unlocked(&id_part).await?;
+        self.save_record_unlocked(account_id, record).await
     }
 
-    async fn import_records(
+    /// 调用方必须已持 `provider_mutation`。
+    async fn import_records_unlocked(
         &self,
         records: Vec<CodexTokenRecord>,
         source: &str,
     ) -> Result<Vec<CodexAccountSummary>, String> {
         let mut imported = Vec::new();
         for record in records {
-            if let Ok(summary) = self.save_new_account(record).await {
+            if let Ok(summary) = self.save_new_account_unlocked(record).await {
                 imported.push(summary);
             }
         }
@@ -507,7 +542,8 @@ impl CodexAccountStore {
         Ok(imported)
     }
 
-    async fn import_refresh_token(
+    /// 调用方必须已持 `provider_mutation`（网络 refresh 期间也持锁，防并发 save 插入中间态）。
+    async fn import_refresh_token_unlocked(
         &self,
         refresh_token: &str,
         client: CodexRefreshTokenClient,
@@ -536,19 +572,88 @@ impl CodexAccountStore {
             account_id: None,
             user_id: None,
             email: None,
-            proxy_url: None,
-            priority: 0,
             quota: super::types::CodexQuotaCache::default(),
         };
         fill_record_from_jwt(&mut record);
-        self.save_new_account(record).await
+        self.save_new_account_unlocked(record).await
     }
 
-    pub(crate) async fn delete_account(&self, account_id: &str) -> Result<(), String> {
+    /// 编排层删除账户凭据；刷新内存 cache。禁止在日志中打印 token。
+    pub async fn delete_account(&self, account_id: &str) -> Result<(), String> {
+        let _gate = self.acquire_provider_mutation().await;
         provider_accounts::delete_account(&self.paths, account_id).await?;
         let mut cache = self.cache.write().await;
         cache.remove(account_id);
+        tracing::debug!(account_id, "codex account deleted for orchestration");
         Ok(())
+    }
+
+    /// 编排层快照：导出全部凭据（含 secret，仅内存短时持有，禁止日志）。
+    pub async fn snapshot_all_records(&self) -> Result<HashMap<String, CodexTokenRecord>, String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.snapshot_all_records_unlocked().await
+    }
+
+    /// 编排层恢复：单 SQLite 事务替换该 provider 全量快照，提交后再替换 cache。
+    pub async fn restore_all_records(
+        &self,
+        snapshot: HashMap<String, CodexTokenRecord>,
+    ) -> Result<(), String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.restore_all_records_unlocked(snapshot).await
+    }
+
+    /// 单账户快照；不存在返回 None。
+    pub async fn snapshot_account_record(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<CodexTokenRecord>, String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.reload_cache_unlocked().await?;
+        Ok(self.cache.read().await.get(account_id).cloned())
+    }
+
+    /// 单账户原子恢复；`None` 表示删除。DB 提交成功后再改 cache。
+    pub async fn restore_account_record(
+        &self,
+        account_id: &str,
+        record: Option<CodexTokenRecord>,
+    ) -> Result<(), String> {
+        let _gate = self.acquire_provider_mutation().await;
+        provider_accounts::replace_codex_account(&self.paths, account_id, record.as_ref()).await?;
+        match record {
+            Some(record) => {
+                self.cache
+                    .write()
+                    .await
+                    .insert(account_id.to_string(), record);
+            }
+            None => {
+                self.cache.write().await.remove(account_id);
+            }
+        }
+        tracing::debug!(
+            account_id,
+            "codex account record restored for orchestration"
+        );
+        Ok(())
+    }
+
+    /// 登录编排提交：持久化 credential，返回 summary 与覆盖前旧 record。
+    pub async fn commit_login_record(
+        &self,
+        mut record: CodexTokenRecord,
+    ) -> Result<(CodexAccountSummary, Option<CodexTokenRecord>), String> {
+        // 先补全 JWT 身份，再查旧 record，保证 re-login 补偿能命中同一账户。
+        // 整段持 provider gate，避免与 restore/refresh 交错。
+        let _gate = self.acquire_provider_mutation().await;
+        fill_record_from_jwt(&mut record);
+        let previous = self
+            .find_existing_import_target_unlocked(&record)
+            .await?
+            .map(|(_, old)| old);
+        let summary = self.save_new_account_unlocked(record).await?;
+        Ok((summary, previous))
     }
 
     pub async fn refresh_due_accounts(&self) -> Result<Vec<String>, String> {
@@ -573,7 +678,7 @@ impl CodexAccountStore {
         record: CodexTokenRecord,
     ) -> Result<CodexTokenRecord, String> {
         // 禁用账号不参与调度，读取路径也不应触发 token refresh。
-        if matches!(record.status, CodexAccountStatus::Disabled) {
+        if matches!(record.status, CodexAccountStatus::Invalid) {
             tracing::debug!(account_id, "skip codex token refresh for disabled account");
             return Ok(record);
         }
@@ -694,7 +799,7 @@ impl CodexAccountStore {
         let id_token = oauth.id_token.to_string();
         let auto_refresh_enabled = oauth.auto_refresh_enabled;
         let openai_device_id = oauth.openai_device_id.map(str::to_string);
-        let proxy_url = self.effective_proxy_url(record.proxy_url.as_deref()).await;
+        let proxy_url = self.effective_proxy_url(None).await;
         let client = self.oauth_client(proxy_url.as_deref(), token_url).await?;
         let refresh_client = refresh_token_client_for_record(&record)?;
         tracing::debug!(
@@ -743,8 +848,6 @@ impl CodexAccountStore {
             account_id: record.account_id.clone(),
             user_id: record.user_id.clone(),
             email: record.email.clone(),
-            proxy_url: record.proxy_url.clone(),
-            priority: record.priority,
             quota: record.quota.clone(),
         };
         fill_record_from_jwt(&mut refreshed);
@@ -802,94 +905,35 @@ impl CodexAccountStore {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) async fn resolve_account_record(
+    /// 解析 Upstream 固定引用的账户凭据。无 pool/unpinned 选号。
+    pub async fn resolve_pinned_account_record(
         &self,
-        account_id: Option<&str>,
+        account_id: &str,
     ) -> Result<(String, CodexTokenRecord), String> {
-        self.resolve_account_record_with_order(account_id, None)
-            .await
-    }
-
-    pub async fn resolve_account_record_with_order(
-        &self,
-        account_id: Option<&str>,
-        ordered_account_ids: Option<&[String]>,
-    ) -> Result<(String, CodexTokenRecord), String> {
-        if let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) {
-            let record = self.get_account_record(account_id).await?;
-            if matches!(record.effective_status(), CodexAccountStatus::Disabled) {
-                return Err(format!("Codex account is disabled: {account_id}"));
-            }
-            if matches!(record.effective_status(), CodexAccountStatus::Expired) {
-                return Err(format!("Codex account is expired: {account_id}"));
-            }
-            if matches!(record.effective_status(), CodexAccountStatus::Invalid) {
-                return Err(format!("Codex account requires re-login: {account_id}"));
-            }
-            return Ok((account_id.to_string(), record));
+        let account_id = account_id.trim();
+        if account_id.is_empty() {
+            return Err(
+                "Codex account_id is required for account credential upstream.".to_string(),
+            );
         }
-
-        self.refresh_cache().await?;
-        let account_ids = if let Some(ordered_account_ids) = ordered_account_ids {
-            ordered_account_ids.to_vec()
-        } else {
-            let cache = self.cache.read().await;
-            sorted_account_ids(&cache)
-        };
-
-        let mut last_error = None;
-        for account_id in account_ids {
-            match self.get_account_record(&account_id).await {
-                Ok(record) if record.is_schedulable() => {
-                    return Ok((account_id, record));
+        let record = self.get_account_record(account_id).await?;
+        if !record.is_usable() {
+            tracing::warn!(
+                account_id,
+                status = ?record.effective_status(),
+                "pinned codex account is not usable"
+            );
+            return Err(format!(
+                "Codex account is {}: {account_id}",
+                match record.effective_status() {
+                    CodexAccountStatus::Active => "active",
+                    CodexAccountStatus::Expired => "expired",
+                    CodexAccountStatus::Invalid => "invalid",
                 }
-                Ok(record) if matches!(record.effective_status(), CodexAccountStatus::Disabled) => {
-                    last_error = Some(format!("Codex account is disabled: {account_id}"));
-                }
-                Ok(record) if matches!(record.effective_status(), CodexAccountStatus::Invalid) => {
-                    last_error = Some(format!("Codex account requires re-login: {account_id}"));
-                }
-                Ok(_) => {
-                    last_error = Some(format!("Codex account is expired: {account_id}"));
-                }
-                Err(err) => {
-                    last_error = Some(err);
-                }
-            }
+            ));
         }
-
-        Err(last_error.unwrap_or_else(|| "Codex account is not configured.".to_string()))
-    }
-
-    pub async fn resolve_next_account_record_with_order(
-        &self,
-        excluded_account_ids: &[String],
-        ordered_account_ids: Option<&[String]>,
-    ) -> Result<Option<(String, CodexTokenRecord)>, String> {
-        self.refresh_cache().await?;
-        let account_ids = if let Some(ordered_account_ids) = ordered_account_ids {
-            ordered_account_ids.to_vec()
-        } else {
-            let cache = self.cache.read().await;
-            sorted_account_ids(&cache)
-        };
-
-        for account_id in account_ids {
-            if excluded_account_ids
-                .iter()
-                .any(|value| value == &account_id)
-            {
-                continue;
-            }
-            match self.get_account_record(&account_id).await {
-                Ok(record) if record.is_schedulable() => {
-                    return Ok(Some((account_id, record)));
-                }
-                Ok(_) | Err(_) => continue,
-            }
-        }
-
-        Ok(None)
+        tracing::debug!(account_id, "resolved pinned codex account credential");
+        Ok((account_id.to_string(), record))
     }
 
     pub(crate) async fn effective_proxy_url(&self, proxy_url: Option<&str>) -> Option<String> {
@@ -1009,14 +1053,137 @@ impl CodexAccountStore {
     }
 
     async fn refresh_cache(&self) -> Result<(), String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.reload_cache_unlocked().await
+    }
+
+    async fn reload_cache_unlocked(&self) -> Result<(), String> {
         let cache = provider_accounts::list_codex_records(&self.paths).await?;
-        let mut guard = self.cache.write().await;
-        *guard = cache;
+        *self.cache.write().await = cache;
         Ok(())
     }
 
-    async fn unique_account_id(&self, id_part: &str) -> Result<String, String> {
-        self.refresh_cache().await?;
+    /// 调用方必须已持 `provider_mutation`。
+    async fn snapshot_all_records_unlocked(
+        &self,
+    ) -> Result<HashMap<String, CodexTokenRecord>, String> {
+        self.reload_cache_unlocked().await?;
+        Ok(self.cache.read().await.clone())
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn restore_all_records_unlocked(
+        &self,
+        snapshot: HashMap<String, CodexTokenRecord>,
+    ) -> Result<(), String> {
+        provider_accounts::replace_all_codex_records(&self.paths, &snapshot).await?;
+        *self.cache.write().await = snapshot;
+        tracing::debug!("codex account store restored from orchestration snapshot");
+        Ok(())
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn import_file_unlocked(
+        &self,
+        path: PathBuf,
+    ) -> Result<Vec<CodexAccountSummary>, String> {
+        if path.as_os_str().is_empty() {
+            return Err("Import path is required.".to_string());
+        }
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Err("Selected import path not found.".to_string());
+        }
+        let mut imported = Vec::new();
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .map_err(|err| format!("Failed to read import path metadata: {err}"))?;
+        let candidate_files = if metadata.is_dir() {
+            collect_json_files(&path).await?
+        } else {
+            vec![path.clone()]
+        };
+
+        for file_path in candidate_files {
+            let contents = match tokio::fs::read_to_string(&file_path).await {
+                Ok(contents) => contents,
+                Err(err) if metadata.is_dir() => {
+                    let _ = err;
+                    continue;
+                }
+                Err(err) => return Err(format!("Failed to read JSON file: {err}")),
+            };
+            let records = match self.parse_import_records(&contents).await {
+                Ok(records) => records,
+                Err(err) if metadata.is_dir() => {
+                    let _ = err;
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+            for record in records {
+                if let Ok(summary) = self.save_new_account_unlocked(record).await {
+                    imported.push(summary);
+                }
+            }
+        }
+        if imported.is_empty() {
+            return Err(if metadata.is_dir() {
+                "No valid Codex accounts found in selected directory.".to_string()
+            } else {
+                "No valid Codex accounts found in JSON file.".to_string()
+            });
+        }
+        Ok(imported)
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn import_text_unlocked(
+        &self,
+        contents: &str,
+    ) -> Result<Vec<CodexAccountSummary>, String> {
+        let records = self.parse_import_records(contents).await?;
+        self.import_records_unlocked(records, "text").await
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn import_refresh_tokens_unlocked(
+        &self,
+        contents: &str,
+        client: CodexRefreshTokenClient,
+    ) -> Result<Vec<CodexAccountSummary>, String> {
+        let refresh_tokens = parse_refresh_token_lines(contents)?;
+        if refresh_tokens.is_empty() {
+            return Err("Refresh token is required.".to_string());
+        }
+
+        let mut imported = Vec::new();
+        let mut errors = Vec::new();
+        for refresh_token in refresh_tokens {
+            match self
+                .import_refresh_token_unlocked(refresh_token.as_str(), client)
+                .await
+            {
+                Ok(summary) => imported.push(summary),
+                Err(err) => errors.push(err),
+            }
+        }
+
+        tracing::info!(
+            client = client.as_str(),
+            imported = imported.len(),
+            failed = errors.len(),
+            "codex refresh token import finished"
+        );
+        if imported.is_empty() {
+            return Err(errors.into_iter().next().unwrap_or_else(|| {
+                "No valid Codex accounts found in refresh token input.".to_string()
+            }));
+        }
+        Ok(imported)
+    }
+
+    async fn unique_account_id_unlocked(&self, id_part: &str) -> Result<String, String> {
+        self.reload_cache_unlocked().await?;
         let cache = self.cache.read().await;
         let mut suffix = 0u32;
         loop {
@@ -1032,11 +1199,11 @@ impl CodexAccountStore {
         }
     }
 
-    async fn find_existing_import_target(
+    async fn find_existing_import_target_unlocked(
         &self,
         imported: &CodexTokenRecord,
     ) -> Result<Option<(String, CodexTokenRecord)>, String> {
-        self.refresh_cache().await?;
+        self.reload_cache_unlocked().await?;
         let imported_account_id = normalize_optional_id(imported.account_id.as_deref());
         let imported_user_id = normalize_optional_id(imported.user_id.as_deref());
         let imported_email = normalize_optional_email(imported.email.as_deref());
@@ -1109,8 +1276,6 @@ fn account_summary(account_id: String, record: &CodexTokenRecord) -> CodexAccoun
         status: record.effective_status(),
         auth_method: record.auth_method(),
         auto_refresh_enabled: record.auto_refresh_enabled(),
-        proxy_url: record.proxy_url.clone(),
-        priority: record.priority,
     }
 }
 
@@ -1156,17 +1321,9 @@ fn account_ids_are_compatible(
 }
 
 fn sorted_account_ids(cache: &HashMap<String, CodexTokenRecord>) -> Vec<String> {
-    let mut entries = cache.iter().collect::<Vec<_>>();
-    entries.sort_by(|(left_id, left_record), (right_id, right_record)| {
-        right_record
-            .priority
-            .cmp(&left_record.priority)
-            .then_with(|| left_id.cmp(right_id))
-    });
-    entries
-        .into_iter()
-        .map(|(account_id, _)| account_id.clone())
-        .collect()
+    let mut account_ids = cache.keys().cloned().collect::<Vec<_>>();
+    account_ids.sort();
+    account_ids
 }
 
 const QUOTA_REFRESH_INTERVAL_SECONDS: i64 = 30;
@@ -1370,8 +1527,6 @@ impl RawAgentIdentity {
             account_id: Some(account_id),
             user_id: Some(user_id),
             email: self.email.and_then(optional_nonempty),
-            proxy_url: None,
-            priority: 0,
             quota: super::types::CodexQuotaCache {
                 plan_type,
                 ..Default::default()
@@ -1604,8 +1759,6 @@ fn raw_access_token_record(
         account_id: None,
         user_id: None,
         email: None,
-        proxy_url: None,
-        priority: 0,
         quota: super::types::CodexQuotaCache::default(),
     };
     fill_record_from_jwt(&mut record);
@@ -1811,17 +1964,6 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
         account_id,
         user_id,
         email,
-        proxy_url: None,
-        priority: find_i64(
-            value,
-            &[
-                &["priority"],
-                &["token_data", "priority"],
-                &["data", "priority"],
-            ],
-        )
-        .and_then(|value| i32::try_from(value).ok())
-        .unwrap_or_default(),
         quota: super::types::CodexQuotaCache::default(),
     })
 }
@@ -1929,14 +2071,12 @@ mod tests {
     use ed25519_dalek::SigningKey;
     use rand::random;
     use serde_json::json;
-    use sqlx::Row;
     use std::future::Future;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
     use time::format_description::well_known::Rfc3339;
     use token_proxy_account_store::app_proxy;
-    use token_proxy_account_store::database as sqlite;
     use token_proxy_account_store::paths::TokenProxyPaths;
 
     fn run_async(test: impl Future<Output = ()>) {
@@ -2326,8 +2466,6 @@ mod tests {
             account_id: Some("acct-paid".to_string()),
             user_id: None,
             email: Some("paid@example.com".to_string()),
-            proxy_url: None,
-            priority: 0,
             quota: CodexQuotaCache {
                 plan_type: Some(quota_plan_type.to_string()),
                 quotas: Vec::new(),
@@ -2369,8 +2507,6 @@ mod tests {
             account_id: Some(account_id.to_string()),
             user_id: None,
             email: Some(email.to_string()),
-            proxy_url: None,
-            priority: 0,
             quota: CodexQuotaCache::default(),
         }
     }
@@ -3645,10 +3781,7 @@ mod tests {
                 .await
                 .expect("first import should succeed");
             let first_local_account_id = first_imported[0].account_id.clone();
-            store
-                .set_proxy_url(&first_local_account_id, Some("http://127.0.0.1:7890"))
-                .await
-                .expect("set proxy url should succeed");
+            // Phase B: 账户无 proxy_url；overwrite 只刷新凭据并保留 client_id / device_id。
 
             let second_path = data_dir.join("codex-second.json");
             tokio::fs::write(
@@ -3680,10 +3813,6 @@ mod tests {
                 .expect("list accounts should succeed");
             assert_eq!(accounts.len(), 1);
             assert_eq!(accounts[0].account_id, first_local_account_id);
-            assert_eq!(
-                accounts[0].proxy_url.as_deref(),
-                Some("http://127.0.0.1:7890")
-            );
 
             let record = store
                 .get_account_record(&first_local_account_id)
@@ -3704,259 +3833,6 @@ mod tests {
             assert_eq!(
                 record.oauth().expect("OAuth record").openai_device_id,
                 Some("device-existing")
-            );
-            assert_eq!(record.proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
-
-            let _ = std::fs::remove_dir_all(data_dir);
-        });
-    }
-
-    #[test]
-    fn list_accounts_orders_by_priority_descending() {
-        run_async(async {
-            let (store, data_dir) = create_test_store();
-            let paths = TokenProxyPaths::from_app_data_dir(data_dir.clone()).expect("test paths");
-            let pool = sqlite::open_write_pool(&paths)
-                .await
-                .expect("open sqlite pool");
-            let columns = sqlx::query("PRAGMA table_info(provider_accounts);")
-                .fetch_all(&pool)
-                .await
-                .expect("read provider_accounts schema");
-            let has_priority = columns
-                .into_iter()
-                .any(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("priority"));
-            if !has_priority {
-                sqlx::query(
-                    "ALTER TABLE provider_accounts ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;",
-                )
-                .execute(&pool)
-                .await
-                .expect("add priority column");
-            }
-
-            let high_expires_at = future_rfc3339(6);
-            let low_expires_at = future_rfc3339(6);
-            sqlx::query(
-                r#"
-INSERT INTO provider_accounts (
-  provider_kind,
-  account_id,
-  email,
-  expires_at,
-  expires_at_ms,
-  auth_method,
-  provider_name,
-  record_json,
-  updated_at_ms,
-  priority
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-"#,
-            )
-            .bind("codex")
-            .bind("codex-a-low.json")
-            .bind("low@example.com")
-            .bind(low_expires_at.as_str())
-            .bind(0_i64)
-            .bind(Option::<String>::None)
-            .bind(Option::<String>::None)
-            .bind(
-                json!({
-                    "access_token": "access-low",
-                    "refresh_token": "refresh-low",
-                    "id_token": build_id_token("low@example.com", "acct-low"),
-                    "auto_refresh_enabled": true,
-                    "status": "active",
-                    "account_id": "acct-low",
-                    "email": "low@example.com",
-                    "expires_at": low_expires_at,
-                    "last_refresh": null,
-                    "proxy_url": null,
-                    "priority": 1,
-                    "quota": {"plan_type": null, "quotas": [], "error": null, "checked_at": null}
-                })
-                .to_string(),
-            )
-            .bind(0_i64)
-            .bind(1_i64)
-            .execute(&pool)
-            .await
-            .expect("insert low priority account");
-
-            sqlx::query(
-                r#"
-INSERT INTO provider_accounts (
-  provider_kind,
-  account_id,
-  email,
-  expires_at,
-  expires_at_ms,
-  auth_method,
-  provider_name,
-  record_json,
-  updated_at_ms,
-  priority
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-"#,
-            )
-            .bind("codex")
-            .bind("codex-z-high.json")
-            .bind("high@example.com")
-            .bind(high_expires_at.as_str())
-            .bind(0_i64)
-            .bind(Option::<String>::None)
-            .bind(Option::<String>::None)
-            .bind(
-                json!({
-                    "access_token": "access-high",
-                    "refresh_token": "refresh-high",
-                    "id_token": build_id_token("high@example.com", "acct-high"),
-                    "auto_refresh_enabled": true,
-                    "status": "active",
-                    "account_id": "acct-high",
-                    "email": "high@example.com",
-                    "expires_at": high_expires_at,
-                    "last_refresh": null,
-                    "proxy_url": null,
-                    "priority": 9,
-                    "quota": {"plan_type": null, "quotas": [], "error": null, "checked_at": null}
-                })
-                .to_string(),
-            )
-            .bind(0_i64)
-            .bind(9_i64)
-            .execute(&pool)
-            .await
-            .expect("insert high priority account");
-
-            let accounts = store.list_accounts().await.expect("list accounts");
-            let ordered_ids = accounts
-                .into_iter()
-                .map(|item| item.account_id)
-                .collect::<Vec<_>>();
-            assert_eq!(
-                ordered_ids,
-                vec![
-                    "codex-z-high.json".to_string(),
-                    "codex-a-low.json".to_string()
-                ]
-            );
-
-            let _ = std::fs::remove_dir_all(data_dir);
-        });
-    }
-
-    #[test]
-    fn import_file_overwrite_preserves_existing_priority_in_record_json() {
-        run_async(async {
-            let (store, data_dir) = create_test_store();
-            let paths = TokenProxyPaths::from_app_data_dir(data_dir.clone()).expect("test paths");
-            let pool = sqlite::open_write_pool(&paths)
-                .await
-                .expect("open sqlite pool");
-            let columns = sqlx::query("PRAGMA table_info(provider_accounts);")
-                .fetch_all(&pool)
-                .await
-                .expect("read provider_accounts schema");
-            let has_priority = columns
-                .into_iter()
-                .any(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("priority"));
-            if !has_priority {
-                sqlx::query(
-                    "ALTER TABLE provider_accounts ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;",
-                )
-                .execute(&pool)
-                .await
-                .expect("add priority column");
-            }
-
-            let existing_expires_at = future_rfc3339(6);
-            sqlx::query(
-                r#"
-INSERT INTO provider_accounts (
-  provider_kind,
-  account_id,
-  email,
-  expires_at,
-  expires_at_ms,
-  auth_method,
-  provider_name,
-  record_json,
-  updated_at_ms,
-  priority
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-"#,
-            )
-            .bind("codex")
-            .bind("codex-priority.json")
-            .bind("overwrite@example.com")
-            .bind(existing_expires_at.as_str())
-            .bind(0_i64)
-            .bind(Option::<String>::None)
-            .bind(Option::<String>::None)
-            .bind(
-                json!({
-                    "access_token": "existing-access",
-                    "refresh_token": "existing-refresh",
-                    "id_token": build_id_token("overwrite@example.com", "acct-overwrite"),
-                    "auto_refresh_enabled": true,
-                    "status": "active",
-                    "account_id": "acct-overwrite",
-                    "email": "overwrite@example.com",
-                    "expires_at": existing_expires_at,
-                    "last_refresh": null,
-                    "proxy_url": null,
-                    "priority": 7,
-                    "quota": {"plan_type": null, "quotas": [], "error": null, "checked_at": null}
-                })
-                .to_string(),
-            )
-            .bind(0_i64)
-            .bind(7_i64)
-            .execute(&pool)
-            .await
-            .expect("insert existing account");
-
-            let input_path = data_dir.join("codex-overwrite.json");
-            tokio::fs::write(
-                &input_path,
-                serde_json::to_string_pretty(&json!({
-                    "type": "codex",
-                    "access_token": "new-access-token",
-                    "refresh_token": "new-refresh-token",
-                    "account_id": "acct-overwrite",
-                    "email": "overwrite@example.com",
-                    "expired": future_rfc3339(12),
-                }))
-                .expect("serialize overwrite json"),
-            )
-            .await
-            .expect("write overwrite json");
-
-            store
-                .import_file(input_path)
-                .await
-                .expect("import should succeed");
-
-            let row = sqlx::query(
-                "SELECT record_json, priority FROM provider_accounts WHERE account_id = ?;",
-            )
-            .bind("codex-priority.json")
-            .fetch_one(&pool)
-            .await
-            .expect("select overwritten record");
-            let record_json = row
-                .try_get::<String, _>("record_json")
-                .expect("decode record_json");
-            let value: serde_json::Value =
-                serde_json::from_str(&record_json).expect("parse record json");
-            assert_eq!(
-                value.get("priority").and_then(serde_json::Value::as_i64),
-                Some(7)
-            );
-            assert_eq!(
-                row.try_get::<i64, _>("priority").expect("decode priority"),
-                7
             );
 
             let _ = std::fs::remove_dir_all(data_dir);
@@ -4117,8 +3993,6 @@ INSERT INTO provider_accounts (
                         account_id: Some("acct-agent-quota".to_string()),
                         user_id: Some("user-agent-quota".to_string()),
                         email: Some("agent-quota@example.com".to_string()),
-                        proxy_url: None,
-                        priority: 0,
                         quota: CodexQuotaCache::default(),
                     },
                 )
@@ -4346,7 +4220,7 @@ INSERT INTO provider_accounts (
                         "refresh-token",
                         build_id_token("disabled@example.com", "acct-disabled"),
                         true,
-                        CodexAccountStatus::Disabled,
+                        CodexAccountStatus::Invalid,
                         "acct-disabled",
                         "disabled@example.com",
                         expired_at.clone(),
@@ -4401,186 +4275,92 @@ INSERT INTO provider_accounts (
     }
 
     #[test]
-    fn set_enabled_updates_record_flag() {
+    fn list_accounts_orders_by_account_id_ascending() {
         run_async(async {
             let (store, data_dir) = create_test_store();
-            let expires_at = future_rfc3339(6);
-            let input_path = data_dir.join("codex-enabled.json");
-            tokio::fs::write(
-                &input_path,
-                serde_json::to_string_pretty(&json!({
-                    "type": "codex",
-                    "access_token": "access-token",
-                    "refresh_token": "refresh-token",
-                    "account_id": "acct-enabled",
-                    "email": "enabled@example.com",
-                    "expired": expires_at,
-                }))
-                .expect("serialize test json"),
-            )
-            .await
-            .expect("write input");
-
-            let imported = store
-                .import_file(input_path)
+            // Phase B: 列表稳定按 account_id 升序，不再按 priority。
+            store
+                .save_record(
+                    "codex-z.json".to_string(),
+                    oauth_test_record(
+                        "access-z",
+                        "refresh-z",
+                        String::new(),
+                        true,
+                        CodexAccountStatus::Active,
+                        "acct-z",
+                        "z@example.com",
+                        future_rfc3339(6),
+                    ),
+                )
                 .await
-                .expect("import should succeed");
-            assert!(matches!(imported[0].status, CodexAccountStatus::Active));
-
-            let updated = store
-                .set_status(&imported[0].account_id, CodexAccountStatus::Disabled)
+                .expect("save z");
+            store
+                .save_record(
+                    "codex-a.json".to_string(),
+                    oauth_test_record(
+                        "access-a",
+                        "refresh-a",
+                        String::new(),
+                        true,
+                        CodexAccountStatus::Active,
+                        "acct-a",
+                        "a@example.com",
+                        future_rfc3339(6),
+                    ),
+                )
                 .await
-                .expect("set status should succeed");
-            assert!(matches!(updated.status, CodexAccountStatus::Disabled));
+                .expect("save a");
 
-            let record = store
-                .get_account_record(&imported[0].account_id)
+            let ids = store
+                .list_accounts()
                 .await
-                .expect("record should exist");
-            assert!(matches!(record.status, CodexAccountStatus::Disabled));
+                .expect("list")
+                .into_iter()
+                .map(|item| item.account_id)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                ids,
+                vec!["codex-a.json".to_string(), "codex-z.json".to_string()]
+            );
 
             let _ = std::fs::remove_dir_all(data_dir);
         });
     }
 
     #[test]
-    fn resolve_account_record_skips_disabled_accounts() {
+    fn get_account_record_does_not_refresh_invalid_expired_account() {
         run_async(async {
             let (store, data_dir) = create_test_store();
-            let first = oauth_test_record(
-                "access-1",
-                "refresh-1",
-                String::new(),
-                true,
-                CodexAccountStatus::Disabled,
-                "acct-disabled",
-                "aaa@example.com",
-                future_rfc3339(6),
-            );
-            let second = oauth_test_record(
-                "access-2",
-                "refresh-2",
-                String::new(),
-                true,
-                CodexAccountStatus::Active,
-                "acct-enabled",
-                "zzz@example.com",
-                future_rfc3339(6),
-            );
-
+            // Invalid 健康态：读取路径不得触发 token refresh。
             store
-                .save_record("codex-a.json".to_string(), first)
-                .await
-                .expect("save first account");
-            store
-                .save_record("codex-b.json".to_string(), second)
-                .await
-                .expect("save second account");
-
-            let (account_id, record) = store
-                .resolve_account_record(None)
-                .await
-                .expect("should resolve enabled account");
-
-            assert_eq!(account_id, "codex-b.json");
-            assert!(record.is_schedulable());
-
-            let _ = std::fs::remove_dir_all(data_dir);
-        });
-    }
-
-    #[test]
-    fn get_account_record_does_not_refresh_disabled_expired_account() {
-        run_async(async {
-            let (store, data_dir) = create_test_store();
-            store
-                .save_record("codex-disabled.json".to_string(), {
-                    let mut record = oauth_test_record(
+                .save_record(
+                    "codex-invalid.json".to_string(),
+                    oauth_test_record(
                         "expired-access",
                         "refresh-token",
                         String::new(),
                         true,
-                        CodexAccountStatus::Disabled,
-                        "acct-disabled",
-                        "disabled@example.com",
+                        CodexAccountStatus::Invalid,
+                        "acct-invalid",
+                        "invalid@example.com",
                         past_rfc3339(2),
-                    );
-                    record.proxy_url = Some("socks5://127.0.0.1:1080".to_string());
-                    record.priority = 7;
-                    record
-                })
+                    ),
+                )
                 .await
-                .expect("save disabled expired account");
+                .expect("save invalid expired account");
 
             let record = store
-                .get_account_record("codex-disabled.json")
+                .get_account_record("codex-invalid.json")
                 .await
-                .expect("disabled account should still load");
+                .expect("invalid account should still load");
 
-            assert!(matches!(record.status, CodexAccountStatus::Disabled));
-            assert!(!record.is_schedulable());
+            assert!(matches!(record.status, CodexAccountStatus::Invalid));
+            assert!(!record.is_usable());
             assert_eq!(
                 record.oauth().expect("OAuth record").access_token,
                 "expired-access"
             );
-            assert_eq!(record.proxy_url.as_deref(), Some("socks5://127.0.0.1:1080"));
-            assert_eq!(record.priority, 7);
-
-            let _ = std::fs::remove_dir_all(data_dir);
-        });
-    }
-
-    #[test]
-    fn set_proxy_url_updates_record_value() {
-        run_async(async {
-            let (store, data_dir) = create_test_store();
-            let input_path = data_dir.join("codex-set-proxy-url.json");
-            tokio::fs::write(
-                &input_path,
-                serde_json::to_string_pretty(&json!({
-                    "type": "codex",
-                    "access_token": "access-token",
-                    "refresh_token": "refresh-token",
-                    "account_id": "acct-set-proxy-url",
-                    "email": "proxy@example.com",
-                    "expired": future_rfc3339(6),
-                }))
-                .expect("serialize test json"),
-            )
-            .await
-            .expect("write input");
-
-            let imported = store
-                .import_file(input_path)
-                .await
-                .expect("import should succeed");
-
-            let updated = store
-                .set_proxy_url(&imported[0].account_id, Some("socks5://127.0.0.1:1080"))
-                .await
-                .expect("set proxy url should succeed");
-            assert_eq!(
-                updated.proxy_url.as_deref(),
-                Some("socks5://127.0.0.1:1080")
-            );
-
-            let record = store
-                .get_account_record(&imported[0].account_id)
-                .await
-                .expect("record should exist");
-            assert_eq!(record.proxy_url.as_deref(), Some("socks5://127.0.0.1:1080"));
-
-            let cleared = store
-                .set_proxy_url(&imported[0].account_id, None::<&str>)
-                .await
-                .expect("clear proxy url should succeed");
-            assert_eq!(cleared.proxy_url, None);
-
-            let cleared_record = store
-                .get_account_record(&imported[0].account_id)
-                .await
-                .expect("record should still exist");
-            assert_eq!(cleared_record.proxy_url, None);
 
             let _ = std::fs::remove_dir_all(data_dir);
         });

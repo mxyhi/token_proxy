@@ -5,14 +5,10 @@ import {
   importXaiRefreshTokens,
   importXaiText,
   listXaiAccounts,
-  logoutXaiAccount,
   refreshXaiAccount,
   refreshXaiQuotaCache,
   refreshXaiQuotaNow,
   setXaiAutoRefresh,
-  setXaiPriority,
-  setXaiProxyUrl,
-  setXaiStatus,
 } from "@/features/xai/api";
 import type { XaiAccountSummary } from "@/features/xai/types";
 import { parseError } from "@/lib/error";
@@ -79,50 +75,6 @@ export function useXaiAccounts(options?: UseXaiAccountsOptions) {
     [updateAccount],
   );
 
-  const setStatus = useCallback(
-    async (accountId: string, status: "active" | "disabled") => {
-      try {
-        return updateAccount(await setXaiStatus(accountId, status));
-      } catch (cause) {
-        setError(parseError(cause));
-        throw cause;
-      }
-    },
-    [updateAccount],
-  );
-
-  const setProxyUrl = useCallback(
-    async (accountId: string, proxyUrl: string | null) => {
-      try {
-        return updateAccount(await setXaiProxyUrl(accountId, proxyUrl));
-      } catch (cause) {
-        setError(parseError(cause));
-        throw cause;
-      }
-    },
-    [updateAccount],
-  );
-
-  const setPriority = useCallback(
-    async (accountId: string, priority: number) => {
-      try {
-        return updateAccount(await setXaiPriority(accountId, priority));
-      } catch (cause) {
-        setError(parseError(cause));
-        throw cause;
-      }
-    },
-    [updateAccount],
-  );
-
-  const logout = useCallback(
-    async (accountId: string) => {
-      await logoutXaiAccount(accountId);
-      await refresh();
-    },
-    [refresh],
-  );
-
   const importFile = useCallback(async (path: string) => {
     try {
       const imported = await importXaiFile(path);
@@ -177,10 +129,6 @@ export function useXaiAccounts(options?: UseXaiAccountsOptions) {
     refresh,
     refreshAccount,
     setAutoRefresh,
-    setStatus,
-    setProxyUrl,
-    setPriority,
-    logout,
     importFile,
     importText,
     importRefreshTokens,

@@ -48,6 +48,18 @@ export type InboundApiFormat =
   | "anthropic_messages"
   | "gemini";
 
+/** 账户型 credential 的 provider；与后端 AccountProvider 对齐。 */
+export type AccountProviderKind = "kiro" | "codex" | "xai";
+
+/**
+ * Upstream 唯一凭据形态（与后端 UpstreamCredential 对齐）。
+ * 禁止再平铺 api_keys + 多个可选 *_account_id。
+ */
+export type UpstreamCredentialConfig =
+  | { type: "api_keys"; api_keys?: string[] }
+  | { type: "account"; provider: AccountProviderKind; account_id: string }
+  | { type: "passthrough" };
+
 export type UpstreamConfig = {
   id: string;
   /**
@@ -58,7 +70,8 @@ export type UpstreamConfig = {
    */
   providers?: string[];
   base_url: string;
-  api_keys?: string[];
+  /** 判别联合凭据；账户型 / API Key / 透传互斥。 */
+  credential?: UpstreamCredentialConfig;
   /**
    * Whether to drop OpenAI Responses request field `prompt_cache_retention` before sending upstream.
    *
@@ -81,9 +94,6 @@ export type UpstreamConfig = {
    * Whether to rewrite OpenAI-compatible role `developer` to `system` before sending upstream.
    */
   rewrite_developer_role_to_system?: boolean;
-  kiro_account_id?: string | null;
-  codex_account_id?: string | null;
-  xai_account_id?: string | null;
   preferred_endpoint?: KiroPreferredEndpoint | null;
   proxy_url: string | null;
   priority: number | null;
@@ -175,7 +185,11 @@ export type UpstreamForm = {
   filterSafetyIdentifier: boolean;
   useChatCompletionsForResponses: boolean;
   rewriteDeveloperRoleToSystem: boolean;
-  xaiAccountId: string;
+  /**
+   * 账户型 credential 的 account_id（与 providers 中唯一账户 provider 绑定）。
+   * 非账户型上游保持空字符串。
+   */
+  accountId: string;
   preferredEndpoint: "" | KiroPreferredEndpoint;
   proxyUrl: string;
   priority: string;

@@ -4,7 +4,12 @@ import { fetchCodexQuotas } from "@/features/codex/api";
 import type { CodexQuotaSummary } from "@/features/codex/types";
 import { parseError } from "@/lib/error";
 
-export function useCodexQuotas() {
+type UseCodexQuotasOptions = {
+  autoLoad?: boolean;
+};
+
+export function useCodexQuotas(options?: UseCodexQuotasOptions) {
+  const autoLoad = options?.autoLoad ?? true;
   const [quotas, setQuotas] = useState<CodexQuotaSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -23,8 +28,11 @@ export function useCodexQuotas() {
   }, []);
 
   useEffect(() => {
+    if (!autoLoad) {
+      return;
+    }
     void refresh();
-  }, [refresh]);
+  }, [autoLoad, refresh]);
 
   return { quotas, loading, error, refresh };
 }

@@ -13,7 +13,6 @@ import { I18nProvider } from "@/lib/i18n";
 
 const configScreenMocks = vi.hoisted(() => ({
   setAppProxyUrlMock: vi.fn<(value: string) => void>(),
-  xaiAccounts: [] as Array<{ account_id: string }>,
 }));
 const { setAppProxyUrlMock } = configScreenMocks;
 
@@ -36,53 +35,6 @@ vi.mock("@/features/update/updater", () => ({
       downloadAndInstall: async () => undefined,
       relaunchApp: async () => undefined,
     },
-  }),
-}));
-
-vi.mock("@/features/kiro/use-kiro-accounts", () => ({
-  useKiroAccounts: () => ({
-    accounts: [],
-    loading: false,
-    error: "",
-    refresh: async () => undefined,
-    logout: async () => undefined,
-    importIde: async () => [],
-    importKam: async () => [],
-    setProxyUrl: async () => undefined,
-  }),
-}));
-
-vi.mock("@/features/codex/use-codex-accounts", () => ({
-  useCodexAccounts: () => ({
-    accounts: [],
-    loading: false,
-    error: "",
-    refresh: async () => undefined,
-    refreshAccount: async () => undefined,
-    setAutoRefresh: async () => undefined,
-    setProxyUrl: async () => undefined,
-    logout: async () => undefined,
-    importFile: async () => [],
-  }),
-}));
-
-vi.mock("@/features/xai/use-xai-accounts", () => ({
-  useXaiAccounts: () => ({
-    accounts: configScreenMocks.xaiAccounts,
-    loading: false,
-    error: "",
-    refresh: async () => [],
-    refreshAccount: async () => undefined,
-    setAutoRefresh: async () => undefined,
-    setStatus: async () => undefined,
-    setProxyUrl: async () => undefined,
-    setPriority: async () => undefined,
-    logout: async () => undefined,
-    importFile: async () => [],
-    importText: async () => [],
-    importRefreshTokens: async () => [],
-    refreshQuotaCache: async () => undefined,
-    refreshQuotaNow: async () => undefined,
   }),
 }));
 
@@ -143,7 +95,6 @@ function createSaveResult(
 describe("config/ConfigScreen auto save", () => {
   beforeEach(() => {
     setAppProxyUrlMock.mockReset();
-    configScreenMocks.xaiAccounts = [];
   });
 
   afterEach(() => {
@@ -291,17 +242,13 @@ describe("config/ConfigScreen auto save", () => {
     });
   });
 
-  it("syncs xai-default after delayed config loading completes", async () => {
+  it("does not invent account-backed default upstreams without login/import", async () => {
     const invokeMock = vi.mocked(invoke);
     const config = toPayload(EMPTY_FORM);
-    configScreenMocks.xaiAccounts = [{ account_id: "xai-1" }];
-    let resolveReadConfig: ((value: { path: string; config: typeof config }) => void) | null = null;
 
     invokeMock.mockImplementation(async (command) => {
       if (command === "read_proxy_config") {
-        return await new Promise<{ path: string; config: typeof config }>((resolve) => {
-          resolveReadConfig = resolve;
-        });
+        return { path: "/tmp/config.json", config };
       }
       if (command === "proxy_status") {
         return PROXY_STATUS;
@@ -319,28 +266,24 @@ describe("config/ConfigScreen auto save", () => {
     );
 
     await waitFor(() => {
-      expect(
-        invokeMock.mock.calls.filter(([command]) => command === "read_proxy_config")
-      ).toHaveLength(1);
-    });
-    expect(screen.getByTestId("upstream-ids")).toHaveTextContent("");
-
-    expect(resolveReadConfig).not.toBeNull();
-    resolveReadConfig!({ path: "/tmp/config.json", config });
-
-    await waitFor(() => {
-      expect(screen.getByTestId("upstream-ids")).toHaveTextContent("xai-default");
+      expect(screen.getByTestId("upstream-ids")).toHaveTextContent("");
     });
     await waitForAutoSaveWindow();
-    await waitFor(() => {
-      expect(
-        invokeMock.mock.calls.find(([command]) => command === "save_proxy_config")?.[1]
-      ).toMatchObject({
-        config: expect.objectContaining({
-          upstreams: [expect.objectContaining({ id: "xai-default", providers: ["xai"] })],
-        }),
-      });
-    });
+    expect(
+      invokeMock.mock.calls.filter(([command]) => command === "save_proxy_config")
+    ).toHaveLength(0);
+    // 不得再调用已删除的账户级 priority/proxy/logout 命令。
+    expect(
+      invokeMock.mock.calls.some(([command]) =>
+        [
+          "kiro_logout",
+          "codex_logout",
+          "xai_logout",
+          "kiro_set_priority",
+          "providers_delete_accounts",
+        ].includes(String(command))
+      )
+    ).toBe(false);
   });
 
   it("allows retrying the same failed draft from the error retry action", async () => {

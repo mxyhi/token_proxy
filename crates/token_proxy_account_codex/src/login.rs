@@ -23,6 +23,8 @@ const CODEX_CALLBACK_PORT: u16 = 1455;
 
 #[derive(Clone)]
 pub struct CodexLoginManager {
+    /// 保留构造对称；credential 落库改由编排层 store 提交。
+    #[allow(dead_code)]
     store: Arc<CodexAccountStore>,
     sessions: Arc<RwLock<HashMap<String, LoginSession>>>,
     app_proxy: AppProxyState,
@@ -34,6 +36,21 @@ struct LoginSession {
     error: Option<String>,
     account: Option<CodexAccountSummary>,
     expires_at: Option<OffsetDateTime>,
+    /// OAuth 完成后待编排层在 mutation 锁内提交的 credential。
+    pending_record: Option<CodexTokenRecord>,
+    /// 编排层正在提交 credential+config，禁止取消/重复 claim。
+    committing: bool,
+}
+
+/// poll 结果：仍等待 / 终态 / 可提交的 prepared credential。
+pub enum CodexLoginPollClaim {
+    /// 无需提交（Waiting / 已 Success / Error）。
+    Response(CodexLoginPollResponse),
+    /// 已从 session 取出 pending，调用方必须 commit 或 fail。
+    Prepared {
+        state: String,
+        record: CodexTokenRecord,
+    },
 }
 
 impl CodexLoginManager {
@@ -67,12 +84,15 @@ impl CodexLoginManager {
     }
 
     pub async fn poll_login(&self, state: &str) -> Result<CodexLoginPollResponse, String> {
+        // 只读会话状态；有 pending 时对外仍为 Waiting，真正提交走 claim_prepared_login。
         let mut guard = self.sessions.write().await;
         let session = guard
             .get_mut(state)
             .ok_or_else(|| "Login session not found.".to_string())?;
         if session.status != CodexLoginStatus::Success
             && session.status != CodexLoginStatus::Error
+            && !session.committing
+            && session.pending_record.is_none()
             && session
                 .expires_at
                 .map(|deadline| OffsetDateTime::now_utc() > deadline)
@@ -89,8 +109,82 @@ impl CodexLoginManager {
         })
     }
 
-    pub async fn logout(&self, account_id: &str) -> Result<(), String> {
-        self.store.delete_account(account_id).await
+    /// 编排层在 mutation 锁内调用：取出 prepared credential 或返回当前 poll 响应。
+    pub async fn claim_prepared_login(&self, state: &str) -> Result<CodexLoginPollClaim, String> {
+        let mut guard = self.sessions.write().await;
+        let session = guard
+            .get_mut(state)
+            .ok_or_else(|| "Login session not found.".to_string())?;
+        if session.status != CodexLoginStatus::Success
+            && session.status != CodexLoginStatus::Error
+            && !session.committing
+            && session.pending_record.is_none()
+            && session
+                .expires_at
+                .map(|deadline| OffsetDateTime::now_utc() > deadline)
+                .unwrap_or(false)
+        {
+            session.status = CodexLoginStatus::Error;
+            session.error = Some("Login expired.".to_string());
+        }
+        // 取消安全：clone 不 take；complete/fail 才清 pending，中断后可重 claim。
+        if let Some(record) = session.pending_record.clone() {
+            session.committing = true;
+            tracing::debug!("codex login prepared credential claimed for orchestration commit");
+            return Ok(CodexLoginPollClaim::Prepared {
+                state: state.to_string(),
+                record,
+            });
+        }
+        Ok(CodexLoginPollClaim::Response(CodexLoginPollResponse {
+            state: state.to_string(),
+            status: session.status.clone(),
+            error: session.error.clone(),
+            account: session.account.clone(),
+        }))
+    }
+
+    /// 编排提交成功。
+    pub async fn complete_login_commit(&self, state: &str, account: CodexAccountSummary) {
+        let mut guard = self.sessions.write().await;
+        if let Some(session) = guard.get_mut(state) {
+            session.status = CodexLoginStatus::Success;
+            session.error = None;
+            session.account = Some(account);
+            session.pending_record = None;
+            session.committing = false;
+            tracing::info!("codex login commit completed");
+        }
+    }
+
+    /// 编排提交失败（credential 已由调用方补偿）。
+    pub async fn fail_login_commit(&self, state: &str, message: String) {
+        let mut guard = self.sessions.write().await;
+        if let Some(session) = guard.get_mut(state) {
+            session.status = CodexLoginStatus::Error;
+            session.error = Some(message);
+            session.account = None;
+            session.pending_record = None;
+            session.committing = false;
+        }
+    }
+
+    /// 测试：注入 prepared login，不走真实 OAuth。
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn inject_prepared_login_for_test(&self, state: &str, record: CodexTokenRecord) {
+        let session = LoginSession {
+            status: CodexLoginStatus::Waiting,
+            error: None,
+            account: None,
+            expires_at: Some(OffsetDateTime::now_utc() + time::Duration::seconds(600)),
+            pending_record: Some(record),
+            committing: false,
+        };
+        self.sessions
+            .write()
+            .await
+            .insert(state.to_string(), session);
+        tracing::debug!("codex prepared login injected for test");
     }
 
     async fn insert_session(&self, state: &str, expires_at: Option<OffsetDateTime>) {
@@ -99,17 +193,23 @@ impl CodexLoginManager {
             error: None,
             account: None,
             expires_at,
+            pending_record: None,
+            committing: false,
         };
         let mut guard = self.sessions.write().await;
         guard.insert(state.to_string(), session);
     }
 
-    async fn complete_session(&self, state: &str, account: CodexAccountSummary) {
+    async fn prepare_session(&self, state: &str, record: CodexTokenRecord) {
+        // 只暂存 credential，最终落库由 token_proxy_app 编排锁提交。
         let mut guard = self.sessions.write().await;
         if let Some(session) = guard.get_mut(state) {
-            session.status = CodexLoginStatus::Success;
+            session.pending_record = Some(record);
+            session.status = CodexLoginStatus::Waiting;
             session.error = None;
-            session.account = Some(account);
+            session.account = None;
+            session.committing = false;
+            tracing::info!("codex login credential prepared; awaiting orchestration commit");
         }
     }
 
@@ -118,6 +218,9 @@ impl CodexLoginManager {
         if let Some(session) = guard.get_mut(state) {
             session.status = CodexLoginStatus::Error;
             session.error = Some(message);
+            session.account = None;
+            session.pending_record = None;
+            session.committing = false;
         }
     }
 
@@ -241,14 +344,10 @@ async fn run_auth_code_login(
         account_id: None,
         user_id: None,
         email: None,
-        proxy_url: None,
-        priority: 0,
         quota: CodexQuotaCache::default(),
     };
-    match manager.store.save_new_account(record).await {
-        Ok(account) => manager.complete_session(&state, account).await,
-        Err(err) => manager.fail_session(&state, err).await,
-    }
+    // 不在 OAuth 任务内落库；交给 poll 路径的编排小事务提交。
+    manager.prepare_session(&state, record).await;
 }
 
 async fn wait_for_auth_code(callback: &mut AuthCodeCallback) -> Result<AuthCodeResult, String> {

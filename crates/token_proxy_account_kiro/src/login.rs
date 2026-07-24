@@ -38,6 +38,18 @@ struct LoginSession {
     error: Option<String>,
     account: Option<KiroAccountSummary>,
     expires_at: Option<OffsetDateTime>,
+    /// OAuth 完成后待编排层在 mutation 锁内提交的 credential。
+    pending_record: Option<KiroTokenRecord>,
+    committing: bool,
+}
+
+/// poll 结果：仍等待 / 终态 / 可提交的 prepared credential。
+pub enum KiroLoginPollClaim {
+    Response(KiroLoginPollResponse),
+    Prepared {
+        state: String,
+        record: KiroTokenRecord,
+    },
 }
 
 impl KiroLoginManager {
@@ -64,12 +76,15 @@ impl KiroLoginManager {
     }
 
     pub async fn poll_login(&self, state: &str) -> Result<KiroLoginPollResponse, String> {
+        // 只读会话；pending 对外仍 Waiting，提交走 claim_prepared_login。
         let mut guard = self.sessions.write().await;
         let session = guard
             .get_mut(state)
             .ok_or_else(|| "Login session not found.".to_string())?;
         if session.status != KiroLoginStatus::Success
             && session.status != KiroLoginStatus::Error
+            && !session.committing
+            && session.pending_record.is_none()
             && session
                 .expires_at
                 .map(|deadline| OffsetDateTime::now_utc() > deadline)
@@ -86,8 +101,83 @@ impl KiroLoginManager {
         })
     }
 
-    pub async fn logout(&self, account_id: &str) -> Result<(), String> {
-        self.store.delete_account(account_id).await
+    /// 编排层 claim prepared credential。
+    ///
+    /// **取消安全**：pending 只 clone 不 take；complete/fail 才清除。
+    /// poll future 在 commit 途中被取消时，pending 仍在，下次 poll 可重试或读到终态。
+    pub async fn claim_prepared_login(&self, state: &str) -> Result<KiroLoginPollClaim, String> {
+        let mut guard = self.sessions.write().await;
+        let session = guard
+            .get_mut(state)
+            .ok_or_else(|| "Login session not found.".to_string())?;
+        if session.status != KiroLoginStatus::Success
+            && session.status != KiroLoginStatus::Error
+            && !session.committing
+            && session.pending_record.is_none()
+            && session
+                .expires_at
+                .map(|deadline| OffsetDateTime::now_utc() > deadline)
+                .unwrap_or(false)
+        {
+            session.status = KiroLoginStatus::Error;
+            session.error = Some("Login expired.".to_string());
+        }
+        // 可恢复：pending 仍在则允许再次 claim（上次 commit 被中断时）。
+        if let Some(record) = session.pending_record.clone() {
+            session.committing = true;
+            tracing::debug!("kiro login prepared credential claimed for orchestration commit");
+            return Ok(KiroLoginPollClaim::Prepared {
+                state: state.to_string(),
+                record,
+            });
+        }
+        Ok(KiroLoginPollClaim::Response(KiroLoginPollResponse {
+            state: state.to_string(),
+            status: session.status.clone(),
+            error: session.error.clone(),
+            account: session.account.clone(),
+        }))
+    }
+
+    pub async fn complete_login_commit(&self, state: &str, account: KiroAccountSummary) {
+        let mut guard = self.sessions.write().await;
+        if let Some(session) = guard.get_mut(state) {
+            session.status = KiroLoginStatus::Success;
+            session.error = None;
+            session.account = Some(account);
+            session.pending_record = None;
+            session.committing = false;
+            tracing::info!("kiro login commit completed");
+        }
+    }
+
+    pub async fn fail_login_commit(&self, state: &str, message: String) {
+        let mut guard = self.sessions.write().await;
+        if let Some(session) = guard.get_mut(state) {
+            session.status = KiroLoginStatus::Error;
+            session.error = Some(message);
+            session.account = None;
+            session.pending_record = None;
+            session.committing = false;
+        }
+    }
+
+    /// 测试：注入 prepared login，不走真实 OAuth。
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn inject_prepared_login_for_test(&self, state: &str, record: KiroTokenRecord) {
+        let session = LoginSession {
+            status: KiroLoginStatus::Waiting,
+            error: None,
+            account: None,
+            expires_at: Some(OffsetDateTime::now_utc() + time::Duration::seconds(600)),
+            pending_record: Some(record),
+            committing: false,
+        };
+        self.sessions
+            .write()
+            .await
+            .insert(state.to_string(), session);
+        tracing::debug!("kiro prepared login injected for test");
     }
 
     pub async fn handle_callback_url(&self, url: &str) -> Result<(), String> {
@@ -200,17 +290,22 @@ impl KiroLoginManager {
             error: None,
             account: None,
             expires_at,
+            pending_record: None,
+            committing: false,
         };
         let mut guard = self.sessions.write().await;
         guard.insert(state.to_string(), session);
     }
 
-    async fn complete_session(&self, state: &str, account: KiroAccountSummary) {
+    async fn prepare_session(&self, state: &str, record: KiroTokenRecord) {
         let mut guard = self.sessions.write().await;
         if let Some(session) = guard.get_mut(state) {
-            session.status = KiroLoginStatus::Success;
+            session.pending_record = Some(record);
+            session.status = KiroLoginStatus::Waiting;
             session.error = None;
-            session.account = Some(account);
+            session.account = None;
+            session.committing = false;
+            tracing::info!("kiro login credential prepared; awaiting orchestration commit");
         }
     }
 
@@ -219,6 +314,9 @@ impl KiroLoginManager {
         if let Some(session) = guard.get_mut(state) {
             session.status = KiroLoginStatus::Error;
             session.error = Some(message);
+            session.account = None;
+            session.pending_record = None;
+            session.committing = false;
         }
     }
 
@@ -480,14 +578,10 @@ async fn handle_builder_success(
         start_url: None,
         region: None,
         status: KiroAccountStatus::Active,
-        proxy_url: None,
-        priority: 0,
         quota: KiroQuotaCache::default(),
     };
-    match manager.store.save_new_account(record).await {
-        Ok(account) => manager.complete_session(&state, account).await,
-        Err(err) => manager.fail_session(&state, err).await,
-    }
+    // 不在 OAuth 任务内落库；交给 poll 路径的编排小事务提交。
+    manager.prepare_session(&state, record).await;
 }
 
 async fn handle_social_success(
@@ -529,12 +623,7 @@ async fn handle_social_success(
         start_url: None,
         region: None,
         status: KiroAccountStatus::Active,
-        proxy_url: None,
-        priority: 0,
         quota: KiroQuotaCache::default(),
     };
-    match manager.store.save_new_account(record).await {
-        Ok(account) => manager.complete_session(&state, account).await,
-        Err(err) => manager.fail_session(&state, err).await,
-    }
+    manager.prepare_session(&state, record).await;
 }

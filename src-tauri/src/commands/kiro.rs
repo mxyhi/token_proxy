@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::commands::parse_manual_account_status;
+use token_proxy_app::app::TokenProxyApp;
+
 use crate::kiro;
 
 #[tauri::command]
@@ -13,26 +14,31 @@ pub async fn kiro_list_accounts(
 
 #[tauri::command]
 pub async fn kiro_import_ide(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     directory: String,
 ) -> Result<Vec<kiro::KiroAccountSummary>, String> {
     let trimmed = directory.trim();
     if trimmed.is_empty() {
         return Err("Directory is required.".to_string());
     }
-    kiro_store.import_ide_tokens(PathBuf::from(trimmed)).await
+    // 导入 + 自动补齐 Upstream 由 app 编排层串行处理。
+    token_proxy_app
+        .kiro_import_ide(PathBuf::from(trimmed))
+        .await
 }
 
 #[tauri::command]
 pub async fn kiro_import_kam(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     path: String,
 ) -> Result<Vec<kiro::KiroAccountSummary>, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("File path is required.".to_string());
     }
-    kiro_store.import_kam_export(PathBuf::from(trimmed)).await
+    token_proxy_app
+        .kiro_import_kam(PathBuf::from(trimmed))
+        .await
 }
 
 #[tauri::command]
@@ -46,18 +52,11 @@ pub async fn kiro_start_login(
 
 #[tauri::command]
 pub async fn kiro_poll_login(
-    kiro_login: tauri::State<'_, Arc<kiro::KiroLoginManager>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     state: String,
 ) -> Result<kiro::KiroLoginPollResponse, String> {
-    kiro_login.poll_login(&state).await
-}
-
-#[tauri::command]
-pub async fn kiro_logout(
-    kiro_login: tauri::State<'_, Arc<kiro::KiroLoginManager>>,
-    account_id: String,
-) -> Result<(), String> {
-    kiro_login.logout(&account_id).await
+    // 登录成功后自动创建缺失 Upstream；quota 路径不经过此编排。
+    token_proxy_app.kiro_poll_login(&state).await
 }
 
 #[tauri::command]
@@ -91,32 +90,5 @@ pub async fn kiro_refresh_quota_now(
     kiro_store.refresh_quota_cache_now(&account_id).await
 }
 
-#[tauri::command]
-pub async fn kiro_set_status(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-    account_id: String,
-    status: String,
-) -> Result<kiro::KiroAccountSummary, String> {
-    let status = parse_manual_account_status(&status)?;
-    kiro_store.set_status(&account_id, status.into()).await
-}
-
-#[tauri::command]
-pub async fn kiro_set_proxy_url(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-    account_id: String,
-    proxy_url: Option<String>,
-) -> Result<kiro::KiroAccountSummary, String> {
-    kiro_store
-        .set_proxy_url(&account_id, proxy_url.as_deref())
-        .await
-}
-
-#[tauri::command]
-pub async fn kiro_set_priority(
-    kiro_store: tauri::State<'_, Arc<kiro::KiroAccountStore>>,
-    account_id: String,
-    priority: i32,
-) -> Result<kiro::KiroAccountSummary, String> {
-    kiro_store.set_priority(&account_id, priority).await
-}
+// Phase C2: 账户删除只能由删除 Upstream 级联触发；kiro_logout Tauri 路径已移除。
+// Phase B: 账户级 priority / proxy_url / 人工 Disabled 已删除。

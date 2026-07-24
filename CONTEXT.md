@@ -48,6 +48,18 @@ _Avoid_: 可用模型、模型白名单
 可重试失败后，在切换到其它上游之前，对同一上游额外再发的次数；由全局配置 `same_upstream_retry_count` 控制，默认 1，0 表示关闭。
 _Avoid_: 跨上游 failover、冷却
 
+**Upstream（上游）**:
+全局 routing/retry 策略作用的唯一候选/调度单元；单条 Upstream 自身承载 provider 能力、priority、proxy、enabled、模型限制/映射与 credential 等已实现字段（`same_upstream_retry_count` / `upstream_strategy` 为全局配置，非 per-upstream 字段）。
+_Avoid_: Provider 条目、独立账户路由项、Accounts 池中的可调度对象、per-upstream retry/dispatch/order
+
+**Provider Account / 账户凭据身份**:
+持久化认证身份（OAuth token、Agent Identity 等），供 Account-backed Upstream 引用；不再独立承载 priority、proxy 或 enabled。
+_Avoid_: 可调度账户、账户优先级、账户代理、账户开关
+
+**Account-backed Upstream（账户型上游）**:
+绑定一个 Kiro / Codex / xAI Provider Account 的 Upstream；一个 account 对应一条稳定 Upstream，credential identity 与 routing fields 分离。
+_Avoid_: 前端构造的 default upstream、多 Upstream 共享同一 account、账户侧 priority/proxy/enabled
+
 **Request Repair Retry（请求修复重试）**:
 上游明确拒绝某个可安全移除的请求字段后，代理保持同一上游身份、仅删除该字段并再次发送；它修改请求，不计入 Same-Upstream Retry 次数。
 _Avoid_: 原地重试、跨上游 failover、任意 400 重试
@@ -121,8 +133,8 @@ _Avoid_: HTTP Error Response（响应头提交后已无法更改 HTTP 状态）
 _Avoid_: xAI 账户、Grok OAuth 账户
 
 **xAI OAuth Account（xAI OAuth 账户）**:
-通过 xAI OIDC device-code 或 refresh token 获得并持久化的 Grok CLI OAuth 身份；它拥有刷新、调度、冷却、配额和禁用状态。
-_Avoid_: xAI API Key、CPA API Key、普通 OpenAI 上游
+通过 xAI OIDC device-code 或 refresh token 获得并持久化的 Grok CLI OAuth 身份；承载刷新与配额语义，调度字段属于绑定它的 Upstream。
+_Avoid_: xAI API Key、CPA API Key、普通 OpenAI 上游、账户级 priority/proxy/enabled
 
 **xAI CLI Gateway（xAI CLI 网关）**:
 xAI OAuth 账户发送文本 Responses 请求并读取该身份实时模型目录的受信服务端点 `cli-chat-proxy.grok.com`；该模型目录不是普通 API Key 上游的标准合同。

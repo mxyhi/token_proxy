@@ -1,24 +1,41 @@
 import { createNativeInboundFormatSet, removeInboundFormatsInSet } from "@/features/config/inbound-formats";
-import type { UpstreamForm } from "@/features/config/types";
+import type { AccountProviderKind, UpstreamForm } from "@/features/config/types";
 
 export const ACCOUNT_BACKED_PROVIDERS = ["kiro", "codex", "xai", "antigravity"] as const;
 
+/** 可绑定 OAuth/账户 credential 的 provider（不含 antigravity 等仅 endpoint 托管型）。 */
+export const ACCOUNT_PROVIDER_KINDS = ["kiro", "codex", "xai"] as const satisfies readonly AccountProviderKind[];
+
 export function isAccountBackedProvider(provider: string) {
   return ACCOUNT_BACKED_PROVIDERS.some((value) => value === provider);
+}
+
+export function isAccountProviderKind(provider: string): provider is AccountProviderKind {
+  return ACCOUNT_PROVIDER_KINDS.some((value) => value === provider);
 }
 
 export function isAccountBackedProviderSet(providers: readonly string[]) {
   return providers.length === 1 && providers.some(isAccountBackedProvider);
 }
 
-export function isManagedAccountBackedUpstream(upstream: UpstreamForm) {
+/**
+ * 账户型 Upstream：绑定固定 credential，禁止复制同 credential。
+ * 删除已启用（删除 Upstream 级联删账户凭据）。
+ */
+export function isAccountCredentialUpstream(upstream: UpstreamForm) {
   const providers = normalizeProviders(upstream.providers);
   const provider = providers[0];
-  if (providers.length !== 1 || provider === undefined || !isAccountBackedProvider(provider)) {
-    return false;
-  }
-  // xAI 允许用户创建多个 OAuth upstream；只有系统生成的默认项禁止复制或删除。
-  return provider === "xai" ? upstream.id.trim() === "xai-default" : true;
+  return providers.length === 1 && provider !== undefined && isAccountProviderKind(provider);
+}
+
+/** @deprecated 使用 isAccountCredentialUpstream；保留别名避免遗漏引用。 */
+export function isManagedAccountBackedUpstream(upstream: UpstreamForm) {
+  return isAccountCredentialUpstream(upstream);
+}
+
+/** 账户型 credential identity 只读：已绑定 account_id 时不可改 provider/account。 */
+export function isAccountIdentityLocked(upstream: UpstreamForm) {
+  return isAccountCredentialUpstream(upstream) && !!upstream.accountId.trim();
 }
 
 export function createCopiedUpstreamId(sourceId: string, upstreams: readonly UpstreamForm[]) {

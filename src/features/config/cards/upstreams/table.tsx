@@ -39,6 +39,7 @@ type UpstreamsToolbarProps = {
   onToggleApiKeys: () => void;
   onStrategyChange: (value: ConfigForm["upstreamStrategy"]) => void;
   onAddClick: () => void;
+  onAddAccountClick: () => void;
   onColumnsClick: () => void;
 };
 
@@ -91,6 +92,7 @@ export function UpstreamsToolbar({
   onToggleApiKeys,
   onStrategyChange,
   onAddClick,
+  onAddAccountClick,
   onColumnsClick,
 }: UpstreamsToolbarProps) {
   const updateStrategy = (patch: Partial<ConfigForm["upstreamStrategy"]>) => {
@@ -108,6 +110,15 @@ export function UpstreamsToolbar({
         <div className="flex flex-wrap items-center gap-2">
           <Button type="button" variant="outline" onClick={onAddClick}>
             {m.upstreams_add()}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onAddAccountClick}
+            data-slot="upstreams-add-account"
+            aria-label={m.upstreams_add_account()}
+          >
+            {m.upstreams_add_account()}
           </Button>
           <Button type="button" variant="outline" onClick={onColumnsClick}>
             <Columns3 className="size-4" aria-hidden="true" />

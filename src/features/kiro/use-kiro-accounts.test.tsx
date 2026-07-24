@@ -9,9 +9,6 @@ const apiMocks = vi.hoisted(() => ({
   importKiroKamTokens: vi.fn(),
   refreshKiroQuotaCache: vi.fn(),
   refreshKiroQuotaNow: vi.fn(),
-  logoutKiroAccount: vi.fn(),
-  setKiroEnabled: vi.fn(),
-  setKiroProxyUrl: vi.fn(),
 }));
 
 vi.mock("@/features/kiro/api", () => ({
@@ -20,9 +17,6 @@ vi.mock("@/features/kiro/api", () => ({
   importKiroKamTokens: apiMocks.importKiroKamTokens,
   refreshKiroQuotaCache: apiMocks.refreshKiroQuotaCache,
   refreshKiroQuotaNow: apiMocks.refreshKiroQuotaNow,
-  logoutKiroAccount: apiMocks.logoutKiroAccount,
-  setKiroEnabled: apiMocks.setKiroEnabled,
-  setKiroProxyUrl: apiMocks.setKiroProxyUrl,
 }));
 
 describe("kiro/use-kiro-accounts", () => {

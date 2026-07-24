@@ -154,10 +154,11 @@ describe("upstreams/editor-dialog-form", () => {
     });
   });
 
-  it("renders kiro account selector when provider is kiro", () => {
+  it("shows missing account banner for unbound kiro and keeps proxy editable", () => {
     const draft = createEmptyUpstream();
-    draft.id = "kiro-default";
+    draft.id = "kiro-unbound";
     draft.providers = ["kiro"];
+    draft.accountId = "";
 
     render(
       <UpstreamEditorFields
@@ -170,17 +171,17 @@ describe("upstreams/editor-dialog-form", () => {
       />
     );
 
-    expect(screen.queryByText(m.field_kiro_account())).not.toBeInTheDocument();
+    expect(screen.getByText(m.upstreams_account_missing())).toBeInTheDocument();
     expect(screen.queryByLabelText(m.field_base_url())).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(m.field_proxy_url())).not.toBeInTheDocument();
-    expect(screen.getByLabelText(m.field_id())).toBeDisabled();
-    expect(screen.getByRole("button", { name: /kiro/i })).toBeDisabled();
+    expect(screen.getByLabelText(m.field_proxy_url())).toBeInTheDocument();
+    expect(screen.getByLabelText(m.field_id())).toBeEnabled();
   });
 
-  it("renders codex account selector when provider is codex", () => {
+  it("shows missing-account warning and keeps base_url hidden for unbound codex", () => {
     const draft = createEmptyUpstream();
-    draft.id = "codex-default";
+    draft.id = "codex-unbound";
     draft.providers = ["codex"];
+    draft.accountId = "";
 
     render(
       <UpstreamEditorFields
@@ -193,19 +194,18 @@ describe("upstreams/editor-dialog-form", () => {
       />
     );
 
-    expect(screen.queryByText(m.field_codex_account())).not.toBeInTheDocument();
+    expect(screen.getByText(m.upstreams_account_missing())).toBeInTheDocument();
     expect(screen.queryByLabelText(m.field_base_url())).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(m.field_proxy_url())).not.toBeInTheDocument();
-    expect(screen.getByLabelText(m.field_id())).toBeDisabled();
-    expect(screen.getByRole("button", { name: /codex/i })).toBeDisabled();
+    expect(screen.queryByLabelText(m.field_api_key())).not.toBeInTheDocument();
+    // 未绑定 account 时 identity 未锁定，id 可编辑。
+    expect(screen.getByLabelText(m.field_id())).toBeEnabled();
   });
 
-  it("selects an optional xai account binding", async () => {
-    const user = userEvent.setup();
+  it("locks credential identity for bound xai account upstream", async () => {
     const draft = createEmptyUpstream();
-    draft.id = "xai-default";
+    draft.id = "xai-bound";
     draft.providers = ["xai"];
-    const onChangeDraft = vi.fn();
+    draft.accountId = "xai-user@example.com";
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === "xai_list_accounts") {
         return [
@@ -220,6 +220,9 @@ describe("upstreams/editor-dialog-form", () => {
           },
         ];
       }
+      if (command === "xai_fetch_quotas") {
+        return [];
+      }
       throw new Error(`unexpected command: ${command}`);
     });
 
@@ -230,24 +233,17 @@ describe("upstreams/editor-dialog-form", () => {
         appProxyUrl=""
         showApiKeys={false}
         onToggleApiKeys={vi.fn()}
-        onChangeDraft={onChangeDraft}
+        onChangeDraft={vi.fn()}
       />
     );
 
-    const accountSelect = screen.getByLabelText(m.field_xai_account());
-    expect(accountSelect).toHaveTextContent(m.xai_account_auto());
+    expect(await screen.findByText("xai-user@example.com")).toBeInTheDocument();
     expect(screen.queryByLabelText(m.field_base_url())).not.toBeInTheDocument();
     expect(screen.getByLabelText(m.field_id())).toBeDisabled();
-
-    await user.click(accountSelect);
-    await user.click(await screen.findByRole("option", { name: /user@example\.com/ }));
-
-    expect(onChangeDraft).toHaveBeenCalledWith({
-      xaiAccountId: "xai-user@example.com",
-    });
+    expect(screen.getByRole("button", { name: /xai/i })).toBeDisabled();
   });
 
-  it("hides network and api key fields when provider is antigravity", () => {
+  it("hides base_url and api key for antigravity while keeping proxy editable", () => {
     const draft = createEmptyUpstream();
     draft.id = "antigravity-default";
     draft.providers = ["antigravity"];
@@ -264,8 +260,9 @@ describe("upstreams/editor-dialog-form", () => {
     );
 
     expect(screen.queryByLabelText(m.field_base_url())).not.toBeInTheDocument();
-    expect(screen.queryByLabelText(m.field_proxy_url())).not.toBeInTheDocument();
     expect(screen.queryByLabelText(m.field_api_key())).not.toBeInTheDocument();
+    // proxy 属于 Upstream 路由字段，在 Advanced 中可编辑。
+    expect(screen.getByLabelText(m.field_proxy_url())).toBeInTheDocument();
     expect(screen.getByLabelText(m.field_id())).toBeEnabled();
     expect(screen.getByRole("button", { name: /antigravity/i })).toBeEnabled();
   });

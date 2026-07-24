@@ -6,7 +6,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::commands::parse_manual_account_status;
+use token_proxy_app::app::TokenProxyApp;
+
 use crate::xai;
 
 #[tauri::command]
@@ -18,14 +19,16 @@ pub async fn xai_list_accounts(
 
 #[tauri::command]
 pub async fn xai_import_file(
-    xai_store: tauri::State<'_, Arc<xai::XaiAccountStore>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     path: String,
 ) -> Result<Vec<xai::XaiAccountSummary>, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("Import path is required.".to_string());
     }
-    let accounts = xai_store.import_file(PathBuf::from(trimmed)).await?;
+    let accounts = token_proxy_app
+        .xai_import_file(PathBuf::from(trimmed))
+        .await?;
     tracing::info!(
         imported = accounts.len(),
         "xai account file import command completed"
@@ -35,10 +38,10 @@ pub async fn xai_import_file(
 
 #[tauri::command]
 pub async fn xai_import_text(
-    xai_store: tauri::State<'_, Arc<xai::XaiAccountStore>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     contents: String,
 ) -> Result<Vec<xai::XaiAccountSummary>, String> {
-    let accounts = xai_store.import_text(&contents).await?;
+    let accounts = token_proxy_app.xai_import_text(&contents).await?;
     tracing::info!(
         imported = accounts.len(),
         "xai account text import command completed"
@@ -48,10 +51,10 @@ pub async fn xai_import_text(
 
 #[tauri::command]
 pub async fn xai_import_refresh_tokens(
-    xai_store: tauri::State<'_, Arc<xai::XaiAccountStore>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     contents: String,
 ) -> Result<Vec<xai::XaiAccountSummary>, String> {
-    let accounts = xai_store.import_refresh_tokens(&contents).await?;
+    let accounts = token_proxy_app.xai_import_refresh_tokens(&contents).await?;
     tracing::info!(
         imported = accounts.len(),
         "xai refresh token import command completed"
@@ -105,45 +108,7 @@ pub async fn xai_set_auto_refresh(
     Ok(account)
 }
 
-#[tauri::command]
-pub async fn xai_set_status(
-    xai_store: tauri::State<'_, Arc<xai::XaiAccountStore>>,
-    account_id: String,
-    status: String,
-) -> Result<xai::XaiAccountSummary, String> {
-    let status = parse_manual_account_status(&status)?;
-    let account = xai_store.set_status(&account_id, status.into()).await?;
-    tracing::info!(account_id, status = ?account.status, "xai account status updated");
-    Ok(account)
-}
-
-#[tauri::command]
-pub async fn xai_set_proxy_url(
-    xai_store: tauri::State<'_, Arc<xai::XaiAccountStore>>,
-    account_id: String,
-    proxy_url: Option<String>,
-) -> Result<xai::XaiAccountSummary, String> {
-    let account = xai_store
-        .set_proxy_url(&account_id, proxy_url.as_deref())
-        .await?;
-    tracing::info!(
-        account_id,
-        proxy_enabled = account.proxy_url.is_some(),
-        "xai account proxy updated"
-    );
-    Ok(account)
-}
-
-#[tauri::command]
-pub async fn xai_set_priority(
-    xai_store: tauri::State<'_, Arc<xai::XaiAccountStore>>,
-    account_id: String,
-    priority: i32,
-) -> Result<xai::XaiAccountSummary, String> {
-    let account = xai_store.set_priority(&account_id, priority).await?;
-    tracing::info!(account_id, priority, "xai account priority updated");
-    Ok(account)
-}
+// Phase B: 账户级 priority / proxy_url / 人工 Disabled 已删除；只保留 auto_refresh。
 
 #[tauri::command]
 pub async fn xai_start_login(
@@ -154,10 +119,10 @@ pub async fn xai_start_login(
 
 #[tauri::command]
 pub async fn xai_poll_login(
-    xai_login: tauri::State<'_, Arc<xai::XaiLoginManager>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     state: String,
 ) -> Result<xai::XaiLoginPollResponse, String> {
-    xai_login.poll_login(&state).await
+    token_proxy_app.xai_poll_login(&state).await
 }
 
 #[tauri::command]
@@ -174,12 +139,4 @@ pub async fn xai_cancel_login(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn xai_logout(
-    xai_login: tauri::State<'_, Arc<xai::XaiLoginManager>>,
-    account_id: String,
-) -> Result<(), String> {
-    xai_login.logout(&account_id).await?;
-    tracing::info!(account_id, "xai account deleted");
-    Ok(())
-}
+// Phase C2: xai_logout Tauri 删除路径已移除；删除只能由 Upstream 级联触发。

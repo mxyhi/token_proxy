@@ -41,6 +41,52 @@ pub(super) fn should_cooldown_retryable_status(status: StatusCode) -> bool {
     ) || status.is_server_error()
 }
 
+/// 是否把可重试 HTTP 状态标为 `RetryScope::NextOnly`（跳过 same-upstream 再放）。
+///
+/// 规则：
+/// - `413 Payload Too Large`：全局 NextOnly（body 过大，原地重放无意义）。
+/// - `400/401/403/404/422`：仅固定账户 credential（`account_id` 非空，且 provider 为
+///   codex/xai；Kiro 走 `kiro_result` 自管 NextOnly）时 NextOnly。
+/// - 普通 API-key upstream：保持缺省 SameThenNext，保留 `same_upstream_retry_count`。
+/// - transport / 超时 / 5xx / 429 / prelude：仍走缺省 SameThenNext。
+pub(super) fn is_next_only_retryable_status(
+    status: StatusCode,
+    provider: &str,
+    account_id: Option<&str>,
+) -> bool {
+    if status == StatusCode::PAYLOAD_TOO_LARGE {
+        return true;
+    }
+    let account_semantic = matches!(
+        status,
+        StatusCode::BAD_REQUEST
+            | StatusCode::UNAUTHORIZED
+            | StatusCode::FORBIDDEN
+            | StatusCode::NOT_FOUND
+            | StatusCode::UNPROCESSABLE_ENTITY
+    );
+    if !account_semantic {
+        return false;
+    }
+    let has_account = account_id
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty());
+    // Kiro 失败路径在 kiro_result 内单独插入 NextOnly，不经过本函数。
+    has_account && matches!(provider, "codex" | "xai")
+}
+
+/// Codex/Kiro/xAI 固定账户：仅当跨多个 distinct runtime Upstream 仍鉴权失败时，
+/// 才将最终 401/403 转为 503。单 Upstream（含 Agent Identity 内部 recovery/replay）保留原状态。
+fn is_fixed_account_auth_status_to_mask(
+    provider: &str,
+    status: StatusCode,
+    distinct_attempted_upstreams: usize,
+) -> bool {
+    distinct_attempted_upstreams > 1
+        && matches!(provider, "codex" | "kiro" | "xai")
+        && matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+}
+
 pub(super) async fn handle_upstream_result(
     state: &ProxyState,
     upstream_res: Result<reqwest::Response, reqwest::Error>,
@@ -101,11 +147,20 @@ pub(super) async fn handle_upstream_result(
                 cooldown_scope,
             );
             let mut response = response;
-            if status == StatusCode::PAYLOAD_TOO_LARGE {
+            // 固定账户 401/403/400 等：同 Upstream 再打无意义，直接跨 Upstream。
+            // API-key upstream 不进此分支，保留 same_upstream_retry_count。
+            if is_next_only_retryable_status(status, provider, account_id_value.as_deref()) {
                 response.extensions_mut().insert(RetryDirective {
                     scope: RetryScope::NextOnly,
                     effective_body: None,
                 });
+                tracing::debug!(
+                    provider,
+                    upstream = upstream_id,
+                    account_id = account_id_value.as_deref().unwrap_or(""),
+                    status = status.as_u16(),
+                    "retryable status marked NextOnly for cross-upstream failover"
+                );
             }
             let retryable_response = response
                 .extensions()
@@ -343,6 +398,48 @@ fn finalize_forward_response(
         return http::error_response(StatusCode::NOT_FOUND, message);
     }
     if let Some(response) = summary.last_retry_response {
+        // 固定账户：仅 distinct runtime Upstream > 1 时 mask 401/403→503。
+        // should_fallback 已在 finalize_forward_result 按 last_retry_response 存在算 true，
+        // 本转换不改 fallback 能力，跨 provider 仍可继续。
+        // 勿用 summary.attempted：same-upstream retry / Agent Identity 内部恢复会放大它。
+        let distinct = summary.attempted_upstream_keys.len();
+        if is_fixed_account_auth_status_to_mask(provider, response.status(), distinct) {
+            let message =
+                format!("All {provider} fixed-account upstreams exhausted after auth failure");
+            tracing::warn!(
+                provider,
+                original_status = response.status().as_u16(),
+                status = StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                distinct_attempted_upstreams = distinct,
+                exclusion_reason = "fixed_account_auth_exhausted",
+                "masking fixed-account auth failure as 503 for client"
+            );
+            log_upstream_error_if_needed(
+                log,
+                request_detail,
+                meta,
+                provider,
+                LOCAL_UPSTREAM_ID,
+                None,
+                inbound_path,
+                StatusCode::SERVICE_UNAVAILABLE,
+                message.clone(),
+                Instant::now(),
+            );
+            return http::error_response(StatusCode::SERVICE_UNAVAILABLE, message);
+        }
+        if matches!(
+            response.status(),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+        ) && matches!(provider, "codex" | "kiro" | "xai")
+        {
+            tracing::debug!(
+                provider,
+                status = response.status().as_u16(),
+                distinct_attempted_upstreams = distinct,
+                "keeping single-upstream fixed-account auth failure status for client"
+            );
+        }
         return response;
     }
     // 仅终态失败落一条 deferred transport 诊断（中间 attempt 已跳过写库）。

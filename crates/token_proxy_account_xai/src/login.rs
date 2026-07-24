@@ -24,6 +24,8 @@ const TERMINAL_SESSION_RETENTION: std::time::Duration = std::time::Duration::fro
 
 #[derive(Clone)]
 pub struct XaiLoginManager {
+    /// 保留构造对称；credential 落库改由编排层 store 提交。
+    #[allow(dead_code)]
     store: Arc<XaiAccountStore>,
     sessions: Arc<RwLock<HashMap<String, LoginSession>>>,
     app_proxy: AppProxyState,
@@ -35,7 +37,12 @@ struct LoginSession {
     error: Option<String>,
     account: Option<XaiAccountSummary>,
     expires_at: OffsetDateTime,
+    /// OAuth 设备流完成、正在准备/提交期间禁止 cancel。
     saving_account: bool,
+    /// 待编排层提交的 credential（未落库）。
+    pending_record: Option<XaiTokenRecord>,
+    /// 编排层正在 commit credential+config。
+    committing: bool,
     task_abort: Option<AbortHandle>,
 }
 
@@ -43,6 +50,15 @@ enum AccountSaveClaim {
     Acquired,
     Inactive,
     Expired,
+}
+
+/// poll 结果：仍等待 / 终态 / 可提交的 prepared credential。
+pub enum XaiLoginPollClaim {
+    Response(XaiLoginPollResponse),
+    Prepared {
+        state: String,
+        record: XaiTokenRecord,
+    },
 }
 
 impl XaiLoginManager {
@@ -72,6 +88,8 @@ impl XaiLoginManager {
                 account: None,
                 expires_at,
                 saving_account: false,
+                pending_record: None,
+                committing: false,
                 task_abort: None,
             },
         );
@@ -104,6 +122,8 @@ impl XaiLoginManager {
     }
 
     pub async fn poll_login(&self, state: &str) -> Result<XaiLoginPollResponse, String> {
+        // pending 对外仍 Waiting，真正提交走 claim_prepared_login。
+        // 终态（Success/Error）在无 pending/committing 时消费 session（兼容旧 poll 语义）。
         let mut sessions = self.sessions.write().await;
         let response = {
             let session = sessions
@@ -111,6 +131,8 @@ impl XaiLoginManager {
                 .ok_or_else(|| "xAI login session not found.".to_string())?;
             if matches!(session.status, XaiLoginStatus::Waiting)
                 && !session.saving_account
+                && !session.committing
+                && session.pending_record.is_none()
                 && OffsetDateTime::now_utc() >= session.expires_at
             {
                 session.status = XaiLoginStatus::Error;
@@ -123,25 +145,119 @@ impl XaiLoginManager {
                 account: session.account.clone(),
             }
         };
-        if !matches!(response.status, XaiLoginStatus::Waiting) {
+        let consumable = !matches!(response.status, XaiLoginStatus::Waiting)
+            && sessions
+                .get(state)
+                .is_some_and(|session| !session.committing && session.pending_record.is_none());
+        if consumable {
             sessions.remove(state);
             tracing::debug!("xai device login terminal session consumed");
         }
         Ok(response)
     }
 
-    pub async fn logout(&self, account_id: &str) -> Result<(), String> {
-        self.store.delete_account(account_id).await
+    /// 编排层在 mutation 锁内 claim prepared credential。
+    pub async fn claim_prepared_login(&self, state: &str) -> Result<XaiLoginPollClaim, String> {
+        let mut sessions = self.sessions.write().await;
+        let session = sessions
+            .get_mut(state)
+            .ok_or_else(|| "xAI login session not found.".to_string())?;
+        if matches!(session.status, XaiLoginStatus::Waiting)
+            && !session.saving_account
+            && !session.committing
+            && session.pending_record.is_none()
+            && OffsetDateTime::now_utc() >= session.expires_at
+        {
+            session.status = XaiLoginStatus::Error;
+            session.error = Some("xAI device login expired.".to_string());
+        }
+        // 取消安全：clone 不 take；complete/fail 才清 pending，中断后可重 claim。
+        if let Some(record) = session.pending_record.clone() {
+            session.committing = true;
+            session.saving_account = true;
+            tracing::debug!("xai login prepared credential claimed for orchestration commit");
+            return Ok(XaiLoginPollClaim::Prepared {
+                state: state.to_string(),
+                record,
+            });
+        }
+        let response = XaiLoginPollResponse {
+            state: state.to_string(),
+            status: session.status.clone(),
+            error: session.error.clone(),
+            account: session.account.clone(),
+        };
+        // 终态响应可消费 session（与旧 poll 行为一致）。
+        if !matches!(response.status, XaiLoginStatus::Waiting) && !session.committing {
+            sessions.remove(state);
+            tracing::debug!("xai device login terminal session consumed");
+        }
+        Ok(XaiLoginPollClaim::Response(response))
+    }
+
+    pub async fn complete_login_commit(&self, state: &str, account: XaiAccountSummary) {
+        let updated = if let Some(session) = self.sessions.write().await.get_mut(state) {
+            session.status = XaiLoginStatus::Success;
+            session.error = None;
+            session.account = Some(account);
+            session.pending_record = None;
+            session.committing = false;
+            session.saving_account = false;
+            true
+        } else {
+            false
+        };
+        if updated {
+            tracing::info!("xai login commit completed");
+            self.schedule_terminal_session_cleanup(state.to_string());
+        }
+    }
+
+    pub async fn fail_login_commit(&self, state: &str, message: String) {
+        tracing::warn!(reason = %message, "xai login orchestration commit failed");
+        let updated = if let Some(session) = self.sessions.write().await.get_mut(state) {
+            session.status = XaiLoginStatus::Error;
+            session.error = Some(message);
+            session.account = None;
+            session.pending_record = None;
+            session.committing = false;
+            session.saving_account = false;
+            true
+        } else {
+            false
+        };
+        if updated {
+            self.schedule_terminal_session_cleanup(state.to_string());
+        }
+    }
+
+    /// 测试：注入 prepared login，不走真实 OAuth。
+    #[cfg(any(test, feature = "test-support"))]
+    pub async fn inject_prepared_login_for_test(&self, state: &str, record: XaiTokenRecord) {
+        let expires_at = OffsetDateTime::now_utc() + time::Duration::seconds(600);
+        self.sessions.write().await.insert(
+            state.to_string(),
+            LoginSession {
+                status: XaiLoginStatus::Waiting,
+                error: None,
+                account: None,
+                expires_at,
+                saving_account: false,
+                pending_record: Some(record),
+                committing: false,
+                task_abort: None,
+            },
+        );
+        tracing::debug!("xai prepared login injected for test");
     }
 
     /// 取消是幂等操作；session 已结束或已消费时同样返回成功。
     pub async fn cancel_login(&self, state: &str) -> Result<(), String> {
         let task_abort = {
             let mut sessions = self.sessions.write().await;
-            if sessions
-                .get(state)
-                .is_some_and(|session| session.saving_account)
-            {
+            if sessions.get(state).is_some_and(|session| {
+                session.saving_account || session.committing || session.pending_record.is_some()
+            }) {
                 return Err(
                     "xAI device login is already completing and cannot be cancelled.".to_string(),
                 );
@@ -209,16 +325,9 @@ impl XaiLoginManager {
                             return;
                         }
                     }
-                    match self.save_token(&device, token).await {
-                        Ok(account) => {
-                            tracing::info!(
-                                account_id = account.account_id,
-                                "xai device login completed"
-                            );
-                            self.complete_session(&state, account).await;
-                        }
-                        Err(error) => self.fail_session(&state, error).await,
-                    }
+                    // OAuth 完成只准备 credential；落库+绑定在 poll 编排锁内提交。
+                    let record = self.prepare_token(&device, token).await;
+                    self.prepare_session(&state, record).await;
                     return;
                 }
                 Err(error) => {
@@ -262,12 +371,12 @@ impl XaiLoginManager {
         AccountSaveClaim::Acquired
     }
 
-    async fn save_token(
+    async fn prepare_token(
         &self,
         device: &XaiDeviceCode,
         token: XaiTokenResponse,
-    ) -> Result<XaiAccountSummary, String> {
-        let record = XaiTokenRecord {
+    ) -> XaiTokenRecord {
+        XaiTokenRecord {
             access_token: token.access_token,
             refresh_token: token.refresh_token,
             id_token: token.id_token,
@@ -283,25 +392,25 @@ impl XaiLoginManager {
             token_endpoint: Some(device.token_endpoint.clone()),
             auto_refresh_enabled: true,
             status: XaiAccountStatus::Active,
-            proxy_url: None,
-            priority: 0,
             quota: XaiQuotaCache::default(),
-        };
-        self.store.save_new_account(record).await
+        }
     }
 
-    async fn complete_session(&self, state: &str, account: XaiAccountSummary) {
+    async fn prepare_session(&self, state: &str, record: XaiTokenRecord) {
+        // 只暂存 credential，最终落库由编排层提交；saving_account 保持 true 直到 claim。
         let updated = if let Some(session) = self.sessions.write().await.get_mut(state) {
-            session.status = XaiLoginStatus::Success;
+            session.pending_record = Some(record);
+            session.status = XaiLoginStatus::Waiting;
             session.error = None;
-            session.account = Some(account);
-            session.saving_account = false;
+            session.account = None;
+            session.committing = false;
+            // saving_account 已在 claim_account_save 置 true，保持以阻止 cancel。
             true
         } else {
             false
         };
         if updated {
-            self.schedule_terminal_session_cleanup(state.to_string());
+            tracing::info!("xai login credential prepared; awaiting orchestration commit");
         }
     }
 
@@ -311,7 +420,9 @@ impl XaiLoginManager {
             session.status = XaiLoginStatus::Error;
             session.error = Some(error);
             session.account = None;
+            session.pending_record = None;
             session.saving_account = false;
+            session.committing = false;
             true
         } else {
             false
@@ -366,7 +477,9 @@ mod tests {
     async fn successful_session_is_removed_after_terminal_poll() {
         let manager = test_manager();
         insert_waiting_session(&manager, "success", OffsetDateTime::now_utc()).await;
-        manager.complete_session("success", test_account()).await;
+        manager
+            .complete_login_commit("success", test_account())
+            .await;
 
         let response = manager.poll_login("success").await.unwrap();
 
@@ -422,6 +535,8 @@ mod tests {
                 account: None,
                 expires_at: OffsetDateTime::now_utc() + time::Duration::minutes(1),
                 saving_account: false,
+                pending_record: None,
+                committing: false,
                 task_abort: Some(task.abort_handle()),
             },
         );
@@ -541,6 +656,8 @@ mod tests {
                 account: None,
                 expires_at,
                 saving_account: false,
+                pending_record: None,
+                committing: false,
                 task_abort: None,
             },
         );
@@ -553,8 +670,6 @@ mod tests {
             expires_at: Some("2999-01-01T00:00:00Z".to_string()),
             status: XaiAccountStatus::Active,
             auto_refresh_enabled: true,
-            proxy_url: None,
-            priority: 0,
         }
     }
 }

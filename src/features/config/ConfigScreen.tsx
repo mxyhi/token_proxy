@@ -9,13 +9,10 @@ import {
   useProxyServiceState,
 } from "@/features/config/config-screen-state";
 import { useConfigActions } from "@/features/config/config-screen-actions";
-import { createModelMapping, syncAccountBackedUpstreams } from "@/features/config/form";
+import { createModelMapping } from "@/features/config/form";
 import { useConfigListActions } from "@/features/config/list-actions";
 import type { ConfigEditorSectionId } from "@/features/config/sections";
 import type { ConfigForm } from "@/features/config/types";
-import { useCodexAccounts } from "@/features/codex/use-codex-accounts";
-import { useKiroAccounts } from "@/features/kiro/use-kiro-accounts";
-import { useXaiAccounts } from "@/features/xai/use-xai-accounts";
 import { useUpdater } from "@/features/update/updater";
 import { parseError } from "@/lib/error";
 
@@ -112,7 +109,6 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
     setProxyServiceMessage: proxyService.setProxyServiceMessage,
   });
   const {
-    setForm,
     setStatus,
     setStatusMessage,
     updateForm,
@@ -156,9 +152,6 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
   });
   const { loadConfig, saveConfig } = configActions;
   const listActions = useConfigListActions(state.setForm);
-  const kiroAccounts = useKiroAccounts();
-  const codexAccounts = useCodexAccounts();
-  const xaiAccounts = useXaiAccounts();
   const {
     actions: { setAppProxyUrl },
   } = useUpdater();
@@ -178,46 +171,6 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
   useEffect(() => {
     void refreshProxyStatus();
   }, [refreshProxyStatus]);
-
-  useEffect(() => {
-    if (
-      !state.lastConfig ||
-      kiroAccounts.loading ||
-      codexAccounts.loading ||
-      xaiAccounts.loading ||
-      kiroAccounts.error ||
-      codexAccounts.error ||
-      xaiAccounts.error
-    ) {
-      return;
-    }
-    setForm((prev) => {
-      const nextUpstreams = syncAccountBackedUpstreams(prev.upstreams, {
-        hasKiroAccount: kiroAccounts.accounts.length > 0,
-        hasCodexAccount: codexAccounts.accounts.length > 0,
-        hasXaiAccount: xaiAccounts.accounts.length > 0,
-      });
-      if (nextUpstreams === prev.upstreams) {
-        return prev;
-      }
-      return {
-        ...prev,
-        upstreams: nextUpstreams,
-      };
-    });
-  }, [
-    codexAccounts.accounts,
-    codexAccounts.error,
-    codexAccounts.loading,
-    kiroAccounts.accounts,
-    kiroAccounts.error,
-    kiroAccounts.loading,
-    state.lastConfig,
-    xaiAccounts.accounts,
-    xaiAccounts.error,
-    xaiAccounts.loading,
-    setForm,
-  ]);
 
   useEffect(() => {
     if (derived.autoSaveKey === lastObservedAutoSaveKeyRef.current) {

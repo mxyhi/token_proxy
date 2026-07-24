@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use super::types::InboundApiFormatMask;
 use super::{
     hot_model_mappings::merge_hot_model_mappings, model_mapping::compile_model_mappings,
-    HeaderOverride, InboundApiFormat, ProviderUpstreams, StaticApiKeyHeaders, UpstreamConfig,
-    UpstreamGroup, UpstreamOverrides, UpstreamRuntime,
+    AccountProvider, HeaderOverride, InboundApiFormat, ProviderUpstreams, StaticApiKeyHeaders,
+    UpstreamConfig, UpstreamCredential, UpstreamGroup, UpstreamOverrides, UpstreamRuntime,
 };
 use axum::http::header::{HeaderName, HeaderValue};
 
@@ -25,6 +25,8 @@ pub(super) fn normalize_upstreams(
     hot_model_mappings: &HashMap<String, String>,
 ) -> Result<Vec<NormalizedUpstream>, String> {
     validate_upstream_ids(upstreams)?;
+    // Account-as-Upstream：同一账户引用只能被一条 Upstream 绑定。
+    validate_unique_account_bindings(upstreams)?;
     let mut normalized = Vec::with_capacity(upstreams.len());
     for upstream in upstreams {
         normalized.extend(normalize_single_upstream(
@@ -85,6 +87,33 @@ fn validate_upstream_ids(upstreams: &[UpstreamConfig]) -> Result<(), String> {
     Ok(())
 }
 
+/// 同一 (provider, account_id) 不得被两条 Upstream 绑定；错误不含 credential secret。
+fn validate_unique_account_bindings(upstreams: &[UpstreamConfig]) -> Result<(), String> {
+    let mut seen: HashMap<(AccountProvider, String), String> = HashMap::new();
+    for upstream in upstreams {
+        let Some((provider, account_id)) = upstream.credential.account_binding() else {
+            continue;
+        };
+        let account_id = account_id.trim();
+        // 空 account_id 由 project_credential 硬失败；此处只查重复绑定。
+        if account_id.is_empty() {
+            continue;
+        }
+        let key = (provider, account_id.to_string());
+        if let Some(existing_id) = seen.get(&key) {
+            return Err(format!(
+                "Account binding {}:{} is bound by multiple upstreams: {} and {}.",
+                provider.as_str(),
+                account_id,
+                existing_id,
+                upstream.id.trim()
+            ));
+        }
+        seen.insert(key, upstream.id.trim().to_string());
+    }
+    Ok(())
+}
+
 fn normalize_single_upstream(
     upstream: &UpstreamConfig,
     app_proxy_url: Option<&str>,
@@ -101,27 +130,12 @@ fn normalize_single_upstream(
         &providers,
         upstream.use_chat_completions_for_responses,
     )?;
-    let api_keys = normalize_api_keys(upstream);
-    validate_api_key_mode(&upstream.id, &providers, &api_keys)?;
-
-    let kiro_account_id = upstream
-        .kiro_account_id
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
-    let codex_account_id = upstream
-        .codex_account_id
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
-    let xai_account_id = upstream
-        .xai_account_id
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string());
+    // 将 credential 投影为 runtime 仍消费的 api_key / 三个 account_id 字段。
+    let projected = project_credential(&upstream.id, &upstream.credential, &providers)?;
+    let api_keys = projected.api_keys;
+    let kiro_account_id = projected.kiro_account_id;
+    let codex_account_id = projected.codex_account_id;
+    let xai_account_id = projected.xai_account_id;
     let proxy_url =
         normalize_upstream_proxy_url(upstream.proxy_url.as_deref(), app_proxy_url, &upstream.id)?;
     let available_models = normalize_available_models(&upstream.available_models);
@@ -134,6 +148,7 @@ fn normalize_single_upstream(
         upstream_id = %upstream.id,
         available_model_count = available_models.len(),
         unrestricted = available_models.is_empty(),
+        credential_type = projected.credential_type,
         "normalized upstream model availability"
     );
     let merged_model_mappings =
@@ -147,13 +162,6 @@ fn normalize_single_upstream(
             &upstream.id,
             upstream.base_url.as_str(),
             runtime_provider.as_str(),
-        )?;
-        validate_provider_account_binding(
-            &upstream.id,
-            runtime_provider.as_str(),
-            kiro_account_id.as_deref(),
-            codex_account_id.as_deref(),
-            xai_account_id.as_deref(),
         )?;
 
         let mut allowed_inbound_formats =
@@ -180,6 +188,7 @@ fn normalize_single_upstream(
                 codex_account_id: codex_account_id.clone(),
                 xai_account_id: xai_account_id.clone(),
                 kiro_preferred_endpoint: upstream.preferred_endpoint.clone(),
+                // Upstream 级 proxy/priority 属于新模型，不能从 account 字段迁移误删。
                 proxy_url: proxy_url.clone(),
                 priority: upstream.priority.unwrap_or(0),
                 available_models: available_models.clone(),
@@ -196,6 +205,142 @@ fn normalize_single_upstream(
     }
 
     Ok(output)
+}
+
+/// credential 投影到 runtime 字段；不暴露 key / account_id 到日志。
+struct CredentialProjection {
+    api_keys: Vec<Option<String>>,
+    kiro_account_id: Option<String>,
+    codex_account_id: Option<String>,
+    xai_account_id: Option<String>,
+    credential_type: &'static str,
+}
+
+/// 从判别联合生成 runtime 投影，并校验账户型约束。
+/// kiro/codex/xai 必须使用 Account；Passthrough 仅允许非账户型 provider。
+fn project_credential(
+    upstream_id: &str,
+    credential: &UpstreamCredential,
+    providers: &[String],
+) -> Result<CredentialProjection, String> {
+    match credential {
+        UpstreamCredential::ApiKeys { api_keys } => {
+            validate_api_keys_not_for_account_providers(upstream_id, providers)?;
+            let normalized = normalize_api_key_list(api_keys);
+            Ok(CredentialProjection {
+                api_keys: normalized,
+                kiro_account_id: None,
+                codex_account_id: None,
+                xai_account_id: None,
+                credential_type: "api_keys",
+            })
+        }
+        UpstreamCredential::Account {
+            provider,
+            account_id,
+        } => {
+            let account_id = account_id.trim();
+            if account_id.is_empty() {
+                return Err(format!(
+                    "Upstream {upstream_id} account credential account_id cannot be empty."
+                ));
+            }
+            validate_account_credential_providers(upstream_id, *provider, providers)?;
+            let (kiro_account_id, codex_account_id, xai_account_id) = match provider {
+                AccountProvider::Kiro => (Some(account_id.to_string()), None, None),
+                AccountProvider::Codex => (None, Some(account_id.to_string()), None),
+                AccountProvider::Xai => (None, None, Some(account_id.to_string())),
+            };
+            Ok(CredentialProjection {
+                api_keys: vec![None],
+                kiro_account_id,
+                codex_account_id,
+                xai_account_id,
+                credential_type: "account",
+            })
+        }
+        UpstreamCredential::Passthrough => {
+            // Account-as-Upstream：账户型上游禁止 passthrough，必须显式 Account。
+            if providers_include_account_type(providers) {
+                return Err(format!(
+                    "Upstream {upstream_id} account-based providers require account credential; passthrough is not allowed."
+                ));
+            }
+            Ok(CredentialProjection {
+                api_keys: vec![None],
+                kiro_account_id: None,
+                codex_account_id: None,
+                xai_account_id: None,
+                credential_type: "passthrough",
+            })
+        }
+    }
+}
+
+fn providers_include_account_type(providers: &[String]) -> bool {
+    providers
+        .iter()
+        .any(|provider| AccountProvider::from_provider_str(provider).is_some())
+}
+
+/// api_keys 不得用于 kiro/codex/xai；xai 保留既有错误文案。
+fn validate_api_keys_not_for_account_providers(
+    upstream_id: &str,
+    providers: &[String],
+) -> Result<(), String> {
+    if providers.iter().any(|provider| provider == "xai") {
+        return Err(format!(
+            "Upstream {upstream_id} xAI OAuth provider does not accept api_keys."
+        ));
+    }
+    if providers
+        .iter()
+        .any(|provider| matches!(provider.as_str(), "kiro" | "codex"))
+    {
+        return Err(format!(
+            "Upstream {upstream_id} does not accept api_keys for account-based providers."
+        ));
+    }
+    Ok(())
+}
+
+/// account credential：providers 中恰好一个匹配的账户型 provider。
+fn validate_account_credential_providers(
+    upstream_id: &str,
+    bound: AccountProvider,
+    providers: &[String],
+) -> Result<(), String> {
+    let account_providers = providers
+        .iter()
+        .filter_map(|provider| AccountProvider::from_provider_str(provider))
+        .collect::<Vec<_>>();
+    // 无账户型 / 绑定 provider 不一致：沿用旧平铺字段错误文案。
+    if account_providers.is_empty() || account_providers.iter().all(|actual| *actual != bound) {
+        return account_provider_mismatch_error(upstream_id, bound);
+    }
+    if account_providers.len() != 1 {
+        return Err(format!(
+            "Upstream {upstream_id} account credential requires exactly one account-based provider in providers[]."
+        ));
+    }
+    Ok(())
+}
+
+fn account_provider_mismatch_error(
+    upstream_id: &str,
+    bound: AccountProvider,
+) -> Result<(), String> {
+    match bound {
+        AccountProvider::Xai => Err(format!(
+            "Upstream {upstream_id} xai_account_id requires provider xai."
+        )),
+        AccountProvider::Kiro => Err(format!(
+            "Upstream {upstream_id} kiro_account_id requires provider kiro."
+        )),
+        AccountProvider::Codex => Err(format!(
+            "Upstream {upstream_id} codex_account_id requires provider codex."
+        )),
+    }
 }
 
 fn normalize_available_models(models: &[String]) -> Vec<String> {
@@ -242,10 +387,10 @@ fn resolve_runtime_providers(
     Ok(output)
 }
 
-fn normalize_api_keys(upstream: &UpstreamConfig) -> Vec<Option<String>> {
+fn normalize_api_key_list(api_keys: &[String]) -> Vec<Option<String>> {
     let mut seen = HashSet::new();
     let mut output = Vec::new();
-    for value in &upstream.api_keys {
+    for value in api_keys {
         let trimmed = value.trim();
         if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
             continue;
@@ -256,28 +401,6 @@ fn normalize_api_keys(upstream: &UpstreamConfig) -> Vec<Option<String>> {
         output.push(None);
     }
     output
-}
-
-fn validate_api_key_mode(
-    upstream_id: &str,
-    providers: &[String],
-    api_keys: &[Option<String>],
-) -> Result<(), String> {
-    if providers.iter().any(|provider| provider == "xai") && api_keys.iter().any(Option::is_some) {
-        return Err(format!(
-            "Upstream {upstream_id} xAI OAuth provider does not accept api_keys."
-        ));
-    }
-    if api_keys.len() > 1
-        && providers
-            .iter()
-            .any(|provider| matches!(provider.as_str(), "kiro" | "codex" | "xai"))
-    {
-        return Err(format!(
-            "Upstream {upstream_id} does not support multiple api_keys for account-based providers."
-        ));
-    }
-    Ok(())
 }
 
 fn build_selector_key(upstream_id: &str, api_key_count: usize, index: usize) -> String {
@@ -414,26 +537,6 @@ fn resolve_base_url(upstream_id: &str, base_url: &str, provider: &str) -> Result
     Err(format!("Upstream {upstream_id} base_url cannot be empty."))
 }
 
-fn validate_provider_account_binding(
-    upstream_id: &str,
-    provider: &str,
-    kiro_account_id: Option<&str>,
-    codex_account_id: Option<&str>,
-    xai_account_id: Option<&str>,
-) -> Result<(), String> {
-    if provider != "xai" && xai_account_id.is_some() {
-        return Err(format!(
-            "Upstream {upstream_id} xai_account_id requires provider xai."
-        ));
-    }
-    if provider == "xai" && (kiro_account_id.is_some() || codex_account_id.is_some()) {
-        return Err(format!(
-            "Upstream {upstream_id} xAI provider only accepts xai_account_id."
-        ));
-    }
-    Ok(())
-}
-
 fn default_inbound_formats_for_provider(
     configured_provider: &str,
     runtime_provider: &str,
@@ -518,6 +621,7 @@ fn normalize_upstream_proxy_url(
     app_proxy_url: Option<&str>,
     upstream_id: &str,
 ) -> Result<Option<String>, String> {
+    // upstream 级 proxy：空=直连；`APP_PROXY` 占位解析为 app_proxy_url；否则校验自定义 URL。
     let value = proxy_url.unwrap_or_default().trim();
     if value.is_empty() {
         return Ok(None);

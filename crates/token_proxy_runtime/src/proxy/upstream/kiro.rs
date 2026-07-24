@@ -18,6 +18,7 @@ use token_proxy_config::UpstreamRuntime;
 pub(super) const MAX_KIRO_RETRIES: usize = 2;
 pub(super) const MAX_KIRO_BACKOFF_SECS: u64 = 30;
 
+/// Kiro 账户型 upstream 固定使用 credential account_id；无 same-upstream 账户 failover。
 pub(super) async fn attempt_kiro_upstream(
     state: &ProxyState,
     method: Method,
@@ -29,76 +30,6 @@ pub(super) async fn attempt_kiro_upstream(
     response_transform: FormatTransform,
     request_detail: Option<RequestDetailSnapshot>,
 ) -> AttemptOutcome {
-    if upstream
-        .kiro_account_id
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty())
-    {
-        return attempt_kiro_single_account(
-            state,
-            upstream,
-            body,
-            meta,
-            headers,
-            method,
-            inbound_path,
-            response_transform,
-            request_detail,
-        )
-        .await
-        .outcome;
-    }
-
-    let mut excluded_account_ids: Vec<String> = Vec::new();
-    let mut current_upstream = upstream.clone();
-    loop {
-        let result = attempt_kiro_single_account(
-            state,
-            &current_upstream,
-            body,
-            meta,
-            headers,
-            method.clone(),
-            inbound_path,
-            response_transform,
-            request_detail.clone(),
-        )
-        .await;
-        let Some(account_id) = result.selected_account_id.clone() else {
-            return result.outcome;
-        };
-        if !should_failover_kiro_account(&result.outcome) {
-            return result.outcome;
-        }
-
-        mark_failed_kiro_account_before_failover(state, &account_id, &result.outcome);
-        excluded_account_ids.push(account_id);
-        let Some(next_account_id) =
-            resolve_next_kiro_account_id(state, &excluded_account_ids).await
-        else {
-            return into_group_retryable_kiro_outcome(result.outcome);
-        };
-        current_upstream.kiro_account_id = Some(next_account_id);
-    }
-}
-
-struct KiroAttemptResult {
-    outcome: AttemptOutcome,
-    selected_account_id: Option<String>,
-}
-
-async fn attempt_kiro_single_account(
-    state: &ProxyState,
-    upstream: &UpstreamRuntime,
-    body: &ReplayableBody,
-    meta: &RequestMeta,
-    headers: &HeaderMap,
-    method: Method,
-    inbound_path: &str,
-    response_transform: FormatTransform,
-    request_detail: Option<RequestDetailSnapshot>,
-) -> KiroAttemptResult {
     let mut context = match prepare_kiro_context(
         state,
         upstream,
@@ -113,19 +44,14 @@ async fn attempt_kiro_single_account(
     .await
     {
         Ok(context) => context,
-        Err(outcome) => {
-            return KiroAttemptResult {
-                outcome,
-                selected_account_id: None,
-            };
-        }
+        Err(outcome) => return outcome,
     };
-    let selected_account_id = Some(context.account_id.clone());
-    let outcome = run_kiro_endpoints(&mut context).await;
-    KiroAttemptResult {
-        outcome,
-        selected_account_id,
-    }
+    tracing::debug!(
+        account_id = context.account_id.as_str(),
+        upstream = %upstream.id,
+        "attempting pinned kiro upstream"
+    );
+    run_kiro_endpoints(&mut context).await
 }
 
 enum EndpointOutcome {
@@ -285,78 +211,4 @@ async fn send_endpoint_request(
         }
     };
     Ok((response, start_time, timings, token_tracker))
-}
-
-fn should_failover_kiro_account(outcome: &AttemptOutcome) -> bool {
-    match outcome {
-        AttemptOutcome::Success(response) => !response.status().is_success(),
-        AttemptOutcome::Retryable { .. } => true,
-        AttemptOutcome::Fatal(_) | AttemptOutcome::SkippedAuth => false,
-    }
-}
-
-fn mark_failed_kiro_account_before_failover(
-    state: &ProxyState,
-    account_id: &str,
-    outcome: &AttemptOutcome,
-) {
-    match outcome {
-        AttemptOutcome::Success(response) if !response.status().is_success() => {
-            let _ = state.account_selector.mark_response_status(
-                "kiro",
-                account_id,
-                response.status(),
-                response.headers(),
-            );
-        }
-        AttemptOutcome::Retryable { .. } => {
-            let _ = state
-                .account_selector
-                .mark_retryable_failure("kiro", account_id);
-        }
-        _ => {}
-    }
-}
-
-async fn resolve_next_kiro_account_id(
-    state: &ProxyState,
-    excluded_account_ids: &[String],
-) -> Option<String> {
-    let ordered_account_ids = super::ordered_runtime_account_ids(
-        state,
-        "kiro",
-        &crate::proxy::cooldown_scope::CooldownScope::Global,
-    )
-    .await;
-    let ordered_account_ids = ordered_account_ids
-        .into_iter()
-        .filter(|account_id| !excluded_account_ids.iter().any(|value| value == account_id))
-        .collect::<Vec<_>>();
-    if ordered_account_ids.is_empty() {
-        return None;
-    }
-    state
-        .kiro_accounts
-        .resolve_account_record_with_order(None, Some(ordered_account_ids.as_slice()))
-        .await
-        .ok()
-        .map(|(account_id, _)| account_id)
-}
-
-fn into_group_retryable_kiro_outcome(outcome: AttemptOutcome) -> AttemptOutcome {
-    match outcome {
-        AttemptOutcome::Success(response)
-            if super::utils::is_retryable_status(response.status()) =>
-        {
-            let status = response.status();
-            AttemptOutcome::Retryable {
-                message: format!("Upstream responded with {}", status.as_u16()),
-                response: Some(response),
-                is_timeout: false,
-                should_cooldown: super::result::should_cooldown_retryable_status(status),
-                deferred_log: None,
-            }
-        }
-        other => other,
-    }
 }

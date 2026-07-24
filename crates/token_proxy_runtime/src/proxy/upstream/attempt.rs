@@ -4,8 +4,8 @@ use axum::http::{HeaderMap, Method, StatusCode};
 use reqwest::ResponseBuilderExt;
 
 use super::retry::{
-    finalize_attempt, retry_after_kiro_refresh, retry_with_next_account, AccountFailoverResult,
-    UpstreamAttempt, UpstreamAttemptFailure,
+    finalize_attempt, retry_after_kiro_refresh, retry_with_account_auth_recovery,
+    AccountAuthRecoveryResult, UpstreamAttempt, UpstreamAttemptFailure,
 };
 use super::transport::send_upstream_request;
 use super::{
@@ -106,8 +106,8 @@ pub(super) async fn attempt_upstream(
             first = Ok(attempt);
             break;
         };
-        // 修复重试必须复用首次选中的账户，不能在账户 failover 中改变归因。
-        if matches!(provider, "codex" | "xai") {
+        // 修复重试必须固定当前 account_id；跨账户选号已删除。
+        if matches!(provider, "codex" | "xai" | "kiro") {
             super::retry::pin_account_if_missing(
                 provider,
                 &mut fixed_upstream,
@@ -142,7 +142,7 @@ pub(super) async fn attempt_upstream(
         )
         .await;
     }
-    let first = match retry_with_next_account(
+    let first = match retry_with_account_auth_recovery(
         state,
         method.clone(),
         provider,
@@ -161,8 +161,8 @@ pub(super) async fn attempt_upstream(
     )
     .await
     {
-        AccountFailoverResult::Pending(attempt) => attempt,
-        AccountFailoverResult::Resolved(outcome) => {
+        AccountAuthRecoveryResult::Pending(attempt) => attempt,
+        AccountAuthRecoveryResult::Resolved(outcome) => {
             return attach_effective_body(outcome, &effective_body, repair_count > 0);
         }
     };

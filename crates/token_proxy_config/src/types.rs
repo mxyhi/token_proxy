@@ -169,14 +169,99 @@ impl Default for TrayTokenRateConfig {
     }
 }
 
+/// 账户型上游 provider：仅 kiro / codex / xai 可绑定 account_id。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountProvider {
+    Kiro,
+    Codex,
+    Xai,
+}
+
+impl AccountProvider {
+    /// 配置与 runtime 共用的 provider 字符串。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Kiro => "kiro",
+            Self::Codex => "codex",
+            Self::Xai => "xai",
+        }
+    }
+
+    /// 从配置字符串解析；非账户型返回 None。
+    pub fn from_provider_str(value: &str) -> Option<Self> {
+        match value.trim() {
+            "kiro" => Some(Self::Kiro),
+            "codex" => Some(Self::Codex),
+            "xai" => Some(Self::Xai),
+            _ => None,
+        }
+    }
+}
+
+/// Upstream 唯一凭据形态：API Key 列表、固定账户引用、或透传/无密钥。
+/// 禁止再使用平铺 `api_keys` + 多个可选 `*_account_id` 的无效组合。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UpstreamCredential {
+    /// 一个或多个静态 API Key；normalize 时按 key 展开为多条 runtime。
+    ApiKeys {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        api_keys: Vec<String>,
+    },
+    /// 账户型上游：provider 必须与上游 providers 中唯一账户型 provider 一致，且固定 account_id。
+    Account {
+        provider: AccountProvider,
+        account_id: String,
+    },
+    /// 无上游密钥（例如依赖客户端透传或 provider 自身鉴权）。
+    Passthrough,
+}
+
+impl Default for UpstreamCredential {
+    fn default() -> Self {
+        Self::Passthrough
+    }
+}
+
+impl UpstreamCredential {
+    pub fn api_keys(keys: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self::ApiKeys {
+            api_keys: keys.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    pub fn account(provider: AccountProvider, account_id: impl Into<String>) -> Self {
+        Self::Account {
+            provider,
+            account_id: account_id.into(),
+        }
+    }
+
+    pub fn is_account(&self) -> bool {
+        matches!(self, Self::Account { .. })
+    }
+
+    pub fn account_binding(&self) -> Option<(AccountProvider, &str)> {
+        match self {
+            Self::Account {
+                provider,
+                account_id,
+            } => Some((*provider, account_id.as_str())),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct UpstreamConfig {
     pub id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<String>,
     pub base_url: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub api_keys: Vec<String>,
+    /// 判别联合凭据；旧平铺字段由 migrate 一次性升级。
+    #[serde(default)]
+    pub credential: UpstreamCredential,
     /// Only meaningful for provider "openai-response": strip `prompt_cache_retention` from /v1/responses requests.
     #[serde(default, skip_serializing_if = "is_false")]
     pub filter_prompt_cache_retention: bool,
@@ -189,12 +274,6 @@ pub struct UpstreamConfig {
     /// Rewrite OpenAI-compatible message role `developer` to `system` before forwarding upstream.
     #[serde(default, skip_serializing_if = "is_false")]
     pub rewrite_developer_role_to_system: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kiro_account_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codex_account_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub xai_account_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_endpoint: Option<KiroPreferredEndpoint>,
     pub proxy_url: Option<String>,

@@ -34,10 +34,6 @@ vi.mock("@/features/logs/LogsPanel", () => ({
   LogsPanel: () => <div data-testid="logs-panel" />,
 }));
 
-vi.mock("@/features/providers/ProvidersPanel", () => ({
-  ProvidersPanel: () => <div data-testid="providers-panel" />,
-}));
-
 const IDLE_PROXY_STATUS: ProxyServiceStatus = {
   state: "stopped",
   addr: null,

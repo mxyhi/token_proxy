@@ -1,7 +1,4 @@
-use axum::{
-    http::{HeaderMap, Method, StatusCode},
-    response::Response,
-};
+use axum::http::{HeaderMap, Method, StatusCode};
 
 use super::super::http::RequestAuth;
 use super::super::{
@@ -12,7 +9,6 @@ use super::{attempt, result, AttemptOutcome, RetryDirective, RetryScope};
 use crate::proxy::cooldown_scope::CooldownScope;
 use crate::proxy::http;
 use crate::proxy::log::RequestTimings;
-use crate::proxy::response::{NonRetryableSemanticResponse, RetryableStreamResponse};
 use crate::proxy::token_rate::RequestTokenTracker;
 use token_proxy_protocol::xai_client_tools::XaiClientToolMapping;
 
@@ -34,7 +30,8 @@ pub(super) struct UpstreamAttemptFailure {
     pub(super) selected_account_id: Option<String>,
 }
 
-pub(super) enum AccountFailoverResult {
+/// Same-upstream 账户鉴权恢复结果；不再做跨账户 failover。
+pub(super) enum AccountAuthRecoveryResult {
     Pending(UpstreamAttempt),
     Resolved(AttemptOutcome),
 }
@@ -165,7 +162,9 @@ pub(super) fn mark_account_retryable_failure(
             .mark_retryable_failure_scoped(provider, account_id, cooldown_scope);
 }
 
-pub(super) async fn retry_with_next_account(
+/// Codex/xAI 在固定 account_id 上做 401 refresh / Agent Identity 恢复；
+/// 失败不切换其它账户，跨 upstream failover 由 upstream selector 负责。
+pub(super) async fn retry_with_account_auth_recovery(
     state: &ProxyState,
     method: Method,
     provider: &str,
@@ -181,96 +180,54 @@ pub(super) async fn retry_with_next_account(
     request_detail: Option<RequestDetailSnapshot>,
     first: Result<UpstreamAttempt, UpstreamAttemptFailure>,
     cooldown_scope: &CooldownScope,
-) -> AccountFailoverResult {
+) -> AccountAuthRecoveryResult {
     if !matches!(provider, "codex" | "xai") {
         return match first {
-            Ok(attempt) => AccountFailoverResult::Pending(attempt),
-            Err(failure) => AccountFailoverResult::Resolved(failure.outcome),
+            Ok(attempt) => AccountAuthRecoveryResult::Pending(attempt),
+            Err(failure) => AccountAuthRecoveryResult::Resolved(failure.outcome),
         };
     }
 
-    let has_pinned_account = provider_account_id(provider, upstream)
+    // Same-Upstream Retry 固定当前 credential account_id。
+    let mut fixed_upstream = upstream.clone();
+    if let Some(account_id) = attempt_selected_account_id(&first) {
+        pin_account(provider, &mut fixed_upstream, account_id);
+    } else if let Some(account_id) = provider_account_id(provider, upstream)
         .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    let mut excluded_account_ids = Vec::new();
-    let mut current_upstream = upstream.clone();
-    let mut current_attempt = first;
-
-    loop {
-        current_attempt = retry_after_account_refresh(
-            state,
-            method.clone(),
-            provider,
-            &current_upstream,
-            inbound_path,
-            upstream_path_with_query,
-            headers,
-            body,
-            meta,
-            request_auth,
-            current_attempt,
-            request_detail.as_ref(),
-            cooldown_scope,
-        )
-        .await;
-        let selected_account_id = attempt_selected_account_id(&current_attempt);
-        let outcome = finalize_account_failover_attempt(
-            state,
-            provider,
-            &current_upstream,
-            inbound_path,
-            client_gemini_api_key,
-            response_transform,
-            request_detail.clone(),
-            current_attempt,
-            cooldown_scope,
-        )
-        .await;
-        if !should_failover_account_outcome(provider, &outcome) || has_pinned_account {
-            return AccountFailoverResult::Resolved(outcome);
-        }
-        let Some(selected_account_id) = selected_account_id else {
-            return AccountFailoverResult::Resolved(outcome);
-        };
-        if !excluded_account_ids
-            .iter()
-            .any(|account_id| account_id == &selected_account_id)
-        {
-            excluded_account_ids.push(selected_account_id);
-        }
-
-        // 与首跳一致：只从 Active 候选里做 failover，禁用账号不进入轮询集合。
-        let next_account_id =
-            match resolve_next_account_id(state, provider, &excluded_account_ids, cooldown_scope)
-                .await
-            {
-                Ok(Some(account_id)) => account_id,
-                Ok(None) => return AccountFailoverResult::Resolved(outcome),
-                Err(err) => {
-                    return AccountFailoverResult::Resolved(AttemptOutcome::Fatal(
-                        http::error_response(StatusCode::UNAUTHORIZED, err),
-                    ));
-                }
-            };
-
-        current_upstream = upstream.clone();
-        pin_account(provider, &mut current_upstream, next_account_id);
-        current_attempt = attempt::attempt_send(
-            state,
-            method.clone(),
-            provider,
-            &current_upstream,
-            inbound_path,
-            upstream_path_with_query,
-            headers,
-            body,
-            meta,
-            request_auth,
-            request_detail.as_ref(),
-            cooldown_scope,
-        )
-        .await;
+        .filter(|value| !value.is_empty())
+    {
+        pin_account(provider, &mut fixed_upstream, account_id.to_string());
     }
+
+    let current_attempt = retry_after_account_refresh(
+        state,
+        method,
+        provider,
+        &fixed_upstream,
+        inbound_path,
+        upstream_path_with_query,
+        headers,
+        body,
+        meta,
+        request_auth,
+        first,
+        request_detail.as_ref(),
+        cooldown_scope,
+    )
+    .await;
+    let outcome = finalize_account_auth_recovery_attempt(
+        state,
+        provider,
+        &fixed_upstream,
+        inbound_path,
+        client_gemini_api_key,
+        response_transform,
+        request_detail,
+        current_attempt,
+        cooldown_scope,
+    )
+    .await;
+    AccountAuthRecoveryResult::Resolved(outcome)
 }
 
 async fn retry_after_account_refresh(
@@ -474,7 +431,7 @@ async fn retry_after_agent_identity_task_recovery(
     retry
 }
 
-async fn finalize_account_failover_attempt(
+async fn finalize_account_auth_recovery_attempt(
     state: &ProxyState,
     provider: &str,
     upstream: &UpstreamRuntime,
@@ -511,63 +468,6 @@ fn attempt_selected_account_id(
         Ok(attempt) => attempt.selected_account_id.clone(),
         Err(failure) => failure.selected_account_id.clone(),
     }
-}
-
-fn should_failover_account_outcome(provider: &str, outcome: &AttemptOutcome) -> bool {
-    if provider == "xai" {
-        return match outcome {
-            AttemptOutcome::Success(response)
-                if response
-                    .extensions()
-                    .get::<NonRetryableSemanticResponse>()
-                    .is_some() =>
-            {
-                false
-            }
-            AttemptOutcome::Success(response) => {
-                should_failover_xai_status(xai_outcome_status(response))
-            }
-            AttemptOutcome::Retryable {
-                response: Some(response),
-                ..
-            } if response
-                .extensions()
-                .get::<NonRetryableSemanticResponse>()
-                .is_some() =>
-            {
-                false
-            }
-            AttemptOutcome::Retryable {
-                response: Some(response),
-                ..
-            } => should_failover_xai_status(xai_outcome_status(response)),
-            AttemptOutcome::Retryable { response: None, .. } => true,
-            AttemptOutcome::Fatal(_) | AttemptOutcome::SkippedAuth => false,
-        };
-    }
-    match outcome {
-        AttemptOutcome::Success(response) => {
-            let status = response.status();
-            // 304 是条件请求成功命中缓存，继续切换账号会破坏 ETag 语义。
-            !status.is_success() && status != StatusCode::NOT_MODIFIED
-        }
-        AttemptOutcome::Retryable { .. } => true,
-        AttemptOutcome::Fatal(_) | AttemptOutcome::SkippedAuth => false,
-    }
-}
-
-fn xai_outcome_status(response: &Response) -> StatusCode {
-    response
-        .extensions()
-        .get::<RetryableStreamResponse>()
-        .map_or_else(|| response.status(), |marker| marker.status)
-}
-
-fn should_failover_xai_status(status: StatusCode) -> bool {
-    matches!(
-        status,
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS
-    ) || status.is_server_error()
 }
 
 fn schedule_account_response_tasks(
@@ -639,38 +539,6 @@ async fn refresh_account(
     }
 }
 
-async fn resolve_next_account_id(
-    state: &ProxyState,
-    provider: &str,
-    excluded_account_ids: &[String],
-    cooldown_scope: &CooldownScope,
-) -> Result<Option<String>, String> {
-    let ordered_account_ids = super::ordered_runtime_account_ids(state, provider, cooldown_scope)
-        .await
-        .into_iter()
-        .filter(|account_id| !excluded_account_ids.contains(account_id))
-        .collect::<Vec<_>>();
-    if ordered_account_ids.is_empty() {
-        return Ok(None);
-    }
-    match provider {
-        "codex" => state
-            .codex_accounts
-            .resolve_next_account_record_with_order(
-                excluded_account_ids,
-                Some(ordered_account_ids.as_slice()),
-            )
-            .await
-            .map(|resolved| resolved.map(|(account_id, _)| account_id)),
-        "xai" => state
-            .xai_accounts
-            .resolve_account_record_with_order(None, Some(ordered_account_ids.as_slice()))
-            .await
-            .map(|(account_id, _)| Some(account_id)),
-        _ => Ok(None),
-    }
-}
-
 fn provider_account_id<'a>(provider: &str, upstream: &'a UpstreamRuntime) -> Option<&'a str> {
     match provider {
         "codex" => upstream.codex_account_id.as_deref(),
@@ -679,6 +547,7 @@ fn provider_account_id<'a>(provider: &str, upstream: &'a UpstreamRuntime) -> Opt
     }
 }
 
+/// Same-Upstream Retry / request repair 必须固定当前 account_id。
 pub(super) fn pin_account_if_missing(
     provider: &str,
     upstream: &mut UpstreamRuntime,
@@ -698,8 +567,18 @@ pub(super) fn pin_account_if_missing(
 
 fn pin_account(provider: &str, upstream: &mut UpstreamRuntime, account_id: String) {
     match provider {
-        "codex" => upstream.codex_account_id = Some(account_id),
-        "xai" => upstream.xai_account_id = Some(account_id),
+        "codex" => {
+            tracing::debug!(account_id, "pinning codex account for same-upstream retry");
+            upstream.codex_account_id = Some(account_id);
+        }
+        "xai" => {
+            tracing::debug!(account_id, "pinning xai account for same-upstream retry");
+            upstream.xai_account_id = Some(account_id);
+        }
+        "kiro" => {
+            tracing::debug!(account_id, "pinning kiro account for same-upstream retry");
+            upstream.kiro_account_id = Some(account_id);
+        }
         _ => {}
     }
 }

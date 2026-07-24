@@ -20,11 +20,12 @@ pub struct XaiQuotaCache {
     pub checked_at: Option<String>,
 }
 
+/// 账户认证健康状态（只读投影）。
+/// 调度 enabled/priority/proxy 只属于 Upstream；此处不承载人工 disabled。
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum XaiAccountStatus {
     Active,
-    Disabled,
     Expired,
     Invalid,
 }
@@ -57,10 +58,6 @@ pub struct XaiTokenRecord {
     #[serde(default = "default_account_status")]
     pub status: XaiAccountStatus,
     #[serde(default)]
-    pub proxy_url: Option<String>,
-    #[serde(default)]
-    pub priority: i32,
-    #[serde(default)]
     pub quota: XaiQuotaCache,
 }
 
@@ -78,9 +75,9 @@ impl XaiTokenRecord {
             .is_none_or(|expires_at| OffsetDateTime::now_utc() >= expires_at)
     }
 
+    /// 健康状态：Invalid 保留鉴权失败；否则由 token 到期推导。
     pub fn effective_status(&self) -> XaiAccountStatus {
         match self.status {
-            XaiAccountStatus::Disabled => XaiAccountStatus::Disabled,
             XaiAccountStatus::Invalid => XaiAccountStatus::Invalid,
             XaiAccountStatus::Active | XaiAccountStatus::Expired if self.is_expired() => {
                 XaiAccountStatus::Expired
@@ -89,8 +86,10 @@ impl XaiTokenRecord {
         }
     }
 
-    pub fn is_schedulable(&self) -> bool {
+    pub fn is_usable(&self) -> bool {
         matches!(self.effective_status(), XaiAccountStatus::Active)
+            || (matches!(self.effective_status(), XaiAccountStatus::Expired)
+                && self.auto_refresh_enabled)
     }
 }
 
@@ -101,8 +100,6 @@ pub struct XaiAccountSummary {
     pub expires_at: Option<String>,
     pub status: XaiAccountStatus,
     pub auto_refresh_enabled: bool,
-    pub proxy_url: Option<String>,
-    pub priority: i32,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -144,11 +141,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn effective_status_preserves_manual_account_state() {
+    fn effective_status_preserves_invalid_auth_state() {
         let mut record = test_record("2999-01-01T00:00:00Z");
-        record.status = XaiAccountStatus::Disabled;
-        assert_eq!(record.effective_status(), XaiAccountStatus::Disabled);
-
         record.status = XaiAccountStatus::Invalid;
         assert_eq!(record.effective_status(), XaiAccountStatus::Invalid);
     }
@@ -178,8 +172,6 @@ mod tests {
             token_endpoint: None,
             auto_refresh_enabled: true,
             status: XaiAccountStatus::Active,
-            proxy_url: None,
-            priority: 0,
             quota: XaiQuotaCache::default(),
         }
     }

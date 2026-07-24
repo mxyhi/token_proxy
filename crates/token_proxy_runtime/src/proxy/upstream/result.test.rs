@@ -20,7 +20,6 @@ fn xai_free_usage_hint_applies_explicit_cooldown_when_default_is_disabled() {
         &CooldownScope::Global,
     );
 
-    let ordered =
-        selector.order_accounts_scoped("xai", &["xai-a".to_string()], &CooldownScope::Global);
-    assert!(ordered.is_empty());
+    // 权威 free-usage cooldown 写入后应可被 is_cooling_down 查询到。
+    assert!(selector.is_cooling_down_scoped("xai", "xai-a", &CooldownScope::Global));
 }

@@ -64,8 +64,6 @@ pub(crate) async fn refresh_quota_cache(
                 .unwrap_or_else(|_| record.expires_at.clone())
         }),
         status: record.effective_status(),
-        proxy_url: record.proxy_url.clone(),
-        priority: record.priority,
     };
     let resolved = match store.get_account_record(account_id).await {
         Ok(record) => record,
@@ -114,7 +112,7 @@ async fn fetch_account_quota(
         .profile_arn
         .as_deref()
         .ok_or_else(|| "Missing Kiro profile ARN.".to_string())?;
-    let proxy_url = store.effective_proxy_url(record.proxy_url.as_deref()).await;
+    let proxy_url = store.app_proxy_url().await;
     let response =
         request_usage_limits(&record.access_token, profile_arn, proxy_url.as_deref()).await?;
     Ok(map_usage_response(account, &response))

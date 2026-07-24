@@ -28,14 +28,16 @@ describe("upstreams/constants", () => {
     ]);
   });
 
-  it("preserves providers already present in existing config", () => {
-    expect(mergeProviderOptions(["kiro", "codex", "legacy-provider"])).toEqual([
+  it("merges non-account providers from config but excludes Kiro/Codex/xAI", () => {
+    // 账户型不进入普通创建选项；antigravity/legacy 等仍保留。
+    expect(
+      mergeProviderOptions(["kiro", "codex", "xai", "antigravity", "legacy-provider"]),
+    ).toEqual([
       "openai",
       "openai-response",
       "anthropic",
       "gemini",
-      "kiro",
-      "codex",
+      "antigravity",
       "legacy-provider",
     ]);
   });

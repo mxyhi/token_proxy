@@ -13,5 +13,15 @@ token_proxy_runtime = { path = "../token_proxy_runtime" }
 token_proxy_storage = { path = "../token_proxy_storage" }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "socks", "http2"] }
 serde = { version = "1", features = ["derive"] }
-tokio = { version = "1.53", features = ["sync"] }
+serde_json = "1.0.151"
+sha2 = "0.11"
+tokio = { version = "1.53", features = ["rt", "sync", "time"] }
 tracing = { version = "0.1.44", features = ["release_max_level_off"] }
+
+[dev-dependencies]
+serde_json = "1.0.151"
+tempfile = "3"
+tokio = { version = "1.53", features = ["macros", "rt-multi-thread", "sync", "fs"] }
+token_proxy_account_codex = { path = "../token_proxy_account_codex", features = ["test-support"] }
+token_proxy_account_kiro = { path = "../token_proxy_account_kiro", features = ["test-support"] }
+token_proxy_account_xai = { path = "../token_proxy_account_xai", features = ["test-support"] }

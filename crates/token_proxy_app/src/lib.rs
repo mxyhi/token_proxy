@@ -5,8 +5,13 @@
 //! - 账户与纯协议能力由 leaf crates 提供
 //! - CLI/Tauri 通过 [`app::TokenProxyApp`] 组装运行时
 
+pub mod account_lifecycle;
+pub mod account_upstreams;
 pub mod app;
 mod pricing_refresh;
 pub mod storage_usage;
 
+pub use account_lifecycle::{
+    AccountBindingMutationSummary, ConfigSideEffects, LifecycleFaults, SaveProxyConfigOutcome,
+};
 pub use token_proxy_runtime::logging;

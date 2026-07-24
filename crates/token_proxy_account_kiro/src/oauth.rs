@@ -113,8 +113,6 @@ pub(crate) async fn refresh_social_token(
         start_url: record.start_url.clone(),
         region: record.region.clone(),
         status: record.status,
-        proxy_url: record.proxy_url.clone(),
-        priority: record.priority,
         quota: record.quota.clone(),
     })
 }

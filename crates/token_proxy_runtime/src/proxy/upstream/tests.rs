@@ -26,6 +26,60 @@ fn cooldown_status_matches_proxy_policy() {
     assert!(result::should_cooldown_retryable_status(
         StatusCode::FORBIDDEN
     ));
+    // 413 全局 NextOnly。
+    assert!(result::is_next_only_retryable_status(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        "openai",
+        None
+    ));
+    // 固定账户 codex/xai：鉴权/语义类 NextOnly，禁止 same-upstream 原位重放。
+    assert!(result::is_next_only_retryable_status(
+        StatusCode::UNAUTHORIZED,
+        "codex",
+        Some("acct-a")
+    ));
+    assert!(result::is_next_only_retryable_status(
+        StatusCode::FORBIDDEN,
+        "xai",
+        Some("acct-b")
+    ));
+    assert!(result::is_next_only_retryable_status(
+        StatusCode::BAD_REQUEST,
+        "codex",
+        Some("acct-a")
+    ));
+    // API-key / 无 account_id：保持 SameThenNext。
+    assert!(!result::is_next_only_retryable_status(
+        StatusCode::UNAUTHORIZED,
+        "openai",
+        None
+    ));
+    assert!(!result::is_next_only_retryable_status(
+        StatusCode::BAD_REQUEST,
+        "openai-response",
+        None
+    ));
+    assert!(!result::is_next_only_retryable_status(
+        StatusCode::FORBIDDEN,
+        "codex",
+        None
+    ));
+    // Kiro 不经本函数标 NextOnly（kiro_result 自管）。
+    assert!(!result::is_next_only_retryable_status(
+        StatusCode::UNAUTHORIZED,
+        "kiro",
+        Some("kiro-a")
+    ));
+    assert!(!result::is_next_only_retryable_status(
+        StatusCode::TOO_MANY_REQUESTS,
+        "codex",
+        Some("acct-a")
+    ));
+    assert!(!result::is_next_only_retryable_status(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "codex",
+        Some("acct-a")
+    ));
     assert!(result::should_cooldown_retryable_status(
         StatusCode::REQUEST_TIMEOUT
     ));

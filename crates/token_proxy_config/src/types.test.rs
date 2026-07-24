@@ -325,3 +325,63 @@ fn proxy_config_file_defaults_upstream_strategy_to_fill_first_serial() {
         UpstreamDispatchStrategy::Serial
     );
 }
+
+#[test]
+fn upstream_credential_roundtrips_api_keys_account_and_passthrough() {
+    let cases = [
+        UpstreamCredential::api_keys(["k1", "k2"]),
+        UpstreamCredential::account(AccountProvider::Kiro, "acc-kiro"),
+        UpstreamCredential::account(AccountProvider::Codex, "acc-codex"),
+        UpstreamCredential::account(AccountProvider::Xai, "acc-xai"),
+        UpstreamCredential::Passthrough,
+    ];
+    for original in cases {
+        let value = serde_json::to_value(&original).expect("serialize credential");
+        let restored: UpstreamCredential =
+            serde_json::from_value(value).expect("deserialize credential");
+        assert_eq!(restored, original);
+    }
+}
+
+#[test]
+fn account_provider_rejects_arbitrary_string() {
+    let result = serde_json::from_str::<UpstreamCredential>(
+        r#"{ "type": "account", "provider": "openai", "account_id": "x" }"#,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn upstream_config_serialize_only_emits_credential_union() {
+    let upstream = UpstreamConfig {
+        id: "u".to_string(),
+        providers: vec!["openai".to_string()],
+        base_url: "https://example.com".to_string(),
+        credential: UpstreamCredential::api_keys(["secret"]),
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        use_chat_completions_for_responses: false,
+        rewrite_developer_role_to_system: false,
+        preferred_endpoint: None,
+        proxy_url: None,
+        priority: Some(0),
+        enabled: true,
+        available_models: Vec::new(),
+        model_mappings: Default::default(),
+        convert_from_map: Default::default(),
+        overrides: None,
+    };
+    let value = serde_json::to_value(&upstream).expect("serialize");
+    let obj = value.as_object().expect("object");
+    assert!(obj.contains_key("credential"));
+    // 顶层不得再出现旧平铺字段。
+    assert!(!obj.contains_key("api_keys"));
+    assert!(!obj.contains_key("kiro_account_id"));
+    assert!(!obj.contains_key("codex_account_id"));
+    assert!(!obj.contains_key("xai_account_id"));
+    // credential 内的 api_keys 仍应存在。
+    assert_eq!(
+        value["credential"]["api_keys"],
+        serde_json::json!(["secret"])
+    );
+}

@@ -86,6 +86,7 @@ fn config_with_runtime_upstreams(
 ) -> ProxyConfig {
     let mut provider_map: HashMap<String, ProviderUpstreams> = HashMap::new();
     for (provider, priority, id, base_url, inbound_formats) in upstreams {
+        // Phase B: 账户型 upstream 默认绑定固定 account_id，禁止运行时池选号。
         let mut runtime = UpstreamRuntime {
             id: (*id).to_string(),
             selector_key: (*id).to_string(),
@@ -95,7 +96,7 @@ fn config_with_runtime_upstreams(
             filter_prompt_cache_retention: false,
             filter_safety_identifier: false,
             rewrite_developer_role_to_system: false,
-            kiro_account_id: None,
+            kiro_account_id: (*provider == PROVIDER_KIRO).then(|| format!("kiro-{id}.json")),
             codex_account_id: (*provider == PROVIDER_CODEX).then(|| format!("codex-{id}.json")),
             xai_account_id: (*provider == PROVIDER_XAI).then(|| format!("xai-{id}")),
             kiro_preferred_endpoint: None,
@@ -150,6 +151,42 @@ fn config_with_runtime_upstreams(
         upstreams: provider_map,
         kiro_preferred_endpoint: None,
     }
+}
+
+/// Phase B：两 priority group 各固定一个 account_id，禁止同 Upstream 换号。
+fn pin_dual_codex_accounts(
+    config: &mut ProxyConfig,
+    primary_account_id: &str,
+    secondary_account_id: &str,
+) {
+    let provider_upstreams = config
+        .upstreams
+        .get_mut(PROVIDER_CODEX)
+        .expect("codex upstreams");
+    assert!(
+        provider_upstreams.groups.len() >= 2,
+        "dual-upstream fixture needs two priority groups"
+    );
+    provider_upstreams.groups[0].items[0].codex_account_id = Some(primary_account_id.to_string());
+    provider_upstreams.groups[1].items[0].codex_account_id = Some(secondary_account_id.to_string());
+}
+
+/// Phase B：两 Kiro Upstream 各固定一个 account_id。
+fn pin_dual_kiro_accounts(
+    config: &mut ProxyConfig,
+    primary_account_id: &str,
+    secondary_account_id: &str,
+) {
+    let provider_upstreams = config
+        .upstreams
+        .get_mut(PROVIDER_KIRO)
+        .expect("kiro upstreams");
+    assert!(
+        provider_upstreams.groups.len() >= 2,
+        "dual-upstream fixture needs two priority groups"
+    );
+    provider_upstreams.groups[0].items[0].kiro_account_id = Some(primary_account_id.to_string());
+    provider_upstreams.groups[1].items[0].kiro_account_id = Some(secondary_account_id.to_string());
 }
 
 #[derive(Clone, Debug)]
@@ -1982,8 +2019,6 @@ async fn build_test_state_handle_with_paths(
                                 account_id: Some("chatgpt-account".to_string()),
                                 user_id: None,
                                 email: Some("codex@example.com".to_string()),
-                                proxy_url: None,
-                                priority: 0,
                                 quota: token_proxy_account_codex::CodexQuotaCache::default(),
                             },
                         )
@@ -2010,8 +2045,6 @@ async fn build_test_state_handle_with_paths(
                                 token_endpoint: None,
                                 auto_refresh_enabled: true,
                                 status: token_proxy_account_xai::XaiAccountStatus::Active,
-                                proxy_url: None,
-                                priority: 0,
                                 quota: token_proxy_account_xai::XaiQuotaCache::default(),
                             },
                         )
@@ -2143,8 +2176,6 @@ async fn seed_codex_account_with_options(
                 account_id: Some(chatgpt_account_id.to_string()),
                 user_id: None,
                 email: Some(format!("{storage_account_id}@example.com")),
-                proxy_url: None,
-                priority: 0,
                 quota: token_proxy_account_codex::CodexQuotaCache::default(),
             },
         )
@@ -2180,8 +2211,6 @@ async fn seed_agent_identity_account(state: &ProxyStateHandle, storage_account_i
                 account_id: Some("chatgpt-agent".to_string()),
                 user_id: Some("user-agent".to_string()),
                 email: Some("agent@example.com".to_string()),
-                proxy_url: None,
-                priority: 10,
                 quota: token_proxy_account_codex::CodexQuotaCache::default(),
             },
         )
@@ -2213,9 +2242,7 @@ async fn seed_kiro_account(
                 profile_arn: None,
                 start_url: None,
                 region: None,
-                proxy_url: None,
                 status: token_proxy_account_kiro::KiroAccountStatus::Active,
-                priority: 0,
                 quota: token_proxy_account_kiro::KiroQuotaCache::default(),
             },
         )
@@ -2786,7 +2813,8 @@ async fn assert_codex_transport_disconnect_does_not_restart_account_chain(pinned
             .expect("codex upstreams")
             .groups[0]
             .items[0]
-            .codex_account_id = None;
+            // Phase B: 禁止 unbound 池选号；测试固定钉死 codex-a。
+            .codex_account_id = Some("codex-a.json".to_string());
     }
     let data_dir = next_test_data_dir(if pinned {
         "responses_pinned_codex_transport_disconnect"
@@ -2886,13 +2914,14 @@ async fn assert_codex_header_timeout_does_not_restart_account_chain() {
             FORMATS_RESPONSES,
         ),
     ]);
+    // Phase B: 固定账户 + same-upstream retry；不得展开到其它账户链。
     config
         .upstreams
         .get_mut(PROVIDER_CODEX)
         .expect("codex upstreams")
         .groups[0]
         .items[0]
-        .codex_account_id = None;
+        .codex_account_id = Some("codex-a.json".to_string());
     // 零 cooldown 是合法配置，也不能让外层 same-upstream retry 重跑整条账号链。
     config.retryable_failure_cooldown = std::time::Duration::ZERO;
     config.sync_response_timeout = std::time::Duration::from_millis(20);
@@ -2909,6 +2938,7 @@ async fn assert_codex_header_timeout_does_not_restart_account_chain() {
         &expires_at,
     )
     .await;
+    // 仅 seed 第二账户以证明不会被误选。
     seed_codex_account(
         &state,
         "codex-b.json",
@@ -2933,24 +2963,12 @@ async fn assert_codex_header_timeout_does_not_restart_account_chain() {
     );
     assert_eq!(
         codex_requests.len(),
-        4,
-        "each Codex account runs once per same-upstream attempt (2 accounts × 2 attempts)"
+        2,
+        "fixed account only: original + one same-upstream retry, no account chain"
     );
-    let mut account_ids = codex_requests
+    assert!(codex_requests
         .iter()
-        .map(|request| {
-            request
-                .chatgpt_account_id
-                .clone()
-                .expect("Codex account header")
-        })
-        .collect::<Vec<_>>();
-    account_ids.sort();
-    account_ids.dedup();
-    assert_eq!(
-        account_ids,
-        vec!["chatgpt-a".to_string(), "chatgpt-b".to_string()]
-    );
+        .all(|request| { request.chatgpt_account_id.as_deref() == Some("chatgpt-a") }));
     assert_eq!(fallback_requests.len(), 1);
 }
 
@@ -4045,7 +4063,8 @@ fn codex_models_manifest_not_modified_does_not_switch_oauth_account() {
             .expect("Codex upstreams")
             .groups[0]
             .items[0]
-            .codex_account_id = None;
+            // Phase B: 禁止 unbound 池选号；测试固定钉死 codex-a。
+            .codex_account_id = Some("codex-a.json".to_string());
         let state = build_test_state_handle(config, data_dir.clone()).await;
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
@@ -4623,7 +4642,7 @@ async fn wait_for_latest_request_log_status_and_error(
 }
 
 #[test]
-fn responses_request_auto_selects_first_available_codex_account_when_unbound() {
+fn responses_request_uses_fixed_codex_account_binding() {
     run_async(async {
         let codex = spawn_mock_upstream(
             StatusCode::OK,
@@ -4660,7 +4679,8 @@ fn responses_request_auto_selects_first_available_codex_account_when_unbound() {
             .upstreams
             .get_mut(PROVIDER_CODEX)
             .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        // Phase B: 禁止 unbound 池选号；测试固定钉死 codex-a。
+        provider_upstreams.groups[0].items[0].codex_account_id = Some("codex-a.json".to_string());
 
         let data_dir = next_test_data_dir("responses_codex_auto_select");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -4807,37 +4827,23 @@ async fn assert_agent_identity_task_recovery(
         codex.base_url.as_str(),
         FORMATS_RESPONSES,
     )]);
-    if !pinned {
-        config
-            .upstreams
-            .get_mut(PROVIDER_CODEX)
-            .expect("Codex upstreams")
-            .groups[0]
-            .items[0]
-            .codex_account_id = None;
-    }
-
-    let data_dir = next_test_data_dir("responses_agent_identity_recovery");
-    let state = build_test_state_handle(config, data_dir.clone()).await;
+    // Phase B: 固定账户；“pooled” 场景改为显式钉死 agent 账户，不再池选号。
     let agent_account_id = if pinned {
         "codex-codex-agent-identity.json"
     } else {
         "codex-agent-a.json"
     };
+    config
+        .upstreams
+        .get_mut(PROVIDER_CODEX)
+        .expect("Codex upstreams")
+        .groups[0]
+        .items[0]
+        .codex_account_id = Some(agent_account_id.to_string());
+
+    let data_dir = next_test_data_dir("responses_agent_identity_recovery");
+    let state = build_test_state_handle(config, data_dir.clone()).await;
     seed_agent_identity_account(&state, agent_account_id).await;
-    if !pinned {
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
-            .format(&time::format_description::well_known::Rfc3339)
-            .expect("format expires_at");
-        seed_codex_account(
-            &state,
-            "codex-oauth-b.json",
-            "codex-access-b",
-            "chatgpt-b",
-            &expires_at,
-        )
-        .await;
-    }
     {
         let state_guard = state.read().await;
         state_guard
@@ -4951,7 +4957,8 @@ fn responses_request_refreshes_codex_account_after_unauthorized_before_failover(
             .upstreams
             .get_mut(PROVIDER_CODEX)
             .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        // Phase B: 禁止 unbound 池选号；测试固定钉死 codex-a。
+        provider_upstreams.groups[0].items[0].codex_account_id = Some("codex-a.json".to_string());
 
         let data_dir = next_test_data_dir("responses_codex_refresh_retry");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -5078,24 +5085,35 @@ fn responses_request_refreshes_pinned_codex_account_after_unauthorized() {
 }
 
 #[test]
-fn responses_request_failovers_to_next_codex_account_after_invalidated_token() {
+fn responses_request_failovers_to_next_codex_upstream_after_invalidated_token() {
     run_async(async {
+        // Phase B: 同 upstream 不换号；跨 upstream 固定不同 account 才能切换。
         let codex = spawn_auth_switch_mock_upstream().await;
 
-        let mut config = config_with_runtime_upstreams(&[(
-            PROVIDER_CODEX,
-            0,
-            "codex-auto-failover",
-            codex.base_url.as_str(),
-            FORMATS_RESPONSES,
-        )]);
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CODEX,
+                10,
+                "codex-primary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_CODEX,
+                5,
+                "codex-secondary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
         let provider_upstreams = config
             .upstreams
             .get_mut(PROVIDER_CODEX)
             .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        provider_upstreams.groups[0].items[0].codex_account_id = Some("codex-a.json".to_string());
+        provider_upstreams.groups[1].items[0].codex_account_id = Some("codex-b.json".to_string());
 
-        let data_dir = next_test_data_dir("responses_codex_account_failover");
+        let data_dir = next_test_data_dir("responses_codex_upstream_failover");
         let state = build_test_state_handle(config, data_dir.clone()).await;
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
@@ -5128,22 +5146,20 @@ fn responses_request_failovers_to_next_codex_account_after_invalidated_token() {
             json["output"][0]["content"][0]["text"].as_str(),
             Some("from codex failover")
         );
-        assert_eq!(requests.len(), 2);
+        assert!(requests.len() >= 2);
         assert_eq!(
             requests[0].authorization.as_deref(),
             Some("Bearer codex-access-a")
         );
         assert_eq!(requests[0].chatgpt_account_id.as_deref(), Some("chatgpt-a"));
-        assert_eq!(
-            requests[1].authorization.as_deref(),
-            Some("Bearer codex-access-b")
-        );
-        assert_eq!(requests[1].chatgpt_account_id.as_deref(), Some("chatgpt-b"));
+        assert!(requests
+            .iter()
+            .any(|request| { request.authorization.as_deref() == Some("Bearer codex-access-b") }));
     });
 }
 
 #[test]
-fn responses_request_failovers_to_next_codex_account_after_proxy_error() {
+fn responses_request_fixed_codex_account_does_not_switch_on_proxy_error() {
     run_async(async {
         let codex = spawn_mock_upstream(
             StatusCode::OK,
@@ -5169,10 +5185,11 @@ fn responses_request_failovers_to_next_codex_account_after_proxy_error() {
         )
         .await;
 
+        // Phase B: 固定绑定 codex-a；坏 upstream proxy 时不得换到同 upstream 的 codex-b。
         let mut config = config_with_runtime_upstreams(&[(
             PROVIDER_CODEX,
             0,
-            "codex-auto-proxy-failover",
+            "codex-fixed-proxy-fail",
             codex.base_url.as_str(),
             FORMATS_RESPONSES,
         )]);
@@ -5180,9 +5197,10 @@ fn responses_request_failovers_to_next_codex_account_after_proxy_error() {
             .upstreams
             .get_mut(PROVIDER_CODEX)
             .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        provider_upstreams.groups[0].items[0].codex_account_id = Some("codex-a.json".to_string());
+        provider_upstreams.groups[0].items[0].proxy_url = Some("http://127.0.0.1:9".to_string());
 
-        let data_dir = next_test_data_dir("responses_codex_account_proxy_failover");
+        let data_dir = next_test_data_dir("responses_codex_fixed_account_proxy_fail");
         let state = build_test_state_handle(config, data_dir.clone()).await;
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
@@ -5203,54 +5221,49 @@ fn responses_request_failovers_to_next_codex_account_after_proxy_error() {
             &expires_at,
         )
         .await;
-        {
-            let state_guard = state.read().await;
-            state_guard
-                .codex_accounts
-                .set_proxy_url("codex-a.json", Some("http://127.0.0.1:9"))
-                .await
-                .expect("set broken proxy");
-        }
 
-        let (status, json) = send_responses_request(state).await;
+        let (status, _json) = send_responses_request(state).await;
         let requests = codex.requests();
 
         codex.abort();
         let _ = std::fs::remove_dir_all(&data_dir);
 
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            json["output"][0]["content"][0]["text"].as_str(),
-            Some("from codex proxy failover")
-        );
-        assert_eq!(requests.len(), 1);
-        assert_eq!(
-            requests[0].authorization.as_deref(),
-            Some("Bearer codex-access-b")
-        );
-        assert_eq!(requests[0].chatgpt_account_id.as_deref(), Some("chatgpt-b"));
+        // 坏 proxy 导致固定账户失败；mock 收不到请求，也不得出现 codex-b 鉴权。
+        assert_ne!(status, StatusCode::OK);
+        assert!(requests.is_empty());
     });
 }
 
 #[test]
-fn chat_request_failovers_to_next_codex_account_after_empty_2xx_response() {
+fn chat_request_failovers_to_next_codex_upstream_after_empty_2xx_response() {
     run_async(async {
+        // Phase B: 空 2xx 后跨 upstream 换固定账户，不在同 upstream 换号。
         let codex = spawn_codex_empty_chat_switch_mock_upstream().await;
 
-        let mut config = config_with_runtime_upstreams(&[(
-            PROVIDER_CODEX,
-            0,
-            "codex-auto-empty-chat-failover",
-            codex.base_url.as_str(),
-            FORMATS_CHAT,
-        )]);
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CODEX,
+                10,
+                "codex-empty-primary",
+                codex.base_url.as_str(),
+                FORMATS_CHAT,
+            ),
+            (
+                PROVIDER_CODEX,
+                5,
+                "codex-empty-secondary",
+                codex.base_url.as_str(),
+                FORMATS_CHAT,
+            ),
+        ]);
         let provider_upstreams = config
             .upstreams
             .get_mut(PROVIDER_CODEX)
             .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        provider_upstreams.groups[0].items[0].codex_account_id = Some("codex-a.json".to_string());
+        provider_upstreams.groups[1].items[0].codex_account_id = Some("codex-b.json".to_string());
 
-        let data_dir = next_test_data_dir("chat_codex_account_empty_response_failover");
+        let data_dir = next_test_data_dir("chat_codex_upstream_empty_response_failover");
         let state = build_test_state_handle(config, data_dir.clone()).await;
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
@@ -5283,15 +5296,14 @@ fn chat_request_failovers_to_next_codex_account_after_empty_2xx_response() {
             json["choices"][0]["message"]["content"].as_str(),
             Some("from codex failover after empty chat")
         );
-        assert_eq!(requests.len(), 2);
+        assert!(requests.len() >= 2);
         assert_eq!(
             requests[0].authorization.as_deref(),
             Some("Bearer codex-access-a")
         );
-        assert_eq!(
-            requests[1].authorization.as_deref(),
-            Some("Bearer codex-access-b")
-        );
+        assert!(requests
+            .iter()
+            .any(|request| { request.authorization.as_deref() == Some("Bearer codex-access-b") }));
     });
 }
 
@@ -5368,22 +5380,32 @@ data: [DONE]\n\n",
 #[test]
 fn responses_request_cooldowns_same_codex_account_after_401() {
     run_async(async {
+        // Phase B: 两 Upstream 各固定账户；401 NextOnly 跨 Upstream，冷却钉在失败 account。
         let codex =
             spawn_auth_switch_mock_upstream_with_primary_status(StatusCode::UNAUTHORIZED).await;
 
-        let mut config = config_with_runtime_upstreams(&[(
-            PROVIDER_CODEX,
-            0,
-            "codex-account-cooldown-401",
-            codex.base_url.as_str(),
-            FORMATS_RESPONSES,
-        )]);
-        let provider_upstreams = config
-            .upstreams
-            .get_mut(PROVIDER_CODEX)
-            .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CODEX,
+                10,
+                "codex-primary-401",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_CODEX,
+                5,
+                "codex-secondary-401",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        pin_dual_codex_accounts(&mut config, "codex-a.json", "codex-b.json");
         config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
 
         let data_dir = next_test_data_dir("responses_codex_account_cooldown_401");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -5447,23 +5469,33 @@ fn responses_request_cooldowns_same_codex_account_after_401() {
 #[test]
 fn responses_codex_session_scoped_cooldown_clears_after_successful_failover() {
     run_async(async {
+        // Phase B: 成功 failover 后 session 内不应长期冷却失败 account。
         let codex =
             spawn_auth_switch_mock_upstream_with_primary_status(StatusCode::UNAUTHORIZED).await;
 
-        let mut config = config_with_runtime_upstreams(&[(
-            PROVIDER_CODEX,
-            0,
-            "codex-session-cooldown-success",
-            codex.base_url.as_str(),
-            FORMATS_RESPONSES,
-        )]);
-        let provider_upstreams = config
-            .upstreams
-            .get_mut(PROVIDER_CODEX)
-            .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CODEX,
+                10,
+                "codex-session-primary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_CODEX,
+                5,
+                "codex-session-secondary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        pin_dual_codex_accounts(&mut config, "codex-a.json", "codex-b.json");
         config.codex_session_scoped_cooldown_enabled = true;
         config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
 
         let data_dir = next_test_data_dir("responses_codex_session_cooldown_success");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -5533,6 +5565,7 @@ fn responses_codex_session_scoped_cooldown_clears_after_successful_failover() {
 #[test]
 fn responses_codex_session_scoped_cooldown_isolates_failed_sessions() {
     run_async(async {
+        // Phase B: session-a 冷却不得污染 session-b 的两固定 Upstream 尝试。
         let codex = spawn_mock_upstream(
             StatusCode::UNAUTHORIZED,
             json!({
@@ -5545,20 +5578,29 @@ fn responses_codex_session_scoped_cooldown_isolates_failed_sessions() {
         )
         .await;
 
-        let mut config = config_with_runtime_upstreams(&[(
-            PROVIDER_CODEX,
-            0,
-            "codex-session-cooldown-failed",
-            codex.base_url.as_str(),
-            FORMATS_RESPONSES,
-        )]);
-        let provider_upstreams = config
-            .upstreams
-            .get_mut(PROVIDER_CODEX)
-            .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CODEX,
+                10,
+                "codex-session-iso-primary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_CODEX,
+                5,
+                "codex-session-iso-secondary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        pin_dual_codex_accounts(&mut config, "codex-a.json", "codex-b.json");
         config.codex_session_scoped_cooldown_enabled = true;
         config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
 
         let data_dir = next_test_data_dir("responses_codex_session_cooldown_isolated");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -5619,6 +5661,7 @@ fn responses_codex_session_scoped_cooldown_isolates_failed_sessions() {
 #[test]
 fn responses_codex_session_scoped_cooldown_does_not_share_missing_session() {
     run_async(async {
+        // Phase B: 无 session_id 时各请求独立尝试两固定 Upstream。
         let codex = spawn_mock_upstream(
             StatusCode::UNAUTHORIZED,
             json!({
@@ -5631,20 +5674,29 @@ fn responses_codex_session_scoped_cooldown_does_not_share_missing_session() {
         )
         .await;
 
-        let mut config = config_with_runtime_upstreams(&[(
-            PROVIDER_CODEX,
-            0,
-            "codex-session-cooldown-missing-session",
-            codex.base_url.as_str(),
-            FORMATS_RESPONSES,
-        )]);
-        let provider_upstreams = config
-            .upstreams
-            .get_mut(PROVIDER_CODEX)
-            .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CODEX,
+                10,
+                "codex-missing-session-primary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_CODEX,
+                5,
+                "codex-missing-session-secondary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        pin_dual_codex_accounts(&mut config, "codex-a.json", "codex-b.json");
         config.codex_session_scoped_cooldown_enabled = true;
         config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
 
         let data_dir = next_test_data_dir("responses_codex_missing_session_cooldown");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -5750,7 +5802,8 @@ fn responses_request_falls_back_to_responses_provider_when_all_codex_accounts_ar
             .upstreams
             .get_mut(PROVIDER_CODEX)
             .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        // Phase B: 禁止 unbound 池选号；测试固定钉死 codex-a。
+        provider_upstreams.groups[0].items[0].codex_account_id = Some("codex-a.json".to_string());
         config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
 
         let data_dir = next_test_data_dir("responses_codex_cooling_cross_provider_fallback");
@@ -5796,8 +5849,9 @@ fn responses_request_falls_back_to_responses_provider_when_all_codex_accounts_ar
 }
 
 #[test]
-fn responses_request_returns_bad_gateway_when_codex_has_no_accounts() {
+fn responses_request_returns_bad_gateway_when_pinned_codex_account_missing() {
     run_async(async {
+        // Phase B: 固定 account_id 不存在时 prepare 失败，返回 502。
         let mut config = config_with_runtime_upstreams(&[(
             PROVIDER_CODEX,
             0,
@@ -5811,8 +5865,8 @@ fn responses_request_returns_bad_gateway_when_codex_has_no_accounts() {
             .expect("codex upstreams")
             .groups[0]
             .items[0]
-            .codex_account_id = None;
-        let data_dir = next_test_data_dir("responses_codex_no_accounts");
+            .codex_account_id = Some("codex-missing.json".to_string());
+        let data_dir = next_test_data_dir("responses_codex_missing_account");
         let state = build_test_state_handle(config, data_dir.clone()).await;
 
         let (status, _) = send_responses_request(state).await;
@@ -5870,7 +5924,8 @@ fn responses_request_returns_service_unavailable_when_all_codex_accounts_are_coo
             .expect("codex upstreams")
             .groups[0]
             .items[0]
-            .codex_account_id = None;
+            // Phase B: 禁止 unbound 池选号；测试固定钉死 codex-a。
+            .codex_account_id = Some("codex-a.json".to_string());
         config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
         let data_dir = next_test_data_dir("responses_codex_all_accounts_cooling");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -5889,7 +5944,11 @@ fn responses_request_returns_service_unavailable_when_all_codex_accounts_are_coo
             .read()
             .await
             .account_selector
-            .mark_retryable_failure(PROVIDER_CODEX, "codex-a.json");
+            .mark_retryable_failure_scoped(
+                PROVIDER_CODEX,
+                "codex-a.json",
+                &super::super::cooldown_scope::CooldownScope::Global,
+            );
 
         let (status, _) = send_responses_request(state).await;
         let requests = upstream.requests();
@@ -5904,22 +5963,32 @@ fn responses_request_returns_service_unavailable_when_all_codex_accounts_are_coo
 #[test]
 fn responses_request_does_not_cooldown_same_codex_account_after_400() {
     run_async(async {
+        // Phase B: 400 NextOnly 跨 Upstream，但不写 cooldown，下一请求仍先试 primary。
         let codex =
             spawn_auth_switch_mock_upstream_with_primary_status(StatusCode::BAD_REQUEST).await;
 
-        let mut config = config_with_runtime_upstreams(&[(
-            PROVIDER_CODEX,
-            0,
-            "codex-account-cooldown-400",
-            codex.base_url.as_str(),
-            FORMATS_RESPONSES,
-        )]);
-        let provider_upstreams = config
-            .upstreams
-            .get_mut(PROVIDER_CODEX)
-            .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CODEX,
+                10,
+                "codex-primary-400",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_CODEX,
+                5,
+                "codex-secondary-400",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        pin_dual_codex_accounts(&mut config, "codex-a.json", "codex-b.json");
         config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
 
         let data_dir = next_test_data_dir("responses_codex_account_no_cooldown_400");
         let state = build_test_state_handle(config, data_dir.clone()).await;
@@ -5985,55 +6054,40 @@ fn responses_request_does_not_cooldown_same_codex_account_after_400() {
 }
 
 #[test]
-fn messages_request_failovers_to_next_kiro_account_before_next_upstream() {
+fn messages_request_failovers_to_next_kiro_upstream_when_fixed_account_fails() {
     run_async(async {
+        // Phase B: 固定 kiro-a 失败后跨 upstream 到 kiro-b；fallback 必须是 Kiro eventstream。
         let kiro = spawn_kiro_auth_switch_mock_upstream(StatusCode::FORBIDDEN).await;
-        let fallback = spawn_mock_upstream(
+        let fallback = spawn_mock_raw_upstream(
             StatusCode::OK,
-            json!({
-                "id": "msg_fallback_upstream",
-                "type": "message",
-                "role": "assistant",
-                "model": "claude-sonnet-4.5",
-                "content": [
-                    { "type": "text", "text": "from fallback upstream" }
-                ],
-                "usage": {
-                    "input_tokens": 1,
-                    "output_tokens": 2
-                }
-            }),
+            build_kiro_event_stream("from fallback upstream"),
+            "application/vnd.amazon.eventstream",
         )
         .await;
 
         let mut config = config_with_runtime_upstreams(&[
             (
                 PROVIDER_KIRO,
-                0,
-                "kiro-auto-failover",
+                10,
+                "kiro-primary",
                 kiro.base_url.as_str(),
                 FORMATS_MESSAGES,
             ),
             (
                 PROVIDER_KIRO,
-                0,
+                5,
                 "kiro-fallback-upstream",
                 fallback.base_url.as_str(),
                 FORMATS_MESSAGES,
             ),
         ]);
-        let provider_upstreams = config
-            .upstreams
-            .get_mut(PROVIDER_KIRO)
-            .expect("kiro upstreams");
-        provider_upstreams.groups[0].items[0].kiro_account_id = None;
-        provider_upstreams.groups[0].items[1].kiro_account_id = None;
+        pin_dual_kiro_accounts(&mut config, "kiro-a.json", "kiro-b.json");
         config.upstream_strategy = UpstreamStrategyRuntime {
             order: UpstreamOrderStrategy::FillFirst,
             dispatch: UpstreamDispatchRuntime::Serial,
         };
 
-        let data_dir = next_test_data_dir("messages_kiro_account_failover");
+        let data_dir = next_test_data_dir("messages_kiro_upstream_failover");
         let state = build_test_state_handle(config, data_dir.clone()).await;
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
@@ -6050,34 +6104,29 @@ fn messages_request_failovers_to_next_kiro_account_before_next_upstream() {
         let _ = std::fs::remove_dir_all(&data_dir);
 
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            json["content"][0]["text"].as_str(),
-            Some("from kiro failover")
-        );
-        assert_eq!(kiro_requests.len(), 2);
-        assert_eq!(
-            kiro_requests[0].authorization.as_deref(),
-            Some("Bearer kiro-access-a")
-        );
-        assert_eq!(
-            kiro_requests[1].authorization.as_deref(),
-            Some("Bearer kiro-access-b")
-        );
         assert!(
-            fallback_requests.is_empty(),
-            "kiro should exhaust same-upstream accounts before falling back to next upstream"
+            json.to_string().contains("from fallback upstream")
+                || json["content"][0]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("from fallback upstream"))
         );
+        assert!(!kiro_requests.is_empty());
+        assert!(kiro_requests
+            .iter()
+            .all(|request| request.authorization.as_deref() == Some("Bearer kiro-access-a")));
+        assert_eq!(fallback_requests.len(), 1);
     });
 }
 
 #[test]
-fn messages_request_stops_after_all_kiro_accounts_fail_and_does_not_retry_next_upstream() {
+fn messages_request_fixed_kiro_account_forbidden_can_still_failover_upstream() {
     run_async(async {
+        // Phase B: 固定账户 403 后可跨 upstream；不再有“同 upstream 多账户耗尽”路径。
         let kiro = spawn_mock_upstream(
             StatusCode::FORBIDDEN,
             json!({
                 "error": {
-                    "message": "all kiro accounts failed with forbidden"
+                    "message": "fixed kiro account forbidden"
                 }
             }),
         )
@@ -6092,14 +6141,14 @@ fn messages_request_stops_after_all_kiro_accounts_fail_and_does_not_retry_next_u
         let mut config = config_with_runtime_upstreams(&[
             (
                 PROVIDER_KIRO,
-                0,
-                "kiro-all-accounts-fail",
+                10,
+                "kiro-primary-fail",
                 kiro.base_url.as_str(),
                 FORMATS_MESSAGES,
             ),
             (
                 PROVIDER_KIRO,
-                0,
+                5,
                 "kiro-fallback-upstream",
                 next_upstream.base_url.as_str(),
                 FORMATS_MESSAGES,
@@ -6109,14 +6158,14 @@ fn messages_request_stops_after_all_kiro_accounts_fail_and_does_not_retry_next_u
             .upstreams
             .get_mut(PROVIDER_KIRO)
             .expect("kiro upstreams");
-        provider_upstreams.groups[0].items[0].kiro_account_id = None;
-        provider_upstreams.groups[0].items[1].kiro_account_id = None;
+        provider_upstreams.groups[0].items[0].kiro_account_id = Some("kiro-a.json".to_string());
+        provider_upstreams.groups[1].items[0].kiro_account_id = Some("kiro-b.json".to_string());
         config.upstream_strategy = UpstreamStrategyRuntime {
             order: UpstreamOrderStrategy::FillFirst,
             dispatch: UpstreamDispatchRuntime::Serial,
         };
 
-        let data_dir = next_test_data_dir("messages_kiro_accounts_then_upstream");
+        let data_dir = next_test_data_dir("messages_kiro_fixed_then_upstream");
         let state = build_test_state_handle(config, data_dir.clone()).await;
         let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
             .format(&time::format_description::well_known::Rfc3339)
@@ -6132,23 +6181,20 @@ fn messages_request_stops_after_all_kiro_accounts_fail_and_does_not_retry_next_u
         next_upstream.abort();
         let _ = std::fs::remove_dir_all(&data_dir);
 
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            json["error"]["message"].as_str(),
-            Some("All Kiro accounts are temporarily cooling down.")
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            json.to_string().contains("from downstream fallback")
+                || json["content"][0]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("from downstream fallback"))
         );
-        assert_eq!(kiro_requests.len(), 2);
-        assert_eq!(
-            kiro_requests[0].authorization.as_deref(),
-            Some("Bearer kiro-access-a")
-        );
-        assert_eq!(
-            kiro_requests[1].authorization.as_deref(),
-            Some("Bearer kiro-access-b")
-        );
+        assert!(!kiro_requests.is_empty());
+        assert!(kiro_requests
+            .iter()
+            .all(|request| request.authorization.as_deref() == Some("Bearer kiro-access-a")));
         assert_eq!(
             next_upstream_requests.len(),
-            0,
+            1,
             "same provider account cooldown now blocks reusing a later kiro upstream in the same request"
         );
     });
@@ -6192,7 +6238,8 @@ fn responses_request_logs_selected_codex_account_id() {
             .upstreams
             .get_mut(PROVIDER_CODEX)
             .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        // Phase B: 禁止 unbound 池选号；测试固定钉死 codex-a。
+        provider_upstreams.groups[0].items[0].codex_account_id = Some("codex-a.json".to_string());
 
         let data_dir = next_test_data_dir("responses_codex_logged_account");
         let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;
@@ -6265,20 +6312,30 @@ fn responses_request_skips_localhost_client_ip_in_request_logs() {
 #[test]
 fn responses_request_logs_each_codex_account_failover_attempt() {
     run_async(async {
+        // Phase B: 两 Upstream 各固定账户；request log 保留每次 attempt 的 account_id。
         let codex = spawn_auth_switch_mock_upstream().await;
 
-        let mut config = config_with_runtime_upstreams(&[(
-            PROVIDER_CODEX,
-            0,
-            "codex-account-log-all-attempts",
-            codex.base_url.as_str(),
-            FORMATS_RESPONSES,
-        )]);
-        let provider_upstreams = config
-            .upstreams
-            .get_mut(PROVIDER_CODEX)
-            .expect("codex upstreams");
-        provider_upstreams.groups[0].items[0].codex_account_id = None;
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CODEX,
+                10,
+                "codex-log-primary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_CODEX,
+                5,
+                "codex-log-secondary",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+        ]);
+        pin_dual_codex_accounts(&mut config, "codex-a.json", "codex-b.json");
+        config.upstream_strategy = UpstreamStrategyRuntime {
+            order: UpstreamOrderStrategy::FillFirst,
+            dispatch: UpstreamDispatchRuntime::Serial,
+        };
 
         let data_dir = next_test_data_dir("responses_codex_logs_all_attempts");
         let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;

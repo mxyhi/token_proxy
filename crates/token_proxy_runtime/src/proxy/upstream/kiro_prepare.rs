@@ -55,47 +55,54 @@ pub(super) async fn prepare_kiro_context<'a>(
 ) -> Result<KiroContext<'a>, AttemptOutcome> {
     let mapped_meta = super::build_mapped_meta(meta, upstream);
     let request_value = read_request_json(state, body).await?;
-    let has_pinned_account = upstream
+    // Account-as-Upstream：Kiro upstream 固定引用 credential account_id，无 pool 选号。
+    let pinned_account_id = upstream
         .kiro_account_id
         .as_deref()
         .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    let ordered_account_ids = if has_pinned_account {
-        None
-    } else {
-        let candidates = super::prepare::ordered_runtime_account_candidates(
-            state,
-            "kiro",
-            &crate::proxy::cooldown_scope::CooldownScope::Global,
-        )
-        .await;
-        if candidates.active_count > 0 && candidates.ids.is_empty() {
-            return Err(super::prepare::all_accounts_cooling_outcome(
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            super::prepare::account_resolution_outcome(
                 "Kiro",
-                candidates.active_count,
-            ));
-        }
-        Some(candidates.ids)
-    };
+                "Kiro account credential is required on upstream.".to_string(),
+            )
+        })?;
+    if state
+        .account_selector
+        .is_cooling_down("kiro", pinned_account_id)
+    {
+        let message = format!("kiro account is temporarily cooling down: {pinned_account_id}");
+        tracing::warn!(
+            account_id = pinned_account_id,
+            exclusion_reason = "account_cooling",
+            "pinned kiro account is cooling down"
+        );
+        let mut response = http::error_response(StatusCode::SERVICE_UNAVAILABLE, &message);
+        response.extensions_mut().insert(super::RetryDirective {
+            scope: super::RetryScope::NextOnly,
+            effective_body: None,
+        });
+        return Err(AttemptOutcome::Retryable {
+            message,
+            response: Some(response),
+            is_timeout: false,
+            should_cooldown: false,
+            deferred_log: None,
+        });
+    }
     let (account_id, record) = state
         .kiro_accounts
-        .resolve_account_record_with_order(
-            upstream.kiro_account_id.as_deref(),
-            ordered_account_ids.as_deref(),
-        )
+        .resolve_pinned_account_record(pinned_account_id)
         .await
-        .map_err(|err| {
-            super::prepare::account_resolution_outcome("Kiro", has_pinned_account, err)
-        })?;
+        .map_err(|err| super::prepare::account_resolution_outcome("Kiro", err))?;
     let is_idc = record.auth_method.trim().eq_ignore_ascii_case("idc");
     let profile_arn = resolve_profile_arn(&record);
     let endpoints = resolve_endpoints(state, upstream, is_idc);
     let (model_id, is_agentic, is_chat_only) = resolve_model(&mapped_meta);
     let source_format = resolve_source_format(response_transform);
-    let client_proxy_url = record
+    let client_proxy_url = upstream
         .proxy_url
         .clone()
-        .or_else(|| upstream.proxy_url.clone())
         .or(state.kiro_accounts.app_proxy_url().await);
     let client = build_client(state, client_proxy_url.as_deref())?;
 

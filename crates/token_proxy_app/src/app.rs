@@ -37,19 +37,21 @@ pub type RequestDetailChangeHandler = Arc<dyn Fn(RequestDetailCaptureState) + Se
 /// handles in their own state container, but they do not construct internals.
 #[derive(Clone)]
 pub struct TokenProxyApp {
-    paths: Arc<TokenProxyPaths>,
+    pub(crate) paths: Arc<TokenProxyPaths>,
     logging: LoggingState,
     app_proxy: AppProxyState,
     request_detail: Arc<RequestDetailCapture>,
     token_rate: Arc<TokenRateTracker>,
-    kiro_accounts: Arc<KiroAccountStore>,
-    codex_accounts: Arc<CodexAccountStore>,
-    xai_accounts: Arc<XaiAccountStore>,
-    kiro_login: Arc<KiroLoginManager>,
-    codex_login: Arc<CodexLoginManager>,
-    xai_login: Arc<XaiLoginManager>,
-    proxy: ProxyServiceHandle,
-    proxy_context: ProxyContext,
+    pub(crate) kiro_accounts: Arc<KiroAccountStore>,
+    pub(crate) codex_accounts: Arc<CodexAccountStore>,
+    pub(crate) xai_accounts: Arc<XaiAccountStore>,
+    pub(crate) kiro_login: Arc<KiroLoginManager>,
+    pub(crate) codex_login: Arc<CodexLoginManager>,
+    pub(crate) xai_login: Arc<XaiLoginManager>,
+    pub(crate) proxy: ProxyServiceHandle,
+    pub(crate) proxy_context: ProxyContext,
+    /// Account/config mutation 串行化与 fault-injection 状态。
+    pub(crate) lifecycle: Arc<crate::account_lifecycle::AccountLifecycle>,
 }
 
 impl TokenProxyApp {
@@ -103,7 +105,13 @@ impl TokenProxyApp {
             xai_login,
             proxy,
             proxy_context,
+            lifecycle: Arc::new(crate::account_lifecycle::AccountLifecycle::new()),
         })
+    }
+
+    /// 测试用 fault-injection 句柄（生产路径不依赖）。
+    pub fn lifecycle_faults(&self) -> Arc<crate::account_lifecycle::LifecycleFaults> {
+        self.lifecycle.faults()
     }
 
     pub fn paths(&self) -> Arc<TokenProxyPaths> {
@@ -155,19 +163,11 @@ impl TokenProxyApp {
         self.proxy.status().await
     }
 
-    /// 启动代理；运行时依赖由应用内部持有。
-    pub async fn start_proxy(&self) -> Result<ProxyServiceStatus, String> {
-        self.proxy.start(&self.proxy_context).await
-    }
+    // start_proxy / restart_proxy：见 account_lifecycle（启动前 reconcile）。
 
     /// 停止代理并等待优雅停机完成。
     pub async fn stop_proxy(&self) -> Result<ProxyServiceStatus, String> {
         self.proxy.stop().await
-    }
-
-    /// 使用当前保存配置重启代理。
-    pub async fn restart_proxy(&self) -> Result<ProxyServiceStatus, String> {
-        self.proxy.restart(&self.proxy_context).await
     }
 
     /// 热重载当前保存配置；需要换监听地址时内部自动重启。

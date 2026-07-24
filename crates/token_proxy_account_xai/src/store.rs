@@ -5,15 +5,15 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use time::{Duration, OffsetDateTime};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, MutexGuard, RwLock};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 use tokio::sync::Notify;
 
 use crate::persistence as provider_accounts;
 use token_proxy_account_store::app_proxy::AppProxyState;
 use token_proxy_account_store::oauth_util::{
-    decode_jwt_payload, expires_at_from_seconds, normalize_proxy_url, now_rfc3339, sanitize_id_part,
+    decode_jwt_payload, expires_at_from_seconds, now_rfc3339, sanitize_id_part,
 };
 use token_proxy_account_store::paths::TokenProxyPaths;
 
@@ -37,8 +37,67 @@ pub struct XaiAccountStore {
     mutation_locks: StdMutex<HashMap<String, Weak<Mutex<()>>>>,
     account_index_mutation: Mutex<()>,
     cache_sync: Mutex<()>,
+    /// Provider 级 mutation gate：snapshot/restore 与 refresh/save/delete 共享，
+    /// 防止全量补偿覆盖并发 token/quota 写。锁序：provider → index → account → cache_sync。
+    provider_mutation: Mutex<()>,
+    /// 测试探针：即将 acquire provider_mutation 时通知（不含 secret）。
+    #[cfg(any(test, feature = "test-support"))]
+    gate_probe: StdMutex<Option<Arc<ProviderGateProbe>>>,
     #[cfg(test)]
     persistence_test_hook: StdMutex<Option<Arc<PersistenceTestHook>>>,
+}
+
+/// provider gate 测试探针：about_to_lock 在阻塞前，acquired 在拿到锁后。
+#[cfg(any(test, feature = "test-support"))]
+pub struct ProviderGateProbe {
+    pub about_to_lock: Notify,
+    pub acquired: Notify,
+}
+
+/// Provider import/restore 事务会话：持有 `provider_mutation` 直至 drop。
+/// 不暴露裸 MutexGuard；事务内只走 unlocked 路径，避免 Tokio Mutex 自重入。
+pub struct XaiProviderMutation<'a> {
+    store: &'a XaiAccountStore,
+    _gate: MutexGuard<'a, ()>,
+}
+
+impl Drop for XaiProviderMutation<'_> {
+    fn drop(&mut self) {
+        tracing::debug!("xai provider mutation session end");
+    }
+}
+
+impl XaiProviderMutation<'_> {
+    /// 已持 gate：全量快照（含 secret，仅内存短时持有，禁止日志）。
+    pub async fn snapshot_all_records(&self) -> Result<HashMap<String, XaiTokenRecord>, String> {
+        self.store.snapshot_all_records_unlocked().await
+    }
+
+    /// 已持 gate：SQLite 事务全量恢复后替换 cache。
+    pub async fn restore_all_records(
+        &self,
+        snapshot: HashMap<String, XaiTokenRecord>,
+    ) -> Result<(), String> {
+        self.store.restore_all_records_unlocked(snapshot).await
+    }
+
+    /// 已持 gate：文件/目录导入。
+    pub async fn import_file(&self, path: PathBuf) -> Result<Vec<XaiAccountSummary>, String> {
+        self.store.import_file_unlocked(path).await
+    }
+
+    /// 已持 gate：文本导入。
+    pub async fn import_text(&self, contents: &str) -> Result<Vec<XaiAccountSummary>, String> {
+        self.store.import_text_unlocked(contents).await
+    }
+
+    /// 已持 gate：refresh token 导入（含网络 refresh）。
+    pub async fn import_refresh_tokens(
+        &self,
+        contents: &str,
+    ) -> Result<Vec<XaiAccountSummary>, String> {
+        self.store.import_refresh_tokens_unlocked(contents).await
+    }
 }
 
 #[cfg(test)]
@@ -86,9 +145,63 @@ impl XaiAccountStore {
             mutation_locks: StdMutex::new(HashMap::new()),
             account_index_mutation: Mutex::new(()),
             cache_sync: Mutex::new(()),
+            provider_mutation: Mutex::new(()),
+            #[cfg(any(test, feature = "test-support"))]
+            gate_probe: StdMutex::new(None),
             #[cfg(test)]
             persistence_test_hook: StdMutex::new(None),
         })
+    }
+
+    /// 开启 provider mutation 事务；session 存活期间独占 provider_mutation。
+    pub async fn begin_provider_mutation(&self) -> XaiProviderMutation<'_> {
+        tracing::debug!("xai provider mutation session begin");
+        let _gate = self.acquire_provider_mutation().await;
+        XaiProviderMutation { store: self, _gate }
+    }
+
+    /// 统一 acquire：外部写路径自动取 gate；测试探针在阻塞前/获锁后通知。
+    async fn acquire_provider_mutation(&self) -> MutexGuard<'_, ()> {
+        #[cfg(any(test, feature = "test-support"))]
+        self.notify_about_to_acquire_provider_gate();
+        let guard = self.provider_mutation.lock().await;
+        #[cfg(any(test, feature = "test-support"))]
+        self.notify_provider_gate_acquired();
+        guard
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn notify_about_to_acquire_provider_gate(&self) {
+        if let Ok(guard) = self.gate_probe.lock() {
+            if let Some(probe) = guard.as_ref() {
+                probe.about_to_lock.notify_one();
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn notify_provider_gate_acquired(&self) {
+        if let Ok(guard) = self.gate_probe.lock() {
+            if let Some(probe) = guard.as_ref() {
+                probe.acquired.notify_one();
+            }
+        }
+    }
+
+    /// 安装 gate 探针；返回 Arc 供测试 wait about_to_lock / acquired。
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn install_provider_gate_probe(&self) -> Arc<ProviderGateProbe> {
+        let probe = Arc::new(ProviderGateProbe {
+            about_to_lock: Notify::new(),
+            acquired: Notify::new(),
+        });
+        *self.gate_probe.lock().expect("xai gate probe lock") = Some(Arc::clone(&probe));
+        probe
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn clear_provider_gate_probe(&self) {
+        *self.gate_probe.lock().expect("xai gate probe lock") = None;
     }
 
     pub async fn list_accounts(&self) -> Result<Vec<XaiAccountSummary>, String> {
@@ -98,152 +211,26 @@ impl XaiAccountStore {
             .iter()
             .map(|(account_id, record)| account_summary(account_id.clone(), record))
             .collect::<Vec<_>>();
-        items.sort_by(|left, right| {
-            right
-                .priority
-                .cmp(&left.priority)
-                .then_with(|| left.account_id.cmp(&right.account_id))
-        });
+        items.sort_by(|left, right| left.account_id.cmp(&right.account_id));
         Ok(items)
     }
 
     pub async fn import_file(&self, path: PathBuf) -> Result<Vec<XaiAccountSummary>, String> {
-        if path.as_os_str().is_empty() {
-            return Err("Import path is required.".to_string());
-        }
-        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            return Err("Selected import path not found.".to_string());
-        }
-        let metadata = tokio::fs::metadata(&path)
-            .await
-            .map_err(|error| format!("Failed to read import path metadata: {error}"))?;
-        let files = if metadata.is_dir() {
-            collect_json_files(&path).await?
-        } else {
-            vec![path]
-        };
-        let mut imported = Vec::new();
-        let mut first_error = None;
-        for file in files {
-            let contents = match tokio::fs::read_to_string(&file).await {
-                Ok(contents) => contents,
-                Err(error) if metadata.is_dir() => {
-                    tracing::debug!(path = %file.display(), error = %error, "skip unreadable xai import file");
-                    first_error.get_or_insert_with(|| {
-                        format!("Failed to read xAI JSON file {}: {error}", file.display())
-                    });
-                    continue;
-                }
-                Err(error) => return Err(format!("Failed to read xAI JSON file: {error}")),
-            };
-            let records = match parse_import_records(&contents) {
-                Ok(records) => records,
-                Err(error) if metadata.is_dir() => {
-                    tracing::debug!(path = %file.display(), error = %error, "skip non-xai import file");
-                    first_error.get_or_insert(error);
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
-            for record in records {
-                if metadata.is_dir() {
-                    match self.prepare_import_record(record).await {
-                        Ok(record) => match self.save_new_account(record).await {
-                            Ok(summary) => imported.push(summary),
-                            Err(error) => {
-                                first_error.get_or_insert(error.clone());
-                                tracing::warn!(
-                                    path = %file.display(),
-                                    error = %error,
-                                    "xai account import save failed"
-                                );
-                            }
-                        },
-                        Err(error) => {
-                            first_error.get_or_insert(error.clone());
-                            tracing::warn!(
-                                path = %file.display(),
-                                error = %error,
-                                "xai account import record rejected"
-                            );
-                        }
-                    }
-                    continue;
-                }
-                let record = self.prepare_import_record(record).await?;
-                imported.push(self.save_new_account(record).await?);
-            }
-        }
-        if imported.is_empty() {
-            return Err(first_error.unwrap_or_else(|| {
-                if metadata.is_dir() {
-                    "No valid xAI OAuth accounts found in selected directory.".to_string()
-                } else {
-                    "No valid xAI OAuth accounts found in JSON file.".to_string()
-                }
-            }));
-        }
-        tracing::info!(
-            imported = imported.len(),
-            "xai account file import finished"
-        );
-        Ok(imported)
+        let _provider = self.acquire_provider_mutation().await;
+        self.import_file_unlocked(path).await
     }
 
     pub async fn import_text(&self, contents: &str) -> Result<Vec<XaiAccountSummary>, String> {
-        let records = parse_import_records(contents)?;
-        let mut imported = Vec::new();
-        let mut errors = Vec::new();
-        for record in records {
-            match self.prepare_import_record(record).await {
-                Ok(record) => match self.save_new_account(record).await {
-                    Ok(summary) => imported.push(summary),
-                    Err(error) => errors.push(error),
-                },
-                Err(error) => errors.push(error),
-            }
-        }
-        tracing::info!(
-            imported = imported.len(),
-            failed = errors.len(),
-            "xai account text import finished"
-        );
-        if imported.is_empty() {
-            return Err(errors
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| "No valid xAI OAuth accounts found in input.".to_string()));
-        }
-        Ok(imported)
+        let _provider = self.acquire_provider_mutation().await;
+        self.import_text_unlocked(contents).await
     }
 
     pub async fn import_refresh_tokens(
         &self,
         contents: &str,
     ) -> Result<Vec<XaiAccountSummary>, String> {
-        let refresh_tokens = parse_refresh_token_lines(contents);
-        if refresh_tokens.is_empty() {
-            return Err("Refresh token is required.".to_string());
-        }
-        let mut imported = Vec::new();
-        let mut errors = Vec::new();
-        for refresh_token in refresh_tokens {
-            match self.import_refresh_token(&refresh_token).await {
-                Ok(summary) => imported.push(summary),
-                Err(error) => errors.push(error),
-            }
-        }
-        tracing::info!(
-            imported = imported.len(),
-            failed = errors.len(),
-            "xai refresh token import finished"
-        );
-        if imported.is_empty() {
-            return Err(errors.into_iter().next().unwrap_or_else(|| {
-                "No valid xAI accounts found in refresh token input.".to_string()
-            }));
-        }
-        Ok(imported)
+        let _provider = self.acquire_provider_mutation().await;
+        self.import_refresh_tokens_unlocked(contents).await
     }
 
     pub async fn get_account_record(&self, account_id: &str) -> Result<XaiTokenRecord, String> {
@@ -364,6 +351,7 @@ impl XaiAccountStore {
                 account_id: account_id.to_string(),
             }
         };
+        let _provider = self.acquire_provider_mutation().await;
         let mutation = self.account_mutation_lock(account_id)?;
         let _mutation_guard = mutation.lock().await;
         let mut latest = self.load_account(account_id).await?;
@@ -384,6 +372,7 @@ impl XaiAccountStore {
         account_id: &str,
         enabled: bool,
     ) -> Result<XaiAccountSummary, String> {
+        let _provider = self.acquire_provider_mutation().await;
         let mutation = self.account_mutation_lock(account_id)?;
         let _guard = mutation.lock().await;
         let mut record = self.load_account(account_id).await?;
@@ -392,50 +381,14 @@ impl XaiAccountStore {
             .await
     }
 
-    pub async fn set_status(
-        &self,
-        account_id: &str,
-        status: XaiAccountStatus,
-    ) -> Result<XaiAccountSummary, String> {
-        let mutation = self.account_mutation_lock(account_id)?;
-        let _guard = mutation.lock().await;
-        let mut record = self.load_account(account_id).await?;
-        record.status = status;
-        self.save_record_locked(account_id.to_string(), record)
-            .await
-    }
-
-    pub async fn set_proxy_url(
-        &self,
-        account_id: &str,
-        proxy_url: Option<&str>,
-    ) -> Result<XaiAccountSummary, String> {
-        let mutation = self.account_mutation_lock(account_id)?;
-        let _guard = mutation.lock().await;
-        let mut record = self.load_account(account_id).await?;
-        record.proxy_url = normalize_proxy_url(proxy_url)?;
-        self.save_record_locked(account_id.to_string(), record)
-            .await
-    }
-
-    pub async fn set_priority(
-        &self,
-        account_id: &str,
-        priority: i32,
-    ) -> Result<XaiAccountSummary, String> {
-        let mutation = self.account_mutation_lock(account_id)?;
-        let _guard = mutation.lock().await;
-        let mut record = self.load_account(account_id).await?;
-        record.priority = priority;
-        self.save_record_locked(account_id.to_string(), record)
-            .await
-    }
-
+    /// 带 provider/account gate 的完整写路径；test-support 与未来 crate 内写入口复用。
+    #[cfg_attr(not(any(test, feature = "test-support")), allow(dead_code))]
     pub(crate) async fn save_record(
         &self,
         account_id: String,
         record: XaiTokenRecord,
     ) -> Result<XaiAccountSummary, String> {
+        let _provider = self.acquire_provider_mutation().await;
         let mutation = self.account_mutation_lock(&account_id)?;
         let _guard = mutation.lock().await;
         self.save_record_locked(account_id, record).await
@@ -479,6 +432,7 @@ impl XaiAccountStore {
         account_id: &str,
         quota: XaiQuotaCache,
     ) -> Result<XaiTokenRecord, String> {
+        let _provider = self.acquire_provider_mutation().await;
         let mutation = self.account_mutation_lock(account_id)?;
         let _guard = mutation.lock().await;
         let mut latest = self.load_account(account_id).await?;
@@ -488,11 +442,22 @@ impl XaiAccountStore {
         Ok(latest)
     }
 
+    /// 自动取 gate 的新建/覆盖入口；事务内请用 unlocked。
+    #[allow(dead_code)]
     pub(crate) async fn save_new_account(
+        &self,
+        record: XaiTokenRecord,
+    ) -> Result<XaiAccountSummary, String> {
+        // 身份匹配、ID 分配和首次保存必须原子化，避免并发导入复用同一空闲 ID。
+        let _provider = self.acquire_provider_mutation().await;
+        self.save_new_account_unlocked(record).await
+    }
+
+    /// 调用方必须已持 `provider_mutation`；仍取 index/account 锁。
+    async fn save_new_account_unlocked(
         &self,
         mut record: XaiTokenRecord,
     ) -> Result<XaiAccountSummary, String> {
-        // 身份匹配、ID 分配和首次保存必须原子化，避免并发导入复用同一空闲 ID。
         let _index_guard = self.account_index_mutation.lock().await;
         fill_record_identity(&mut record);
         if let Some((account_id, _)) = self.find_existing_account(&record).await? {
@@ -500,14 +465,8 @@ impl XaiAccountStore {
             let _guard = mutation.lock().await;
             let existing = self.load_account(&account_id).await?;
             record.auto_refresh_enabled = existing.auto_refresh_enabled;
-            // 成功重导入会修复 Expired/Invalid；只有用户显式 Disabled 需要保留。
-            record.status = if existing.status == XaiAccountStatus::Disabled {
-                XaiAccountStatus::Disabled
-            } else {
-                XaiAccountStatus::Active
-            };
-            record.proxy_url = record.proxy_url.or(existing.proxy_url);
-            record.priority = existing.priority;
+            // 成功重导入会修复 Expired/Invalid 健康状态。
+            record.status = XaiAccountStatus::Active;
             record.quota = existing.quota;
             return self.save_record_locked(account_id, record).await;
         }
@@ -521,10 +480,14 @@ impl XaiAccountStore {
             id_part = OffsetDateTime::now_utc().unix_timestamp().to_string();
         }
         let account_id = self.unique_account_id(&id_part).await?;
-        self.save_record(account_id, record).await
+        // 已持 provider gate：直接 account lock + save_record_locked，避免重入。
+        let mutation = self.account_mutation_lock(&account_id)?;
+        let _guard = mutation.lock().await;
+        self.save_record_locked(account_id, record).await
     }
 
     pub async fn delete_account(&self, account_id: &str) -> Result<(), String> {
+        let _provider = self.acquire_provider_mutation().await;
         let mutation = self.account_mutation_lock(account_id)?;
         let _guard = mutation.lock().await;
         let _cache_guard = self.cache_sync.lock().await;
@@ -539,6 +502,75 @@ impl XaiAccountStore {
         #[cfg(test)]
         self.pause_after_persistence_for_test().await;
         Ok(())
+    }
+
+    /// 编排层快照：导出全部凭据（含 secret，仅内存短时持有，禁止日志）。
+    pub async fn snapshot_all_records(&self) -> Result<HashMap<String, XaiTokenRecord>, String> {
+        let _provider = self.acquire_provider_mutation().await;
+        self.snapshot_all_records_unlocked().await
+    }
+
+    /// 编排层恢复：单 SQLite 事务替换该 provider 全量快照，提交后再替换 cache。
+    pub async fn restore_all_records(
+        &self,
+        snapshot: HashMap<String, XaiTokenRecord>,
+    ) -> Result<(), String> {
+        // provider gate 阻止并发 save/refresh 在 restore 中途写回。
+        let _provider = self.acquire_provider_mutation().await;
+        self.restore_all_records_unlocked(snapshot).await
+    }
+
+    /// 单账户快照；不存在返回 None。
+    pub async fn snapshot_account_record(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<XaiTokenRecord>, String> {
+        let _provider = self.acquire_provider_mutation().await;
+        self.refresh_cache_unlocked().await?;
+        Ok(self.cache.read().await.get(account_id).cloned())
+    }
+
+    /// 单账户原子恢复；`None` 表示删除。DB 提交成功后再改 cache。
+    pub async fn restore_account_record(
+        &self,
+        account_id: &str,
+        record: Option<XaiTokenRecord>,
+    ) -> Result<(), String> {
+        let _provider = self.acquire_provider_mutation().await;
+        let mutation = self.account_mutation_lock(account_id)?;
+        let _guard = mutation.lock().await;
+        let _cache_guard = self.cache_sync.lock().await;
+        provider_accounts::replace_xai_account(&self.paths, account_id, record.as_ref()).await?;
+        match record {
+            Some(record) => {
+                self.cache
+                    .write()
+                    .await
+                    .insert(account_id.to_string(), record);
+            }
+            None => {
+                self.cache.write().await.remove(account_id);
+            }
+        }
+        tracing::debug!(account_id, "xai account record restored for orchestration");
+        Ok(())
+    }
+
+    /// 登录编排提交：持久化 credential，返回 summary 与覆盖前旧 record。
+    pub async fn commit_login_record(
+        &self,
+        mut record: XaiTokenRecord,
+    ) -> Result<(XaiAccountSummary, Option<XaiTokenRecord>), String> {
+        // 身份填充后再 snapshot 旧 record，避免 re-login 覆盖后无法恢复。
+        // 整段持 provider gate，避免与 restore/refresh 交错。
+        let _provider = self.acquire_provider_mutation().await;
+        fill_record_identity(&mut record);
+        let previous = self
+            .find_existing_account(&record)
+            .await?
+            .map(|(_, old)| old);
+        let summary = self.save_new_account_unlocked(record).await?;
+        Ok((summary, previous))
     }
 
     #[cfg(test)]
@@ -564,50 +596,42 @@ impl XaiAccountStore {
         }
     }
 
-    pub async fn resolve_account_record_with_order(
+    /// 解析 Upstream 固定引用的账户凭据。无 pool/unpinned 选号。
+    pub async fn resolve_pinned_account_record(
         &self,
-        pinned_account_id: Option<&str>,
-        ordered_account_ids: Option<&[String]>,
+        account_id: &str,
     ) -> Result<(String, XaiTokenRecord), String> {
-        if let Some(account_id) = pinned_account_id
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            let record = self.get_account_record(account_id).await?;
-            if !record.is_schedulable() {
-                return Err(format!("xAI account {account_id} is not active."));
-            }
-            return Ok((account_id.to_string(), record));
+        let account_id = account_id.trim();
+        if account_id.is_empty() {
+            return Err("xAI account_id is required for account credential upstream.".to_string());
         }
-
-        self.refresh_cache().await?;
-        let candidates = match ordered_account_ids {
-            Some(account_ids) => account_ids.to_vec(),
-            None => {
-                let cache = self.cache.read().await;
-                sorted_account_ids(&cache)
-            }
-        };
-        let mut last_error = None;
-        for account_id in candidates {
-            match self.get_account_record(&account_id).await {
-                Ok(record) if record.is_schedulable() => return Ok((account_id, record)),
-                Ok(_) => {}
-                Err(error) => last_error = Some(error),
-            }
+        let record = self.get_account_record(account_id).await?;
+        if !record.is_usable() {
+            tracing::warn!(
+                account_id,
+                status = ?record.effective_status(),
+                "pinned xai account is not usable"
+            );
+            return Err(format!(
+                "xAI account is {}: {account_id}",
+                match record.effective_status() {
+                    XaiAccountStatus::Active => "active",
+                    XaiAccountStatus::Expired => "expired",
+                    XaiAccountStatus::Invalid => "invalid",
+                }
+            ));
         }
-        Err(last_error.unwrap_or_else(|| "No active xAI OAuth accounts found.".to_string()))
+        tracing::debug!(account_id, "resolved pinned xai account credential");
+        Ok((account_id.to_string(), record))
     }
 
     pub async fn app_proxy_url(&self) -> Option<String> {
         self.app_proxy.read().await.clone()
     }
 
-    pub(crate) async fn effective_proxy_url(&self, account_proxy: Option<&str>) -> Option<String> {
-        match normalize_proxy_url(account_proxy) {
-            Ok(Some(proxy_url)) => Some(proxy_url),
-            Ok(None) | Err(_) => self.app_proxy_url().await,
-        }
+    pub(crate) async fn effective_proxy_url(&self, _account_proxy: Option<&str>) -> Option<String> {
+        // 账户不再持有 proxy_url；OAuth/HTTP 仅使用 app 级 proxy。
+        self.app_proxy_url().await
     }
 
     pub(crate) async fn load_account(&self, account_id: &str) -> Result<XaiTokenRecord, String> {
@@ -624,10 +648,179 @@ impl XaiAccountStore {
     }
 
     async fn refresh_cache(&self) -> Result<(), String> {
+        // 不持 provider_mutation：load_account 常在已持 gate 的写路径中调用，避免重入死锁。
+        // 与 restore/save 的互斥靠 cache_sync；全量 restore 另持 provider 挡并发写。
+        self.refresh_cache_unlocked().await
+    }
+
+    async fn refresh_cache_unlocked(&self) -> Result<(), String> {
         let _guard = self.cache_sync.lock().await;
         let snapshot = provider_accounts::list_xai_records(&self.paths).await?;
         *self.cache.write().await = snapshot;
         Ok(())
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn snapshot_all_records_unlocked(
+        &self,
+    ) -> Result<HashMap<String, XaiTokenRecord>, String> {
+        self.refresh_cache_unlocked().await?;
+        Ok(self.cache.read().await.clone())
+    }
+
+    /// 调用方必须已持 `provider_mutation`；仍取 index/cache_sync。
+    async fn restore_all_records_unlocked(
+        &self,
+        snapshot: HashMap<String, XaiTokenRecord>,
+    ) -> Result<(), String> {
+        let _index_guard = self.account_index_mutation.lock().await;
+        let _cache_guard = self.cache_sync.lock().await;
+        provider_accounts::replace_all_xai_records(&self.paths, &snapshot).await?;
+        *self.cache.write().await = snapshot;
+        tracing::debug!("xai account store restored from orchestration snapshot");
+        Ok(())
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn import_file_unlocked(&self, path: PathBuf) -> Result<Vec<XaiAccountSummary>, String> {
+        if path.as_os_str().is_empty() {
+            return Err("Import path is required.".to_string());
+        }
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Err("Selected import path not found.".to_string());
+        }
+        let metadata = tokio::fs::metadata(&path)
+            .await
+            .map_err(|error| format!("Failed to read import path metadata: {error}"))?;
+        let files = if metadata.is_dir() {
+            collect_json_files(&path).await?
+        } else {
+            vec![path]
+        };
+        let mut imported = Vec::new();
+        let mut first_error = None;
+        for file in files {
+            let contents = match tokio::fs::read_to_string(&file).await {
+                Ok(contents) => contents,
+                Err(error) if metadata.is_dir() => {
+                    tracing::debug!(path = %file.display(), error = %error, "skip unreadable xai import file");
+                    first_error.get_or_insert_with(|| {
+                        format!("Failed to read xAI JSON file {}: {error}", file.display())
+                    });
+                    continue;
+                }
+                Err(error) => return Err(format!("Failed to read xAI JSON file: {error}")),
+            };
+            let records = match parse_import_records(&contents) {
+                Ok(records) => records,
+                Err(error) if metadata.is_dir() => {
+                    tracing::debug!(path = %file.display(), error = %error, "skip non-xai import file");
+                    first_error.get_or_insert(error);
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            for record in records {
+                if metadata.is_dir() {
+                    match self.prepare_import_record(record).await {
+                        Ok(record) => match self.save_new_account_unlocked(record).await {
+                            Ok(summary) => imported.push(summary),
+                            Err(error) => {
+                                first_error.get_or_insert(error.clone());
+                                tracing::warn!(
+                                    path = %file.display(),
+                                    error = %error,
+                                    "xai account import save failed"
+                                );
+                            }
+                        },
+                        Err(error) => {
+                            first_error.get_or_insert(error.clone());
+                            tracing::warn!(
+                                path = %file.display(),
+                                error = %error,
+                                "xai account import record rejected"
+                            );
+                        }
+                    }
+                    continue;
+                }
+                let record = self.prepare_import_record(record).await?;
+                imported.push(self.save_new_account_unlocked(record).await?);
+            }
+        }
+        if imported.is_empty() {
+            return Err(first_error.unwrap_or_else(|| {
+                if metadata.is_dir() {
+                    "No valid xAI OAuth accounts found in selected directory.".to_string()
+                } else {
+                    "No valid xAI OAuth accounts found in JSON file.".to_string()
+                }
+            }));
+        }
+        tracing::info!(
+            imported = imported.len(),
+            "xai account file import finished"
+        );
+        Ok(imported)
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn import_text_unlocked(&self, contents: &str) -> Result<Vec<XaiAccountSummary>, String> {
+        let records = parse_import_records(contents)?;
+        let mut imported = Vec::new();
+        let mut errors = Vec::new();
+        for record in records {
+            match self.prepare_import_record(record).await {
+                Ok(record) => match self.save_new_account_unlocked(record).await {
+                    Ok(summary) => imported.push(summary),
+                    Err(error) => errors.push(error),
+                },
+                Err(error) => errors.push(error),
+            }
+        }
+        tracing::info!(
+            imported = imported.len(),
+            failed = errors.len(),
+            "xai account text import finished"
+        );
+        if imported.is_empty() {
+            return Err(errors
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| "No valid xAI OAuth accounts found in input.".to_string()));
+        }
+        Ok(imported)
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn import_refresh_tokens_unlocked(
+        &self,
+        contents: &str,
+    ) -> Result<Vec<XaiAccountSummary>, String> {
+        let refresh_tokens = parse_refresh_token_lines(contents);
+        if refresh_tokens.is_empty() {
+            return Err("Refresh token is required.".to_string());
+        }
+        let mut imported = Vec::new();
+        let mut errors = Vec::new();
+        for refresh_token in refresh_tokens {
+            match self.import_refresh_token_unlocked(&refresh_token).await {
+                Ok(summary) => imported.push(summary),
+                Err(error) => errors.push(error),
+            }
+        }
+        tracing::info!(
+            imported = imported.len(),
+            failed = errors.len(),
+            "xai refresh token import finished"
+        );
+        if imported.is_empty() {
+            return Err(errors.into_iter().next().unwrap_or_else(|| {
+                "No valid xAI accounts found in refresh token input.".to_string()
+            }));
+        }
+        Ok(imported)
     }
 
     async fn prepare_import_record(
@@ -640,7 +833,6 @@ impl XaiAccountStore {
                     .map_err(|error| error.to_string())?,
             );
         }
-        record.proxy_url = normalize_proxy_url(record.proxy_url.as_deref())?;
         fill_record_identity(&mut record);
         if record_needs_refresh(&record) && !record.refresh_token.trim().is_empty() {
             return self.refresh_import_record(record).await;
@@ -657,7 +849,11 @@ impl XaiAccountStore {
         Ok(record)
     }
 
-    async fn import_refresh_token(&self, refresh_token: &str) -> Result<XaiAccountSummary, String> {
+    /// 调用方必须已持 `provider_mutation`。
+    async fn import_refresh_token_unlocked(
+        &self,
+        refresh_token: &str,
+    ) -> Result<XaiAccountSummary, String> {
         let proxy_url = self.app_proxy_url().await;
         let client = XaiOAuthClient::new(proxy_url.as_deref())?;
         let response = client
@@ -665,14 +861,14 @@ impl XaiAccountStore {
             .await
             .map_err(|error| error.to_string())?;
         let record = record_from_token_response(response, refresh_token, None);
-        self.save_new_account(record).await
+        self.save_new_account_unlocked(record).await
     }
 
     async fn refresh_import_record(
         &self,
         record: XaiTokenRecord,
     ) -> Result<XaiTokenRecord, String> {
-        let proxy_url = self.effective_proxy_url(record.proxy_url.as_deref()).await;
+        let proxy_url = self.effective_proxy_url(None).await;
         let client = XaiOAuthClient::new(proxy_url.as_deref())?;
         let response = client
             .refresh_token(&record.refresh_token, record.token_endpoint.as_deref())
@@ -686,10 +882,8 @@ impl XaiAccountStore {
         account_id: &str,
         record: XaiTokenRecord,
     ) -> Result<XaiTokenRecord, String> {
-        if matches!(
-            record.status,
-            XaiAccountStatus::Disabled | XaiAccountStatus::Invalid
-        ) || !record_needs_refresh(&record)
+        if matches!(record.status, XaiAccountStatus::Invalid)
+            || !record_needs_refresh(&record)
             || !record.auto_refresh_enabled
             || record.refresh_token.trim().is_empty()
         {
@@ -718,7 +912,7 @@ impl XaiAccountStore {
         account_id: &str,
         record: XaiTokenRecord,
     ) -> Result<XaiTokenRecord, String> {
-        let proxy_url = self.effective_proxy_url(record.proxy_url.as_deref()).await;
+        let proxy_url = self.effective_proxy_url(None).await;
         let client = XaiOAuthClient::new(proxy_url.as_deref())?;
         tracing::debug!(account_id, "xai account refresh start");
         let response = match client
@@ -749,6 +943,7 @@ impl XaiAccountStore {
         attempted: &XaiTokenRecord,
         response: XaiTokenResponse,
     ) -> Result<XaiTokenRecord, String> {
+        let _provider = self.acquire_provider_mutation().await;
         let mutation = self.account_mutation_lock(account_id)?;
         let _guard = mutation.lock().await;
         let latest = self.load_account(account_id).await?;
@@ -770,6 +965,7 @@ impl XaiAccountStore {
         account_id: &str,
         attempted: &XaiTokenRecord,
     ) -> Result<(), String> {
+        let _provider = self.acquire_provider_mutation().await;
         let mutation = self.account_mutation_lock(account_id)?;
         let _guard = mutation.lock().await;
         let mut latest = self.load_account(account_id).await?;
@@ -780,13 +976,7 @@ impl XaiAccountStore {
             );
             return Ok(());
         }
-        if latest.status == XaiAccountStatus::Disabled {
-            tracing::warn!(
-                account_id,
-                "xai refresh rejected while account remains manually disabled"
-            );
-            return Ok(());
-        }
+
         latest.status = XaiAccountStatus::Invalid;
         tracing::warn!(
             account_id,
@@ -916,8 +1106,6 @@ fn account_summary(account_id: String, record: &XaiTokenRecord) -> XaiAccountSum
         }),
         status: record.effective_status(),
         auto_refresh_enabled: record.auto_refresh_enabled,
-        proxy_url: record.proxy_url.clone(),
-        priority: record.priority,
     }
 }
 
@@ -947,8 +1135,6 @@ fn record_from_token_response(
         token_endpoint,
         auto_refresh_enabled: true,
         status: XaiAccountStatus::Active,
-        proxy_url: None,
-        priority: 0,
         quota: XaiQuotaCache::default(),
     };
     fill_record_identity(&mut record);
@@ -968,9 +1154,8 @@ fn merge_token_response(mut record: XaiTokenRecord, response: XaiTokenResponse) 
     }
     record.expires_at = expires_at_from_seconds(response.expires_in);
     record.last_refresh = Some(now_rfc3339());
-    if record.status != XaiAccountStatus::Disabled {
-        record.status = XaiAccountStatus::Active;
-    }
+    // 成功 refresh 恢复健康态；人工 Disabled 已删除，不再保留双模型。
+    record.status = XaiAccountStatus::Active;
     fill_record_identity(&mut record);
     record
 }
@@ -1021,17 +1206,9 @@ fn credential_basis_changed(attempted: &XaiTokenRecord, latest: &XaiTokenRecord)
 }
 
 fn sorted_account_ids(cache: &HashMap<String, XaiTokenRecord>) -> Vec<String> {
-    let mut entries = cache.iter().collect::<Vec<_>>();
-    entries.sort_by(|(left_id, left), (right_id, right)| {
-        right
-            .priority
-            .cmp(&left.priority)
-            .then_with(|| left_id.cmp(right_id))
-    });
-    entries
-        .into_iter()
-        .map(|(account_id, _)| account_id.clone())
-        .collect()
+    let mut account_ids = cache.keys().cloned().collect::<Vec<_>>();
+    account_ids.sort();
+    account_ids
 }
 
 fn quota_persist_is_due(checked_at: Option<&str>) -> bool {
@@ -1179,10 +1356,6 @@ struct ImportedXaiRecord {
     subject: Option<String>,
     #[serde(default)]
     token_endpoint: Option<String>,
-    #[serde(default)]
-    proxy_url: Option<String>,
-    #[serde(default)]
-    priority: i32,
 }
 
 impl TryFrom<ImportedXaiRecord> for XaiTokenRecord {
@@ -1233,8 +1406,6 @@ impl TryFrom<ImportedXaiRecord> for XaiTokenRecord {
             token_endpoint: imported.token_endpoint,
             auto_refresh_enabled: !imported.refresh_token.trim().is_empty(),
             status: XaiAccountStatus::Active,
-            proxy_url: imported.proxy_url,
-            priority: imported.priority,
             quota: XaiQuotaCache::default(),
         })
     }
@@ -1303,8 +1474,6 @@ mod tests {
             token_endpoint: None,
             auto_refresh_enabled: true,
             status: XaiAccountStatus::Active,
-            proxy_url: None,
-            priority: 0,
             quota: XaiQuotaCache::default(),
         }
     }
@@ -1447,49 +1616,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn successful_reimport_restores_invalid_but_preserves_disabled() {
-        for (label, previous, expected) in [
-            (
-                "invalid",
-                XaiAccountStatus::Invalid,
-                XaiAccountStatus::Active,
-            ),
-            (
-                "disabled",
-                XaiAccountStatus::Disabled,
-                XaiAccountStatus::Disabled,
-            ),
-        ] {
-            let (store, _paths, data_dir) = test_store(label);
-            let account_id = format!("xai-{label}@example.com");
-            let email = format!("{label}@example.com");
-            let mut existing = test_record("old-access-token", Some(&email));
-            existing.status = previous;
-            store
-                .save_record(account_id, existing)
-                .await
-                .expect("seed account");
+    async fn successful_reimport_restores_invalid_to_active() {
+        // Phase B: 无人工 Disabled；重导入成功一律恢复 Active。
+        let (store, _paths, data_dir) = test_store("reimport-invalid");
+        let account_id = "xai-invalid@example.com";
+        let mut existing = test_record("old-access-token", Some("invalid@example.com"));
+        existing.status = XaiAccountStatus::Invalid;
+        store
+            .save_record(account_id.to_string(), existing)
+            .await
+            .expect("seed account");
 
-            let imported = store
-                .save_new_account(test_record("new-access-token", Some(&email)))
-                .await
-                .expect("reimport account");
+        let imported = store
+            .save_new_account(test_record("new-access-token", Some("invalid@example.com")))
+            .await
+            .expect("reimport account");
 
-            assert_eq!(imported.status, expected);
-            let _ = std::fs::remove_dir_all(data_dir);
-        }
+        assert_eq!(imported.status, XaiAccountStatus::Active);
+        let _ = std::fs::remove_dir_all(data_dir);
     }
 
     #[tokio::test]
-    async fn invalid_grant_does_not_override_manual_disabled_status() {
-        let (store, _paths, data_dir) = test_store("disabled-invalid-grant");
-        let account_id = "xai-disabled-invalid@example.com";
-        let mut record = test_record("access-token", Some("disabled-invalid@example.com"));
-        record.status = XaiAccountStatus::Disabled;
+    async fn invalid_grant_keeps_invalid_status() {
+        let (store, _paths, data_dir) = test_store("invalid-grant");
+        let account_id = "xai-invalid-grant@example.com";
+        let mut record = test_record("access-token", Some("invalid-grant@example.com"));
+        record.status = XaiAccountStatus::Invalid;
         store
             .save_record(account_id.to_string(), record.clone())
             .await
-            .expect("seed disabled account");
+            .expect("seed invalid account");
 
         store
             .mark_invalid_if_credentials_match(account_id, &record)
@@ -1497,7 +1653,7 @@ mod tests {
             .expect("handle invalid grant");
 
         let persisted = store.load_account(account_id).await.expect("load account");
-        assert_eq!(persisted.status, XaiAccountStatus::Disabled);
+        assert_eq!(persisted.status, XaiAccountStatus::Invalid);
         let _ = std::fs::remove_dir_all(data_dir);
     }
 
@@ -1527,12 +1683,10 @@ mod tests {
     #[tokio::test]
     async fn token_and_quota_updates_only_merge_owned_fields() {
         let (store, paths, data_dir) = test_store("field-merge");
-        let account_id = "xai-disabled@example.com";
-        let mut record = test_record("initial-access-token", Some("disabled@example.com"));
+        let account_id = "xai-merge@example.com";
+        let mut record = test_record("initial-access-token", Some("merge@example.com"));
         record.auto_refresh_enabled = false;
-        record.status = XaiAccountStatus::Disabled;
-        record.proxy_url = Some("http://127.0.0.1:7890".to_string());
-        record.priority = 17;
+        record.status = XaiAccountStatus::Invalid;
         record.quota = XaiQuotaCache {
             plan_type: Some("old-plan".to_string()),
             quotas: vec![crate::types::XaiQuotaItem {
@@ -1554,10 +1708,9 @@ mod tests {
             .persist_token_response(account_id, &record, refreshed_token_response())
             .await
             .expect("persist token response");
-        assert_eq!(refreshed.status, XaiAccountStatus::Disabled);
+        // 成功 token merge 恢复 Active；auto_refresh / quota 不被 token 响应覆盖。
+        assert_eq!(refreshed.status, XaiAccountStatus::Active);
         assert!(!refreshed.auto_refresh_enabled);
-        assert_eq!(refreshed.proxy_url, record.proxy_url);
-        assert_eq!(refreshed.priority, 17);
         assert_eq!(refreshed.quota.plan_type.as_deref(), Some("old-plan"));
 
         let quota = XaiQuotaCache {
@@ -1578,10 +1731,8 @@ mod tests {
             .expect("persist quota cache");
         assert_eq!(persisted.access_token, "rotated-access-token");
         assert_eq!(persisted.refresh_token, "rotated-refresh-token");
-        assert_eq!(persisted.status, XaiAccountStatus::Disabled);
+        assert_eq!(persisted.status, XaiAccountStatus::Active);
         assert!(!persisted.auto_refresh_enabled);
-        assert_eq!(persisted.proxy_url, record.proxy_url);
-        assert_eq!(persisted.priority, 17);
         assert_eq!(persisted.quota.plan_type.as_deref(), Some("new-plan"));
         assert_eq!(persisted.quota.quotas.len(), 2);
         assert!(persisted
@@ -1601,7 +1752,7 @@ mod tests {
             .remove(account_id)
             .expect("database account");
         assert_eq!(database_record.access_token, persisted.access_token);
-        assert_eq!(database_record.status, XaiAccountStatus::Disabled);
+        assert_eq!(database_record.status, XaiAccountStatus::Active);
         assert_eq!(database_record.quota.plan_type.as_deref(), Some("new-plan"));
         let _ = std::fs::remove_dir_all(data_dir);
     }
@@ -1660,8 +1811,7 @@ mod tests {
             .expect("seed account");
         let hook = store.install_persistence_test_hook();
         let task_store = Arc::clone(&store);
-        let mut updated = test_record("new-access-token", Some("cancelled-save@example.com"));
-        updated.priority = 9;
+        let updated = test_record("new-access-token", Some("cancelled-save@example.com"));
         let save_task = tokio::spawn(async move {
             task_store
                 .save_record(account_id.to_string(), updated)
@@ -1691,7 +1841,6 @@ mod tests {
             .await
             .expect("reload committed account");
         assert_eq!(loaded.access_token, "new-access-token");
-        assert_eq!(loaded.priority, 9);
         let _ = std::fs::remove_dir_all(data_dir);
     }
 

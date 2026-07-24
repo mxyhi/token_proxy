@@ -10,18 +10,17 @@ use token_proxy_account_xai::{XaiAccountStatus, XaiQuotaCache, XaiQuotaItem, Xai
 pub use token_proxy_account_store::records::ProviderKind as ProviderAccountKind;
 
 const STATUS_ACTIVE: &str = "active";
-const STATUS_DISABLED: &str = "disabled";
 const STATUS_EXPIRED: &str = "expired";
 const STATUS_INVALID: &str = "invalid";
 const STATUS_COOLING_DOWN: &str = "cooling_down";
 
 pub const MAX_PAGE_SIZE: u32 = 100;
 
+/// 跨 provider 账户列表健康状态（只读）。不含人工 disabled 调度字段。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderAccountStatus {
     Active,
-    Disabled,
     Expired,
     Invalid,
     CoolingDown,
@@ -31,7 +30,6 @@ impl ProviderAccountStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Active => STATUS_ACTIVE,
-            Self::Disabled => STATUS_DISABLED,
             Self::Expired => STATUS_EXPIRED,
             Self::Invalid => STATUS_INVALID,
             Self::CoolingDown => STATUS_COOLING_DOWN,
@@ -41,7 +39,6 @@ impl ProviderAccountStatus {
     pub fn parse(value: &str) -> Result<Self, String> {
         match value.trim().to_ascii_lowercase().as_str() {
             STATUS_ACTIVE => Ok(Self::Active),
-            STATUS_DISABLED => Ok(Self::Disabled),
             STATUS_EXPIRED => Ok(Self::Expired),
             STATUS_INVALID => Ok(Self::Invalid),
             STATUS_COOLING_DOWN => Ok(Self::CoolingDown),
@@ -56,12 +53,10 @@ pub struct ProviderAccountListItem {
     pub account_id: String,
     pub email: Option<String>,
     pub expires_at: Option<String>,
-    pub priority: i32,
     pub status: ProviderAccountStatus,
     pub auth_method: Option<String>,
     pub provider_name: Option<String>,
     pub auto_refresh_enabled: Option<bool>,
-    pub proxy_url: Option<String>,
     pub quota: ProviderAccountQuotaSnapshot,
 }
 
@@ -96,7 +91,6 @@ pub struct ProviderAccountsPage {
 pub struct ProviderAccountStatusCounts {
     pub all: u32,
     pub active: u32,
-    pub disabled: u32,
     pub expired: u32,
     pub invalid: u32,
     pub cooling_down: u32,
@@ -110,9 +104,6 @@ impl ProviderAccountStatusCounts {
             match item.status {
                 ProviderAccountStatus::Active => {
                     counts.active = counts.active.saturating_add(1);
-                }
-                ProviderAccountStatus::Disabled => {
-                    counts.disabled = counts.disabled.saturating_add(1);
                 }
                 ProviderAccountStatus::Expired => {
                     counts.expired = counts.expired.saturating_add(1);
@@ -179,14 +170,6 @@ fn build_list_item(row: StoredAccountRow) -> Result<ProviderAccountListItem, Str
     }
 }
 
-fn normalize_optional_string(value: Option<&str>) -> Option<String> {
-    let trimmed = value?.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(trimmed.to_string())
-}
-
 fn build_kiro_list_item(
     account_id: String,
     email: Option<String>,
@@ -202,12 +185,10 @@ fn build_kiro_list_item(
         account_id,
         email,
         expires_at,
-        priority: record.priority,
         status: provider_status_from_kiro(&record),
         auth_method,
         provider_name,
         auto_refresh_enabled: None,
-        proxy_url: normalize_optional_string(record.proxy_url.as_deref()),
         quota: provider_quota_snapshot_from_kiro(&record.quota),
     })
 }
@@ -226,12 +207,10 @@ fn build_codex_list_item(
         account_id,
         email,
         expires_at,
-        priority: record.priority,
         status: provider_status_from_codex(&record),
         auth_method: Some(record.auth_method().as_str().to_string()),
         provider_name,
         auto_refresh_enabled: record.auto_refresh_enabled(),
-        proxy_url: normalize_optional_string(record.proxy_url.as_deref()),
         quota: provider_quota_snapshot_from_codex(&record.quota),
     })
 }
@@ -250,12 +229,10 @@ fn build_xai_list_item(
         account_id,
         email,
         expires_at,
-        priority: record.priority,
         status: provider_status_from_xai(&record),
         auth_method: Some("oauth".to_string()),
         provider_name,
         auto_refresh_enabled: Some(record.auto_refresh_enabled),
-        proxy_url: normalize_optional_string(record.proxy_url.as_deref()),
         quota: provider_quota_snapshot_from_xai(&record.quota),
     })
 }
@@ -263,7 +240,6 @@ fn build_xai_list_item(
 fn provider_status_from_kiro(record: &KiroTokenRecord) -> ProviderAccountStatus {
     match record.effective_status() {
         KiroAccountStatus::Active => ProviderAccountStatus::Active,
-        KiroAccountStatus::Disabled => ProviderAccountStatus::Disabled,
         KiroAccountStatus::Expired => ProviderAccountStatus::Expired,
     }
 }
@@ -271,7 +247,6 @@ fn provider_status_from_kiro(record: &KiroTokenRecord) -> ProviderAccountStatus 
 fn provider_status_from_codex(record: &CodexTokenRecord) -> ProviderAccountStatus {
     match record.effective_status() {
         CodexAccountStatus::Active => ProviderAccountStatus::Active,
-        CodexAccountStatus::Disabled => ProviderAccountStatus::Disabled,
         CodexAccountStatus::Expired => ProviderAccountStatus::Expired,
         CodexAccountStatus::Invalid => ProviderAccountStatus::Invalid,
     }
@@ -280,7 +255,6 @@ fn provider_status_from_codex(record: &CodexTokenRecord) -> ProviderAccountStatu
 fn provider_status_from_xai(record: &XaiTokenRecord) -> ProviderAccountStatus {
     match record.effective_status() {
         XaiAccountStatus::Active => ProviderAccountStatus::Active,
-        XaiAccountStatus::Disabled => ProviderAccountStatus::Disabled,
         XaiAccountStatus::Expired => ProviderAccountStatus::Expired,
         XaiAccountStatus::Invalid => ProviderAccountStatus::Invalid,
     }
@@ -374,12 +348,10 @@ mod tests {
             account_id: format!("codex-{}", status.as_str()),
             email: None,
             expires_at: None,
-            priority: 0,
             status,
             auth_method: None,
             provider_name: None,
             auto_refresh_enabled: Some(true),
-            proxy_url: None,
             quota: ProviderAccountQuotaSnapshot::default(),
         }
     }
@@ -400,7 +372,6 @@ mod tests {
         assert_eq!(counts.expired, 1);
         assert_eq!(counts.invalid, 1);
         assert_eq!(counts.cooling_down, 1);
-        assert_eq!(counts.disabled, 0);
     }
 
     #[tokio::test]
@@ -437,8 +408,6 @@ mod tests {
                 account_id: Some(account_id.to_string()),
                 user_id: None,
                 email: Some(email.to_string()),
-                proxy_url: None,
-                priority: 0,
                 quota: CodexQuotaCache::default(),
             };
             records::upsert_record(
@@ -451,7 +420,6 @@ mod tests {
                     expires_at_ms: record.expires_at().map(records::unix_millis),
                     auth_method: None,
                     provider_name: None,
-                    priority: 0,
                 },
                 &record,
             )
@@ -500,8 +468,6 @@ mod tests {
             token_endpoint: Some("https://auth.x.ai/oauth/token".to_string()),
             auto_refresh_enabled: true,
             status: XaiAccountStatus::Active,
-            proxy_url: Some("http://127.0.0.1:7890".to_string()),
-            priority: 7,
             quota: XaiQuotaCache::default(),
         };
         records::upsert_record(
@@ -514,7 +480,6 @@ mod tests {
                 expires_at_ms: record.expires_at().map(records::unix_millis),
                 auth_method: Some("oauth"),
                 provider_name: Some("xai"),
-                priority: record.priority,
             },
             &record,
         )
@@ -537,11 +502,9 @@ mod tests {
         let item = &items[0];
         assert_eq!(item.provider_kind, ProviderAccountKind::Xai);
         assert_eq!(item.email.as_deref(), Some("user@example.com"));
-        assert_eq!(item.priority, 7);
         assert_eq!(item.status, ProviderAccountStatus::Active);
         assert_eq!(item.auth_method.as_deref(), Some("oauth"));
         assert_eq!(item.provider_name.as_deref(), Some("xai"));
         assert_eq!(item.auto_refresh_enabled, Some(true));
-        assert_eq!(item.proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
     }
 }

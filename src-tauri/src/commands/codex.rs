@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use token_proxy_app::app::TokenProxyApp;
+
 use crate::codex;
-use crate::commands::parse_manual_account_status;
 
 #[tauri::command]
 pub async fn codex_list_accounts(
@@ -13,32 +14,36 @@ pub async fn codex_list_accounts(
 
 #[tauri::command]
 pub async fn codex_import_file(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     path: String,
 ) -> Result<Vec<codex::CodexAccountSummary>, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("Import path is required.".to_string());
     }
-    codex_store.import_file(PathBuf::from(trimmed)).await
+    token_proxy_app
+        .codex_import_file(PathBuf::from(trimmed))
+        .await
 }
 
 #[tauri::command]
 pub async fn codex_import_text(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     contents: String,
 ) -> Result<Vec<codex::CodexAccountSummary>, String> {
-    codex_store.import_text(&contents).await
+    token_proxy_app.codex_import_text(&contents).await
 }
 
 #[tauri::command]
 pub async fn codex_import_refresh_tokens(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     contents: String,
     client_kind: String,
 ) -> Result<Vec<codex::CodexAccountSummary>, String> {
     let client = parse_codex_refresh_token_client(&client_kind)?;
-    codex_store.import_refresh_tokens(&contents, client).await
+    token_proxy_app
+        .codex_import_refresh_tokens(&contents, client)
+        .await
 }
 
 #[tauri::command]
@@ -83,35 +88,7 @@ pub async fn codex_set_auto_refresh(
     codex_store.set_auto_refresh(&account_id, enabled).await
 }
 
-#[tauri::command]
-pub async fn codex_set_status(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    account_id: String,
-    status: String,
-) -> Result<codex::CodexAccountSummary, String> {
-    let status = parse_manual_account_status(&status)?;
-    codex_store.set_status(&account_id, status.into()).await
-}
-
-#[tauri::command]
-pub async fn codex_set_proxy_url(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    account_id: String,
-    proxy_url: Option<String>,
-) -> Result<codex::CodexAccountSummary, String> {
-    codex_store
-        .set_proxy_url(&account_id, proxy_url.as_deref())
-        .await
-}
-
-#[tauri::command]
-pub async fn codex_set_priority(
-    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
-    account_id: String,
-    priority: i32,
-) -> Result<codex::CodexAccountSummary, String> {
-    codex_store.set_priority(&account_id, priority).await
-}
+// Phase B: 账户级 priority / proxy_url / 人工 Disabled 已删除；只保留 auto_refresh。
 
 #[tauri::command]
 pub async fn codex_start_login(
@@ -122,19 +99,13 @@ pub async fn codex_start_login(
 
 #[tauri::command]
 pub async fn codex_poll_login(
-    codex_login: tauri::State<'_, Arc<codex::CodexLoginManager>>,
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     state: String,
 ) -> Result<codex::CodexLoginPollResponse, String> {
-    codex_login.poll_login(&state).await
+    token_proxy_app.codex_poll_login(&state).await
 }
 
-#[tauri::command]
-pub async fn codex_logout(
-    codex_login: tauri::State<'_, Arc<codex::CodexLoginManager>>,
-    account_id: String,
-) -> Result<(), String> {
-    codex_login.logout(&account_id).await
-}
+// Phase C2: codex_logout Tauri 删除路径已移除；删除只能由 Upstream 级联触发。
 
 fn parse_codex_refresh_token_client(value: &str) -> Result<codex::CodexRefreshTokenClient, String> {
     match value.trim().to_ascii_lowercase().as_str() {

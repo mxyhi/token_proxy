@@ -82,8 +82,6 @@ async fn refresh_quota_cache_with_endpoint(
         status: record.effective_status(),
         auth_method: record.auth_method(),
         auto_refresh_enabled: record.auto_refresh_enabled(),
-        proxy_url: record.proxy_url.clone(),
-        priority: record.priority,
     };
     let resolved = match store.get_account_record(account_id).await {
         Ok(record) => record,
@@ -140,7 +138,7 @@ async fn fetch_account_quota_with_endpoint(
     usage_endpoint: &str,
 ) -> Result<CodexQuotaFetchResult, String> {
     let mut effective_record = record.clone();
-    let proxy_url = store.effective_proxy_url(record.proxy_url.as_deref()).await;
+    let proxy_url = store.effective_proxy_url(None).await;
     let authorization = store.authorization_header(&account.account_id).await?;
     let response = match request_usage(
         usage_endpoint,
@@ -165,9 +163,7 @@ async fn fetch_account_quota_with_endpoint(
                 .await?;
             let refreshed = store.load_account(&account.account_id).await?;
             let authorization = store.authorization_header(&account.account_id).await?;
-            let proxy_url = store
-                .effective_proxy_url(refreshed.proxy_url.as_deref())
-                .await;
+            let proxy_url = store.effective_proxy_url(None).await;
             let response = request_usage(
                 usage_endpoint,
                 &authorization,
@@ -193,9 +189,7 @@ async fn fetch_account_quota_with_endpoint(
                 })?;
             let refreshed = store.load_account(&account.account_id).await?;
             let authorization = store.authorization_header(&account.account_id).await?;
-            let proxy_url = store
-                .effective_proxy_url(refreshed.proxy_url.as_deref())
-                .await;
+            let proxy_url = store.effective_proxy_url(None).await;
             let response = request_usage(
                 usage_endpoint,
                 &authorization,
@@ -356,6 +350,7 @@ fn build_usage_attempts(proxy_url: Option<&str>) -> Vec<UsageAttempt> {
         http1_only: false,
     });
 
+    // 账户 quota 只走 app proxy；socks5h 升级与 http1 回退复用同一 proxy_url 合同。
     if let Some(proxy_url) = proxy_url {
         if let Some(upgraded) = upgrade_socks5(proxy_url) {
             attempts.push(UsageAttempt {

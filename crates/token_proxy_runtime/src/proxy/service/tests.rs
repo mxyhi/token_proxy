@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use token_proxy_account_store::app_proxy;
 use token_proxy_account_store::paths::TokenProxyPaths;
-use token_proxy_config::UpstreamConfig;
+use token_proxy_config::{AccountProvider, UpstreamConfig, UpstreamCredential};
 use tokio::task::{AbortHandle, JoinHandle};
 
 fn config_with_addr_and_body_limit(
@@ -226,18 +226,22 @@ async fn spawn_codex_token_endpoint(
 }
 
 fn upstream_config(id: &str, provider: &str, base_url: &str) -> UpstreamConfig {
+    // Phase A credential 模型：API Key 上游用 ApiKeys；账户型由调用方覆盖 credential。
+    let credential = match AccountProvider::from_provider_str(provider) {
+        Some(account_provider) => {
+            UpstreamCredential::account(account_provider, format!("{provider}-{id}"))
+        }
+        None => UpstreamCredential::api_keys(["test-key"]),
+    };
     UpstreamConfig {
         id: id.to_string(),
         providers: vec![provider.to_string()],
         base_url: base_url.to_string(),
-        api_keys: vec!["test-key".to_string()],
+        credential,
         filter_prompt_cache_retention: false,
         filter_safety_identifier: false,
         use_chat_completions_for_responses: false,
         rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
         preferred_endpoint: None,
         proxy_url: None,
         priority: None,
@@ -251,7 +255,7 @@ fn upstream_config(id: &str, provider: &str, base_url: &str) -> UpstreamConfig {
 
 fn xai_upstream_config(id: &str, proxy_url: &str) -> UpstreamConfig {
     let mut upstream = upstream_config(id, "xai", token_proxy_account_xai::CLI_BASE_URL);
-    upstream.api_keys.clear();
+    // xAI model probe 走 CLI base + 自定义 proxy；credential 仍为固定 account 绑定。
     upstream.proxy_url = Some(proxy_url.to_string());
     upstream
 }
@@ -541,8 +545,6 @@ fn start_spawns_codex_keepalive_without_codex_upstream() {
                     account_id: Some("acct-service".to_string()),
                     user_id: None,
                     email: Some("service@example.com".to_string()),
-                    proxy_url: None,
-                    priority: 0,
                     quota: token_proxy_account_codex::CodexQuotaCache::default(),
                 },
             )

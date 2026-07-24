@@ -163,49 +163,35 @@ async fn resolve_upstream_auth(
     })
 }
 
+/// 账户型 Upstream 永远使用 credential 固定的 account_id；无 unpinned 池选号。
 async fn resolve_kiro_upstream(
     state: &ProxyState,
     upstream: &UpstreamRuntime,
     upstream_url: &str,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
-    let has_pinned_account = upstream
-        .kiro_account_id
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    let ordered_account_ids = if has_pinned_account {
-        None
-    } else {
-        let candidates =
-            ordered_runtime_account_candidates(state, "kiro", &CooldownScope::Global).await;
-        if candidates.active_count > 0 && candidates.ids.is_empty() {
-            return Err(all_accounts_cooling_outcome(
-                "Kiro",
-                candidates.active_count,
-            ));
-        }
-        Some(candidates.ids)
-    };
+    let account_id = require_pinned_account_id(upstream.kiro_account_id.as_deref(), "Kiro")?;
+    ensure_account_not_cooling(state, "kiro", &account_id, &CooldownScope::Global)?;
     let (selected_account_id, record) = state
         .kiro_accounts
-        .resolve_account_record_with_order(
-            upstream.kiro_account_id.as_deref(),
-            ordered_account_ids.as_deref(),
-        )
+        .resolve_pinned_account_record(&account_id)
         .await
-        .map_err(|err| account_resolution_outcome("Kiro", has_pinned_account, err))?;
-    let global_proxy_url = state.kiro_accounts.app_proxy_url().await;
-    let proxy_url = record
+        .map_err(|err| account_resolution_outcome("Kiro", err))?;
+    // 路由 proxy 只看 Upstream；账户 store 仅提供 app 级 OAuth 代理回退。
+    let proxy_url = upstream
         .proxy_url
         .clone()
-        .or_else(|| upstream.proxy_url.clone())
-        .or(global_proxy_url);
+        .or(state.kiro_accounts.app_proxy_url().await);
     let value = http::bearer_header(&record.access_token).ok_or_else(|| {
         AttemptOutcome::Fatal(http::error_response(
             StatusCode::UNAUTHORIZED,
             "Upstream access token contains invalid characters.",
         ))
     })?;
+    tracing::debug!(
+        account_id = selected_account_id.as_str(),
+        proxy_enabled = proxy_url.is_some(),
+        "prepared pinned kiro upstream auth"
+    );
     Ok(ResolvedUpstreamAuth {
         upstream_url: upstream_url.to_string(),
         auth: http::UpstreamAuthHeader {
@@ -225,37 +211,17 @@ async fn resolve_codex_upstream(
     upstream_url: &str,
     cooldown_scope: &CooldownScope,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
-    let has_pinned_account = upstream
-        .codex_account_id
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    let ordered_account_ids = if has_pinned_account {
-        None
-    } else {
-        let candidates = ordered_runtime_account_candidates(state, "codex", cooldown_scope).await;
-        if candidates.active_count > 0 && candidates.ids.is_empty() {
-            return Err(all_accounts_cooling_outcome(
-                "Codex",
-                candidates.active_count,
-            ));
-        }
-        Some(candidates.ids)
-    };
+    let account_id = require_pinned_account_id(upstream.codex_account_id.as_deref(), "Codex")?;
+    ensure_account_not_cooling(state, "codex", &account_id, cooldown_scope)?;
     let (selected_account_id, record) = state
         .codex_accounts
-        .resolve_account_record_with_order(
-            upstream.codex_account_id.as_deref(),
-            ordered_account_ids.as_deref(),
-        )
+        .resolve_pinned_account_record(&account_id)
         .await
-        .map_err(|err| account_resolution_outcome("Codex", has_pinned_account, err))?;
-    let global_proxy_url = state.codex_accounts.app_proxy_url().await;
-    let proxy_url = record
+        .map_err(|err| account_resolution_outcome("Codex", err))?;
+    let proxy_url = upstream
         .proxy_url
         .clone()
-        .or_else(|| upstream.proxy_url.clone())
-        .or(global_proxy_url);
+        .or(state.codex_accounts.app_proxy_url().await);
     let authorization = state
         .codex_accounts
         .authorization_header(&selected_account_id)
@@ -275,8 +241,8 @@ async fn resolve_codex_upstream(
         ))
     })?;
     let mut extra_headers = HeaderMap::new();
-    if let Some(account_id) = record.account_id.as_deref() {
-        if let Ok(value) = axum::http::HeaderValue::from_str(account_id) {
+    if let Some(chatgpt_account_id) = record.account_id.as_deref() {
+        if let Ok(value) = axum::http::HeaderValue::from_str(chatgpt_account_id) {
             extra_headers.insert(
                 axum::http::HeaderName::from_static("chatgpt-account-id"),
                 value,
@@ -288,6 +254,11 @@ async fn resolve_codex_upstream(
     } else {
         Some(extra_headers)
     };
+    tracing::debug!(
+        account_id = selected_account_id.as_str(),
+        proxy_enabled = proxy_url.is_some(),
+        "prepared pinned codex upstream auth"
+    );
     Ok(ResolvedUpstreamAuth {
         upstream_url: upstream_url.to_string(),
         auth: http::UpstreamAuthHeader {
@@ -312,34 +283,17 @@ async fn resolve_xai_upstream(
     upstream_path_with_query: &str,
     cooldown_scope: &CooldownScope,
 ) -> Result<ResolvedUpstreamAuth, AttemptOutcome> {
-    let has_pinned_account = upstream
-        .xai_account_id
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|value| !value.is_empty());
-    let ordered_account_ids = if has_pinned_account {
-        None
-    } else {
-        let candidates = ordered_runtime_account_candidates(state, "xai", cooldown_scope).await;
-        if candidates.active_count > 0 && candidates.ids.is_empty() {
-            return Err(all_accounts_cooling_outcome("xAI", candidates.active_count));
-        }
-        Some(candidates.ids)
-    };
+    let account_id = require_pinned_account_id(upstream.xai_account_id.as_deref(), "xAI")?;
+    ensure_account_not_cooling(state, "xai", &account_id, cooldown_scope)?;
     let (selected_account_id, record) = state
         .xai_accounts
-        .resolve_account_record_with_order(
-            upstream.xai_account_id.as_deref(),
-            ordered_account_ids.as_deref(),
-        )
+        .resolve_pinned_account_record(&account_id)
         .await
-        .map_err(|err| account_resolution_outcome("xAI", has_pinned_account, err))?;
-    let global_proxy_url = state.xai_accounts.app_proxy_url().await;
-    let proxy_url = record
+        .map_err(|err| account_resolution_outcome("xAI", err))?;
+    let proxy_url = upstream
         .proxy_url
         .clone()
-        .or_else(|| upstream.proxy_url.clone())
-        .or(global_proxy_url);
+        .or(state.xai_accounts.app_proxy_url().await);
     let value = http::bearer_header(&record.access_token).ok_or_else(|| {
         AttemptOutcome::Fatal(http::error_response(
             StatusCode::UNAUTHORIZED,
@@ -352,6 +306,11 @@ async fn resolve_xai_upstream(
     };
     let mut protected_headers = HeaderMap::new();
     protected_headers.insert(auth.name.clone(), auth.value.clone());
+    tracing::debug!(
+        account_id = selected_account_id.as_str(),
+        proxy_enabled = proxy_url.is_some(),
+        "prepared pinned xai upstream auth"
+    );
     Ok(ResolvedUpstreamAuth {
         upstream_url: xai_request_url(upstream_path_with_query),
         auth,
@@ -362,11 +321,55 @@ async fn resolve_xai_upstream(
     })
 }
 
-pub(super) fn account_resolution_outcome(
+fn require_pinned_account_id(
+    account_id: Option<&str>,
     provider_label: &str,
-    has_pinned_account: bool,
-    err: String,
-) -> AttemptOutcome {
+) -> Result<String, AttemptOutcome> {
+    let account_id = account_id.map(str::trim).filter(|value| !value.is_empty());
+    let Some(account_id) = account_id else {
+        return Err(account_resolution_outcome(
+            provider_label,
+            format!("{provider_label} account credential is required on upstream."),
+        ));
+    };
+    Ok(account_id.to_string())
+}
+
+/// cooldown 只作健康保护：固定账户冷却时本 upstream 失败，不产生其它账户候选。
+fn ensure_account_not_cooling(
+    state: &ProxyState,
+    provider: &str,
+    account_id: &str,
+    cooldown_scope: &CooldownScope,
+) -> Result<(), AttemptOutcome> {
+    if !state
+        .account_selector
+        .is_cooling_down_scoped(provider, account_id, cooldown_scope)
+    {
+        return Ok(());
+    }
+    let message = format!("{provider} account is temporarily cooling down: {account_id}");
+    tracing::warn!(
+        provider,
+        account_id,
+        exclusion_reason = "account_cooling",
+        "pinned account credential is cooling down"
+    );
+    let mut response = http::error_response(StatusCode::SERVICE_UNAVAILABLE, &message);
+    response.extensions_mut().insert(RetryDirective {
+        scope: RetryScope::NextOnly,
+        effective_body: None,
+    });
+    Err(AttemptOutcome::Retryable {
+        message,
+        response: Some(response),
+        is_timeout: false,
+        should_cooldown: false,
+        deferred_log: None,
+    })
+}
+
+pub(super) fn account_resolution_outcome(provider_label: &str, err: String) -> AttemptOutcome {
     let mut response = http::error_response(StatusCode::BAD_GATEWAY, err.clone());
     response.extensions_mut().insert(RetryDirective {
         scope: RetryScope::NextOnly,
@@ -377,11 +380,9 @@ pub(super) fn account_resolution_outcome(
         status = StatusCode::BAD_GATEWAY.as_u16(),
         exclusion_reason = "no_usable_account",
         error = %err,
-        "account provider has no usable runtime credential"
+        "pinned account credential is not usable"
     );
-    if has_pinned_account {
-        return AttemptOutcome::Fatal(response);
-    }
+    // 配置阶段应保证 account_id 存在；运行时失败固定该账户，跨 upstream 由 selector 处理。
     AttemptOutcome::Retryable {
         message: err,
         response: Some(response),
@@ -389,116 +390,6 @@ pub(super) fn account_resolution_outcome(
         should_cooldown: false,
         deferred_log: None,
     }
-}
-
-pub(super) fn all_accounts_cooling_outcome(
-    provider_label: &str,
-    active_count: usize,
-) -> AttemptOutcome {
-    let message = format!("All {provider_label} accounts are temporarily cooling down.");
-    let mut response = http::error_response(StatusCode::SERVICE_UNAVAILABLE, &message);
-    response.extensions_mut().insert(RetryDirective {
-        scope: RetryScope::NextOnly,
-        effective_body: None,
-    });
-    tracing::warn!(
-        provider = provider_label,
-        status = StatusCode::SERVICE_UNAVAILABLE.as_u16(),
-        active_account_count = active_count,
-        ready_account_count = 0,
-        exclusion_reason = "all_accounts_cooling",
-        "account provider has no ready runtime credential"
-    );
-    AttemptOutcome::Retryable {
-        message,
-        response: Some(response),
-        is_timeout: false,
-        should_cooldown: false,
-        deferred_log: None,
-    }
-}
-
-pub(super) struct RuntimeAccountCandidates {
-    pub(super) ids: Vec<String>,
-    pub(super) active_count: usize,
-}
-
-pub(super) async fn ordered_runtime_account_ids(
-    state: &ProxyState,
-    provider: &str,
-    cooldown_scope: &CooldownScope,
-) -> Vec<String> {
-    ordered_runtime_account_candidates(state, provider, cooldown_scope)
-        .await
-        .ids
-}
-
-pub(super) async fn ordered_runtime_account_candidates(
-    state: &ProxyState,
-    provider: &str,
-    cooldown_scope: &CooldownScope,
-) -> RuntimeAccountCandidates {
-    // 候选集合只收 effective Active（可调度）账号。
-    // disabled/expired/invalid 不应进入 cooldown 排序与 resolve 候选，避免无用 refresh 副作用。
-    let account_ids = match provider {
-        "kiro" => state.kiro_accounts.list_accounts().await.map(|items| {
-            items
-                .into_iter()
-                .filter(|item| {
-                    matches!(
-                        item.status,
-                        token_proxy_account_kiro::KiroAccountStatus::Active
-                    )
-                })
-                .map(|item| item.account_id)
-                .collect::<Vec<_>>()
-        }),
-        "codex" => state.codex_accounts.list_accounts().await.map(|items| {
-            items
-                .into_iter()
-                .filter(|item| {
-                    matches!(
-                        item.status,
-                        token_proxy_account_codex::CodexAccountStatus::Active
-                    )
-                })
-                .map(|item| item.account_id)
-                .collect::<Vec<_>>()
-        }),
-        "xai" => state.xai_accounts.list_accounts().await.map(|items| {
-            items
-                .into_iter()
-                .filter(|item| {
-                    matches!(
-                        item.status,
-                        token_proxy_account_xai::XaiAccountStatus::Active
-                    ) || (matches!(
-                        item.status,
-                        token_proxy_account_xai::XaiAccountStatus::Expired
-                    ) && item.auto_refresh_enabled)
-                })
-                .map(|item| item.account_id)
-                .collect::<Vec<_>>()
-        }),
-        _ => Ok(Vec::new()),
-    }
-    .unwrap_or_default();
-    tracing::debug!(
-        provider,
-        candidate_count = account_ids.len(),
-        "ordered runtime account candidates after active filter"
-    );
-    let active_count = account_ids.len();
-    let ids = state
-        .account_selector
-        .order_accounts_scoped(provider, &account_ids, cooldown_scope);
-    tracing::debug!(
-        provider,
-        active_account_count = active_count,
-        ready_account_count = ids.len(),
-        "runtime account candidate ordering completed"
-    );
-    RuntimeAccountCandidates { ids, active_count }
 }
 
 const XAI_TOKEN_AUTH_HEADER: HeaderName =

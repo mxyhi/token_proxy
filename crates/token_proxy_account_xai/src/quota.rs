@@ -45,7 +45,7 @@ pub(crate) async fn refresh_quota_cache(
     account_id: &str,
 ) -> Result<XaiQuotaCache, String> {
     let mut record = store.get_account_record(account_id).await?;
-    let proxy_url = store.effective_proxy_url(record.proxy_url.as_deref()).await;
+    let proxy_url = store.effective_proxy_url(None).await;
     let http = build_reqwest_client_no_redirect(proxy_url.as_deref(), Duration::from_secs(30))
         .map_err(|error| format!("Failed to build xAI quota client: {error}"))?;
 

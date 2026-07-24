@@ -6062,6 +6062,9 @@ version = "0.1.0"
 dependencies = [
  "reqwest",
  "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
  "token_proxy_account_codex",
  "token_proxy_account_kiro",
  "token_proxy_account_store",

@@ -9,11 +9,13 @@ Local AI API gateway for OpenAI / Gemini / Anthropic. Runs on your machine, keep
 ---
 
 ## What you get
-- Multiple providers: `openai`, `openai-response`, `anthropic`, `gemini`, `kiro`, `codex`
+- Multiple providers: `openai`, `openai-response`, `anthropic`, `gemini`, `kiro`, `codex`, `xai`
 - Built-in routing + optional format conversion (OpenAI Chat ⇄ Responses; Anthropic Messages ↔ OpenAI; Gemini ↔ OpenAI/Anthropic; SSE supported)
-- Per-upstream priority + two balancing strategies (fill-first / round-robin)
+- **Upstream is the only scheduling unit**: priority, proxy, enabled, models, and credential live on each upstream entry
+- No separate Accounts / Providers page — on **Upstreams**, use **Add Account** to log in or import Kiro / Codex / xAI; the same editor manages identity, quota, token refresh / auto-refresh (where the provider supports it), and routing
+- Account-backed upstreams: one account maps to one stable upstream; deleting it cascades account credentials; copy is disabled
 - Model alias mapping (exact / prefix* / wildcard*) and response model rewrite
-- Local access key (Authorization) + upstream key injection
+- Local access key + upstream credential injection (`credential.api_keys` or request-header fallback when local auth is off)
 - SQLite-powered dashboard (requests, tokens, cached tokens, latency, recent)
 - macOS tray live token rate (optional)
 
@@ -111,17 +113,29 @@ Notes:
 | Field | Default | Notes |
 | --- | --- | --- |
 | `id` | required | Unique per upstream. |
-| `providers` | required | One upstream can serve multiple providers. Special providers `kiro/codex` cannot be mixed with others. |
-| `base_url` | required | Full base; overlapping path parts are de-duplicated. (`providers=["kiro"]` / `["codex"]` can be empty.) |
-| `api_key` | `null` | Provider-specific bearer/key; overrides request headers. |
-| `kiro_account_id` | `null` | Required when `providers=["kiro"]`. |
-| `preferred_endpoint` | `null` | `kiro` only (`providers=["kiro"]`): `ide` or `cli`. |
-| `proxy_url` | `null` | Per-upstream proxy; supports `http/https/socks5/socks5h`; default is **no system proxy**. `$app_proxy_url` placeholder allowed. |
-| `priority` | `0` | Higher = tried earlier. Grouped by priority then by order (or round-robin). |
-| `enabled` | `true` | Disabled upstreams are skipped. |
+| `providers` | required | One upstream can serve multiple providers. Account-based providers `kiro` / `codex` / `xai` must be alone (cannot mix with each other or with API-key providers). |
+| `base_url` | required | Full base; overlapping path parts are de-duplicated. (`providers=["kiro"]` / `["codex"]` can be empty; `xai` account-backed uses the fixed CLI gateway base.) |
+| `credential` | `{ "type": "passthrough" }` | **Discriminated union** — the only credential shape. See below. |
+| `preferred_endpoint` | `null` | `kiro` only: `ide` or `cli`. |
+| `proxy_url` | `null` | Per-upstream proxy (not an account field); supports `http/https/socks5/socks5h`; default is **no system proxy**. `$app_proxy_url` placeholder allowed. |
+| `priority` | `0` | Per-upstream scheduling weight (not an account field). Higher = tried earlier. |
+| `enabled` | `true` | Per-upstream toggle (not an account field). Disabled upstreams are skipped. |
+| `available_models` | `[]` | Inbound model allowlist; empty = no restriction. |
 | `model_mappings` | `{}` | Exact / `prefix*` / `*`. Priority: exact > longest prefix > wildcard. Response echoes original alias. |
 | `convert_from_map` | `{}` | Explicitly allow inbound format conversion per provider. Example: `{ "openai-response": ["openai_chat", "anthropic_messages"] }`. |
 | `overrides.header` | `{}` | Set/remove headers (null removes). Hop-by-hop/Host/Content-Length are always ignored. |
+
+#### `credential` (required shape)
+
+| `type` | Shape | Notes |
+| --- | --- | --- |
+| `passthrough` | `{ "type": "passthrough" }` | No static upstream key; may rely on request-header fallback when `local_api_key` is unset. **Not allowed** for `kiro` / `codex` / `xai`. |
+| `api_keys` | `{ "type": "api_keys", "api_keys": ["key-a", "key-b"] }` | Static keys; empty list behaves like passthrough after normalize. **Not allowed** for account-based providers. |
+| `account` | `{ "type": "account", "provider": "kiro"\|"codex"\|"xai", "account_id": "..." }` | Binds one Provider Account. `provider` must match the sole account-based entry in `providers[]`. One `(provider, account_id)` may bind only one upstream. |
+
+Kiro / Codex / xAI **must** use `credential.type = "account"`. Account login/import creates a stable binding via app lifecycle; do not invent frontend-only ids such as `kiro-default` / `codex-default` / `xai-default`. Deleting an account-backed upstream **cascades** deletion of that account credential; **copy is forbidden**.
+
+Legacy flat fields (`api_key`, `api_keys`, `kiro_account_id`, `codex_account_id`, `xai_account_id`) are **not** part of the documented schema. On load they are migrated once into `credential` and written back (no dual-format docs).
 
 ## Routing & format conversion
 - Gemini native API: `/v1beta/models/*` (including `:generateContent`, `:streamGenerateContent`, `:countTokens`, `:embedContent`, `:batchEmbedContents`), model catalog/detail, `/v1beta/files*`, `/upload/v1beta/files*`, `/v1beta/cachedContents*`, `/v1beta/tunedModels*` → `gemini`.
@@ -139,16 +153,17 @@ Notes:
 - Other Gemini native endpoints are pass-through only and require a configured `gemini` upstream.
 
 ## Auth rules (important)
-- Local access: `local_api_key` enabled → require format-specific key. These local auth inputs are stripped and **not** forwarded upstream.
+- Local access: `local_api_key` enabled → require format-specific key. Local auth inputs are reserved for gateway access and **not** used as upstream credentials.
   - Public whitelist: `GET` / `HEAD` `/v1/models` and `/v1beta/openai/models` do not require local key.
   - OpenAI / Responses: `Authorization: Bearer <key>`
   - Anthropic `/v1/messages`: `x-api-key` or `x-anthropic-api-key`
   - Gemini native API: `x-goog-api-key` or `?key=...`
-- When `local_api_key` is enabled, request headers are **not** used for upstream auth; configure `upstreams[].api_key` instead.
-- Upstream auth resolution (per request):
-  - **OpenAI**: `upstream.api_key` → `x-openai-api-key` → `Authorization` (only if `local_api_key` is **not** set) → error.
-  - **Anthropic**: `upstream.api_key` → `x-api-key` / `x-anthropic-api-key` → error. Missing `anthropic-version` is auto-filled with `2023-06-01`.
-  - **Gemini**: `upstream.api_key` → `x-goog-api-key` → query `?key=...` → error.
+- When `local_api_key` is enabled, inbound request auth headers are **not** collected for upstream; configure `credential.api_keys` (or an account credential) on the upstream instead.
+- Upstream auth resolution (per request; runtime expands `credential.api_keys` into the attempt key):
+  - **OpenAI-compatible** (and most non-Anthropic providers): `credential.api_keys` → request `x-openai-api-key` / `Authorization` **only when** `local_api_key` is unset → no key.
+  - **Anthropic**: `credential.api_keys` → request `x-api-key` / `x-anthropic-api-key` / bearer fallback **only when** `local_api_key` is unset → no key. Missing `anthropic-version` is auto-filled with `2023-06-01`.
+  - **Gemini**: `credential.api_keys` → request `x-goog-api-key` → query `?key=...` (query/header fallback only when `local_api_key` is unset) → skip attempt.
+  - **Account-backed** (`kiro` / `codex` / `xai`): uses the bound Provider Account identity (OAuth / Agent Assertion); not `api_keys`.
 
 ## Load balancing & retries
 - Priorities: higher `priority` groups first.
@@ -183,7 +198,7 @@ Notes:
 
 ## FAQ
 - **Port already in use?** Change `port` in `config.jsonc`; remember to update your client base URL.
-- **Got 401?** If `local_api_key` is set, you must send the format-specific local key (OpenAI/Responses: `Authorization`, Anthropic: `x-api-key`, Gemini: `x-goog-api-key` or `?key=`). With local auth enabled, configure upstream keys in `upstreams[].api_key`.
+- **Got 401?** If `local_api_key` is set, you must send the format-specific local key (OpenAI/Responses: `Authorization`, Anthropic: `x-api-key`, Gemini: `x-goog-api-key` or `?key=`). With local auth enabled, configure upstream keys in `upstreams[].credential` (`api_keys` or `account`).
 - **Got 504?** Upstream did not send response headers or the first body chunk within 120s. For streaming responses, a 120s idle timeout between chunks may also close the connection.
 - **413 Payload Too Large?** Body exceeded `max_request_body_bytes` (default 100 MiB) or the transform limit for format-conversion requests.
 - **Why no system proxy?** By design, `reqwest` is built with `.no_proxy()`; set per-upstream `proxy_url` if needed.

@@ -57,7 +57,6 @@ pub fn read_default_hot_model_mappings() -> HashMap<String, String> {
 
 #[tauri::command]
 pub async fn save_proxy_config(
-    app: tauri::AppHandle,
     token_proxy_app: tauri::State<'_, TokenProxyApp>,
     tray_state: tauri::State<'_, tray::TrayState>,
     logging_state: tauri::State<'_, logging::LoggingState>,
@@ -66,33 +65,30 @@ pub async fn save_proxy_config(
 ) -> Result<ProxyConfigSaveResult, String> {
     tracing::debug!("save_proxy_config start");
     let start = Instant::now();
-    tracing::debug!("save_proxy_config apply_config start");
-    let apply_start = Instant::now();
-    tray_state.apply_config(&config.tray_token_rate).await;
-    tracing::debug!(
-        elapsed_ms = apply_start.elapsed().as_millis(),
-        "save_proxy_config apply_config done"
-    );
-    let log_level = config.log_level;
-    let app_proxy_url = token_proxy_config::app_proxy_url_from_config(&config)
-        .ok()
-        .flatten();
-    let paths = app.state::<Arc<token_proxy_account_store::paths::TokenProxyPaths>>();
-    if let Err(err) = token_proxy_config::write_config(paths.inner().as_ref(), config).await {
-        tracing::error!(error = %err, "save_proxy_config save failed");
-        tray_state.apply_error("保存失败", &err);
-        return Err(err);
-    }
+    // 全部 account/config mutation 走 app 编排锁；侧效应仅在成功后应用。
+    let outcome = match token_proxy_app.save_proxy_config(config).await {
+        Ok(outcome) => outcome,
+        Err(err) => {
+            tracing::error!(error = %err, "save_proxy_config failed");
+            tray_state.apply_error("保存失败", &err);
+            return Err(err);
+        }
+    };
     tracing::debug!(
         elapsed_ms = start.elapsed().as_millis(),
-        "save_proxy_config saved"
+        removed_credentials = outcome.removed_credentials,
+        "save_proxy_config orchestration done"
     );
-    logging_state.apply_level(log_level);
-    app_proxy::set(&app_proxy_state, app_proxy_url).await;
-    let result = token_proxy_app.apply_saved_proxy_config().await;
-    tray_state.apply_status(&result.status);
-    if let Some(error) = result.apply_error.as_deref() {
+
+    tray_state
+        .apply_config(&outcome.side_effects.tray_token_rate)
+        .await;
+    logging_state.apply_level(outcome.side_effects.log_level);
+    app_proxy::set(&app_proxy_state, outcome.side_effects.app_proxy_url.clone()).await;
+    tray_state.apply_status(&outcome.proxy.status);
+    if let Some(error) = outcome.proxy.apply_error.as_deref() {
+        // 编排层已把 apply 失败当作错误回滚；此处仅作防御性展示。
         tray_state.apply_error("应用失败", error);
     }
-    Ok(result)
+    Ok(outcome.proxy)
 }

@@ -10,15 +10,11 @@ const apiMocks = vi.hoisted(() => ({
   importXaiFile: vi.fn<(path: string) => Promise<XaiAccountSummary[]>>(),
   importXaiText: vi.fn<(contents: string) => Promise<XaiAccountSummary[]>>(),
   importXaiRefreshTokens: vi.fn<(contents: string) => Promise<XaiAccountSummary[]>>(),
-  logoutXaiAccount: vi.fn<(accountId: string) => Promise<void>>(),
   refreshXaiAccount: vi.fn<(accountId: string) => Promise<void>>(),
   refreshXaiQuotaCache: vi.fn<(accountIds?: string[]) => Promise<string[]>>(),
   refreshXaiQuotaNow: vi.fn<(accountId: string) => Promise<void>>(),
   fetchXaiQuotas: vi.fn<() => Promise<XaiQuotaSummary[]>>(),
   setXaiAutoRefresh: vi.fn(),
-  setXaiPriority: vi.fn(),
-  setXaiProxyUrl: vi.fn(),
-  setXaiStatus: vi.fn(),
 }));
 
 vi.mock("@/features/xai/api", () => apiMocks);

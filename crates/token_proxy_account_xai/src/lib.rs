@@ -8,9 +8,11 @@ mod quota;
 mod store;
 mod types;
 
-pub use login::XaiLoginManager;
+pub use login::{XaiLoginManager, XaiLoginPollClaim};
 pub use quota::fetch_quotas;
-pub use store::XaiAccountStore;
+#[cfg(any(test, feature = "test-support"))]
+pub use store::ProviderGateProbe;
+pub use store::{XaiAccountStore, XaiProviderMutation};
 pub use types::{
     XaiAccountStatus, XaiAccountSummary, XaiLoginPollResponse, XaiLoginStartResponse,
     XaiLoginStatus, XaiQuotaCache, XaiQuotaItem, XaiQuotaSummary, XaiTokenRecord,

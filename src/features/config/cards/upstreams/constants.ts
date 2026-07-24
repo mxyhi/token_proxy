@@ -1,4 +1,5 @@
 import type { ColumnVisibility, UpstreamColumnDefinition } from "@/features/config/cards/upstreams/types";
+import { isAccountProviderKind } from "@/features/config/cards/upstreams/upstream-editor-helpers";
 import { m } from "@/paraglide/messages.js";
 
 export const UPSTREAM_COLUMNS: readonly UpstreamColumnDefinition[] = [
@@ -58,6 +59,13 @@ const DEFAULT_PROVIDER_OPTIONS = [
   "gemini",
 ] as const;
 
+/**
+ * 合并普通 Upstream 编辑器可选 provider。
+ * - 默认公开 API provider 优先
+ * - 配置里已有的自定义/托管 provider 会并入（如 antigravity、legacy）
+ * - Kiro/Codex/xAI 不进入普通「添加上游」选项：账户型必须走「添加账户」入口，
+ *   避免生成空 account-backed draft；编辑既有账户 Upstream 时由 draft.providers 展示并锁定
+ */
 export function mergeProviderOptions(values: readonly string[]) {
   const seen = new Set<string>();
   const merged: string[] = [];
@@ -68,6 +76,10 @@ export function mergeProviderOptions(values: readonly string[]) {
     }
   }
   for (const option of values) {
+    // 排除 OAuth 账户 provider；antigravity 等仍可出现在普通编辑器中。
+    if (isAccountProviderKind(option)) {
+      continue;
+    }
     if (!seen.has(option)) {
       seen.add(option);
       merged.push(option);

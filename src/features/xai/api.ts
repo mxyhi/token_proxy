@@ -35,10 +35,6 @@ export async function cancelXaiLogin(state: string) {
   return await invoke<void>("xai_cancel_login", { state });
 }
 
-export async function logoutXaiAccount(accountId: string) {
-  return await invoke<void>("xai_logout", { accountId });
-}
-
 export async function fetchXaiQuotas() {
   return await invoke<XaiQuotaSummary[]>("xai_fetch_quotas");
 }
@@ -61,26 +57,5 @@ export async function setXaiAutoRefresh(accountId: string, enabled: boolean) {
   return await invoke<XaiAccountSummary>("xai_set_auto_refresh", {
     accountId,
     enabled,
-  });
-}
-
-export async function setXaiStatus(accountId: string, status: "active" | "disabled") {
-  return await invoke<XaiAccountSummary>("xai_set_status", {
-    accountId,
-    status,
-  });
-}
-
-export async function setXaiProxyUrl(accountId: string, proxyUrl: string | null) {
-  return await invoke<XaiAccountSummary>("xai_set_proxy_url", {
-    accountId,
-    proxyUrl,
-  });
-}
-
-export async function setXaiPriority(accountId: string, priority: number) {
-  return await invoke<XaiAccountSummary>("xai_set_priority", {
-    accountId,
-    priority,
   });
 }

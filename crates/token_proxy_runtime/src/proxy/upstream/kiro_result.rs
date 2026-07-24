@@ -185,10 +185,40 @@ fn build_error_outcome(
         Some(context.account_id.as_str()),
         context.inbound_path,
         status,
-        message,
+        message.clone(),
         start_time,
     );
-    AttemptOutcome::Success(build_passthrough_response(status, headers, body))
+    // 固定账户终态失败必须可跨 Upstream failover；Success 会短路 dispatch。
+    // token refresh 已在 endpoint 内穷尽，同 upstream 再原地重放无意义 → NextOnly。
+    let should_cooldown = result::should_cooldown_retryable_status(status);
+    if should_cooldown {
+        super::retry::mark_account_retryable_failure(
+            context.state,
+            "kiro",
+            Some(context.account_id.as_str()),
+            Some(message.clone()),
+            &crate::proxy::cooldown_scope::CooldownScope::Global,
+        );
+    }
+    tracing::warn!(
+        account_id = context.account_id.as_str(),
+        upstream = %context.upstream.id,
+        status = status.as_u16(),
+        should_cooldown,
+        "kiro fixed account failed; allowing cross-upstream failover"
+    );
+    let mut response = build_passthrough_response(status, headers, body);
+    response.extensions_mut().insert(super::RetryDirective {
+        scope: super::RetryScope::NextOnly,
+        effective_body: None,
+    });
+    AttemptOutcome::Retryable {
+        message: format!("Upstream responded with {status}"),
+        response: Some(response),
+        is_timeout: false,
+        should_cooldown,
+        deferred_log: None,
+    }
 }
 
 fn build_passthrough_response(

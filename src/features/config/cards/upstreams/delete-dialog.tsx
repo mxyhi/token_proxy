@@ -14,19 +14,31 @@ import { m } from "@/paraglide/messages.js";
 
 type DeleteUpstreamDialogProps = {
   dialog: DeleteDialogState;
+  /** 账户型：删除 Upstream 会级联删除账户凭据。 */
+  accountBacked?: boolean;
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
 };
 
-export function DeleteUpstreamDialog({ dialog, onOpenChange, onConfirm }: DeleteUpstreamDialogProps) {
+export function DeleteUpstreamDialog({
+  dialog,
+  accountBacked = false,
+  onOpenChange,
+  onConfirm,
+}: DeleteUpstreamDialogProps) {
+  const rowLabel = dialog.open ? getUpstreamLabel(dialog.index) : "";
   const description = dialog.open
-    ? m.upstreams_delete_description({ rowLabel: getUpstreamLabel(dialog.index) })
+    ? accountBacked
+      ? m.upstreams_delete_account_description({ rowLabel })
+      : m.upstreams_delete_description({ rowLabel })
     : "";
   return (
     <AlertDialog open={dialog.open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{m.upstreams_delete_title()}</AlertDialogTitle>
+          <AlertDialogTitle>
+            {accountBacked ? m.upstreams_delete_account_title() : m.upstreams_delete_title()}
+          </AlertDialogTitle>
           <AlertDialogDescription>{description}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

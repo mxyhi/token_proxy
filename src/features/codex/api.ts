@@ -37,10 +37,6 @@ export async function pollCodexLogin(state: string) {
   return await invoke<CodexLoginPollResponse>("codex_poll_login", { state });
 }
 
-export async function logoutCodexAccount(accountId: string) {
-  return await invoke<void>("codex_logout", { accountId });
-}
-
 export async function fetchCodexQuotas() {
   return await invoke<CodexQuotaSummary[]>("codex_fetch_quotas");
 }
@@ -63,26 +59,5 @@ export async function setCodexAutoRefresh(accountId: string, enabled: boolean) {
   return await invoke<CodexAccountSummary>("codex_set_auto_refresh", {
     accountId,
     enabled,
-  });
-}
-
-export async function setCodexStatus(accountId: string, status: "active" | "disabled") {
-  return await invoke<CodexAccountSummary>("codex_set_status", {
-    accountId,
-    status,
-  });
-}
-
-export async function setCodexProxyUrl(accountId: string, proxyUrl: string | null) {
-  return await invoke<CodexAccountSummary>("codex_set_proxy_url", {
-    accountId,
-    proxyUrl,
-  });
-}
-
-export async function setCodexPriority(accountId: string, priority: number) {
-  return await invoke<CodexAccountSummary>("codex_set_priority", {
-    accountId,
-    priority,
   });
 }

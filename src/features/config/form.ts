@@ -6,6 +6,7 @@ import {
   type ProxyConfigFile,
   type ProxyConfigFileBase,
   type TrayTokenRateConfig,
+  type UpstreamCredentialConfig,
   type UpstreamDispatchStrategy,
   type UpstreamForm,
   type UpstreamStrategy,
@@ -15,6 +16,7 @@ import {
   ACCOUNT_BACKED_PROVIDERS,
   isAccountBackedProvider,
   isAccountBackedProviderSet,
+  isAccountProviderKind,
 } from "@/features/config/cards/upstreams/upstream-editor-helpers";
 import { createNativeInboundFormatSet, removeInboundFormatsInSet } from "@/features/config/inbound-formats";
 import { m } from "@/paraglide/messages.js";
@@ -156,7 +158,7 @@ export function createEmptyUpstream(): UpstreamForm {
     filterSafetyIdentifier: false,
     useChatCompletionsForResponses: false,
     rewriteDeveloperRoleToSystem: false,
-    xaiAccountId: "",
+    accountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: DEFAULT_UPSTREAM_PRIORITY,
@@ -170,13 +172,39 @@ export function createEmptyUpstream(): UpstreamForm {
   };
 }
 
-function createAccountBackedUpstream(provider: "kiro" | "codex" | "xai"): UpstreamForm {
-  return {
-    ...createEmptyUpstream(),
-    id: `${provider}-default`,
-    providers: [provider],
-    enabled: true,
-  };
+/** 从配置 credential 解析 apiKeys / accountId 表单字段。 */
+function credentialToFormFields(credential: UpstreamCredentialConfig | undefined) {
+  if (!credential || credential.type === "passthrough") {
+    return { apiKeys: "", accountId: "" };
+  }
+  if (credential.type === "api_keys") {
+    return { apiKeys: joinListInput(credential.api_keys), accountId: "" };
+  }
+  return { apiKeys: "", accountId: credential.account_id.trim() };
+}
+
+/**
+ * 由 providers + 表单字段投影为唯一 credential。
+ * 账户型必须带 account_id；API Key 非空写 api_keys；否则 passthrough。
+ */
+function toUpstreamCredential(
+  providers: readonly string[],
+  apiKeysInput: string,
+  accountId: string,
+): UpstreamCredentialConfig {
+  const accountProvider = providers.length === 1 ? providers[0] : undefined;
+  if (accountProvider && isAccountProviderKind(accountProvider)) {
+    return {
+      type: "account",
+      provider: accountProvider,
+      account_id: accountId.trim(),
+    };
+  }
+  const apiKeys = parseApiKeysInput(apiKeysInput);
+  if (apiKeys.length) {
+    return { type: "api_keys", api_keys: apiKeys };
+  }
+  return { type: "passthrough" };
 }
 
 export function createModelMapping(pattern = "", target = "") {
@@ -237,20 +265,23 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     hotModelMappings: toModelMappingForm(config.hot_model_mappings ?? {}),
     upstreams: config.upstreams.map((upstream) => {
       const providers = upstream.providers ?? [];
-      const omitNetworkFields = isAccountBackedProviderSet(providers);
+      // 账户型 base_url 由 normalize 解析官方端点；表单侧保持空串。
+      const omitBaseUrl = isAccountBackedProviderSet(providers);
       const availableModels = normalizeAvailableModels(upstream.available_models ?? []);
+      const { apiKeys, accountId } = credentialToFormFields(upstream.credential);
       return {
         id: upstream.id,
         providers,
-        baseUrl: omitNetworkFields ? "" : upstream.base_url,
-        apiKeys: joinListInput(upstream.api_keys),
+        baseUrl: omitBaseUrl ? "" : upstream.base_url,
+        apiKeys,
         filterPromptCacheRetention: upstream.filter_prompt_cache_retention ?? false,
         filterSafetyIdentifier: upstream.filter_safety_identifier ?? false,
         useChatCompletionsForResponses: upstream.use_chat_completions_for_responses ?? false,
         rewriteDeveloperRoleToSystem: upstream.rewrite_developer_role_to_system ?? false,
-        xaiAccountId: upstream.xai_account_id ?? "",
+        accountId,
         preferredEndpoint: upstream.preferred_endpoint ?? "",
-        proxyUrl: omitNetworkFields ? "" : upstream.proxy_url ?? "",
+        // proxy 属于 Upstream 路由字段，账户型也可编辑。
+        proxyUrl: upstream.proxy_url ?? "",
         priority: upstream.priority === null ? "" : String(upstream.priority),
         enabled: upstream.enabled,
         availableModelsMode: availableModels.length ? "selected" : "all",
@@ -292,29 +323,20 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     hot_model_mappings: toModelMappingPayload(form.hotModelMappings),
     upstreams: form.upstreams.map((upstream) => {
       const providers = normalizeProviders(upstream.providers);
-      const apiKeys = parseApiKeysInput(upstream.apiKeys);
-      const omitNetworkFields = isAccountBackedProviderSet(providers);
+      // 账户型 base_url 留空，由后端 normalize 填官方端点；proxy 可编辑。
+      const omitBaseUrl = isAccountBackedProviderSet(providers);
+      const credential = toUpstreamCredential(providers, upstream.apiKeys, upstream.accountId);
       return {
         id: upstream.id.trim(),
         providers,
-        base_url: omitNetworkFields ? "" : upstream.baseUrl.trim(),
-        api_keys: !omitNetworkFields && apiKeys.length ? apiKeys : undefined,
-        kiro_account_id: null,
-        codex_account_id: null,
-        xai_account_id:
-          providers.length === 1 && providers[0] === "xai" && upstream.xaiAccountId.trim()
-            ? upstream.xaiAccountId.trim()
-            : null,
+        base_url: omitBaseUrl ? "" : upstream.baseUrl.trim(),
+        credential,
         filter_prompt_cache_retention: upstream.filterPromptCacheRetention,
         filter_safety_identifier: upstream.filterSafetyIdentifier,
         use_chat_completions_for_responses: upstream.useChatCompletionsForResponses,
         rewrite_developer_role_to_system: upstream.rewriteDeveloperRoleToSystem,
         preferred_endpoint: normalizeKiroPreferredEndpoint(upstream.preferredEndpoint),
-        proxy_url: omitNetworkFields
-          ? null
-          : upstream.proxyUrl.trim()
-            ? upstream.proxyUrl.trim()
-            : null,
+        proxy_url: upstream.proxyUrl.trim() ? upstream.proxyUrl.trim() : null,
         priority: parseOptionalInt(upstream.priority),
         enabled: upstream.enabled,
         available_models:
@@ -327,55 +349,6 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
       };
     }),
   };
-}
-
-function isSingleProvider(upstream: UpstreamForm, provider: "kiro" | "codex" | "xai") {
-  const providers = normalizeProviders(upstream.providers);
-  return providers.length === 1 && providers[0] === provider;
-}
-
-function isManagedXaiUpstream(upstream: UpstreamForm) {
-  return upstream.id.trim() === "xai-default" && isSingleProvider(upstream, "xai");
-}
-
-export function syncAccountBackedUpstreams(
-  upstreams: UpstreamForm[],
-  accountState: {
-    hasKiroAccount: boolean;
-    hasCodexAccount: boolean;
-    hasXaiAccount: boolean;
-  },
-) {
-  const filtered = upstreams.filter((upstream) => {
-    if (isSingleProvider(upstream, "kiro")) {
-      return accountState.hasKiroAccount;
-    }
-    if (isSingleProvider(upstream, "codex")) {
-      return accountState.hasCodexAccount;
-    }
-    if (isManagedXaiUpstream(upstream)) {
-      return accountState.hasXaiAccount;
-    }
-    return true;
-  });
-
-  const next = [...filtered];
-  if (accountState.hasKiroAccount && !next.some((upstream) => isSingleProvider(upstream, "kiro"))) {
-    next.push(createAccountBackedUpstream("kiro"));
-  }
-  if (accountState.hasCodexAccount && !next.some((upstream) => isSingleProvider(upstream, "codex"))) {
-    next.push(createAccountBackedUpstream("codex"));
-  }
-  if (accountState.hasXaiAccount && !next.some(isManagedXaiUpstream)) {
-    next.push(createAccountBackedUpstream("xai"));
-  }
-  if (
-    next.length === upstreams.length &&
-    next.every((upstream, index) => upstream === upstreams[index])
-  ) {
-    return upstreams;
-  }
-  return next;
 }
 
 export function validate(form: ConfigForm) {
@@ -436,6 +409,24 @@ export function validate(form: ConfigForm) {
     }
     ids.add(id);
 
+    // 账户型（kiro/codex/xai）无论 enabled 都必须绑定 account_id，禁止以「禁用草稿」绕过。
+    // 其它普通 Upstream 的 disabled 草稿语义不变（见下方 early continue）。
+    {
+      const accountProviders = normalizeProviders(upstream.providers);
+      const accountProvider = accountProviders[0];
+      if (
+        accountProviders.length === 1 &&
+        accountProvider &&
+        isAccountProviderKind(accountProvider) &&
+        !upstream.accountId.trim()
+      ) {
+        return {
+          valid: false,
+          message: m.error_upstream_account_required({ id, provider: accountProvider }),
+        };
+      }
+    }
+
     // 允许上游为空 / 全部禁用：仅对启用中的上游做强校验；禁用项保留为“草稿”。
     if (!upstream.enabled) {
       continue;
@@ -457,12 +448,6 @@ export function validate(form: ConfigForm) {
       return {
         valid: false,
         message: m.error_upstream_provider_required({ id }),
-      };
-    }
-    if (specialProviders.length && parseApiKeysInput(upstream.apiKeys).length > 1) {
-      return {
-        valid: false,
-        message: m.error_upstream_multiple_api_keys_unsupported({ id }),
       };
     }
     if (providers.some((provider) => !SUPPORTED_PROVIDERS.has(provider))) {

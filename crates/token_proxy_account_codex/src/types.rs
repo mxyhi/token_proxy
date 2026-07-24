@@ -20,17 +20,14 @@ pub struct CodexQuotaCache {
     pub checked_at: Option<String>,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// 账户认证健康状态（只读投影）。
+/// 调度 enabled/priority/proxy 只属于 Upstream；此处不承载人工 disabled。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexAccountStatus {
     Active,
-    Disabled,
     Expired,
     Invalid,
-}
-
-fn default_account_priority() -> i32 {
-    0
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -87,10 +84,6 @@ pub struct CodexTokenRecord {
     #[serde(default)]
     pub user_id: Option<String>,
     pub email: Option<String>,
-    #[serde(default)]
-    pub proxy_url: Option<String>,
-    #[serde(default = "default_account_priority")]
-    pub priority: i32,
     #[serde(default)]
     pub quota: CodexQuotaCache,
 }
@@ -204,10 +197,8 @@ impl CodexTokenRecord {
         OffsetDateTime::now_utc() >= expires_at
     }
 
+    /// 健康状态：Invalid 保留人工/鉴权失败标记；否则由 token 到期推导。
     pub fn effective_status(&self) -> CodexAccountStatus {
-        if self.status == CodexAccountStatus::Disabled {
-            return CodexAccountStatus::Disabled;
-        }
         if self.status == CodexAccountStatus::Invalid {
             return CodexAccountStatus::Invalid;
         }
@@ -218,7 +209,7 @@ impl CodexTokenRecord {
         }
     }
 
-    pub fn is_schedulable(&self) -> bool {
+    pub fn is_usable(&self) -> bool {
         matches!(self.effective_status(), CodexAccountStatus::Active)
     }
 }
@@ -262,8 +253,6 @@ pub struct CodexAccountSummary {
     pub status: CodexAccountStatus,
     pub auth_method: CodexAuthMethod,
     pub auto_refresh_enabled: Option<bool>,
-    pub proxy_url: Option<String>,
-    pub priority: i32,
 }
 
 fn default_auto_refresh_enabled() -> bool {
@@ -274,7 +263,7 @@ fn default_account_status() -> CodexAccountStatus {
     CodexAccountStatus::Active
 }
 
-#[derive(Clone, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexLoginStatus {
     Waiting,

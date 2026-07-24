@@ -38,41 +38,7 @@ impl AccountSelectorRuntime {
         }
     }
 
-    pub(crate) fn order_accounts_scoped(
-        &self,
-        provider: &str,
-        account_ids: &[String],
-        scope: &CooldownScope,
-    ) -> Vec<String> {
-        let now = Instant::now();
-        let mut ready = Vec::with_capacity(account_ids.len());
-        let mut cooldowns = self
-            .cooldowns
-            .lock()
-            .expect("account selector cooldown lock poisoned");
-        prune_expired_cooldowns(&mut cooldowns, now);
-
-        for account_id in account_ids {
-            let key = AccountCooldownKey::new(provider, account_id, scope);
-            match cooldowns.get(&key).copied() {
-                // 账号级 cooldown 的新语义是“冷却窗口内完全不选”，
-                // 只有到期后才重新回到调度集合。
-                Some(until) if until > now => continue,
-                Some(_) => {
-                    cooldowns.remove(&key);
-                    ready.push(account_id.clone());
-                }
-                None => ready.push(account_id.clone()),
-            }
-        }
-
-        ready
-    }
-
-    pub(crate) fn mark_retryable_failure(&self, provider: &str, account_id: &str) -> Option<u128> {
-        self.mark_retryable_failure_scoped(provider, account_id, &CooldownScope::Global)
-    }
-
+    /// 可重试失败后写入账号 cooldown（生产路径：retry / result）。
     pub(crate) fn mark_retryable_failure_scoped(
         &self,
         provider: &str,
@@ -100,22 +66,7 @@ impl AccountSelectorRuntime {
         self.mark_cooldown_until(provider, account_id, scope, until)
     }
 
-    pub(crate) fn mark_response_status(
-        &self,
-        provider: &str,
-        account_id: &str,
-        status: StatusCode,
-        headers: &HeaderMap,
-    ) -> Option<u128> {
-        self.mark_response_status_scoped(
-            provider,
-            account_id,
-            status,
-            headers,
-            &CooldownScope::Global,
-        )
-    }
-
+    /// 按 HTTP 状态 / Retry-After 写入 cooldown（生产路径：upstream result）。
     pub(crate) fn mark_response_status_scoped(
         &self,
         provider: &str,
@@ -159,13 +110,23 @@ impl AccountSelectorRuntime {
     }
 
     pub(crate) fn is_cooling_down(&self, provider: &str, account_id: &str) -> bool {
+        self.is_cooling_down_scoped(provider, account_id, &CooldownScope::Global)
+    }
+
+    /// 查询指定 scope 下账户是否处于 cooldown（健康保护，不产生候选序列）。
+    pub(crate) fn is_cooling_down_scoped(
+        &self,
+        provider: &str,
+        account_id: &str,
+        scope: &CooldownScope,
+    ) -> bool {
         let now = Instant::now();
         let mut cooldowns = self
             .cooldowns
             .lock()
             .expect("account selector cooldown lock poisoned");
         prune_expired_cooldowns(&mut cooldowns, now);
-        let key = AccountCooldownKey::new(provider, account_id, &CooldownScope::Global);
+        let key = AccountCooldownKey::new(provider, account_id, scope);
         match cooldowns.get(&key).copied() {
             Some(until) if until > now => true,
             Some(_) => {

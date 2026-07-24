@@ -2,7 +2,6 @@ import type { LucideIcon } from "lucide-react";
 import {
   CircleDollarSign,
   LayoutDashboard,
-  ShieldCheck,
   Server,
   Shuffle,
   SlidersHorizontal,
@@ -18,7 +17,6 @@ export type ConfigSectionId =
   | "core"
   | "upstreams"
   | "pricing"
-  | "providers"
   | "agents"
   | "settings";
 
@@ -44,13 +42,6 @@ export const CONFIG_SECTIONS: readonly ConfigSection[] = [
     label: () => m.config_section_dashboard_label(),
     description: () => m.config_section_dashboard_desc(),
     icon: LayoutDashboard,
-  },
-  {
-    id: "providers",
-    route: "/config/providers",
-    label: () => m.config_section_providers_label(),
-    description: () => m.config_section_providers_desc(),
-    icon: ShieldCheck,
   },
   {
     id: "upstreams",

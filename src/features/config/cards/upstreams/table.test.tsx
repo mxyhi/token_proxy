@@ -22,7 +22,7 @@ function buildUpstream(): UpstreamForm {
     filterSafetyIdentifier: false,
     useChatCompletionsForResponses: false,
     rewriteDeveloperRoleToSystem: false,
-    xaiAccountId: "",
+    accountId: "",
     preferredEndpoint: "",
     proxyUrl: "",
     priority: "10",

@@ -19,7 +19,7 @@ fn migrate_removes_legacy_fields_and_sets_providers() {
         "#,
     );
 
-    let changed = migrate_config_json(&mut value);
+    let changed = migrate_config_json(&mut value).expect("migrate");
     assert!(changed);
 
     let obj = value.as_object().expect("root must be object");
@@ -40,6 +40,7 @@ fn migrate_removes_legacy_fields_and_sets_providers() {
         "openai"
     );
     assert!(upstream.contains_key("convert_from_map"));
+    assert_eq!(upstream["credential"]["type"].as_str(), Some("passthrough"));
 }
 
 #[test]
@@ -56,7 +57,7 @@ fn migrate_default_legacy_enable_true_when_missing() {
         "#,
     );
 
-    let changed = migrate_config_json(&mut value);
+    let changed = migrate_config_json(&mut value).expect("migrate");
     assert!(changed);
 
     let obj = value.as_object().expect("root must be object");
@@ -76,10 +77,11 @@ fn migrate_default_legacy_enable_true_when_missing() {
 }
 
 #[test]
-fn migrate_api_key_to_api_keys() {
+fn migrate_api_key_to_credential_api_keys() {
     let mut value = parse_json(
         r#"
         {
+          "hot_model_mappings": {},
           "upstreams": [
             {
               "id": "u1",
@@ -93,19 +95,379 @@ fn migrate_api_key_to_api_keys() {
         "#,
     );
 
-    let changed = migrate_config_json(&mut value);
+    let changed = migrate_config_json(&mut value).expect("migrate");
     assert!(changed);
 
     let upstream = value["upstreams"][0]
         .as_object()
         .expect("upstream must be object");
     assert!(!upstream.contains_key("api_key"));
-    let keys = upstream["api_keys"]
+    assert!(!upstream.contains_key("api_keys"));
+    assert_eq!(upstream["credential"]["type"].as_str(), Some("api_keys"));
+    let keys = upstream["credential"]["api_keys"]
         .as_array()
-        .expect("api_keys must be array");
+        .expect("credential.api_keys must be array");
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].as_str(), Some("key-1"));
 }
+
+#[test]
+fn migrate_flat_api_keys_to_credential() {
+    let mut value = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "u1",
+              "providers": ["openai"],
+              "base_url": "https://example.com",
+              "api_keys": ["key-a", "key-b"],
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+
+    let changed = migrate_config_json(&mut value).expect("migrate");
+    assert!(changed);
+
+    let upstream = value["upstreams"][0]
+        .as_object()
+        .expect("upstream must be object");
+    assert!(!upstream.contains_key("api_keys"));
+    assert_eq!(upstream["credential"]["type"].as_str(), Some("api_keys"));
+    assert_eq!(
+        upstream["credential"]["api_keys"],
+        serde_json::json!(["key-a", "key-b"])
+    );
+}
+
+#[test]
+fn migrate_kiro_account_to_credential() {
+    let mut value = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "kiro-u",
+              "providers": ["kiro"],
+              "base_url": "",
+              "kiro_account_id": "kiro-acc-1",
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+
+    let changed = migrate_config_json(&mut value).expect("migrate");
+    assert!(changed);
+
+    let upstream = value["upstreams"][0]
+        .as_object()
+        .expect("upstream must be object");
+    assert!(!upstream.contains_key("kiro_account_id"));
+    assert_eq!(
+        upstream["credential"],
+        serde_json::json!({
+            "type": "account",
+            "provider": "kiro",
+            "account_id": "kiro-acc-1"
+        })
+    );
+}
+
+#[test]
+fn migrate_codex_account_to_credential() {
+    let mut value = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "codex-u",
+              "providers": ["codex"],
+              "base_url": "",
+              "codex_account_id": "codex-acc-1",
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+
+    let changed = migrate_config_json(&mut value).expect("migrate");
+    assert!(changed);
+
+    let upstream = value["upstreams"][0]
+        .as_object()
+        .expect("upstream must be object");
+    assert!(!upstream.contains_key("codex_account_id"));
+    assert_eq!(upstream["credential"]["provider"].as_str(), Some("codex"));
+    assert_eq!(
+        upstream["credential"]["account_id"].as_str(),
+        Some("codex-acc-1")
+    );
+}
+
+#[test]
+fn migrate_xai_account_to_credential() {
+    let mut value = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "xai-u",
+              "providers": ["xai"],
+              "base_url": "",
+              "xai_account_id": "xai-acc-1",
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+
+    let changed = migrate_config_json(&mut value).expect("migrate");
+    assert!(changed);
+
+    let upstream = value["upstreams"][0]
+        .as_object()
+        .expect("upstream must be object");
+    assert!(!upstream.contains_key("xai_account_id"));
+    assert_eq!(upstream["credential"]["type"].as_str(), Some("account"));
+    assert_eq!(upstream["credential"]["provider"].as_str(), Some("xai"));
+}
+
+#[test]
+fn migrate_rejects_api_keys_and_account_conflict_without_mutating_root() {
+    let original = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "conflict-u",
+              "providers": ["codex"],
+              "base_url": "",
+              "api_keys": ["key-a"],
+              "codex_account_id": "codex-acc",
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+    let mut value = original.clone();
+
+    let error = migrate_config_json(&mut value).expect_err("conflict must fail");
+    assert!(error.contains("cannot combine api_keys with account_id"));
+    // 冲突时传入 Value 字节语义不变。
+    assert_eq!(value, original);
+}
+
+#[test]
+fn migrate_rejects_multiple_account_ids_without_mutating_root() {
+    let original = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "multi-acc",
+              "providers": ["kiro"],
+              "base_url": "",
+              "kiro_account_id": "kiro-1",
+              "codex_account_id": "codex-1",
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+    let mut value = original.clone();
+
+    let error = migrate_config_json(&mut value).expect_err("multi account must fail");
+    assert!(error.contains("cannot pin multiple account ids"));
+    assert_eq!(value, original);
+}
+
+#[test]
+fn migrate_rejects_api_keys_non_array_without_mutating_root() {
+    let original = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "bad-keys",
+              "providers": ["openai"],
+              "base_url": "https://example.com",
+              "api_keys": "not-an-array",
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+    let mut value = original.clone();
+
+    let error = migrate_config_json(&mut value).expect_err("non-array api_keys must fail");
+    assert!(error.contains("api_keys"));
+    assert!(error.contains("must be an array"));
+    assert_eq!(value, original);
+}
+
+#[test]
+fn migrate_rejects_api_keys_non_string_element_without_mutating_root() {
+    let original = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "bad-key-elem",
+              "providers": ["openai"],
+              "base_url": "https://example.com",
+              "api_keys": [1, "ok"],
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+    let mut value = original.clone();
+
+    let error = migrate_config_json(&mut value).expect_err("non-string api_keys element must fail");
+    assert!(error.contains("api_keys"));
+    assert!(error.contains("only strings"));
+    assert_eq!(value, original);
+}
+
+#[test]
+fn migrate_rejects_account_id_non_string_without_mutating_root() {
+    let original = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "bad-acc",
+              "providers": ["codex"],
+              "base_url": "",
+              "codex_account_id": 42,
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+    let mut value = original.clone();
+
+    let error = migrate_config_json(&mut value).expect_err("non-string account_id must fail");
+    assert!(error.contains("codex_account_id"));
+    assert!(error.contains("must be a string or null"));
+    assert_eq!(value, original);
+}
+
+#[test]
+fn migrate_rejects_credential_with_legacy_flat_fields_without_mutating_root() {
+    let original = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "mixed",
+              "providers": ["openai"],
+              "base_url": "https://example.com",
+              "credential": { "type": "passthrough" },
+              "api_keys": ["should-not-override"],
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+    let mut value = original.clone();
+
+    let error = migrate_config_json(&mut value).expect_err("credential + flat must fail");
+    assert!(error.contains("cannot combine credential with legacy flat credential fields"));
+    assert_eq!(value, original);
+    // 确认未静默覆盖为 api_keys credential。
+    assert_eq!(
+        value["upstreams"][0]["credential"]["type"].as_str(),
+        Some("passthrough")
+    );
+    assert!(value["upstreams"][0].get("api_keys").is_some());
+}
+
+#[test]
+fn migrate_rejects_credential_with_legacy_account_id_without_mutating_root() {
+    let original = parse_json(
+        r#"
+        {
+          "hot_model_mappings": {},
+          "upstreams": [
+            {
+              "id": "mixed-acc",
+              "providers": ["xai"],
+              "base_url": "",
+              "credential": {
+                "type": "account",
+                "provider": "xai",
+                "account_id": "keep-me"
+              },
+              "xai_account_id": "must-not-override",
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+    let mut value = original.clone();
+
+    let error = migrate_config_json(&mut value).expect_err("credential + account flat must fail");
+    assert!(error.contains("cannot combine credential with legacy flat credential fields"));
+    assert_eq!(value, original);
+}
+
+#[test]
+fn migrate_new_format_is_noop() {
+    let mut value = parse_json(
+        r#"
+        {
+          "host": "127.0.0.1",
+          "port": 9208,
+          "hot_model_mappings": {
+            "custom/alias": "custom-target"
+          },
+          "upstreams": [
+            {
+              "id": "modern",
+              "providers": ["openai"],
+              "base_url": "https://example.com",
+              "credential": {
+                "type": "api_keys",
+                "api_keys": ["key-1"]
+              },
+              "enabled": true
+            }
+          ]
+        }
+        "#,
+    );
+    let before = value.clone();
+
+    let changed = migrate_config_json(&mut value).expect("migrate");
+    assert!(!changed);
+    assert_eq!(value, before);
+}
+
 #[test]
 fn migrate_legacy_upstream_strategy_string_to_structured_fill_first_serial() {
     let mut value = parse_json(
@@ -119,7 +481,7 @@ fn migrate_legacy_upstream_strategy_string_to_structured_fill_first_serial() {
         "#,
     );
 
-    let changed = migrate_config_json(&mut value);
+    let changed = migrate_config_json(&mut value).expect("migrate");
     assert!(changed);
 
     assert_eq!(
@@ -144,7 +506,7 @@ fn migrate_legacy_upstream_strategy_string_to_structured_round_robin_serial() {
         "#,
     );
 
-    let changed = migrate_config_json(&mut value);
+    let changed = migrate_config_json(&mut value).expect("migrate");
     assert!(changed);
 
     assert_eq!(
@@ -168,7 +530,7 @@ fn migrate_adds_default_hot_model_mappings_when_missing() {
         "#,
     );
 
-    let changed = migrate_config_json(&mut value);
+    let changed = migrate_config_json(&mut value).expect("migrate");
     assert!(changed);
 
     assert_eq!(
@@ -201,7 +563,7 @@ fn migrate_preserves_custom_hot_model_mappings() {
         "#,
     );
 
-    let changed = migrate_config_json(&mut value);
+    let changed = migrate_config_json(&mut value).expect("migrate");
     assert!(!changed);
 
     assert_eq!(
@@ -228,7 +590,7 @@ fn migrate_removes_legacy_model_discovery_refresh_secs() {
         "#,
     );
 
-    let changed = migrate_config_json(&mut value);
+    let changed = migrate_config_json(&mut value).expect("migrate");
     assert!(changed);
 
     assert!(value.get("model_discovery_refresh_secs").is_none());

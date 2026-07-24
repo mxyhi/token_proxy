@@ -10,10 +10,13 @@ mod store;
 mod types;
 mod util;
 
-pub use login::KiroLoginManager;
+pub use login::{KiroLoginManager, KiroLoginPollClaim};
 pub use quota::fetch_quotas;
-pub use store::KiroAccountStore;
+#[cfg(any(test, feature = "test-support"))]
+pub use store::ProviderGateProbe;
+pub use store::{KiroAccountStore, KiroProviderMutation};
 pub use types::{
     KiroAccountStatus, KiroAccountSummary, KiroLoginMethod, KiroLoginPollResponse,
-    KiroLoginStartResponse, KiroQuotaCache, KiroQuotaItem, KiroQuotaSummary, KiroTokenRecord,
+    KiroLoginStartResponse, KiroLoginStatus, KiroQuotaCache, KiroQuotaItem, KiroQuotaSummary,
+    KiroTokenRecord,
 };

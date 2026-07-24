@@ -14,12 +14,14 @@ pub use identity::{
     enforce_minimum_client_version, is_official_originator, official_originator_from_user_agent,
     supported_official_user_agent, DEFAULT_ORIGINATOR, USER_AGENT,
 };
-pub use login::CodexLoginManager;
+pub use login::{CodexLoginManager, CodexLoginPollClaim};
 pub use oauth::CodexRefreshTokenClient;
 pub use quota::fetch_quotas;
-pub use store::CodexAccountStore;
+#[cfg(any(test, feature = "test-support"))]
+pub use store::ProviderGateProbe;
+pub use store::{CodexAccountStore, CodexProviderMutation};
 pub use types::{
     CodexAccountStatus, CodexAccountSummary, CodexAgentIdentityRef, CodexAuthMethod,
-    CodexCredential, CodexLoginPollResponse, CodexLoginStartResponse, CodexOAuthCredentialRef,
-    CodexQuotaCache, CodexQuotaItem, CodexQuotaSummary, CodexTokenRecord,
+    CodexCredential, CodexLoginPollResponse, CodexLoginStartResponse, CodexLoginStatus,
+    CodexOAuthCredentialRef, CodexQuotaCache, CodexQuotaItem, CodexQuotaSummary, CodexTokenRecord,
 };

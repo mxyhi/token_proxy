@@ -11,9 +11,7 @@ const apiMocks = vi.hoisted(() => ({
   refreshCodexQuotaCache: vi.fn(),
   refreshCodexQuotaNow: vi.fn(),
   setCodexAutoRefresh: vi.fn(),
-  setCodexEnabled: vi.fn(),
   refreshCodexAccount: vi.fn(),
-  logoutCodexAccount: vi.fn(),
 }));
 
 vi.mock("@/features/codex/api", () => ({
@@ -24,9 +22,7 @@ vi.mock("@/features/codex/api", () => ({
   refreshCodexQuotaCache: apiMocks.refreshCodexQuotaCache,
   refreshCodexQuotaNow: apiMocks.refreshCodexQuotaNow,
   setCodexAutoRefresh: apiMocks.setCodexAutoRefresh,
-  setCodexEnabled: apiMocks.setCodexEnabled,
   refreshCodexAccount: apiMocks.refreshCodexAccount,
-  logoutCodexAccount: apiMocks.logoutCodexAccount,
 }));
 
 describe("codex/use-codex-accounts", () => {

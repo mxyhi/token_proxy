@@ -1,14 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+#[cfg(any(test, feature = "test-support"))]
+use std::sync::{Arc, Mutex as StdMutex};
 
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
 use time::{Duration, OffsetDateTime};
-use tokio::sync::{Mutex, RwLock};
+#[cfg(any(test, feature = "test-support"))]
+use tokio::sync::Notify;
+use tokio::sync::{Mutex, MutexGuard, RwLock};
 
 use crate::persistence as provider_accounts;
 use token_proxy_account_store::app_proxy::AppProxyState;
-use token_proxy_account_store::oauth_util::normalize_proxy_url;
 use token_proxy_account_store::paths::TokenProxyPaths;
 
 use super::oauth;
@@ -24,6 +27,65 @@ pub struct KiroAccountStore {
     cache: RwLock<HashMap<String, KiroTokenRecord>>,
     app_proxy: AppProxyState,
     quota_refreshing: Mutex<HashSet<String>>,
+    /// Provider 级 mutation gate：所有持久化写、cache 更新、snapshot/restore 共享。
+    /// 阻止 lifecycle 全量 restore 与并发 refresh/save 互相覆盖。
+    provider_mutation: Mutex<()>,
+    /// 测试探针：即将 acquire provider_mutation 时通知（不含 secret）。
+    #[cfg(any(test, feature = "test-support"))]
+    gate_probe: StdMutex<Option<Arc<ProviderGateProbe>>>,
+}
+
+/// provider gate 测试探针：about_to_lock 在阻塞前，acquired 在拿到锁后。
+/// 用于无 sleep 的并发断言；禁止携带 secret。
+#[cfg(any(test, feature = "test-support"))]
+pub struct ProviderGateProbe {
+    pub about_to_lock: Notify,
+    pub acquired: Notify,
+}
+
+/// Provider import/restore 事务会话：持有 `provider_mutation` 直至 drop。
+/// 不暴露裸 MutexGuard；事务内只走 unlocked 路径，避免 Tokio Mutex 自重入。
+pub struct KiroProviderMutation<'a> {
+    store: &'a KiroAccountStore,
+    _gate: MutexGuard<'a, ()>,
+}
+
+impl Drop for KiroProviderMutation<'_> {
+    fn drop(&mut self) {
+        // 会话结束即释放 gate；不记录任何 credential 字段。
+        tracing::debug!("kiro provider mutation session end");
+    }
+}
+
+impl KiroProviderMutation<'_> {
+    /// 已持 gate：全量快照（含 secret，仅内存短时持有，禁止日志）。
+    pub async fn snapshot_all_records(&self) -> Result<HashMap<String, KiroTokenRecord>, String> {
+        self.store.snapshot_all_records_unlocked().await
+    }
+
+    /// 已持 gate：SQLite 事务全量恢复后替换 cache。
+    pub async fn restore_all_records(
+        &self,
+        snapshot: HashMap<String, KiroTokenRecord>,
+    ) -> Result<(), String> {
+        self.store.restore_all_records_unlocked(snapshot).await
+    }
+
+    /// 已持 gate：IDE 目录导入（内部 save 走 unlocked）。
+    pub async fn import_ide_tokens(
+        &self,
+        directory: PathBuf,
+    ) -> Result<Vec<KiroAccountSummary>, String> {
+        self.store.import_ide_tokens_unlocked(directory).await
+    }
+
+    /// 已持 gate：KAM 导出文件导入（内部 save 走 unlocked）。
+    pub async fn import_kam_export(
+        &self,
+        path: PathBuf,
+    ) -> Result<Vec<KiroAccountSummary>, String> {
+        self.store.import_kam_export_unlocked(path).await
+    }
 }
 
 impl KiroAccountStore {
@@ -35,7 +97,62 @@ impl KiroAccountStore {
             cache: RwLock::new(HashMap::new()),
             app_proxy,
             quota_refreshing: Mutex::new(HashSet::new()),
+            provider_mutation: Mutex::new(()),
+            #[cfg(any(test, feature = "test-support"))]
+            gate_probe: StdMutex::new(None),
         })
+    }
+
+    /// 开启 provider mutation 事务；session 存活期间独占 provider_mutation。
+    pub async fn begin_provider_mutation(&self) -> KiroProviderMutation<'_> {
+        tracing::debug!("kiro provider mutation session begin");
+        let _gate = self.acquire_provider_mutation().await;
+        KiroProviderMutation { store: self, _gate }
+    }
+
+    /// 统一 acquire：外部写路径自动取 gate；测试探针在阻塞前/获锁后通知。
+    async fn acquire_provider_mutation(&self) -> MutexGuard<'_, ()> {
+        #[cfg(any(test, feature = "test-support"))]
+        self.notify_about_to_acquire_provider_gate();
+        let guard = self.provider_mutation.lock().await;
+        #[cfg(any(test, feature = "test-support"))]
+        self.notify_provider_gate_acquired();
+        guard
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn notify_about_to_acquire_provider_gate(&self) {
+        if let Ok(guard) = self.gate_probe.lock() {
+            if let Some(probe) = guard.as_ref() {
+                // 仅通知「即将等锁」；不携带 account_id / token。
+                probe.about_to_lock.notify_one();
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    fn notify_provider_gate_acquired(&self) {
+        if let Ok(guard) = self.gate_probe.lock() {
+            if let Some(probe) = guard.as_ref() {
+                probe.acquired.notify_one();
+            }
+        }
+    }
+
+    /// 安装 gate 探针；返回 Arc 供测试 wait about_to_lock / acquired。
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn install_provider_gate_probe(&self) -> Arc<ProviderGateProbe> {
+        let probe = Arc::new(ProviderGateProbe {
+            about_to_lock: Notify::new(),
+            acquired: Notify::new(),
+        });
+        *self.gate_probe.lock().expect("kiro gate probe lock") = Some(Arc::clone(&probe));
+        probe
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn clear_provider_gate_probe(&self) {
+        *self.gate_probe.lock().expect("kiro gate probe lock") = None;
     }
 
     pub(crate) fn dir(&self) -> &Path {
@@ -46,74 +163,17 @@ impl KiroAccountStore {
         &self,
         directory: PathBuf,
     ) -> Result<Vec<KiroAccountSummary>, String> {
-        if directory.as_os_str().is_empty() {
-            return Err("Directory is required.".to_string());
-        }
-        let mut entries = match tokio::fs::read_dir(&directory).await {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Err("Selected directory not found.".to_string());
-            }
-            Err(err) => {
-                return Err(format!("Failed to read selected directory: {err}"));
-            }
-        };
-        let mut imported = Vec::new();
-        // 仅扫描所选目录本层的 JSON 文件，忽略无效内容。
-        while let Some(entry) = entries
-            .next_entry()
-            .await
-            .map_err(|err| format!("Failed to read directory entry: {err}"))?
-        {
-            let path = entry.path();
-            let file_type = entry
-                .file_type()
-                .await
-                .map_err(|err| format!("Failed to read entry type: {err}"))?;
-            if !file_type.is_file() || !is_json_file(&path) {
-                continue;
-            }
-            let Some(record) = load_ide_token_record(&path).await else {
-                continue;
-            };
-            if let Ok(summary) = self.save_new_account(record).await {
-                imported.push(summary);
-            }
-        }
-        if imported.is_empty() {
-            return Err("No valid Kiro token JSON files found.".to_string());
-        }
-        Ok(imported)
+        // 直接调用自动取 gate；lifecycle 事务内走 unlocked。
+        let _gate = self.acquire_provider_mutation().await;
+        self.import_ide_tokens_unlocked(directory).await
     }
 
     pub async fn import_kam_export(
         &self,
         path: PathBuf,
     ) -> Result<Vec<KiroAccountSummary>, String> {
-        if path.as_os_str().is_empty() {
-            return Err("File path is required.".to_string());
-        }
-        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            return Err("Selected file not found.".to_string());
-        }
-        let contents = tokio::fs::read_to_string(&path)
-            .await
-            .map_err(|err| format!("Failed to read JSON file: {err}"))?;
-        let data: KamExportData = serde_json::from_str(&contents)
-            .map_err(|err| format!("Invalid Kiro account JSON file: {err}"))?;
-        let mut imported = Vec::new();
-        for account in data.accounts {
-            let Some(record) = kam_account_to_record(account) else {
-                continue;
-            };
-            if let Ok(summary) = self.save_new_account(record).await {
-                imported.push(summary);
-            }
-        }
-        if imported.is_empty() {
-            return Err("No valid Kiro accounts found in JSON file.".to_string());
-        }
-        Ok(imported)
+        let _gate = self.acquire_provider_mutation().await;
+        self.import_kam_export_unlocked(path).await
     }
 
     pub async fn list_accounts(&self) -> Result<Vec<KiroAccountSummary>, String> {
@@ -132,16 +192,10 @@ impl KiroAccountStore {
                         .unwrap_or_else(|_| record.expires_at.clone())
                 }),
                 status: record.effective_status(),
-                proxy_url: record.proxy_url.clone(),
-                priority: record.priority,
             })
             .collect();
-        items.sort_by(|left, right| {
-            right
-                .priority
-                .cmp(&left.priority)
-                .then_with(|| left.account_id.cmp(&right.account_id))
-        });
+        // Account store 不再按 priority 排序；路由顺序只看 Upstream.priority。
+        items.sort_by(|left, right| left.account_id.cmp(&right.account_id));
         Ok(items)
     }
 
@@ -174,37 +228,16 @@ impl KiroAccountStore {
         Ok(refreshed)
     }
 
-    pub async fn set_proxy_url(
-        &self,
-        account_id: &str,
-        proxy_url: Option<&str>,
-    ) -> Result<KiroAccountSummary, String> {
-        let mut record = self.load_account(account_id).await?;
-        record.proxy_url = normalize_proxy_url(proxy_url)?;
-        self.save_record(account_id.to_string(), record).await
-    }
-
-    pub async fn set_status(
-        &self,
-        account_id: &str,
-        status: KiroAccountStatus,
-    ) -> Result<KiroAccountSummary, String> {
-        let mut record = self.load_account(account_id).await?;
-        record.status = status;
-        self.save_record(account_id.to_string(), record).await
-    }
-
-    pub async fn set_priority(
-        &self,
-        account_id: &str,
-        priority: i32,
-    ) -> Result<KiroAccountSummary, String> {
-        let mut record = self.load_account(account_id).await?;
-        record.priority = priority;
-        self.save_record(account_id.to_string(), record).await
-    }
-
     pub(crate) async fn save_record(
+        &self,
+        account_id: String,
+        record: KiroTokenRecord,
+    ) -> Result<KiroAccountSummary, String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.save_record_unlocked(account_id, record).await
+    }
+
+    async fn save_record_unlocked(
         &self,
         account_id: String,
         record: KiroTokenRecord,
@@ -223,8 +256,6 @@ impl KiroAccountStore {
                     .unwrap_or_else(|_| record.expires_at.clone())
             }),
             status: record.effective_status(),
-            proxy_url: record.proxy_url.clone(),
-            priority: record.priority,
         })
     }
 
@@ -248,12 +279,33 @@ impl KiroAccountStore {
         Ok(record)
     }
 
+    /// 自动取 gate 的新建/覆盖入口；事务内请用 unlocked。
+    #[allow(dead_code)]
     pub(crate) async fn save_new_account(
+        &self,
+        record: KiroTokenRecord,
+    ) -> Result<KiroAccountSummary, String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.save_new_account_unlocked(record).await
+    }
+
+    /// 调用方必须已持 `provider_mutation`：身份匹配 + 分配 ID + 落库。
+    async fn save_new_account_unlocked(
         &self,
         mut record: KiroTokenRecord,
     ) -> Result<KiroAccountSummary, String> {
         if record.email.is_none() {
             record.email = extract_email_from_jwt(&record.access_token);
+        }
+        // 稳定身份：同 provider + email（或 profile_arn）覆盖，避免重复 credential。
+        if let Some((account_id, existing)) = self.find_existing_account_unlocked(&record).await? {
+            tracing::debug!(
+                account_id = %account_id,
+                "kiro save reuses existing account by identity"
+            );
+            record.quota = existing.quota;
+            record.status = KiroAccountStatus::Active;
+            return self.save_record_unlocked(account_id, record).await;
         }
         let provider = record.provider.trim().to_ascii_lowercase();
         let id_part_source = record
@@ -265,15 +317,85 @@ impl KiroAccountStore {
         if id_part.is_empty() {
             id_part = format!("{}", OffsetDateTime::now_utc().unix_timestamp());
         }
-        let account_id = self.unique_account_id(&provider, &id_part).await?;
-        self.save_record(account_id, record).await
+        let account_id = self.unique_account_id_unlocked(&provider, &id_part).await?;
+        self.save_record_unlocked(account_id, record).await
     }
 
-    pub(crate) async fn delete_account(&self, account_id: &str) -> Result<(), String> {
+    /// 编排层删除账户凭据；刷新内存 cache。禁止在日志中打印 token。
+    pub async fn delete_account(&self, account_id: &str) -> Result<(), String> {
+        let _gate = self.acquire_provider_mutation().await;
         provider_accounts::delete_account(&self.paths, account_id).await?;
         let mut cache = self.cache.write().await;
         cache.remove(account_id);
+        tracing::debug!(account_id, "kiro account deleted for orchestration");
         Ok(())
+    }
+
+    /// 编排层快照：导出全部凭据（含 secret，仅内存短时持有，禁止日志）。
+    pub async fn snapshot_all_records(&self) -> Result<HashMap<String, KiroTokenRecord>, String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.snapshot_all_records_unlocked().await
+    }
+
+    /// 编排层恢复：单 SQLite 事务替换该 provider 全量快照，提交后再替换 cache。
+    pub async fn restore_all_records(
+        &self,
+        snapshot: HashMap<String, KiroTokenRecord>,
+    ) -> Result<(), String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.restore_all_records_unlocked(snapshot).await
+    }
+
+    /// 单账户快照；不存在返回 None。
+    pub async fn snapshot_account_record(
+        &self,
+        account_id: &str,
+    ) -> Result<Option<KiroTokenRecord>, String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.reload_cache_unlocked().await?;
+        Ok(self.cache.read().await.get(account_id).cloned())
+    }
+
+    /// 单账户原子恢复；`None` 表示删除。DB 提交成功后再改 cache。
+    pub async fn restore_account_record(
+        &self,
+        account_id: &str,
+        record: Option<KiroTokenRecord>,
+    ) -> Result<(), String> {
+        let _gate = self.acquire_provider_mutation().await;
+        provider_accounts::replace_kiro_account(&self.paths, account_id, record.as_ref()).await?;
+        match record {
+            Some(record) => {
+                self.cache
+                    .write()
+                    .await
+                    .insert(account_id.to_string(), record);
+            }
+            None => {
+                self.cache.write().await.remove(account_id);
+            }
+        }
+        tracing::debug!(account_id, "kiro account record restored for orchestration");
+        Ok(())
+    }
+
+    /// 登录编排提交：持久化 credential，返回 summary 与覆盖前旧 record。
+    pub async fn commit_login_record(
+        &self,
+        record: KiroTokenRecord,
+    ) -> Result<(KiroAccountSummary, Option<KiroTokenRecord>), String> {
+        let _gate = self.acquire_provider_mutation().await;
+        let mut record = record;
+        if record.email.is_none() {
+            record.email = extract_email_from_jwt(&record.access_token);
+        }
+        let previous = self
+            .find_existing_account_unlocked(&record)
+            .await?
+            .map(|(_, old)| old);
+        // 已持 gate：走 unlocked 路径，避免重入死锁。
+        let summary = self.save_new_account_unlocked(record).await?;
+        Ok((summary, previous))
     }
 
     async fn refresh_if_needed(
@@ -281,14 +403,13 @@ impl KiroAccountStore {
         account_id: &str,
         record: KiroTokenRecord,
     ) -> Result<KiroTokenRecord, String> {
-        // 禁用账号不参与调度，也不应因 token 过期触发 refresh（避免把 status 写回 Active）。
-        if matches!(record.status, KiroAccountStatus::Disabled) {
-            tracing::debug!(account_id, "skip kiro token refresh for disabled account");
-            return Ok(record);
-        }
         if !record.is_expired() {
             return Ok(record);
         }
+        tracing::debug!(
+            account_id,
+            "kiro token expired; refreshing pinned credential"
+        );
         self.refresh_record(account_id, record).await
     }
 
@@ -297,18 +418,16 @@ impl KiroAccountStore {
         account_id: &str,
         record: KiroTokenRecord,
     ) -> Result<KiroTokenRecord, String> {
-        let proxy_url = self.effective_proxy_url(record.proxy_url.as_deref()).await;
+        // OAuth/refresh 网络走 app 级 proxy，账户不再持有 proxy_url。
+        let proxy_url = self.app_proxy_url().await;
         let refreshed = match record.auth_method.as_str() {
             "builder-id" => sso_oidc::refresh_builder_token(&record, proxy_url.as_deref()).await?,
             "idc" => sso_oidc::refresh_idc_token(&record, proxy_url.as_deref()).await?,
             "social" => oauth::refresh_social_token(&record, proxy_url.as_deref()).await?,
             _ => return Err("Unsupported Kiro auth method.".to_string()),
         };
-        // 防御：各 auth 路径必须保留本地调度字段；这里再强制回填一遍。
+        // 保留本地邮箱与 quota 缓存，避免 refresh 响应丢失元数据。
         let refreshed = KiroTokenRecord {
-            status: record.status,
-            proxy_url: record.proxy_url.clone(),
-            priority: record.priority,
             email: record.email.clone().or(refreshed.email),
             quota: record.quota.clone(),
             ..refreshed
@@ -357,65 +476,29 @@ impl KiroAccountStore {
         result.map(|_| ())
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub(crate) async fn resolve_account_record(
+    /// 解析 Upstream 固定引用的账户凭据。无 pool/unpinned 选号。
+    pub async fn resolve_pinned_account_record(
         &self,
-        account_id: Option<&str>,
+        account_id: &str,
     ) -> Result<(String, KiroTokenRecord), String> {
-        self.resolve_account_record_with_order(account_id, None)
-            .await
-    }
-
-    pub async fn resolve_account_record_with_order(
-        &self,
-        account_id: Option<&str>,
-        ordered_account_ids: Option<&[String]>,
-    ) -> Result<(String, KiroTokenRecord), String> {
-        if let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) {
-            let record = self.get_account_record(account_id).await?;
-            if matches!(record.effective_status(), KiroAccountStatus::Disabled) {
-                return Err(format!("Kiro account is disabled: {account_id}"));
-            }
-            if matches!(record.effective_status(), KiroAccountStatus::Expired) {
-                return Err(format!("Kiro account is expired: {account_id}"));
-            }
-            return Ok((account_id.to_string(), record));
+        let account_id = account_id.trim();
+        if account_id.is_empty() {
+            return Err("Kiro account_id is required for account credential upstream.".to_string());
         }
-
-        self.refresh_cache().await?;
-        let account_ids = if let Some(ordered_account_ids) = ordered_account_ids {
-            ordered_account_ids.to_vec()
-        } else {
-            let cache = self.cache.read().await;
-            sorted_account_ids(&cache)
-        };
-
-        let mut last_error = None;
-        for account_id in account_ids {
-            match self.get_account_record(&account_id).await {
-                Ok(record) if record.is_schedulable() => {
-                    return Ok((account_id, record));
-                }
-                Ok(record) if matches!(record.effective_status(), KiroAccountStatus::Disabled) => {
-                    last_error = Some(format!("Kiro account is disabled: {account_id}"));
-                }
-                Ok(_) => {
-                    last_error = Some(format!("Kiro account is expired: {account_id}"));
-                }
-                Err(err) => {
-                    last_error = Some(err);
-                }
-            }
+        let record = self.get_account_record(account_id).await?;
+        if !record.is_usable() {
+            tracing::warn!(
+                account_id,
+                status = ?record.effective_status(),
+                "pinned kiro account is not usable"
+            );
+            return Err(format!(
+                "Kiro account is {}: {account_id}",
+                record.effective_status().as_label()
+            ));
         }
-
-        Err(last_error.unwrap_or_else(|| "Kiro account is not configured.".to_string()))
-    }
-
-    pub(crate) async fn effective_proxy_url(&self, proxy_url: Option<&str>) -> Option<String> {
-        match normalize_proxy_url(proxy_url) {
-            Ok(Some(proxy_url)) => Some(proxy_url),
-            Ok(None) | Err(_) => self.app_proxy_url().await,
-        }
+        tracing::debug!(account_id, "resolved pinned kiro account credential");
+        Ok((account_id.to_string(), record))
     }
 
     async fn resolve_quota_targets(
@@ -464,14 +547,120 @@ impl KiroAccountStore {
     }
 
     async fn refresh_cache(&self) -> Result<(), String> {
+        let _gate = self.acquire_provider_mutation().await;
+        self.reload_cache_unlocked().await
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn reload_cache_unlocked(&self) -> Result<(), String> {
         let cache = provider_accounts::list_kiro_records(&self.paths).await?;
         let mut guard = self.cache.write().await;
         *guard = cache;
         Ok(())
     }
 
-    async fn unique_account_id(&self, provider: &str, id_part: &str) -> Result<String, String> {
-        self.refresh_cache().await?;
+    /// 调用方必须已持 `provider_mutation`。
+    async fn snapshot_all_records_unlocked(
+        &self,
+    ) -> Result<HashMap<String, KiroTokenRecord>, String> {
+        self.reload_cache_unlocked().await?;
+        Ok(self.cache.read().await.clone())
+    }
+
+    /// 调用方必须已持 `provider_mutation`。DB 原子替换成功后再换 cache。
+    async fn restore_all_records_unlocked(
+        &self,
+        snapshot: HashMap<String, KiroTokenRecord>,
+    ) -> Result<(), String> {
+        provider_accounts::replace_all_kiro_records(&self.paths, &snapshot).await?;
+        *self.cache.write().await = snapshot;
+        tracing::debug!("kiro account store restored from orchestration snapshot");
+        Ok(())
+    }
+
+    /// 调用方必须已持 `provider_mutation`：IDE 目录导入。
+    async fn import_ide_tokens_unlocked(
+        &self,
+        directory: PathBuf,
+    ) -> Result<Vec<KiroAccountSummary>, String> {
+        if directory.as_os_str().is_empty() {
+            return Err("Directory is required.".to_string());
+        }
+        let mut entries = match tokio::fs::read_dir(&directory).await {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Err("Selected directory not found.".to_string());
+            }
+            Err(err) => {
+                return Err(format!("Failed to read selected directory: {err}"));
+            }
+        };
+        let mut imported = Vec::new();
+        // 仅扫描所选目录本层的 JSON 文件，忽略无效内容。
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|err| format!("Failed to read directory entry: {err}"))?
+        {
+            let path = entry.path();
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|err| format!("Failed to read entry type: {err}"))?;
+            if !file_type.is_file() || !is_json_file(&path) {
+                continue;
+            }
+            let Some(record) = load_ide_token_record(&path).await else {
+                continue;
+            };
+            if let Ok(summary) = self.save_new_account_unlocked(record).await {
+                imported.push(summary);
+            }
+        }
+        if imported.is_empty() {
+            return Err("No valid Kiro token JSON files found.".to_string());
+        }
+        Ok(imported)
+    }
+
+    /// 调用方必须已持 `provider_mutation`：KAM 导出文件导入。
+    async fn import_kam_export_unlocked(
+        &self,
+        path: PathBuf,
+    ) -> Result<Vec<KiroAccountSummary>, String> {
+        if path.as_os_str().is_empty() {
+            return Err("File path is required.".to_string());
+        }
+        if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+            return Err("Selected file not found.".to_string());
+        }
+        let contents = tokio::fs::read_to_string(&path)
+            .await
+            .map_err(|err| format!("Failed to read JSON file: {err}"))?;
+        let data: KamExportData = serde_json::from_str(&contents)
+            .map_err(|err| format!("Invalid Kiro account JSON file: {err}"))?;
+        let mut imported = Vec::new();
+        for account in data.accounts {
+            let Some(record) = kam_account_to_record(account) else {
+                continue;
+            };
+            if let Ok(summary) = self.save_new_account_unlocked(record).await {
+                imported.push(summary);
+            }
+        }
+        if imported.is_empty() {
+            return Err("No valid Kiro accounts found in JSON file.".to_string());
+        }
+        Ok(imported)
+    }
+
+    /// 调用方必须已持 `provider_mutation`。
+    async fn unique_account_id_unlocked(
+        &self,
+        provider: &str,
+        id_part: &str,
+    ) -> Result<String, String> {
+        self.reload_cache_unlocked().await?;
         let cache = self.cache.read().await;
         let mut suffix = 0u32;
         loop {
@@ -486,23 +675,60 @@ impl KiroAccountStore {
             suffix += 1;
         }
     }
+
+    /// 稳定身份匹配：provider + email；无 email 时 provider + profile_arn。
+    /// 调用方必须已持 `provider_mutation`。
+    async fn find_existing_account_unlocked(
+        &self,
+        record: &KiroTokenRecord,
+    ) -> Result<Option<(String, KiroTokenRecord)>, String> {
+        self.reload_cache_unlocked().await?;
+        let provider = record.provider.trim().to_ascii_lowercase();
+        let email = record
+            .email
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase());
+        let profile_arn = record
+            .profile_arn
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let cache = self.cache.read().await;
+        if let Some(email) = email.as_ref() {
+            if let Some((account_id, existing)) = cache.iter().find(|(_, existing)| {
+                existing.provider.trim().eq_ignore_ascii_case(&provider)
+                    && existing
+                        .email
+                        .as_deref()
+                        .map(str::trim)
+                        .map(|value| value.to_ascii_lowercase())
+                        .as_ref()
+                        == Some(email)
+            }) {
+                return Ok(Some((account_id.clone(), existing.clone())));
+            }
+        }
+        if email.is_none() {
+            if let Some(profile_arn) = profile_arn {
+                if let Some((account_id, existing)) = cache.iter().find(|(_, existing)| {
+                    existing.provider.trim().eq_ignore_ascii_case(&provider)
+                        && existing
+                            .profile_arn
+                            .as_deref()
+                            .map(str::trim)
+                            .is_some_and(|value| value == profile_arn)
+                }) {
+                    return Ok(Some((account_id.clone(), existing.clone())));
+                }
+            }
+        }
+        Ok(None)
+    }
 }
 
 const QUOTA_REFRESH_INTERVAL_SECONDS: i64 = 30;
-
-fn sorted_account_ids(cache: &HashMap<String, KiroTokenRecord>) -> Vec<String> {
-    let mut entries = cache.iter().collect::<Vec<_>>();
-    entries.sort_by(|(left_id, left_record), (right_id, right_record)| {
-        right_record
-            .priority
-            .cmp(&left_record.priority)
-            .then_with(|| left_id.cmp(right_id))
-    });
-    entries
-        .into_iter()
-        .map(|(account_id, _)| account_id.clone())
-        .collect()
-}
 
 fn quota_refresh_is_due(checked_at: Option<&str>) -> bool {
     let Some(checked_at) = checked_at.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -586,8 +812,6 @@ fn kam_account_to_record(account: KamAccount) -> Option<KiroTokenRecord> {
         start_url: credentials.start_url,
         region: credentials.region,
         status: KiroAccountStatus::Active,
-        proxy_url: None,
-        priority: 0,
         quota: super::types::KiroQuotaCache::default(),
     })
 }
@@ -695,8 +919,6 @@ impl KiroIdeTokenFile {
             start_url: self.start_url,
             region: self.region,
             status: KiroAccountStatus::Active,
-            proxy_url: None,
-            priority: 0,
             quota: super::types::KiroQuotaCache::default(),
         })
     }
@@ -707,11 +929,9 @@ mod tests {
     use super::*;
     use rand::random;
     use serde_json::json;
-    use sqlx::Row;
     use std::future::Future;
     use time::Duration;
     use token_proxy_account_store::app_proxy;
-    use token_proxy_account_store::database as sqlite;
     use token_proxy_account_store::paths::TokenProxyPaths;
 
     fn run_async(test: impl Future<Output = ()>) {
@@ -731,12 +951,6 @@ mod tests {
 
     fn future_rfc3339(hours: i64) -> String {
         (OffsetDateTime::now_utc() + Duration::hours(hours))
-            .format(&Rfc3339)
-            .expect("format expires_at")
-    }
-
-    fn past_rfc3339(hours: i64) -> String {
-        (OffsetDateTime::now_utc() - Duration::hours(hours))
             .format(&Rfc3339)
             .expect("format expires_at")
     }
@@ -773,8 +987,6 @@ mod tests {
                     start_url: None,
                     region: None,
                     status: KiroAccountStatus::Active,
-                    proxy_url: None,
-                    priority: 0,
                     quota: crate::KiroQuotaCache::default(),
                 })
                 .await
@@ -801,142 +1013,65 @@ mod tests {
     }
 
     #[test]
-    fn list_accounts_orders_by_priority_descending() {
+    fn list_accounts_orders_by_account_id_ascending() {
         run_async(async {
             let (store, data_dir) = create_test_store();
-            let paths = TokenProxyPaths::from_app_data_dir(data_dir.clone()).expect("test paths");
-            let pool = sqlite::open_write_pool(&paths)
-                .await
-                .expect("open sqlite pool");
-            let columns = sqlx::query("PRAGMA table_info(provider_accounts);")
-                .fetch_all(&pool)
-                .await
-                .expect("read provider_accounts schema");
-            let has_priority = columns
-                .into_iter()
-                .any(|row| row.try_get::<String, _>("name").ok().as_deref() == Some("priority"));
-            if !has_priority {
-                sqlx::query(
-                    "ALTER TABLE provider_accounts ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;",
+            // Phase B: 列表稳定按 account_id 升序，不再按 priority。
+            store
+                .save_record(
+                    "kiro-z.json".to_string(),
+                    KiroTokenRecord {
+                        access_token: "access-z".to_string(),
+                        refresh_token: "refresh-z".to_string(),
+                        profile_arn: Some("arn:aws:iam::123456789012:user/z".to_string()),
+                        expires_at: future_rfc3339(6),
+                        auth_method: "google".to_string(),
+                        provider: "kiro".to_string(),
+                        client_id: None,
+                        client_secret: None,
+                        email: Some("z@example.com".to_string()),
+                        last_refresh: None,
+                        start_url: None,
+                        region: None,
+                        status: KiroAccountStatus::Active,
+                        quota: crate::KiroQuotaCache::default(),
+                    },
                 )
-                .execute(&pool)
                 .await
-                .expect("add priority column");
-            }
+                .expect("save z");
+            store
+                .save_record(
+                    "kiro-a.json".to_string(),
+                    KiroTokenRecord {
+                        access_token: "access-a".to_string(),
+                        refresh_token: "refresh-a".to_string(),
+                        profile_arn: Some("arn:aws:iam::123456789012:user/a".to_string()),
+                        expires_at: future_rfc3339(6),
+                        auth_method: "google".to_string(),
+                        provider: "kiro".to_string(),
+                        client_id: None,
+                        client_secret: None,
+                        email: Some("a@example.com".to_string()),
+                        last_refresh: None,
+                        start_url: None,
+                        region: None,
+                        status: KiroAccountStatus::Active,
+                        quota: crate::KiroQuotaCache::default(),
+                    },
+                )
+                .await
+                .expect("save a");
 
-            let high_expires_at = future_rfc3339(6);
-            let low_expires_at = future_rfc3339(6);
-            sqlx::query(
-                r#"
-INSERT INTO provider_accounts (
-  provider_kind,
-  account_id,
-  email,
-  expires_at,
-  expires_at_ms,
-  auth_method,
-  provider_name,
-  record_json,
-  updated_at_ms,
-  priority
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-"#,
-            )
-            .bind("kiro")
-            .bind("kiro-google-a-low.json")
-            .bind("low@example.com")
-            .bind(low_expires_at.as_str())
-            .bind(0_i64)
-            .bind("google")
-            .bind("kiro")
-            .bind(
-                json!({
-                    "access_token": "access-low",
-                    "refresh_token": "refresh-low",
-                    "profile_arn": "arn:aws:iam::123456789012:user/low",
-                    "expires_at": low_expires_at,
-                    "auth_method": "google",
-                    "provider": "kiro",
-                    "client_id": null,
-                    "client_secret": null,
-                    "email": "low@example.com",
-                    "last_refresh": null,
-                    "start_url": null,
-                    "region": null,
-                    "status": "active",
-                    "proxy_url": null,
-                    "priority": 1,
-                    "quota": {"plan_type": null, "quotas": [], "error": null, "checked_at": null}
-                })
-                .to_string(),
-            )
-            .bind(0_i64)
-            .bind(1_i64)
-            .execute(&pool)
-            .await
-            .expect("insert low priority account");
-
-            sqlx::query(
-                r#"
-INSERT INTO provider_accounts (
-  provider_kind,
-  account_id,
-  email,
-  expires_at,
-  expires_at_ms,
-  auth_method,
-  provider_name,
-  record_json,
-  updated_at_ms,
-  priority
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-"#,
-            )
-            .bind("kiro")
-            .bind("kiro-google-z-high.json")
-            .bind("high@example.com")
-            .bind(high_expires_at.as_str())
-            .bind(0_i64)
-            .bind("google")
-            .bind("kiro")
-            .bind(
-                json!({
-                    "access_token": "access-high",
-                    "refresh_token": "refresh-high",
-                    "profile_arn": "arn:aws:iam::123456789012:user/high",
-                    "expires_at": high_expires_at,
-                    "auth_method": "google",
-                    "provider": "kiro",
-                    "client_id": null,
-                    "client_secret": null,
-                    "email": "high@example.com",
-                    "last_refresh": null,
-                    "start_url": null,
-                    "region": null,
-                    "status": "active",
-                    "proxy_url": null,
-                    "priority": 9,
-                    "quota": {"plan_type": null, "quotas": [], "error": null, "checked_at": null}
-                })
-                .to_string(),
-            )
-            .bind(0_i64)
-            .bind(9_i64)
-            .execute(&pool)
-            .await
-            .expect("insert high priority account");
-
-            let accounts = store.list_accounts().await.expect("list accounts");
-            let ordered_ids = accounts
+            let ids = store
+                .list_accounts()
+                .await
+                .expect("list")
                 .into_iter()
                 .map(|item| item.account_id)
                 .collect::<Vec<_>>();
             assert_eq!(
-                ordered_ids,
-                vec![
-                    "kiro-google-z-high.json".to_string(),
-                    "kiro-google-a-low.json".to_string()
-                ]
+                ids,
+                vec!["kiro-a.json".to_string(), "kiro-z.json".to_string()]
             );
 
             let _ = std::fs::remove_dir_all(data_dir);
@@ -944,278 +1079,44 @@ INSERT INTO provider_accounts (
     }
 
     #[test]
-    fn set_proxy_url_updates_record_value() {
+    fn get_account_record_returns_unexpired_without_refresh() {
         run_async(async {
             let (store, data_dir) = create_test_store();
-            let saved = store
-                .save_new_account(KiroTokenRecord {
-                    access_token: "access-token".to_string(),
-                    refresh_token: "refresh-token".to_string(),
-                    profile_arn: Some("arn:aws:iam::123456789012:user/test".to_string()),
-                    expires_at: future_rfc3339(6),
-                    auth_method: "google".to_string(),
-                    provider: "kiro".to_string(),
-                    client_id: None,
-                    client_secret: None,
-                    email: Some("proxy-kiro@example.com".to_string()),
-                    last_refresh: None,
-                    start_url: None,
-                    region: None,
-                    status: KiroAccountStatus::Active,
-                    proxy_url: None,
-                    priority: 0,
-                    quota: crate::KiroQuotaCache::default(),
-                })
-                .await
-                .expect("save kiro account");
-
-            let updated = store
-                .set_proxy_url(&saved.account_id, Some("http://127.0.0.1:7890"))
-                .await
-                .expect("set proxy url should succeed");
-            assert_eq!(updated.proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
-
-            let record = store
-                .get_account_record(&saved.account_id)
-                .await
-                .expect("record should exist");
-            assert_eq!(record.proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
-
-            let cleared = store
-                .set_proxy_url(&saved.account_id, None::<&str>)
-                .await
-                .expect("clear proxy url should succeed");
-            assert_eq!(cleared.proxy_url, None);
-
-            let cleared_record = store
-                .get_account_record(&saved.account_id)
-                .await
-                .expect("record should exist");
-            assert_eq!(cleared_record.proxy_url, None);
-
-            let _ = std::fs::remove_dir_all(data_dir);
-        });
-    }
-
-    #[test]
-    fn set_enabled_updates_record_flag() {
-        run_async(async {
-            let (store, data_dir) = create_test_store();
-            let saved = store
-                .save_new_account(KiroTokenRecord {
-                    access_token: "access-token".to_string(),
-                    refresh_token: "refresh-token".to_string(),
-                    profile_arn: Some("arn:aws:iam::123456789012:user/test".to_string()),
-                    expires_at: future_rfc3339(6),
-                    auth_method: "google".to_string(),
-                    provider: "kiro".to_string(),
-                    client_id: None,
-                    client_secret: None,
-                    email: Some("enabled-kiro@example.com".to_string()),
-                    last_refresh: None,
-                    start_url: None,
-                    region: None,
-                    status: KiroAccountStatus::Active,
-                    proxy_url: None,
-                    priority: 0,
-                    quota: crate::KiroQuotaCache::default(),
-                })
-                .await
-                .expect("save kiro account");
-
-            let updated = store
-                .set_status(&saved.account_id, KiroAccountStatus::Disabled)
-                .await
-                .expect("set status should succeed");
-            assert!(matches!(updated.status, KiroAccountStatus::Disabled));
-
-            let record = store
-                .get_account_record(&saved.account_id)
-                .await
-                .expect("record should exist");
-            assert!(matches!(record.status, KiroAccountStatus::Disabled));
-
-            let _ = std::fs::remove_dir_all(data_dir);
-        });
-    }
-
-    #[test]
-    fn resolve_account_record_skips_disabled_accounts() {
-        run_async(async {
-            let (store, data_dir) = create_test_store();
+            // 未过期账户：读取路径不发起 refresh 网络。
             store
                 .save_record(
-                    "kiro-google-a.json".to_string(),
-                    KiroTokenRecord {
-                        access_token: "access-1".to_string(),
-                        refresh_token: "refresh-1".to_string(),
-                        profile_arn: Some("arn:aws:iam::123456789012:user/a".to_string()),
-                        expires_at: future_rfc3339(6),
-                        auth_method: "google".to_string(),
-                        provider: "kiro".to_string(),
-                        client_id: None,
-                        client_secret: None,
-                        email: Some("aaa@example.com".to_string()),
-                        last_refresh: None,
-                        start_url: None,
-                        region: None,
-                        status: KiroAccountStatus::Disabled,
-                        proxy_url: None,
-                        priority: 0,
-                        quota: crate::KiroQuotaCache::default(),
-                    },
-                )
-                .await
-                .expect("save first account");
-            store
-                .save_record(
-                    "kiro-google-b.json".to_string(),
-                    KiroTokenRecord {
-                        access_token: "access-2".to_string(),
-                        refresh_token: "refresh-2".to_string(),
-                        profile_arn: Some("arn:aws:iam::123456789012:user/b".to_string()),
-                        expires_at: future_rfc3339(6),
-                        auth_method: "google".to_string(),
-                        provider: "kiro".to_string(),
-                        client_id: None,
-                        client_secret: None,
-                        email: Some("zzz@example.com".to_string()),
-                        last_refresh: None,
-                        start_url: None,
-                        region: None,
-                        status: KiroAccountStatus::Active,
-                        proxy_url: None,
-                        priority: 0,
-                        quota: crate::KiroQuotaCache::default(),
-                    },
-                )
-                .await
-                .expect("save second account");
-
-            let (account_id, record) = store
-                .resolve_account_record(None)
-                .await
-                .expect("should resolve enabled account");
-
-            assert_eq!(account_id, "kiro-google-b.json");
-            assert!(record.is_schedulable());
-
-            let _ = std::fs::remove_dir_all(data_dir);
-        });
-    }
-
-    #[test]
-    fn get_account_record_does_not_refresh_disabled_expired_account() {
-        run_async(async {
-            let (store, data_dir) = create_test_store();
-            // 禁用 + 已过期：读取路径不得触发 refresh，status 必须保持 disabled。
-            store
-                .save_record(
-                    "kiro-builder-disabled.json".to_string(),
-                    KiroTokenRecord {
-                        access_token: "expired-access".to_string(),
-                        refresh_token: "refresh-token".to_string(),
-                        profile_arn: None,
-                        expires_at: past_rfc3339(2),
-                        auth_method: "builder-id".to_string(),
-                        provider: "AWS".to_string(),
-                        client_id: Some("client-id".to_string()),
-                        client_secret: Some("client-secret".to_string()),
-                        email: Some("disabled@example.com".to_string()),
-                        last_refresh: None,
-                        start_url: None,
-                        region: None,
-                        status: KiroAccountStatus::Disabled,
-                        proxy_url: Some("socks5://127.0.0.1:1080".to_string()),
-                        priority: 9,
-                        quota: crate::KiroQuotaCache::default(),
-                    },
-                )
-                .await
-                .expect("save disabled expired account");
-
-            let record = store
-                .get_account_record("kiro-builder-disabled.json")
-                .await
-                .expect("disabled account should still load");
-
-            assert!(matches!(record.status, KiroAccountStatus::Disabled));
-            assert!(!record.is_schedulable());
-            assert_eq!(record.access_token, "expired-access");
-            assert_eq!(record.proxy_url.as_deref(), Some("socks5://127.0.0.1:1080"));
-            assert_eq!(record.priority, 9);
-
-            let _ = std::fs::remove_dir_all(data_dir);
-        });
-    }
-
-    #[test]
-    fn resolve_account_record_skips_disabled_expired_builder_id_accounts() {
-        run_async(async {
-            let (store, data_dir) = create_test_store();
-            // 回归：禁用 builder-id 账号过期后仍不得进入调度，也不能被 refresh 复活成 Active。
-            store
-                .save_record(
-                    "kiro-builder-disabled.json".to_string(),
-                    KiroTokenRecord {
-                        access_token: "disabled-access".to_string(),
-                        refresh_token: "disabled-refresh".to_string(),
-                        profile_arn: None,
-                        expires_at: past_rfc3339(2),
-                        auth_method: "builder-id".to_string(),
-                        provider: "AWS".to_string(),
-                        client_id: Some("client-id".to_string()),
-                        client_secret: Some("client-secret".to_string()),
-                        email: Some("disabled@example.com".to_string()),
-                        last_refresh: None,
-                        start_url: None,
-                        region: None,
-                        status: KiroAccountStatus::Disabled,
-                        proxy_url: None,
-                        priority: 100,
-                        quota: crate::KiroQuotaCache::default(),
-                    },
-                )
-                .await
-                .expect("save disabled account");
-            store
-                .save_record(
-                    "kiro-active.json".to_string(),
+                    "kiro-builder-active.json".to_string(),
                     KiroTokenRecord {
                         access_token: "active-access".to_string(),
-                        refresh_token: "active-refresh".to_string(),
-                        profile_arn: Some("arn:aws:iam::123456789012:user/active".to_string()),
+                        refresh_token: "refresh-token".to_string(),
+                        profile_arn: None,
                         expires_at: future_rfc3339(6),
-                        auth_method: "google".to_string(),
-                        provider: "kiro".to_string(),
-                        client_id: None,
-                        client_secret: None,
+                        auth_method: "builder-id".to_string(),
+                        provider: "AWS".to_string(),
+                        client_id: Some("client-id".to_string()),
+                        client_secret: Some("client-secret".to_string()),
                         email: Some("active@example.com".to_string()),
                         last_refresh: None,
                         start_url: None,
                         region: None,
                         status: KiroAccountStatus::Active,
-                        proxy_url: None,
-                        priority: 1,
                         quota: crate::KiroQuotaCache::default(),
                     },
                 )
                 .await
                 .expect("save active account");
 
-            let (account_id, record) = store
-                .resolve_account_record(None)
+            let record = store
+                .get_account_record("kiro-builder-active.json")
                 .await
-                .expect("should resolve only active account");
-            assert_eq!(account_id, "kiro-active.json");
-            assert!(record.is_schedulable());
+                .expect("active account should load");
 
-            let disabled = store
-                .get_account_record("kiro-builder-disabled.json")
-                .await
-                .expect("disabled record should remain");
-            assert!(matches!(disabled.status, KiroAccountStatus::Disabled));
-            assert!(!disabled.is_schedulable());
+            assert!(matches!(
+                record.effective_status(),
+                KiroAccountStatus::Active
+            ));
+            assert!(record.is_usable());
+            assert_eq!(record.access_token, "active-access");
 
             let _ = std::fs::remove_dir_all(data_dir);
         });
@@ -1256,6 +1157,99 @@ INSERT INTO provider_accounts (
                 .expect("list accounts should only use sqlite");
             assert!(accounts.is_empty());
 
+            let _ = std::fs::remove_dir_all(data_dir);
+        });
+    }
+
+    /// 无 sleep：transaction 持 gate 期间并发 save 阻塞；release 后写入不被旧 snapshot 覆盖。
+    #[test]
+    fn provider_mutation_session_serializes_concurrent_save() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            store
+                .save_record(
+                    "kiro-txn-1".to_string(),
+                    KiroTokenRecord {
+                        access_token: "v1".to_string(),
+                        refresh_token: "r1".to_string(),
+                        profile_arn: None,
+                        expires_at: future_rfc3339(6),
+                        auth_method: "builder-id".to_string(),
+                        provider: "Google".to_string(),
+                        client_id: None,
+                        client_secret: None,
+                        email: Some("txn@example.com".to_string()),
+                        last_refresh: None,
+                        start_url: None,
+                        region: None,
+                        status: KiroAccountStatus::Active,
+                        quota: crate::KiroQuotaCache::default(),
+                    },
+                )
+                .await
+                .expect("seed");
+
+            let probe = store.install_provider_gate_probe();
+            let txn = store.begin_provider_mutation().await;
+            let snapshot = txn.snapshot_all_records().await.expect("snapshot");
+            assert_eq!(snapshot.len(), 1);
+
+            // 订阅后 spawn，确保 about_to_lock 不丢失。
+            let save_about_to_lock = probe.about_to_lock.notified();
+            let (done_tx, mut done_rx) = tokio::sync::oneshot::channel();
+            let store_save = &store;
+            // store 非 Clone：用路径上的并发 save 走同一引用需 spawn 作用域内完成。
+            // 这里用局部 async block + select 模拟：先 park 在 about_to_lock。
+            let save_fut = async {
+                let result = store
+                    .save_record(
+                        "kiro-txn-1".to_string(),
+                        KiroTokenRecord {
+                            access_token: "v2".to_string(),
+                            refresh_token: "r2".to_string(),
+                            profile_arn: None,
+                            expires_at: future_rfc3339(6),
+                            auth_method: "builder-id".to_string(),
+                            provider: "Google".to_string(),
+                            client_id: None,
+                            client_secret: None,
+                            email: Some("txn@example.com".to_string()),
+                            last_refresh: None,
+                            start_url: None,
+                            region: None,
+                            status: KiroAccountStatus::Active,
+                            quota: crate::KiroQuotaCache::default(),
+                        },
+                    )
+                    .await;
+                let _ = done_tx.send(result);
+            };
+            tokio::pin!(save_fut);
+
+            // 推进 save 至 about_to_lock；txn 仍持 gate。
+            tokio::select! {
+                _ = save_about_to_lock => {}
+                _ = &mut save_fut => panic!("save finished before blocking on gate"),
+            }
+            assert!(
+                done_rx.try_recv().is_err(),
+                "save must remain incomplete while transaction holds gate"
+            );
+
+            // 模拟 binding 失败 rollback（restore 旧 snapshot）。
+            txn.restore_all_records(snapshot).await.expect("restore");
+            drop(txn);
+
+            save_fut.await;
+            done_rx.await.expect("save result").expect("save ok");
+
+            let final_record = store
+                .snapshot_account_record("kiro-txn-1")
+                .await
+                .expect("snap")
+                .expect("exists");
+            assert_eq!(final_record.access_token, "v2");
+            let _ = store_save;
             let _ = std::fs::remove_dir_all(data_dir);
         });
     }

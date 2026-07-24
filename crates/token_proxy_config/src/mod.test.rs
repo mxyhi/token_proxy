@@ -4,6 +4,32 @@ use super::*;
 use std::collections::HashMap;
 use std::time::Duration;
 
+fn sample_upstream(
+    id: &str,
+    providers: &[&str],
+    base_url: &str,
+    credential: UpstreamCredential,
+) -> UpstreamConfig {
+    UpstreamConfig {
+        id: id.to_string(),
+        providers: providers.iter().map(|value| (*value).to_string()).collect(),
+        base_url: base_url.to_string(),
+        credential,
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        use_chat_completions_for_responses: false,
+        rewrite_developer_role_to_system: false,
+        preferred_endpoint: None,
+        proxy_url: None,
+        priority: Some(0),
+        enabled: true,
+        available_models: Vec::new(),
+        model_mappings: HashMap::new(),
+        convert_from_map: HashMap::new(),
+        overrides: None,
+    }
+}
+
 #[test]
 fn build_runtime_config_adds_new_default_hot_mapping_to_saved_overrides() {
     let mut config = ProxyConfigFile::default();
@@ -75,27 +101,14 @@ fn build_runtime_config_rejects_same_upstream_retry_count_above_max() {
 #[test]
 fn build_runtime_config_routes_openai_responses_via_chat_when_enabled() {
     let mut config = ProxyConfigFile::default();
-    config.upstreams = vec![UpstreamConfig {
-        id: "glm-coding-plan".to_string(),
-        providers: vec!["openai-response".to_string()],
-        base_url: "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
-        api_keys: vec!["test-key".to_string()],
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        use_chat_completions_for_responses: true,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        preferred_endpoint: None,
-        proxy_url: None,
-        priority: Some(0),
-        enabled: true,
-        available_models: Vec::new(),
-        model_mappings: HashMap::new(),
-        convert_from_map: HashMap::new(),
-        overrides: None,
-    }];
+    let mut upstream = sample_upstream(
+        "glm-coding-plan",
+        &["openai-response"],
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+        UpstreamCredential::api_keys(["test-key"]),
+    );
+    upstream.use_chat_completions_for_responses = true;
+    config.upstreams = vec![upstream];
 
     let runtime = build_runtime_config(config).expect("runtime config");
     assert!(runtime.provider_upstreams("openai-response").is_none());
@@ -116,27 +129,12 @@ fn build_runtime_config_routes_openai_responses_via_chat_when_enabled() {
 #[test]
 fn build_runtime_config_keeps_openai_responses_provider_when_chat_compat_disabled() {
     let mut config = ProxyConfigFile::default();
-    config.upstreams = vec![UpstreamConfig {
-        id: "glm-coding-plan".to_string(),
-        providers: vec!["openai-response".to_string()],
-        base_url: "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
-        api_keys: vec!["test-key".to_string()],
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        use_chat_completions_for_responses: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        preferred_endpoint: None,
-        proxy_url: None,
-        priority: Some(0),
-        enabled: true,
-        available_models: Vec::new(),
-        model_mappings: HashMap::new(),
-        convert_from_map: HashMap::new(),
-        overrides: None,
-    }];
+    config.upstreams = vec![sample_upstream(
+        "glm-coding-plan",
+        &["openai-response"],
+        "https://open.bigmodel.cn/api/coding/paas/v4",
+        UpstreamCredential::api_keys(["test-key"]),
+    )];
 
     let runtime = build_runtime_config(config).expect("runtime config");
     assert!(runtime.provider_upstreams("openai").is_none());
@@ -156,32 +154,19 @@ fn build_runtime_config_keeps_openai_responses_provider_when_chat_compat_disable
 #[test]
 fn build_runtime_config_normalizes_available_models() {
     let mut config = ProxyConfigFile::default();
-    config.upstreams = vec![UpstreamConfig {
-        id: "model-limited".to_string(),
-        providers: vec!["openai".to_string()],
-        base_url: "https://api.openai.com".to_string(),
-        api_keys: vec!["test-key".to_string()],
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        use_chat_completions_for_responses: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        preferred_endpoint: None,
-        proxy_url: None,
-        priority: Some(0),
-        enabled: true,
-        available_models: vec![
-            " gpt-5.4-mini ".to_string(),
-            String::new(),
-            "gpt-5.4".to_string(),
-            "gpt-5.4".to_string(),
-        ],
-        model_mappings: HashMap::new(),
-        convert_from_map: HashMap::new(),
-        overrides: None,
-    }];
+    let mut upstream = sample_upstream(
+        "model-limited",
+        &["openai"],
+        "https://api.openai.com",
+        UpstreamCredential::api_keys(["test-key"]),
+    );
+    upstream.available_models = vec![
+        " gpt-5.4-mini ".to_string(),
+        String::new(),
+        "gpt-5.4".to_string(),
+        "gpt-5.4".to_string(),
+    ];
+    config.upstreams = vec![upstream];
 
     let runtime = build_runtime_config(config).expect("runtime config");
     let item = runtime
@@ -199,27 +184,12 @@ fn build_runtime_config_normalizes_available_models() {
 #[test]
 fn build_runtime_config_codex_accepts_chat_and_responses_by_default() {
     let mut config = ProxyConfigFile::default();
-    config.upstreams = vec![UpstreamConfig {
-        id: "codex-account".to_string(),
-        providers: vec!["codex".to_string()],
-        base_url: String::new(),
-        api_keys: Vec::new(),
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        use_chat_completions_for_responses: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        preferred_endpoint: None,
-        proxy_url: None,
-        priority: Some(0),
-        enabled: true,
-        available_models: Vec::new(),
-        model_mappings: HashMap::new(),
-        convert_from_map: HashMap::new(),
-        overrides: None,
-    }];
+    config.upstreams = vec![sample_upstream(
+        "codex-account",
+        &["codex"],
+        "",
+        UpstreamCredential::account(AccountProvider::Codex, "codex-acc"),
+    )];
 
     let runtime = build_runtime_config(config).expect("runtime config");
     let codex = runtime
@@ -233,30 +203,16 @@ fn build_runtime_config_codex_accepts_chat_and_responses_by_default() {
 
     assert!(item.supports_inbound(InboundApiFormat::OpenaiChat));
     assert!(item.supports_inbound(InboundApiFormat::OpenaiResponses));
+    assert_eq!(item.codex_account_id.as_deref(), Some("codex-acc"));
 }
 
 fn xai_upstream(base_url: &str) -> UpstreamConfig {
-    UpstreamConfig {
-        id: "xai-default".to_string(),
-        providers: vec!["xai".to_string()],
-        base_url: base_url.to_string(),
-        api_keys: Vec::new(),
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        use_chat_completions_for_responses: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: Some("xai-user@example.com".to_string()),
-        preferred_endpoint: None,
-        proxy_url: None,
-        priority: Some(0),
-        enabled: true,
-        available_models: Vec::new(),
-        model_mappings: HashMap::new(),
-        convert_from_map: HashMap::new(),
-        overrides: None,
-    }
+    sample_upstream(
+        "xai-default",
+        &["xai"],
+        base_url,
+        UpstreamCredential::account(AccountProvider::Xai, "xai-user@example.com"),
+    )
 }
 
 #[test]
@@ -295,7 +251,7 @@ fn build_runtime_config_rejects_untrusted_xai_base_url() {
 fn build_runtime_config_rejects_api_key_for_xai_oauth_provider() {
     let mut config = ProxyConfigFile::default();
     let mut upstream = xai_upstream("");
-    upstream.api_keys = vec!["not-an-oauth-account".to_string()];
+    upstream.credential = UpstreamCredential::api_keys(["not-an-oauth-account"]);
     config.upstreams = vec![upstream];
 
     let error = build_runtime_config(config)
@@ -309,14 +265,15 @@ fn build_runtime_config_rejects_api_key_for_xai_oauth_provider() {
 fn build_runtime_config_rejects_foreign_account_binding_for_xai() {
     let mut config = ProxyConfigFile::default();
     let mut upstream = xai_upstream("");
-    upstream.codex_account_id = Some("codex-account".to_string());
+    // 旧版可同时写多个 *_account_id；新联合类型用 provider mismatch 表达同类冲突。
+    upstream.credential = UpstreamCredential::account(AccountProvider::Codex, "codex-account");
     config.upstreams = vec![upstream];
 
     let error = build_runtime_config(config)
         .err()
         .expect("foreign account binding must fail");
 
-    assert!(error.contains("only accepts xai_account_id"));
+    assert!(error.contains("codex_account_id requires provider codex"));
 }
 
 #[test]
@@ -331,6 +288,171 @@ fn build_runtime_config_rejects_xai_account_binding_for_other_provider() {
         .expect("xai binding on openai must fail");
 
     assert!(error.contains("xai_account_id requires provider xai"));
+}
+
+#[test]
+fn build_runtime_config_projects_kiro_account_credential() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![sample_upstream(
+        "kiro-bound",
+        &["kiro"],
+        "",
+        UpstreamCredential::account(AccountProvider::Kiro, "kiro-acc"),
+    )];
+
+    let runtime = build_runtime_config(config).expect("runtime config");
+    let item = runtime
+        .provider_upstreams("kiro")
+        .and_then(|upstreams| upstreams.groups.first())
+        .and_then(|group| group.items.first())
+        .expect("kiro runtime item");
+
+    assert_eq!(item.kiro_account_id.as_deref(), Some("kiro-acc"));
+    assert!(item.codex_account_id.is_none());
+    assert!(item.xai_account_id.is_none());
+    assert!(item.api_key.is_none());
+}
+
+#[test]
+fn build_runtime_config_projects_codex_account_credential() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![sample_upstream(
+        "codex-bound",
+        &["codex"],
+        "",
+        UpstreamCredential::account(AccountProvider::Codex, "codex-acc"),
+    )];
+
+    let runtime = build_runtime_config(config).expect("runtime config");
+    let item = runtime
+        .provider_upstreams("codex")
+        .and_then(|upstreams| upstreams.groups.first())
+        .and_then(|group| group.items.first())
+        .expect("codex runtime item");
+
+    assert_eq!(item.codex_account_id.as_deref(), Some("codex-acc"));
+    assert!(item.kiro_account_id.is_none());
+    assert!(item.xai_account_id.is_none());
+}
+
+#[test]
+fn build_runtime_config_passthrough_credential_has_no_api_key_or_account() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![sample_upstream(
+        "openai-pass",
+        &["openai"],
+        "https://api.openai.com",
+        UpstreamCredential::Passthrough,
+    )];
+
+    let runtime = build_runtime_config(config).expect("runtime config");
+    let item = runtime
+        .provider_upstreams("openai")
+        .and_then(|upstreams| upstreams.groups.first())
+        .and_then(|group| group.items.first())
+        .expect("openai runtime item");
+
+    assert!(item.api_key.is_none());
+    assert!(item.kiro_account_id.is_none());
+    assert!(item.codex_account_id.is_none());
+    assert!(item.xai_account_id.is_none());
+}
+
+#[test]
+fn build_runtime_config_rejects_duplicate_account_binding() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![
+        sample_upstream(
+            "kiro-a",
+            &["kiro"],
+            "",
+            UpstreamCredential::account(AccountProvider::Kiro, "same-acc"),
+        ),
+        sample_upstream(
+            "kiro-b",
+            &["kiro"],
+            "",
+            UpstreamCredential::account(AccountProvider::Kiro, "same-acc"),
+        ),
+    ];
+
+    let error = build_runtime_config(config)
+        .err()
+        .expect("duplicate account binding must fail");
+
+    // 错误须含安全标识，不得夹带 api key 等 secret。
+    assert!(error.contains("kiro"));
+    assert!(error.contains("same-acc"));
+    assert!(error.contains("kiro-a"));
+    assert!(error.contains("kiro-b"));
+    assert!(!error.contains("sk-"));
+}
+
+#[test]
+fn build_runtime_config_allows_same_account_id_across_different_providers() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![
+        sample_upstream(
+            "kiro-shared-id",
+            &["kiro"],
+            "",
+            UpstreamCredential::account(AccountProvider::Kiro, "shared"),
+        ),
+        sample_upstream(
+            "codex-shared-id",
+            &["codex"],
+            "",
+            UpstreamCredential::account(AccountProvider::Codex, "shared"),
+        ),
+    ];
+
+    build_runtime_config(config).expect("same account_id across providers is ok");
+}
+
+#[test]
+fn build_runtime_config_duplicate_account_binding_does_not_affect_api_key_or_passthrough() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![
+        sample_upstream(
+            "openai-key",
+            &["openai"],
+            "https://api.openai.com/v1",
+            UpstreamCredential::api_keys(["sk-test"]),
+        ),
+        sample_upstream(
+            "openai-pass",
+            &["openai"],
+            "https://api.openai.com/v1",
+            UpstreamCredential::Passthrough,
+        ),
+        sample_upstream(
+            "kiro-only",
+            &["kiro"],
+            "",
+            UpstreamCredential::account(AccountProvider::Kiro, "kiro-1"),
+        ),
+    ];
+
+    let runtime = build_runtime_config(config).expect("mixed upstreams ok");
+    assert!(runtime.provider_upstreams("openai").is_some());
+    assert!(runtime.provider_upstreams("kiro").is_some());
+}
+
+#[test]
+fn upstream_config_serialization_omits_legacy_flat_credential_fields() {
+    let upstream = sample_upstream(
+        "ser",
+        &["openai"],
+        "https://example.com",
+        UpstreamCredential::api_keys(["k1"]),
+    );
+    let value = serde_json::to_value(&upstream).expect("serialize");
+    let obj = value.as_object().expect("object");
+    assert!(obj.contains_key("credential"));
+    assert!(!obj.contains_key("api_keys"));
+    assert!(!obj.contains_key("kiro_account_id"));
+    assert!(!obj.contains_key("codex_account_id"));
+    assert!(!obj.contains_key("xai_account_id"));
 }
 
 #[test]
@@ -505,27 +627,12 @@ fn build_runtime_config_rejects_sync_response_timeout_that_overflows_instant() {
 #[test]
 fn build_runtime_config_expands_multiple_api_keys_into_multiple_runtime_upstreams() {
     let mut config = ProxyConfigFile::default();
-    config.upstreams = vec![UpstreamConfig {
-        id: "shared-openai".to_string(),
-        providers: vec!["openai".to_string()],
-        base_url: "https://api.openai.com".to_string(),
-        api_keys: vec!["key-a".to_string(), "key-b".to_string()],
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        use_chat_completions_for_responses: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        preferred_endpoint: None,
-        proxy_url: None,
-        priority: Some(0),
-        enabled: true,
-        available_models: Vec::new(),
-        model_mappings: HashMap::new(),
-        convert_from_map: HashMap::new(),
-        overrides: None,
-    }];
+    config.upstreams = vec![sample_upstream(
+        "shared-openai",
+        &["openai"],
+        "https://api.openai.com",
+        UpstreamCredential::api_keys(["key-a", "key-b"]),
+    )];
 
     let runtime = build_runtime_config(config).expect("runtime config");
     let openai = runtime
@@ -544,27 +651,12 @@ fn build_runtime_config_expands_multiple_api_keys_into_multiple_runtime_upstream
 #[test]
 fn build_runtime_config_rejects_api_key_that_cannot_be_precompiled_as_header() {
     let mut config = ProxyConfigFile::default();
-    config.upstreams = vec![UpstreamConfig {
-        id: "bad-openai".to_string(),
-        providers: vec!["openai".to_string()],
-        base_url: "https://api.openai.com".to_string(),
-        api_keys: vec!["bad\nkey".to_string()],
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        use_chat_completions_for_responses: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        preferred_endpoint: None,
-        proxy_url: None,
-        priority: Some(0),
-        enabled: true,
-        available_models: Vec::new(),
-        model_mappings: HashMap::new(),
-        convert_from_map: HashMap::new(),
-        overrides: None,
-    }];
+    config.upstreams = vec![sample_upstream(
+        "bad-openai",
+        &["openai"],
+        "https://api.openai.com",
+        UpstreamCredential::api_keys(["bad\nkey"]),
+    )];
 
     let result = build_runtime_config(config);
 
@@ -574,27 +666,12 @@ fn build_runtime_config_rejects_api_key_that_cannot_be_precompiled_as_header() {
 #[test]
 fn build_runtime_config_rejects_unsupported_provider() {
     let mut config = ProxyConfigFile::default();
-    config.upstreams = vec![UpstreamConfig {
-        id: "removed-provider".to_string(),
-        providers: vec!["legacy-provider".to_string()],
-        base_url: String::new(),
-        api_keys: Vec::new(),
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        use_chat_completions_for_responses: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        preferred_endpoint: None,
-        proxy_url: None,
-        priority: Some(0),
-        enabled: true,
-        available_models: Vec::new(),
-        model_mappings: HashMap::new(),
-        convert_from_map: HashMap::new(),
-        overrides: None,
-    }];
+    config.upstreams = vec![sample_upstream(
+        "removed-provider",
+        &["legacy-provider"],
+        "",
+        UpstreamCredential::Passthrough,
+    )];
 
     let result = build_runtime_config(config);
 
@@ -604,27 +681,13 @@ fn build_runtime_config_rejects_unsupported_provider() {
 #[test]
 fn build_runtime_config_rejects_multiple_api_keys_for_account_based_provider() {
     let mut config = ProxyConfigFile::default();
-    config.upstreams = vec![UpstreamConfig {
-        id: "codex-account".to_string(),
-        providers: vec!["codex".to_string()],
-        base_url: String::new(),
-        api_keys: vec!["key-a".to_string(), "key-b".to_string()],
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        use_chat_completions_for_responses: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: Some("codex-account.json".to_string()),
-        xai_account_id: None,
-        preferred_endpoint: None,
-        proxy_url: None,
-        priority: Some(0),
-        enabled: true,
-        available_models: Vec::new(),
-        model_mappings: HashMap::new(),
-        convert_from_map: HashMap::new(),
-        overrides: None,
-    }];
+    // 旧 fixture 同时写 api_keys + codex_account_id；新联合改为 api_keys 作用于账户型 provider。
+    config.upstreams = vec![sample_upstream(
+        "codex-account",
+        &["codex"],
+        "",
+        UpstreamCredential::api_keys(["key-a", "key-b"]),
+    )];
 
     let result = build_runtime_config(config);
 
@@ -632,54 +695,49 @@ fn build_runtime_config_rejects_multiple_api_keys_for_account_based_provider() {
 }
 
 #[test]
-fn build_runtime_config_allows_account_based_provider_without_binding_account_id() {
+fn build_runtime_config_rejects_passthrough_for_kiro() {
     let mut config = ProxyConfigFile::default();
-    config.upstreams = vec![
-        UpstreamConfig {
-            id: "kiro-default".to_string(),
-            providers: vec!["kiro".to_string()],
-            base_url: String::new(),
-            api_keys: Vec::new(),
-            filter_prompt_cache_retention: false,
-            filter_safety_identifier: false,
-            use_chat_completions_for_responses: false,
-            rewrite_developer_role_to_system: false,
-            kiro_account_id: None,
-            codex_account_id: None,
-            xai_account_id: None,
-            preferred_endpoint: None,
-            proxy_url: None,
-            priority: Some(0),
-            enabled: true,
-            available_models: Vec::new(),
-            model_mappings: HashMap::new(),
-            convert_from_map: HashMap::new(),
-            overrides: None,
-        },
-        UpstreamConfig {
-            id: "codex-default".to_string(),
-            providers: vec!["codex".to_string()],
-            base_url: String::new(),
-            api_keys: Vec::new(),
-            filter_prompt_cache_retention: false,
-            filter_safety_identifier: false,
-            use_chat_completions_for_responses: false,
-            rewrite_developer_role_to_system: false,
-            kiro_account_id: None,
-            codex_account_id: None,
-            xai_account_id: None,
-            preferred_endpoint: None,
-            proxy_url: None,
-            priority: Some(0),
-            enabled: true,
-            available_models: Vec::new(),
-            model_mappings: HashMap::new(),
-            convert_from_map: HashMap::new(),
-            overrides: None,
-        },
-    ];
+    config.upstreams = vec![sample_upstream(
+        "kiro-default",
+        &["kiro"],
+        "",
+        UpstreamCredential::Passthrough,
+    )];
 
-    let result = build_runtime_config(config);
+    let error = build_runtime_config(config)
+        .err()
+        .expect("kiro passthrough must fail");
+    assert!(error.contains("account-based providers require account credential"));
+}
 
-    assert!(result.is_ok());
+#[test]
+fn build_runtime_config_rejects_passthrough_for_codex() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![sample_upstream(
+        "codex-default",
+        &["codex"],
+        "",
+        UpstreamCredential::Passthrough,
+    )];
+
+    let error = build_runtime_config(config)
+        .err()
+        .expect("codex passthrough must fail");
+    assert!(error.contains("account-based providers require account credential"));
+}
+
+#[test]
+fn build_runtime_config_rejects_passthrough_for_xai() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![sample_upstream(
+        "xai-default",
+        &["xai"],
+        "",
+        UpstreamCredential::Passthrough,
+    )];
+
+    let error = build_runtime_config(config)
+        .err()
+        .expect("xai passthrough must fail");
+    assert!(error.contains("account-based providers require account credential"));
 }

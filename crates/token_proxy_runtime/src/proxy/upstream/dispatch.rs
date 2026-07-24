@@ -3,7 +3,7 @@ use axum::{
     response::Response,
 };
 use futures_util::stream::{FuturesUnordered, StreamExt};
-use std::{future::Future, pin::Pin, time::Duration};
+use std::{collections::HashSet, future::Future, pin::Pin, time::Duration};
 
 use super::super::{
     config::{InboundApiFormat, ProviderUpstreams, UpstreamDispatchRuntime, UpstreamRuntime},
@@ -22,6 +22,8 @@ use super::{
 pub(super) struct GroupAttemptResult {
     pub(super) response: Option<Response>,
     pub(super) attempted: usize,
+    /// 本组实际尝试过的不同 runtime Upstream（selector_key 去重；同 upstream 原地重试只算一次）。
+    pub(super) attempted_upstream_keys: HashSet<String>,
     pub(super) missing_auth: bool,
     pub(super) last_timeout_error: Option<String>,
     pub(super) last_retry_error: Option<String>,
@@ -36,6 +38,7 @@ impl GroupAttemptResult {
         Self {
             response: None,
             attempted: 0,
+            attempted_upstream_keys: HashSet::new(),
             missing_auth: false,
             last_timeout_error: None,
             last_retry_error: None,
@@ -49,6 +52,8 @@ impl GroupAttemptResult {
 pub(super) struct ForwardAttemptState {
     pub(super) response: Option<Response>,
     pub(super) attempted: usize,
+    /// 跨 priority group 累计的实际尝试过的不同 runtime Upstream（selector_key）。
+    pub(super) attempted_upstream_keys: HashSet<String>,
     pub(super) missing_auth: bool,
     pub(super) last_timeout_error: Option<String>,
     pub(super) last_retry_error: Option<String>,
@@ -63,6 +68,7 @@ impl ForwardAttemptState {
         Self {
             response: None,
             attempted: 0,
+            attempted_upstream_keys: HashSet::new(),
             missing_auth: false,
             last_timeout_error: None,
             last_retry_error: None,
@@ -188,6 +194,10 @@ fn apply_attempt_outcome(result: &mut GroupAttemptResult, outcome: AttemptOutcom
 
 fn merge_group_result(state: &mut ForwardAttemptState, result: GroupAttemptResult) -> bool {
     state.attempted += result.attempted;
+    // 跨 priority group 并入 distinct runtime Upstream，供 finalize 判断是否 mask 401/403。
+    state
+        .attempted_upstream_keys
+        .extend(result.attempted_upstream_keys);
     state.missing_auth |= result.missing_auth;
     if let Some(response) = result.response {
         state.response = Some(response);
@@ -426,8 +436,20 @@ fn apply_group_attempt_outcome(
         }
         _ => {}
     }
+    // 仅真实 attempt 计数并记入去重集合；SkippedAuth 不算。
+    // 同 selector_key 的 same-upstream retry / 内部 recovery 不膨胀 distinct 数。
     if !matches!(outcome, AttemptOutcome::SkippedAuth) {
         result.attempted += 1;
+        let key = upstream.selector_key.as_str();
+        if result.attempted_upstream_keys.insert(key.to_string()) {
+            tracing::debug!(
+                provider,
+                upstream = %upstream.id,
+                selector_key = %key,
+                distinct = result.attempted_upstream_keys.len(),
+                "recorded distinct attempted runtime upstream"
+            );
+        }
     }
     // 在 move outcome 前抽出 deferred，绑定当前 upstream。
     let deferred = match &outcome {
@@ -634,6 +656,34 @@ async fn dispatch_group_upstreams(
 
 /// 对当前完成结果记账；若为 Retryable 且未达上限，则同步原地再试。
 /// 返回 true 表示已得到终态响应（Success/Fatal），调用方应立即返回。
+/// Same-Upstream Retry 固定 account_id：清掉该 pin 上刚写入的 cooldown，避免原地重试被 prepare 短路。
+fn clear_pinned_account_cooldown_before_same_upstream_retry(
+    state: &ProxyState,
+    provider: &str,
+    upstream: &UpstreamRuntime,
+    cooldown_scope: &CooldownScope,
+) {
+    let account_id = match provider {
+        "codex" => upstream.codex_account_id.as_deref(),
+        "xai" => upstream.xai_account_id.as_deref(),
+        "kiro" => upstream.kiro_account_id.as_deref(),
+        _ => None,
+    };
+    let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if state
+        .account_selector
+        .clear_cooldown_scoped(provider, account_id, cooldown_scope)
+    {
+        tracing::debug!(
+            provider,
+            account_id,
+            "cleared pinned account cooldown before same-upstream retry"
+        );
+    }
+}
+
 async fn apply_same_upstream_retries(
     state: &ProxyState,
     method: &Method,
@@ -687,6 +737,14 @@ async fn apply_same_upstream_retries(
             attempt = used,
             max = max_retries,
             "retrying same upstream before upstream failover"
+        );
+        // 失败 attempt 可能刚写入 account cooldown；same-upstream 仍钉死同一 account_id，
+        // 必须清掉该 pin 的冷却，否则 prepare 会 503 短路、实际请求数永远只有 1。
+        clear_pinned_account_cooldown_before_same_upstream_retry(
+            state,
+            provider,
+            upstream,
+            cooldown_scope,
         );
         // 原地重试前：已 rotate 过的毒连接由 transport 内层处理；此处再清一次 H2 槽，
         // 覆盖 dispatch 层 capacity/HTTP 类 Retryable 之外的同连接复用风险。

@@ -74,6 +74,7 @@ type AppViewProps = {
   ) => void;
   onSave: () => void;
   onReload: () => void;
+  /** 账户登录/导入成功后刷新配置（account_upstreams reconcile）。 */
   onProxyServiceRefresh: () => void;
   onProxyServiceStart: () => void;
   onProxyServiceStop: () => void;
@@ -259,6 +260,7 @@ function ConfigSectionBody({
             onAdd={props.onAddUpstream}
             onRemove={props.onRemoveUpstream}
             onChange={props.onChangeUpstream}
+            onConfigReload={props.onReload}
           />
         </div>
       );

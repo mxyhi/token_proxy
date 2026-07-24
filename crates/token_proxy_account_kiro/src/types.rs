@@ -21,16 +21,22 @@ pub struct KiroQuotaCache {
     pub checked_at: Option<String>,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+/// 账户认证健康状态（只读投影）。
+/// 调度 enabled/priority/proxy 只属于 Upstream；此处不承载人工 disabled。
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum KiroAccountStatus {
     Active,
-    Disabled,
     Expired,
 }
 
-fn default_account_priority() -> i32 {
-    0
+impl KiroAccountStatus {
+    pub fn as_label(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Expired => "expired",
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -49,10 +55,6 @@ pub struct KiroTokenRecord {
     pub region: Option<String>,
     #[serde(default = "default_account_status")]
     pub status: KiroAccountStatus,
-    #[serde(default)]
-    pub proxy_url: Option<String>,
-    #[serde(default = "default_account_priority")]
-    pub priority: i32,
     #[serde(default)]
     pub quota: KiroQuotaCache,
 }
@@ -73,10 +75,8 @@ impl KiroTokenRecord {
         OffsetDateTime::now_utc() >= expires_at
     }
 
+    /// 健康状态只反映 token 是否过期；不参与跨账户选号。
     pub fn effective_status(&self) -> KiroAccountStatus {
-        if self.status == KiroAccountStatus::Disabled {
-            return KiroAccountStatus::Disabled;
-        }
         if self.is_expired() {
             KiroAccountStatus::Expired
         } else {
@@ -84,7 +84,7 @@ impl KiroTokenRecord {
         }
     }
 
-    pub fn is_schedulable(&self) -> bool {
+    pub fn is_usable(&self) -> bool {
         matches!(self.effective_status(), KiroAccountStatus::Active)
     }
 }
@@ -97,8 +97,6 @@ pub struct KiroAccountSummary {
     pub email: Option<String>,
     pub expires_at: Option<String>,
     pub status: KiroAccountStatus,
-    pub proxy_url: Option<String>,
-    pub priority: i32,
 }
 
 fn default_account_status() -> KiroAccountStatus {
@@ -128,7 +126,7 @@ impl std::str::FromStr for KiroLoginMethod {
     }
 }
 
-#[derive(Clone, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum KiroLoginStatus {
     Waiting,

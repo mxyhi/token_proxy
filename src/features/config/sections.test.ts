@@ -9,13 +9,13 @@ describe("config/sections", () => {
   it("parses section id from config pathname", () => {
     expect(getSectionIdFromPathname("/config/upstreams")).toBe("upstreams");
     expect(getSectionIdFromPathname("/config/pricing")).toBe("pricing");
-    expect(getSectionIdFromPathname("/config/providers")).toBe("providers");
     expect(getSectionIdFromPathname("/config/settings/")).toBe("settings");
   });
 
-  it("falls back to default section for invalid pathname", () => {
+  it("falls back to default section for invalid pathname including removed providers", () => {
     expect(getSectionIdFromPathname("/config")).toBe(DEFAULT_CONFIG_SECTION);
     expect(getSectionIdFromPathname("/config/unknown")).toBe(DEFAULT_CONFIG_SECTION);
+    expect(getSectionIdFromPathname("/config/providers")).toBe(DEFAULT_CONFIG_SECTION);
     expect(getSectionIdFromPathname("/other")).toBe(DEFAULT_CONFIG_SECTION);
   });
 });

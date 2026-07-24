@@ -1,55 +1,52 @@
 use super::*;
-use crate::proxy::response::{NonRetryableSemanticResponse, RetryableStreamResponse};
+use token_proxy_config::UpstreamRuntime;
 
-#[test]
-fn xai_failover_uses_stream_marker_semantic_status() {
-    for status in [StatusCode::UNAUTHORIZED, StatusCode::TOO_MANY_REQUESTS] {
-        let mut response = http::error_response(StatusCode::OK, "embedded stream failure");
-        response.extensions_mut().insert(RetryableStreamResponse {
-            status,
-            message: "embedded stream failure".to_string(),
-            should_cooldown: true,
-        });
-        let outcome = AttemptOutcome::Retryable {
-            message: "embedded stream failure".to_string(),
-            response: Some(response),
-            is_timeout: false,
-            should_cooldown: true,
-            deferred_log: None,
-        };
-
-        assert!(should_failover_account_outcome("xai", &outcome));
+fn sample_upstream(codex_account_id: Option<&str>) -> UpstreamRuntime {
+    UpstreamRuntime {
+        id: "codex-u".to_string(),
+        selector_key: "codex-u".to_string(),
+        base_url: "https://example.com".to_string(),
+        api_key: None,
+        api_key_headers: None,
+        filter_prompt_cache_retention: false,
+        filter_safety_identifier: false,
+        rewrite_developer_role_to_system: false,
+        kiro_account_id: None,
+        codex_account_id: codex_account_id.map(str::to_string),
+        xai_account_id: None,
+        kiro_preferred_endpoint: None,
+        proxy_url: None,
+        priority: 0,
+        available_models: Vec::new(),
+        advertised_model_ids: Vec::new(),
+        model_mappings: None,
+        header_overrides: None,
+        allowed_inbound_formats: Default::default(),
     }
 }
 
 #[test]
-fn xai_does_not_failover_for_non_retryable_stream_semantic_status() {
-    let mut response = http::error_response(StatusCode::OK, "bad request");
-    response.extensions_mut().insert(RetryableStreamResponse {
-        status: StatusCode::BAD_REQUEST,
-        message: "bad request".to_string(),
-        should_cooldown: false,
-    });
-    let outcome = AttemptOutcome::Retryable {
-        message: "bad request".to_string(),
-        response: Some(response),
-        is_timeout: false,
-        should_cooldown: false,
-        deferred_log: None,
-    };
-
-    assert!(!should_failover_account_outcome("xai", &outcome));
+fn pin_account_if_missing_fills_empty_codex_slot() {
+    // Same-Upstream Retry 必须钉住当前 account_id，禁止换号。
+    let mut upstream = sample_upstream(None);
+    pin_account_if_missing("codex", &mut upstream, Some("codex-a.json"));
+    assert_eq!(upstream.codex_account_id.as_deref(), Some("codex-a.json"));
 }
 
 #[test]
-fn xai_does_not_failover_for_request_scoped_content_policy_rejection() {
-    let mut response = http::error_response(StatusCode::FORBIDDEN, "content policy rejection");
-    response
-        .extensions_mut()
-        .insert(NonRetryableSemanticResponse);
+fn pin_account_if_missing_keeps_existing_binding() {
+    // 已固定的 credential account_id 不可被运行时覆盖。
+    let mut upstream = sample_upstream(Some("codex-fixed.json"));
+    pin_account_if_missing("codex", &mut upstream, Some("codex-other.json"));
+    assert_eq!(
+        upstream.codex_account_id.as_deref(),
+        Some("codex-fixed.json")
+    );
+}
 
-    assert!(!should_failover_account_outcome(
-        "xai",
-        &AttemptOutcome::Success(response)
-    ));
+#[test]
+fn pin_account_if_missing_ignores_blank_candidate() {
+    let mut upstream = sample_upstream(None);
+    pin_account_if_missing("codex", &mut upstream, Some("  "));
+    assert!(upstream.codex_account_id.is_none());
 }

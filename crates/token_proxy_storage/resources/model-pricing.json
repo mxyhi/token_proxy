@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "version": "catalog.e316ebf5.3a0ca530",
+  "version": "catalog.6c9b84cc.139de8a9",
   "source": {
     "url": "https://github.com/Wei-Shaw/sub2api/blob/main/backend/resources/model-pricing/model_prices_and_context_window.json",
-    "commit": "e316ebf52838a89d57fc790981cce7520f819ac8",
-    "sha256": "3a0ca5300799607e5a7938f2670bedd8dfc861ec3659b0a6dd6662a361d089fc",
-    "commitTime": "2026-07-10T22:09:25+08:00"
+    "commit": "6c9b84cc7aaddd8e1490f8c4c194c650134aaeb5",
+    "sha256": "139de8a906ce61dc3f086ed394cd01b6c2110341054d7576dce4c4775f358569",
+    "commitTime": "2026-07-25T11:22:42+08:00"
   },
   "models": [
     {
@@ -374,6 +374,26 @@
         "cacheWriteNanoUsdPerToken": 3750,
         "cacheWrite5mNanoUsdPerToken": 3750,
         "cacheWrite1hNanoUsdPerToken": 6000,
+        "imageInputNanoUsdPerToken": null,
+        "imageOutputNanoUsdPerToken": null
+      },
+      "serviceTierProfiles": {},
+      "longContext": null
+    },
+    {
+      "modelId": "claude-opus-5",
+      "sourceModelId": "claude-opus-5",
+      "aliases": [
+        "anthropic/claude-opus-5"
+      ],
+      "priceMultiplierScaled": 1000000000000,
+      "standard": {
+        "inputNanoUsdPerToken": 5000,
+        "outputNanoUsdPerToken": 25000,
+        "cacheReadNanoUsdPerToken": 500,
+        "cacheWriteNanoUsdPerToken": 6250,
+        "cacheWrite5mNanoUsdPerToken": 6250,
+        "cacheWrite1hNanoUsdPerToken": 10000,
         "imageInputNanoUsdPerToken": null,
         "imageOutputNanoUsdPerToken": null
       },

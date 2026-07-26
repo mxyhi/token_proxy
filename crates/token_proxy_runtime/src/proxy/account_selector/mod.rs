@@ -155,7 +155,8 @@ impl AccountSelectorRuntime {
             };
             return Some(until);
         }
-        if status == StatusCode::UNAUTHORIZED
+        if status == StatusCode::PAYMENT_REQUIRED
+            || status == StatusCode::UNAUTHORIZED
             || status == StatusCode::FORBIDDEN
             || status == StatusCode::REQUEST_TIMEOUT
             || status.is_server_error()

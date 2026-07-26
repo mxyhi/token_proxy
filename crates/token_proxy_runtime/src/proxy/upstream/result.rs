@@ -32,9 +32,11 @@ pub(crate) struct ForwardUpstreamResult {
 pub(super) fn should_cooldown_retryable_status(status: StatusCode) -> bool {
     // cooldown 只用于“更像上游账号/节点短时异常”的错误，避免把请求内容问题扩散到后续请求。
     // 因此 400/404/422/307 虽然可在当前请求内换路重试，但不会跨请求冷却整个 upstream。
+    // 402 表示账户计费/订阅不可用，属于账户访问失败，需要冷却后再选择其它账户。
     matches!(
         status,
-        StatusCode::UNAUTHORIZED
+        StatusCode::PAYMENT_REQUIRED
+            | StatusCode::UNAUTHORIZED
             | StatusCode::FORBIDDEN
             | StatusCode::REQUEST_TIMEOUT
             | StatusCode::TOO_MANY_REQUESTS
@@ -45,7 +47,7 @@ pub(super) fn should_cooldown_retryable_status(status: StatusCode) -> bool {
 ///
 /// 规则：
 /// - `413 Payload Too Large`：全局 NextOnly（body 过大，原地重放无意义）。
-/// - `400/401/403/404/422`：仅固定账户 credential（`account_id` 非空，且 provider 为
+/// - `400/401/402/403/404/422`：仅固定账户 credential（`account_id` 非空，且 provider 为
 ///   codex/xai；Kiro 走 `kiro_result` 自管 NextOnly）时 NextOnly。
 /// - 普通 API-key upstream：保持缺省 SameThenNext，保留 `same_upstream_retry_count`。
 /// - transport / 超时 / 5xx / 429 / prelude：仍走缺省 SameThenNext。
@@ -60,6 +62,7 @@ pub(super) fn is_next_only_retryable_status(
     let account_semantic = matches!(
         status,
         StatusCode::BAD_REQUEST
+            | StatusCode::PAYMENT_REQUIRED
             | StatusCode::UNAUTHORIZED
             | StatusCode::FORBIDDEN
             | StatusCode::NOT_FOUND

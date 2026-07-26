@@ -33,6 +33,10 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
         Some(&"claude-opus-4-7".to_string())
     );
     assert_eq!(
+        mappings.get("anthropic/claude-opus-5"),
+        Some(&"claude-opus-5".to_string())
+    );
+    assert_eq!(
         mappings.get("anthropic/claude-sonnet-5"),
         Some(&"claude-sonnet-5".to_string())
     );

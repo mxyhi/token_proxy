@@ -87,3 +87,19 @@ fn clear_provider_scope_restores_scoped_accounts() {
     assert!(!selector.is_cooling_down_scoped("codex", "a", &scope));
     assert!(!selector.is_cooling_down_scoped("codex", "b", &scope));
 }
+
+#[test]
+fn payment_required_cools_account_for_later_requests() {
+    let selector = AccountSelectorRuntime::new_with_cooldown(Duration::from_secs(15));
+
+    let marked = selector.mark_response_status_scoped(
+        "xai",
+        "xai-a",
+        StatusCode::PAYMENT_REQUIRED,
+        &HeaderMap::new(),
+        &CooldownScope::Global,
+    );
+
+    assert!(marked.is_some());
+    assert!(selector.is_cooling_down_scoped("xai", "xai-a", &CooldownScope::Global));
+}

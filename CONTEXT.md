@@ -104,6 +104,10 @@ _Avoid_: 账号访问失败、未知 403
 由账号 suspension、disabled 或 subscription/entitlement 缺失导致的访问拒绝；它属于账号身份，可参与账号 failover 和 cooldown。
 _Avoid_: 请求级内容策略拒绝
 
+**Payment Required Account Failure（账户付费要求失败）**:
+账户型上游返回 HTTP 402，表示当前账户的订阅、余额或付费资格不可用；它属于账号访问失败，跳过原地重试，参与跨上游 failover 和 cooldown。
+_Avoid_: 客户端付费要求、普通请求校验失败、Same-Upstream Retry
+
 **Unknown Forbidden（未知 403）**:
 缺少足够结构化证据来判断作用域的 403；保持账号级失败语义，避免把真实账号封禁误判为单请求拒绝。
 _Avoid_: 含糊的 Policy Violation
@@ -115,6 +119,10 @@ _Avoid_: Agent Identity、Codex API Key
 **Codex Agent Identity Account（Codex Agent Identity 账户）**:
 从官方 Codex `auth.json` 导入的独立凭据类型，持久化 runtime ID、PKCS#8 Ed25519 私钥与 task binding，不持久化或伪造 OAuth token，也没有 token 到期/自动刷新语义。
 _Avoid_: OAuth 登录开关、access token 别名、应用内生成身份
+
+**Codex Alpha Search（Codex Alpha 搜索）**:
+Codex 账户提供的原生搜索能力；入站 `/v1/alpha/search` 只能路由到 Codex，并保持请求、响应和查询参数的原生合同。
+_Avoid_: OpenAI-compatible 搜索、formatless fallback、Responses 格式转换
 
 **AgentAssertion（Agent Assertion）**:
 每次 Codex 请求根据 runtime ID、当前 task ID 和 UTC 时间动态签名生成的 `Authorization` 值；断言本身不得写入日志或持久化。

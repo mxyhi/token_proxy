@@ -596,6 +596,111 @@ async fn filter_safety_identifier_is_noop_when_disabled() {
 }
 
 #[tokio::test]
+async fn sanitizes_native_openai_responses_input_metadata() {
+    let upstream = test_upstream(false, false, false);
+    let meta = xai_meta("gpt-5.6-sol", false);
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{
+            "model":"gpt-5.6-sol",
+            "large":9007199254740993,
+            "tools":[{"type":"namespace","name":"team","namespace":"keep-tool"}],
+            "input":[
+                {"type":"message","id":"item_message","namespace":"remove-message","role":"user","content":[{"type":"input_text","text":"hi","namespace":"keep-content"}]},
+                {"type":"function_call","id":"item_call","namespace":"remove-call","call_id":"call_1","name":"exec","arguments":"{}"},
+                {"type":"custom_tool_call","id":"fc_valid","namespace":"remove-custom","call_id":"call_2","name":"shell","input":"pwd"},
+                {"type":"function_call_output","id":"item_output","namespace":"remove-output","call_id":"call_1","output":"ok"},
+                {"type":"reasoning","id":"rs_valid","namespace":"remove-reasoning","summary":[]}
+            ]
+        }"#,
+    ));
+
+    let rewritten = match build_json_transformed_body(
+        "openai-response",
+        &upstream,
+        "/v1/responses",
+        &body,
+        &meta,
+        None,
+    )
+    .await
+    {
+        Ok(Some(rewritten)) => rewritten,
+        Ok(None) => panic!("request should change"),
+        Err(_) => panic!("sanitize request should succeed"),
+    };
+    let bytes = rewritten
+        .read_bytes_if_small(4096)
+        .await
+        .expect("read sanitized body")
+        .expect("sanitized bytes");
+    let value: Value = serde_json::from_slice(&bytes).expect("sanitized json");
+
+    assert!(value["input"][0].get("id").is_none());
+    assert!(value["input"][1].get("id").is_none());
+    assert_eq!(value["input"][2]["id"], "fc_valid");
+    assert_eq!(value["input"][3]["id"], "item_output");
+    assert_eq!(value["input"][4]["id"], "rs_valid");
+    for item in value["input"].as_array().expect("input array") {
+        assert!(item.get("namespace").is_none());
+    }
+    assert_eq!(value["input"][0]["content"][0]["namespace"], "keep-content");
+    assert_eq!(value["tools"][0]["namespace"], "keep-tool");
+    assert_eq!(value["large"], 9_007_199_254_740_993_u64);
+}
+
+#[tokio::test]
+async fn native_openai_responses_sanitizer_ignores_other_paths() {
+    let upstream = test_upstream(false, false, false);
+    let meta = xai_meta("gpt-5.6-sol", false);
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"gpt-5.6-sol","input":[{"type":"message","id":"item_message","namespace":"keep"}]}"#,
+    ));
+
+    let rewritten = match build_json_transformed_body(
+        "openai-response",
+        &upstream,
+        "/v1/responses/compact",
+        &body,
+        &meta,
+        None,
+    )
+    .await
+    {
+        Ok(rewritten) => rewritten,
+        Err(_) => panic!("inspect request should succeed"),
+    };
+
+    assert!(rewritten.is_none());
+}
+
+#[tokio::test]
+async fn sanitizes_openai_provider_native_responses_input_metadata() {
+    let upstream = test_upstream(false, false, false);
+    let meta = xai_meta("gpt-5.6-sol", false);
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"gpt-5.6-sol","input":[{"type":"message","id":42,"namespace":"remove"}]}"#,
+    ));
+
+    let rewritten =
+        match build_json_transformed_body("openai", &upstream, "/v1/responses", &body, &meta, None)
+            .await
+        {
+            Ok(Some(rewritten)) => rewritten,
+            Ok(None) => panic!("request should change"),
+            Err(_) => panic!("sanitize request should succeed"),
+        };
+    let bytes = rewritten
+        .read_bytes_if_small(4096)
+        .await
+        .expect("read sanitized body")
+        .expect("sanitized bytes");
+    let value: Value = serde_json::from_slice(&bytes).expect("sanitized json");
+
+    assert!(value["input"][0].get("id").is_none());
+    assert!(value["input"][0].get("namespace").is_none());
+}
+
+#[tokio::test]
 async fn rewrites_developer_role_to_system_for_chat_upstream() {
     let upstream = test_upstream(false, false, true);
     let body = ReplayableBody::from_bytes(Bytes::from_static(

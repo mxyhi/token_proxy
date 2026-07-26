@@ -980,9 +980,35 @@ mod tests {
     #[test]
     fn bundled_catalog_uses_latest_upstream_snapshot() {
         let settings = default_model_pricing_settings();
-        assert_eq!(settings.version, "catalog.e316ebf5.3a0ca530");
+        assert_eq!(settings.version, "catalog.6c9b84cc.139de8a9");
         let source = settings.source.expect("catalog source");
-        assert_eq!(source.commit, "e316ebf52838a89d57fc790981cce7520f819ac8");
+        assert_eq!(source.commit, "6c9b84cc7aaddd8e1490f8c4c194c650134aaeb5");
+    }
+
+    #[test]
+    fn claude_opus_5_aliases_use_current_standard_and_cache_prices() {
+        let settings = default_model_pricing_settings();
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            cache_write_5m_tokens: 1,
+            cache_write_1h_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        for model in ["claude-opus-5", "anthropic/claude-opus-5"] {
+            let cost = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                .expect("claude opus 5 price");
+
+            assert_eq!(cost.pricing_model, "claude-opus-5");
+            assert_eq!(cost.breakdown.uncached_input_nano_usd, 5_000);
+            assert_eq!(cost.breakdown.cache_read_nano_usd, 500);
+            assert_eq!(cost.breakdown.cache_write_5m_nano_usd, 6_250);
+            assert_eq!(cost.breakdown.cache_write_1h_nano_usd, 10_000);
+            assert_eq!(cost.breakdown.output_nano_usd, 25_000);
+            assert_eq!(cost.cost_nano_usd, 46_750);
+        }
     }
 
     #[test]

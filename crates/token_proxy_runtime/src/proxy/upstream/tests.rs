@@ -6,6 +6,7 @@ use super::*;
 #[test]
 fn retryable_status_matches_proxy_policy() {
     assert!(is_retryable_status(StatusCode::BAD_REQUEST));
+    assert!(is_retryable_status(StatusCode::PAYMENT_REQUIRED));
     assert!(is_retryable_status(StatusCode::FORBIDDEN));
     assert!(is_retryable_status(StatusCode::TOO_MANY_REQUESTS));
     assert!(is_retryable_status(StatusCode::TEMPORARY_REDIRECT));
@@ -26,6 +27,9 @@ fn cooldown_status_matches_proxy_policy() {
     assert!(result::should_cooldown_retryable_status(
         StatusCode::FORBIDDEN
     ));
+    assert!(result::should_cooldown_retryable_status(
+        StatusCode::PAYMENT_REQUIRED
+    ));
     // 413 全局 NextOnly。
     assert!(result::is_next_only_retryable_status(
         StatusCode::PAYLOAD_TOO_LARGE,
@@ -40,6 +44,11 @@ fn cooldown_status_matches_proxy_policy() {
     ));
     assert!(result::is_next_only_retryable_status(
         StatusCode::FORBIDDEN,
+        "xai",
+        Some("acct-b")
+    ));
+    assert!(result::is_next_only_retryable_status(
+        StatusCode::PAYMENT_REQUIRED,
         "xai",
         Some("acct-b")
     ));

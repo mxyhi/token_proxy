@@ -27,6 +27,7 @@ const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
     ("openai/o4-mini", "o4-mini"),
     ("openai/o3", "o3"),
     ("openai/o3-mini", "o3-mini"),
+    ("anthropic/claude-opus-5", "claude-opus-5"),
     ("anthropic/claude-opus-4-7", "claude-opus-4-7"),
     ("anthropic/claude-opus-4.7", "claude-opus-4-7"),
     ("anthropic/claude-opus-4.6", "claude-opus-4.6"),

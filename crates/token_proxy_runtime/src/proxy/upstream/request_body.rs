@@ -131,6 +131,8 @@ async fn build_json_transformed_body_with_headers(
     let must_strip_sampling =
         should_strip_openai_responses_sampling_params(provider, upstream_path, meta);
     let must_filter_xai = should_filter_xai_responses_request(provider, upstream_path);
+    let must_sanitize_responses_input =
+        should_sanitize_native_openai_responses_input(provider, upstream_path);
     let read_limit = json_transform_read_limit(
         provider,
         upstream,
@@ -152,6 +154,9 @@ async fn build_json_transformed_body_with_headers(
         if must_filter_xai {
             return Err(xai_responses_payload_too_large());
         }
+        if must_sanitize_responses_input {
+            return Err(openai_responses_input_payload_too_large());
+        }
         return Ok(None);
     };
 
@@ -168,6 +173,7 @@ async fn build_json_transformed_body_with_headers(
     changed |= rewrite_model_mapping(object, meta, body_len);
     changed |= apply_reasoning_effort(provider, upstream_path, object, meta, body_len);
     changed |= filter_openai_responses_fields(provider, upstream, upstream_path, object, body_len);
+    changed |= sanitize_native_openai_responses_input(provider, upstream_path, object, body_len);
     changed |= filter_xai_responses_request(provider, upstream_path, object, meta, body_len)?;
     changed |= normalize_xai_image_refs(provider, object, body_len);
     changed |= force_codex_responses_lite_parallel_tool_calls(
@@ -216,6 +222,9 @@ fn json_transform_read_limit(
     if should_filter_openai_responses_fields(provider, upstream, upstream_path) {
         limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
     }
+    if should_sanitize_native_openai_responses_input(provider, upstream_path) {
+        limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
+    }
     if should_filter_xai_responses_request(provider, upstream_path) {
         limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
     }
@@ -252,6 +261,7 @@ fn needs_json_transform(
         || should_normalize_anthropic_model(provider, upstream_path, meta)
         || should_apply_reasoning_effort(provider, upstream_path, meta)
         || should_filter_openai_responses_fields(provider, upstream, upstream_path)
+        || should_sanitize_native_openai_responses_input(provider, upstream_path)
         || should_filter_xai_responses_request(provider, upstream_path)
         || should_normalize_xai_image_refs(provider)
         || should_strip_openai_responses_sampling_params(provider, upstream_path, meta)
@@ -481,6 +491,71 @@ fn filter_openai_responses_fields(
         changed |= object.remove("safety_identifier").is_some();
     }
     changed
+}
+
+fn should_sanitize_native_openai_responses_input(provider: &str, upstream_path: &str) -> bool {
+    matches!(provider, "openai" | "openai-response") && upstream_path == OPENAI_RESPONSES_PATH
+}
+
+/// 删除上游不接受的客户端历史元数据；只处理 direct input item，不触碰 tools 或嵌套 content。
+fn sanitize_native_openai_responses_input(
+    provider: &str,
+    upstream_path: &str,
+    object: &mut Map<String, Value>,
+    body_len: usize,
+) -> bool {
+    if body_len > REQUEST_FILTER_LIMIT_BYTES
+        || !should_sanitize_native_openai_responses_input(provider, upstream_path)
+    {
+        return false;
+    }
+    let Some(items) = object.get_mut("input").and_then(Value::as_array_mut) else {
+        return false;
+    };
+
+    let mut removed_namespace_count = 0usize;
+    let mut removed_id_count = 0usize;
+    for item in items {
+        let Some(item) = item.as_object_mut() else {
+            continue;
+        };
+        removed_namespace_count += usize::from(item.remove("namespace").is_some());
+
+        let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+        let required_id_prefix = match item_type {
+            "message" => Some("msg"),
+            "function_call" | "tool_call" | "local_shell_call" | "tool_search_call"
+            | "custom_tool_call" | "mcp_tool_call" => Some("fc"),
+            _ => None,
+        };
+        if required_id_prefix.is_some_and(|prefix| {
+            item.get("id")
+                .is_some_and(|id| !id.as_str().is_some_and(|id| id.starts_with(prefix)))
+        }) {
+            item.remove("id");
+            removed_id_count += 1;
+        }
+    }
+
+    let changed = removed_namespace_count > 0 || removed_id_count > 0;
+    if changed {
+        tracing::debug!(
+            provider,
+            removed_namespace_count,
+            removed_id_count,
+            "sanitized native OpenAI Responses input metadata"
+        );
+    }
+    changed
+}
+
+fn openai_responses_input_payload_too_large() -> AttemptOutcome {
+    AttemptOutcome::Fatal(http::error_response(
+        StatusCode::PAYLOAD_TOO_LARGE,
+        format!(
+            "OpenAI Responses request is too large to sanitize input metadata; limit is {REQUEST_FILTER_LIMIT_BYTES} bytes."
+        ),
+    ))
 }
 
 fn should_filter_xai_responses_request(provider: &str, upstream_path: &str) -> bool {

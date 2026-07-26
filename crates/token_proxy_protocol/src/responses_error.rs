@@ -238,7 +238,10 @@ fn parse_numeric_status(value: &Value) -> Option<StatusCode> {
 fn is_retryable_status_hint(status: StatusCode) -> bool {
     matches!(
         status,
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::TOO_MANY_REQUESTS
+        StatusCode::PAYMENT_REQUIRED
+            | StatusCode::UNAUTHORIZED
+            | StatusCode::FORBIDDEN
+            | StatusCode::TOO_MANY_REQUESTS
     ) || status.is_server_error()
 }
 
@@ -505,6 +508,29 @@ mod tests {
             let classified = responses_stream_error(&event).expect("error event");
 
             assert_eq!(classified.status, StatusCode::TOO_MANY_REQUESTS);
+            assert!(classified.retryable_before_output, "event: {event}");
+        }
+    }
+
+    #[test]
+    fn treats_payment_required_status_as_retryable_before_output() {
+        for event in [
+            json!({
+                "type": "error",
+                "status": 402,
+                "error": { "type": "invalid_request_error", "message": "payment required" }
+            }),
+            json!({
+                "type": "response.failed",
+                "response": {
+                    "status": "402",
+                    "error": { "type": "invalid_request_error", "message": "payment required" }
+                }
+            }),
+        ] {
+            let classified = responses_stream_error(&event).expect("error event");
+
+            assert_eq!(classified.status, StatusCode::PAYMENT_REQUIRED);
             assert!(classified.retryable_before_output, "event: {event}");
         }
     }

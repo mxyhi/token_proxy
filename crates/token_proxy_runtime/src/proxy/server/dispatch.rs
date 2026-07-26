@@ -34,6 +34,8 @@ struct ProviderRank {
 
 const OPENAI_MODELS_PATH: &str = "/v1/models";
 const OPENAI_COMPATIBLE_MODELS_PATH: &str = "/v1beta/openai/models";
+const CODEX_ALPHA_SEARCH_INBOUND_PATH: &str = "/v1/alpha/search";
+const CODEX_ALPHA_SEARCH_OUTBOUND_PATH: &str = "/alpha/search";
 const RESPONSES_INPUT_TOKENS_PATH: &str = "/v1/responses/input_tokens";
 const ANTHROPIC_MESSAGES_PATH: &str = "/v1/messages";
 const ANTHROPIC_COUNT_TOKENS_PATH: &str = "/v1/messages/count_tokens";
@@ -223,6 +225,23 @@ fn resolve_openai_native_plan(
         return Some(provider.map(base_plan));
     }
     None
+}
+
+fn resolve_codex_alpha_search_plan(
+    config: &ProxyConfig,
+    path: &str,
+) -> Option<Result<DispatchPlan, String>> {
+    if path != CODEX_ALPHA_SEARCH_INBOUND_PATH {
+        return None;
+    }
+    let provider = choose_provider_by_priority(config, None, &[PROVIDER_CODEX])
+        .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+    Some(provider.map(|provider| DispatchPlan {
+        provider,
+        outbound_path: Some(CODEX_ALPHA_SEARCH_OUTBOUND_PATH),
+        request_transform: FormatTransform::None,
+        response_transform: FormatTransform::None,
+    }))
 }
 
 fn is_xai_media_path(path: &str) -> bool {
@@ -434,6 +453,10 @@ pub(super) fn resolve_dispatch_plan_with_request(
     headers: &HeaderMap,
     query: Option<&str>,
 ) -> Result<DispatchPlan, String> {
+    // Alpha Search 是 Codex 账户能力，必须在 formatless fallback 前锁定 provider。
+    if let Some(plan) = resolve_codex_alpha_search_plan(config, path) {
+        return plan;
+    }
     if let Some(plan) = resolve_models_plan(config, method, path, headers, query) {
         return plan;
     }

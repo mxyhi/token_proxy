@@ -123,11 +123,12 @@ fn message_contains_any(message: &str, markers: &[&str]) -> bool {
 pub(super) fn is_retryable_status(status: StatusCode) -> bool {
     // 为了尽量提供“无反馈”的自动切换体验，以下错误都允许继续尝试下一个渠道：
     // - 显式可回退的鉴权/路由/请求超时/语义校验错误：401/404/408/422
-    // - 配额/权限/重定向：400/403/429/307
+    // - 配额/权限/重定向：400/402/403/429/307
     // - 所有 5xx，包括 504 与 Cloudflare 524。
     matches!(
         status,
         StatusCode::BAD_REQUEST
+            | StatusCode::PAYMENT_REQUIRED
             | StatusCode::UNAUTHORIZED
             | StatusCode::FORBIDDEN
             | StatusCode::NOT_FOUND
@@ -172,5 +173,10 @@ mod tests {
         assert!(!is_retryable_transport_error_message(
             "unspecific protocol error"
         ));
+    }
+
+    #[test]
+    fn payment_required_is_retryable_for_account_failover() {
+        assert!(is_retryable_status(StatusCode::PAYMENT_REQUIRED));
     }
 }

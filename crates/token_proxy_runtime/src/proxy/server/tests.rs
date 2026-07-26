@@ -10098,6 +10098,127 @@ fn gemini_non_generate_route_does_not_fallback_to_formatless_provider() {
 }
 
 #[test]
+fn codex_alpha_search_dispatches_only_to_codex() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_CHAT, 100, "chat", FORMATS_CHAT),
+        (PROVIDER_RESPONSES, 100, "responses", FORMATS_RESPONSES),
+        (PROVIDER_CODEX, 0, "codex", FORMATS_RESPONSES),
+    ]);
+
+    let plan = resolve_dispatch_plan(&config, "/v1/alpha/search").expect("should dispatch");
+
+    assert_eq!(plan.provider, PROVIDER_CODEX);
+    assert_eq!(plan.outbound_path, Some("/alpha/search"));
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn codex_alpha_search_rejects_formatless_fallback_without_codex() {
+    let config = config_with_providers(&[
+        (PROVIDER_CHAT, FORMATS_CHAT),
+        (PROVIDER_RESPONSES, FORMATS_RESPONSES),
+        (PROVIDER_ANTHROPIC, FORMATS_MESSAGES),
+    ]);
+
+    let error = resolve_dispatch_plan(&config, "/v1/alpha/search")
+        .err()
+        .expect("alpha search requires codex");
+
+    assert_eq!(error, "No available upstream configured.");
+}
+
+#[test]
+fn codex_alpha_search_preserves_query_on_outbound_path() {
+    let config = config_with_providers(&[(PROVIDER_CODEX, FORMATS_RESPONSES)]);
+    let plan = resolve_dispatch_plan(&config, "/v1/alpha/search").expect("should dispatch");
+    let outbound = resolve_outbound_path(
+        "/v1/alpha/search",
+        &plan,
+        &RequestMeta {
+            client_ip: None,
+            stream: false,
+            original_model: Some("gpt-5.6-sol".to_string()),
+            mapped_model: None,
+            reasoning_effort: None,
+            response_format: None,
+            estimated_input_tokens: None,
+            billing: Default::default(),
+        },
+    );
+    let uri = Uri::from_static("/v1/alpha/search?source=codex");
+
+    assert_eq!(
+        build_outbound_path_with_query(&outbound, &uri),
+        "/alpha/search?source=codex"
+    );
+}
+
+#[test]
+fn codex_alpha_search_forwards_with_account_auth() {
+    run_async(async {
+        let upstream = spawn_mock_upstream(
+            StatusCode::OK,
+            json!({
+                "id": "search-result",
+                "type": "computer_initialize_state",
+                "os_type": "computer",
+                "os_name": " chrome",
+                "os_version": "1"
+            }),
+        )
+        .await;
+        let config = config_with_runtime_upstreams(&[(
+            PROVIDER_CODEX,
+            0,
+            "codex-alpha",
+            upstream.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        let data_dir = next_test_data_dir("codex_alpha_search_forward");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let request_body = json!({
+            "id": "session-123",
+            "model": "gpt-5.6-sol",
+            "commands": { "search_query": [{ "q": "rust async io" }] }
+        });
+
+        let response = proxy_request(
+            State(state),
+            Method::POST,
+            Uri::from_static("/v1/alpha/search"),
+            HeaderMap::new(),
+            Body::from(request_body.to_string()),
+        )
+        .await;
+        let status = response.status();
+        let response_body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("alpha search response bytes");
+        let response_json: Value =
+            serde_json::from_slice(&response_body).expect("alpha search response json");
+        let requests = upstream.requests();
+
+        upstream.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(response_json["id"], "search-result");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/alpha/search");
+        assert_eq!(requests[0].body, request_body);
+        assert_eq!(
+            requests[0].authorization.as_deref(),
+            Some("Bearer codex-access-token")
+        );
+        assert_eq!(
+            requests[0].chatgpt_account_id.as_deref(),
+            Some("chatgpt-account")
+        );
+    });
+}
+
+#[test]
 fn gemini_upload_files_route_dispatches_to_gemini() {
     let config = config_with_providers(&[(PROVIDER_GEMINI, FORMATS_GEMINI)]);
     let plan = resolve_dispatch_plan(&config, "/upload/v1beta/files").expect("should dispatch");

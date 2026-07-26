@@ -35,6 +35,7 @@ target/
 .magi
 .codegraph/
 .planning/
+/.agents/memory/
 
 findings.md
 progress.md

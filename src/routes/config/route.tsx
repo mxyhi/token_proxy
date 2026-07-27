@@ -1,7 +1,13 @@
 import { Outlet, createFileRoute } from "@tanstack/react-router";
 
+import { ConfigScreenProvider } from "@/features/config/ConfigScreen";
+
 function ConfigLayoutRoute() {
-  return <Outlet />;
+  return (
+    <ConfigScreenProvider>
+      <Outlet />
+    </ConfigScreenProvider>
+  );
 }
 
 export const Route = createFileRoute("/config")({

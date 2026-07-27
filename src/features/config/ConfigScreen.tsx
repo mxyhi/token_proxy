@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useRef } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  type ReactNode,
+} from "react";
 
 import { AppView } from "@/features/config/AppView";
 import {
@@ -20,6 +27,10 @@ type ConfigScreenProps = {
   activeSectionId: ConfigEditorSectionId;
 };
 
+type ConfigScreenProviderProps = {
+  children: ReactNode;
+};
+
 type ConfigState = ReturnType<typeof useConfigState>;
 type ConfigDerived = ReturnType<typeof useConfigDerived>;
 type ProxyServiceState = ReturnType<typeof useProxyServiceState>;
@@ -38,6 +49,10 @@ type AppViewArgs = {
   proxyActions: ProxyServiceActions;
   onResetHotModelMappings: () => void;
 };
+
+type ConfigScreenController = Omit<AppViewArgs, "activeSectionId">;
+
+const ConfigScreenControllerContext = createContext<ConfigScreenController | null>(null);
 
 function buildAppViewProps({
   activeSectionId,
@@ -89,7 +104,7 @@ function buildAppViewProps({
   };
 }
 
-export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
+function useConfigScreenController(): ConfigScreenController {
   const lastObservedAutoSaveKeyRef = useRef("");
   const lastAttemptedAutoSaveKeyRef = useRef("");
   const state = useConfigState();
@@ -195,8 +210,7 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
     return () => window.clearTimeout(timerId);
   }, [derived.autoSaveKey, derived.canAutoSave, saveConfig]);
 
-  const appViewProps = buildAppViewProps({
-    activeSectionId,
+  return {
     state,
     derived,
     proxyService,
@@ -204,7 +218,37 @@ export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
     configActions,
     proxyActions,
     onResetHotModelMappings: resetHotModelMappings,
-  });
+  };
+}
+
+/** 配置控制器由 `/config` layout 持有，leaf route 切换不会中断待保存草稿。 */
+export function ConfigScreenProvider({ children }: ConfigScreenProviderProps) {
+  const controller = useConfigScreenController();
+  return (
+    <ConfigScreenControllerContext.Provider value={controller}>
+      {children}
+    </ConfigScreenControllerContext.Provider>
+  );
+}
+
+function ConfigScreenView({
+  activeSectionId,
+  controller,
+}: ConfigScreenProps & { controller: ConfigScreenController }) {
+  const appViewProps = buildAppViewProps({ activeSectionId, ...controller });
 
   return <AppView {...appViewProps} />;
+}
+
+function StandaloneConfigScreen({ activeSectionId }: ConfigScreenProps) {
+  const controller = useConfigScreenController();
+  return <ConfigScreenView activeSectionId={activeSectionId} controller={controller} />;
+}
+
+export function ConfigScreen({ activeSectionId }: ConfigScreenProps) {
+  const controller = useContext(ConfigScreenControllerContext);
+  if (!controller) {
+    return <StandaloneConfigScreen activeSectionId={activeSectionId} />;
+  }
+  return <ConfigScreenView activeSectionId={activeSectionId} controller={controller} />;
 }

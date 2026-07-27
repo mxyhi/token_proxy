@@ -1,9 +1,10 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { ConfigScreen } from "@/features/config/ConfigScreen";
-import { EMPTY_FORM, toPayload } from "@/features/config/form";
+import { ConfigScreen, ConfigScreenProvider } from "@/features/config/ConfigScreen";
+import { createEmptyUpstream, EMPTY_FORM, toPayload } from "@/features/config/form";
 import type {
   ConfigForm,
   ProxyServiceStatus,
@@ -46,6 +47,8 @@ vi.mock("@/features/config/AppView", () => ({
     status,
     statusMessage,
     onFormChange,
+    onChangeUpstream,
+    onRemoveUpstream,
     onSave,
   }: {
     form: ConfigForm;
@@ -54,6 +57,11 @@ vi.mock("@/features/config/AppView", () => ({
     status: "idle" | "loading" | "saving" | "saved" | "error";
     statusMessage: string;
     onFormChange: (patch: Partial<ConfigForm>) => void;
+    onChangeUpstream: (
+      index: number,
+      patch: Partial<ConfigForm["upstreams"][number]>
+    ) => void;
+    onRemoveUpstream: (index: number) => void;
     onSave: () => void;
   }) => (
     <div>
@@ -63,6 +71,19 @@ vi.mock("@/features/config/AppView", () => ({
         value={form.host}
         onChange={(event) => onFormChange({ host: event.target.value })}
       />
+      {form.upstreams[0] ? (
+        <>
+          <button
+            type="button"
+            onClick={() => onChangeUpstream(0, { enabled: !form.upstreams[0]?.enabled })}
+          >
+            toggle-first-upstream
+          </button>
+          <button type="button" onClick={() => onRemoveUpstream(0)}>
+            remove-first-upstream
+          </button>
+        </>
+      ) : null}
       {status === "error" && isDirty && canSave ? (
         <button type="button" onClick={onSave}>
           retry-save
@@ -107,6 +128,105 @@ describe("config/ConfigScreen auto save", () => {
       window.setTimeout(resolve, 1200);
     });
   }
+
+  function createAccountUpstreamConfig() {
+    const upstream = createEmptyUpstream();
+    upstream.id = "codex-regression";
+    upstream.providers = ["codex"];
+    upstream.accountId = "codex-regression-account";
+    upstream.enabled = true;
+    return toPayload({ ...EMPTY_FORM, upstreams: [upstream] });
+  }
+
+  function ConfigRouteHarness() {
+    const [editorMounted, setEditorMounted] = useState(true);
+    return (
+      <ConfigScreenProvider>
+        <button type="button" onClick={() => setEditorMounted(false)}>
+          leave-editor
+        </button>
+        {editorMounted ? <ConfigScreen activeSectionId="upstreams" /> : <div>dashboard</div>}
+      </ConfigScreenProvider>
+    );
+  }
+
+  it("persists an account upstream disable after the editor leaf route unmounts", async () => {
+    const invokeMock = vi.mocked(invoke);
+    const config = createAccountUpstreamConfig();
+
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "read_proxy_config") {
+        return { path: "/tmp/config.json", config };
+      }
+      if (command === "proxy_status") {
+        return PROXY_STATUS;
+      }
+      if (command === "save_proxy_config") {
+        return { ...createSaveResult(), args };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(
+      <I18nProvider>
+        <ConfigRouteHarness />
+      </I18nProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("upstream-ids")).toHaveTextContent("codex-regression");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "toggle-first-upstream" }));
+    fireEvent.click(screen.getByRole("button", { name: "leave-editor" }));
+    await waitForAutoSaveWindow();
+
+    const writeCalls = invokeMock.mock.calls.filter(([command]) => command === "save_proxy_config");
+    expect(writeCalls).toHaveLength(1);
+    expect(writeCalls[0]?.[1]).toMatchObject({
+      config: expect.objectContaining({
+        upstreams: [expect.objectContaining({ id: "codex-regression", enabled: false })],
+      }),
+    });
+  });
+
+  it("persists an account upstream delete after the editor leaf route unmounts", async () => {
+    const invokeMock = vi.mocked(invoke);
+    const config = createAccountUpstreamConfig();
+
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "read_proxy_config") {
+        return { path: "/tmp/config.json", config };
+      }
+      if (command === "proxy_status") {
+        return PROXY_STATUS;
+      }
+      if (command === "save_proxy_config") {
+        return { ...createSaveResult(), args };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(
+      <I18nProvider>
+        <ConfigRouteHarness />
+      </I18nProvider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("upstream-ids")).toHaveTextContent("codex-regression");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "remove-first-upstream" }));
+    fireEvent.click(screen.getByRole("button", { name: "leave-editor" }));
+    await waitForAutoSaveWindow();
+
+    const writeCalls = invokeMock.mock.calls.filter(([command]) => command === "save_proxy_config");
+    expect(writeCalls).toHaveLength(1);
+    expect(writeCalls[0]?.[1]).toMatchObject({
+      config: expect.objectContaining({ upstreams: [] }),
+    });
+  });
 
   it("auto saves only after edits settle", async () => {
     const invokeMock = vi.mocked(invoke);

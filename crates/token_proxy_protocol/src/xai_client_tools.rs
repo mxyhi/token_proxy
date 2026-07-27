@@ -1,13 +1,22 @@
 use serde_json::{json, Map, Value};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 const TOOL_SEARCH_PROXY_NAME: &str = "tool_search";
+const INTERNAL_X_SEARCH_TOOL_NAMES: [&str; 4] = [
+    "x_user_search",
+    "x_semantic_search",
+    "x_keyword_search",
+    "x_thread_fetch",
+];
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct XaiClientToolMapping {
     custom_tools: HashSet<String>,
+    // 仅用于 X Search 内部 trace 防误删；普通 function 本身不需要响应恢复。
+    function_tools: HashSet<String>,
     namespace_tools: HashMap<String, NamespaceToolName>,
     tool_search: bool,
+    filter_internal_x_search: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -18,7 +27,20 @@ struct NamespaceToolName {
 
 impl XaiClientToolMapping {
     pub fn is_empty(&self) -> bool {
-        self.custom_tools.is_empty() && self.namespace_tools.is_empty() && !self.tool_search
+        self.custom_tools.is_empty()
+            && self.namespace_tools.is_empty()
+            && !self.tool_search
+            && !self.filter_internal_x_search
+    }
+
+    /// 启用 xAI 服务端 X Search 子调用过滤，避免客户端重复执行内部 trace。
+    pub fn enable_internal_x_search_filter(&mut self) {
+        self.filter_internal_x_search = true;
+    }
+
+    /// 返回当前响应映射是否需要过滤服务端 X Search trace。
+    pub fn filters_internal_x_search(&self) -> bool {
+        self.filter_internal_x_search
     }
 }
 
@@ -77,6 +99,7 @@ pub fn adapt_request(
             "Built-in tool_search conflicts with a declared tool named {TOOL_SEARCH_PROXY_NAME}."
         ));
     }
+    mapping.function_tools = function_names;
 
     let flattened = crate::tool_identity::flatten_responses_namespaces(object, &[])? > 0;
     let mut lowered = Vec::new();
@@ -305,13 +328,33 @@ pub fn restore_json_payload(
         .map_err(|error| format!("Failed to serialize xAI Responses client tool payload: {error}"))
 }
 
+/// 只过滤 xAI X Search 内部 trace，不恢复客户端专用工具类型。
+pub fn filter_internal_x_search_json_payload(
+    bytes: &[u8],
+    mapping: &XaiClientToolMapping,
+) -> Result<(Vec<u8>, bool), String> {
+    if !mapping.filter_internal_x_search {
+        return Ok((bytes.to_vec(), false));
+    }
+    let mut value: Value = serde_json::from_slice(bytes)
+        .map_err(|error| format!("Failed to parse xAI X Search response payload: {error}"))?;
+    let changed = filter_internal_x_search_value(&mut value, mapping);
+    if !changed {
+        return Ok((bytes.to_vec(), false));
+    }
+    serde_json::to_vec(&value)
+        .map(|value| (value, true))
+        .map_err(|error| format!("Failed to serialize xAI X Search response payload: {error}"))
+}
+
 fn restore_value(value: &mut Value, mapping: &XaiClientToolMapping) -> bool {
     match value {
         Value::Array(items) => items.iter_mut().fold(false, |changed, item| {
             restore_value(item, mapping) | changed
         }),
         Value::Object(object) => {
-            let mut changed = restore_call_object(object, mapping);
+            let mut changed = filter_internal_x_search_output(object, mapping);
+            changed |= restore_call_object(object, mapping);
             for child in object.values_mut() {
                 changed |= restore_value(child, mapping);
             }
@@ -319,6 +362,82 @@ fn restore_value(value: &mut Value, mapping: &XaiClientToolMapping) -> bool {
         }
         _ => false,
     }
+}
+
+fn filter_internal_x_search_output(
+    object: &mut Map<String, Value>,
+    mapping: &XaiClientToolMapping,
+) -> bool {
+    let Some(output) = object.get_mut("output").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let original_len = output.len();
+    output.retain(|item| !is_internal_x_search_call(item, mapping));
+    let dropped_count = original_len.saturating_sub(output.len());
+    if dropped_count > 0 {
+        tracing::debug!(
+            dropped_count,
+            "filtered internal xAI X Search response calls"
+        );
+    }
+    dropped_count > 0
+}
+
+fn filter_internal_x_search_value(value: &mut Value, mapping: &XaiClientToolMapping) -> bool {
+    match value {
+        Value::Array(items) => items.iter_mut().fold(false, |changed, item| {
+            filter_internal_x_search_value(item, mapping) | changed
+        }),
+        Value::Object(object) => {
+            let mut changed = filter_internal_x_search_output(object, mapping);
+            for child in object.values_mut() {
+                changed |= filter_internal_x_search_value(child, mapping);
+            }
+            changed
+        }
+        _ => false,
+    }
+}
+
+fn is_internal_x_search_call(item: &Value, mapping: &XaiClientToolMapping) -> bool {
+    if !mapping.filter_internal_x_search {
+        return false;
+    }
+    let Some(object) = item.as_object() else {
+        return false;
+    };
+    let item_type = object
+        .get("type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !matches!(item_type, "function_call" | "custom_tool_call") {
+        return false;
+    }
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !INTERNAL_X_SEARCH_TOOL_NAMES.contains(&name) {
+        return false;
+    }
+    if object
+        .get("namespace")
+        .and_then(Value::as_str)
+        .is_some_and(|namespace| !namespace.trim().is_empty())
+    {
+        return false;
+    }
+    if object
+        .get("call_id")
+        .and_then(Value::as_str)
+        .is_some_and(|call_id| call_id.trim().starts_with("xs_call"))
+    {
+        return true;
+    }
+    item_type != "function_call"
+        || !(mapping.function_tools.contains(name) || mapping.custom_tools.contains(name))
 }
 
 fn restore_call_object(object: &mut Map<String, Value>, mapping: &XaiClientToolMapping) -> bool {
@@ -394,19 +513,36 @@ enum StreamCallKind {
 
 pub struct XaiClientToolStreamRestorer {
     mapping: XaiClientToolMapping,
+    restore_client_tools: bool,
     calls: HashMap<String, StreamCall>,
     call_ids: HashMap<String, String>,
     output_indexes: HashMap<u64, String>,
+    dropped_item_ids: HashSet<String>,
+    dropped_call_ids: HashSet<String>,
+    dropped_output_indexes: BTreeSet<u64>,
     next_sequence: Option<u64>,
 }
 
 impl XaiClientToolStreamRestorer {
     pub fn new(mapping: XaiClientToolMapping) -> Self {
+        Self::with_restore_mode(mapping, true)
+    }
+
+    /// 仅过滤内部 trace，保留原始 function/custom 形态供后续格式转换。
+    pub fn new_filter_only(mapping: XaiClientToolMapping) -> Self {
+        Self::with_restore_mode(mapping, false)
+    }
+
+    fn with_restore_mode(mapping: XaiClientToolMapping, restore_client_tools: bool) -> Self {
         Self {
             mapping,
+            restore_client_tools,
             calls: HashMap::new(),
             call_ids: HashMap::new(),
             output_indexes: HashMap::new(),
+            dropped_item_ids: HashSet::new(),
+            dropped_call_ids: HashSet::new(),
+            dropped_output_indexes: BTreeSet::new(),
             next_sequence: None,
         }
     }
@@ -420,11 +556,19 @@ impl XaiClientToolStreamRestorer {
             .and_then(Value::as_u64)
             .unwrap_or_else(|| self.next_sequence.unwrap_or_default());
         self.next_sequence.get_or_insert(sequence);
+        if self.record_internal_x_search_call(&value) || self.references_dropped_call(&value) {
+            return Ok(Vec::new());
+        }
         let event_type = value
             .get("type")
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+
+        if !self.restore_client_tools {
+            filter_internal_x_search_value(&mut value, &self.mapping);
+            return self.serialize_events(vec![value]);
+        }
 
         let events = match event_type.as_str() {
             "response.output_item.added" => {
@@ -472,9 +616,14 @@ impl XaiClientToolStreamRestorer {
             }
         };
 
+        self.serialize_events(events)
+    }
+
+    fn serialize_events(&mut self, events: Vec<Value>) -> Result<Vec<String>, String> {
         events
             .into_iter()
             .map(|mut event| {
+                self.compact_output_index(&mut event);
                 let sequence = self.next_sequence.unwrap_or_default();
                 event["sequence_number"] = json!(sequence);
                 self.next_sequence = Some(sequence.saturating_add(1));
@@ -483,6 +632,76 @@ impl XaiClientToolStreamRestorer {
                 })
             })
             .collect()
+    }
+
+    fn record_internal_x_search_call(&mut self, event: &Value) -> bool {
+        let Some(item) = event.get("item") else {
+            return false;
+        };
+        if !is_internal_x_search_call(item, &self.mapping) {
+            return false;
+        }
+        if let Some(item_id) = item
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            self.dropped_item_ids.insert(item_id.to_string());
+        }
+        if let Some(call_id) = item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            self.dropped_call_ids.insert(call_id.to_string());
+        }
+        if let Some(output_index) = event.get("output_index").and_then(Value::as_u64) {
+            self.dropped_output_indexes.insert(output_index);
+        }
+        tracing::debug!(
+            tool_name = item
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default(),
+            "filtered internal xAI X Search stream call"
+        );
+        true
+    }
+
+    fn references_dropped_call(&self, event: &Value) -> bool {
+        let item = event.get("item");
+        let item_id = event
+            .get("item_id")
+            .or_else(|| item.and_then(|item| item.get("id")))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if item_id.is_some_and(|item_id| self.dropped_item_ids.contains(item_id)) {
+            return true;
+        }
+        let call_id = event
+            .get("call_id")
+            .or_else(|| item.and_then(|item| item.get("call_id")))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if call_id.is_some_and(|call_id| self.dropped_call_ids.contains(call_id)) {
+            return true;
+        }
+        event
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .is_some_and(|index| self.dropped_output_indexes.contains(&index))
+    }
+
+    fn compact_output_index(&self, event: &mut Value) {
+        let Some(original) = event.get("output_index").and_then(Value::as_u64) else {
+            return;
+        };
+        let removed_before = self.dropped_output_indexes.range(..original).count() as u64;
+        event["output_index"] = json!(original.saturating_sub(removed_before));
     }
 
     fn record_call(&mut self, event: &Value) {
@@ -692,6 +911,7 @@ mod tests {
                 },
             )]),
             tool_search: true,
+            ..Default::default()
         }
     }
 
@@ -708,6 +928,48 @@ mod tests {
         assert_eq!(value["output"][1]["arguments"]["query"], "git");
         assert_eq!(value["output"][2]["name"], "send");
         assert_eq!(value["output"][2]["namespace"], "team");
+    }
+
+    #[test]
+    fn filters_internal_x_search_calls_but_keeps_declared_same_name_function() {
+        let mut request = json!({
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "x_keyword_search",
+                    "parameters": {"type": "object"}
+                }
+            ]
+        });
+        let request = request.as_object_mut().expect("request object");
+        let (mut mapping, _) = adapt_request(request).expect("adapt request");
+        mapping.enable_internal_x_search_filter();
+        let payload = br#"{"output":[{"type":"custom_tool_call","name":"x_user_search","call_id":"xs_call_1"},{"type":"function_call","name":"x_semantic_search","call_id":"internal_without_prefix"},{"type":"function_call","name":"x_keyword_search","call_id":"client_call"},{"type":"message","content":[]}]}"#;
+
+        let (restored, changed) = restore_json_payload(payload, &mapping).expect("restore");
+        let value: Value = serde_json::from_slice(&restored).expect("json");
+        let output = value["output"].as_array().expect("output");
+
+        assert!(changed);
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0]["name"], "x_keyword_search");
+        assert_eq!(output[1]["type"], "message");
+    }
+
+    #[test]
+    fn filter_only_keeps_client_tool_shape_for_later_format_conversion() {
+        let mut mapping = mapping();
+        mapping.enable_internal_x_search_filter();
+        let payload = br#"{"output":[{"type":"custom_tool_call","name":"x_user_search","call_id":"xs_call_1"},{"type":"function_call","name":"exec","arguments":"{\"input\":\"pwd\"}"}]}"#;
+
+        let (filtered, changed) =
+            filter_internal_x_search_json_payload(payload, &mapping).expect("filter");
+        let value: Value = serde_json::from_slice(&filtered).expect("json");
+
+        assert!(changed);
+        assert_eq!(value["output"].as_array().map(Vec::len), Some(1));
+        assert_eq!(value["output"][0]["type"], "function_call");
+        assert_eq!(value["output"][0]["name"], "exec");
     }
 
     #[test]
@@ -736,5 +998,59 @@ mod tests {
         assert_eq!(first["delta"], "pwd");
         assert_eq!(second["sequence_number"], 9);
         assert_eq!(second["input"], "pwd");
+    }
+
+    #[test]
+    fn stream_restorer_filters_internal_x_search_and_compacts_indexes() {
+        let mut mapping = XaiClientToolMapping::default();
+        mapping.enable_internal_x_search_filter();
+        let mut restorer = XaiClientToolStreamRestorer::new(mapping);
+
+        assert!(restorer
+            .restore_event(r#"{"type":"response.output_item.added","sequence_number":7,"output_index":0,"item":{"type":"custom_tool_call","id":"internal_item","call_id":"xs_call_1","name":"x_user_search","input":"{}"}}"#)
+            .expect("internal added")
+            .is_empty());
+        assert!(restorer
+            .restore_event(r#"{"type":"response.function_call_arguments.delta","sequence_number":8,"output_index":0,"item_id":"internal_item","delta":"{}"}"#)
+            .expect("internal delta")
+            .is_empty());
+
+        let visible = restorer
+            .restore_event(r#"{"type":"response.output_item.added","sequence_number":9,"output_index":1,"item":{"type":"message","id":"message_1","content":[]}}"#)
+            .expect("visible added");
+        let visible: Value = serde_json::from_str(&visible[0]).expect("visible json");
+        assert_eq!(visible["sequence_number"], 7);
+        assert_eq!(visible["output_index"], 0);
+
+        let completed = restorer
+            .restore_event(r#"{"type":"response.completed","sequence_number":10,"response":{"output":[{"type":"custom_tool_call","id":"internal_item","call_id":"xs_call_1","name":"x_user_search"},{"type":"message","id":"message_1","content":[]}]}}"#)
+            .expect("completed");
+        let completed: Value = serde_json::from_str(&completed[0]).expect("completed json");
+        assert_eq!(completed["sequence_number"], 8);
+        assert_eq!(
+            completed["response"]["output"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(completed["response"]["output"][0]["id"], "message_1");
+    }
+
+    #[test]
+    fn stream_filter_only_keeps_client_tool_shape() {
+        let mut mapping = mapping();
+        mapping.enable_internal_x_search_filter();
+        let mut restorer = XaiClientToolStreamRestorer::new_filter_only(mapping);
+
+        assert!(restorer
+            .restore_event(r#"{"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"type":"custom_tool_call","id":"internal","call_id":"xs_call_1","name":"x_user_search"}}"#)
+            .expect("internal")
+            .is_empty());
+        let visible = restorer
+            .restore_event(r#"{"type":"response.output_item.added","sequence_number":3,"output_index":1,"item":{"type":"function_call","id":"client","call_id":"client_1","name":"exec","arguments":"{}"}}"#)
+            .expect("visible");
+        let visible: Value = serde_json::from_str(&visible[0]).expect("json");
+
+        assert_eq!(visible["sequence_number"], 2);
+        assert_eq!(visible["output_index"], 0);
+        assert_eq!(visible["item"]["type"], "function_call");
     }
 }

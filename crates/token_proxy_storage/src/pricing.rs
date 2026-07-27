@@ -980,9 +980,36 @@ mod tests {
     #[test]
     fn bundled_catalog_uses_latest_upstream_snapshot() {
         let settings = default_model_pricing_settings();
-        assert_eq!(settings.version, "catalog.6c9b84cc.139de8a9");
+        assert_eq!(settings.version, "catalog.6c762580.0812af25");
         let source = settings.source.expect("catalog source");
-        assert_eq!(source.commit, "6c9b84cc7aaddd8e1490f8c4c194c650134aaeb5");
+        assert_eq!(source.commit, "6c7625800a78a37afdeb8b4afbd8e869ef84241c");
+    }
+
+    #[test]
+    fn gemini_3_6_flash_aliases_apply_standard_and_priority_prices() {
+        let settings = default_model_pricing_settings();
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        for model in [
+            "gemini-3.6-flash",
+            "google/gemini-3.6-flash",
+            "models/gemini-3.6-flash",
+        ] {
+            let standard = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                .expect("Gemini 3.6 Flash standard price");
+            let priority =
+                calculate_request_cost(&settings, Some(model), None, Some("priority"), &usage)
+                    .expect("Gemini 3.6 Flash priority price");
+
+            assert_eq!(standard.pricing_model, "gemini-3.6-flash");
+            assert_eq!(standard.cost_nano_usd, 9_150);
+            assert_eq!(priority.cost_nano_usd, 16_470);
+        }
     }
 
     #[test]

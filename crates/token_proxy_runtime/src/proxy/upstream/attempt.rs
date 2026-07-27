@@ -337,13 +337,17 @@ pub(super) async fn attempt_send(
         outcome,
         selected_account_id: None,
     })?;
-    let xai_client_tools =
-        super::request_body::xai_client_tool_mapping(provider, upstream_path_with_query, body)
-            .await
-            .map_err(|outcome| UpstreamAttemptFailure {
-                outcome,
-                selected_account_id: None,
-            })?;
+    let xai_client_tools = super::request_body::xai_client_tool_mapping(
+        provider,
+        upstream_path_with_query,
+        body,
+        state.config.xai_inject_x_search,
+    )
+    .await
+    .map_err(|outcome| UpstreamAttemptFailure {
+        outcome,
+        selected_account_id: None,
+    })?;
     let PreparedUpstreamRequest {
         upstream_path_with_query,
         upstream_url,

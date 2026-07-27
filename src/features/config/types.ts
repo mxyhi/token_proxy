@@ -126,6 +126,7 @@ export type ProxyConfigFileBase = {
   retryable_failure_cooldown_secs?: number;
   same_upstream_retry_count?: number;
   codex_session_scoped_cooldown_enabled?: boolean;
+  xai_inject_x_search?: boolean;
   stream_first_output_timeout_secs?: number;
   sync_response_timeout_secs?: number;
   tray_token_rate: TrayTokenRateConfig;
@@ -228,6 +229,7 @@ export type ConfigForm = {
   retryableFailureCooldownSecs: string;
   sameUpstreamRetryCount: string;
   codexSessionScopedCooldownEnabled: boolean;
+  xaiInjectXSearch: boolean;
   streamFirstOutputTimeoutSecs: string;
   syncResponseTimeoutSecs: string;
   trayTokenRate: TrayTokenRateConfig;

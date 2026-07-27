@@ -210,7 +210,7 @@ fn extract_response_output(
                     content_text = extract_output_text(item);
                 }
             }
-            Some("function_call") => {
+            Some("function_call" | "custom_tool_call") => {
                 if let Some(tool_call) = build_tool_call(item, tool_name_map) {
                     tool_calls.push(tool_call);
                 }
@@ -292,7 +292,12 @@ fn build_tool_call(
 ) -> Option<Value> {
     let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
     let name = item.get("name").and_then(Value::as_str).unwrap_or("");
-    let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("");
+    // Chat Completions exposes both function and freeform custom calls as tool_calls.
+    let arguments = if item.get("type").and_then(Value::as_str) == Some("custom_tool_call") {
+        item.get("input").and_then(Value::as_str).unwrap_or("")
+    } else {
+        item.get("arguments").and_then(Value::as_str).unwrap_or("")
+    };
     let restored_name = tool_name_map
         .get(name)
         .map(|identity| identity.name.as_str())
@@ -322,7 +327,10 @@ fn restore_tool_names_in_response(
         let Some(item) = item.as_object_mut() else {
             continue;
         };
-        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+        if !matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("function_call" | "custom_tool_call")
+        ) {
             continue;
         }
         let Some(name) = item.get("name").and_then(Value::as_str) else {

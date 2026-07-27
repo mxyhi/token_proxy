@@ -151,3 +151,7 @@ _Avoid_: xAI 官方 API、OpenAI-compatible base URL
 **xAI Official API（xAI 官方 API）**:
 xAI OAuth 账户发送仓库已有图片、视频和 Responses Compact 请求的受信服务端点 `api.x.ai`；它与 CLI 网关使用同一账户身份，承接 CLI 网关明确不支持的端点能力。
 _Avoid_: xAI CLI 网关、自定义 base URL
+
+**xAI X Search Injection（xAI X Search 注入）**:
+由用户显式启用的全局能力，为原生 xAI Responses 请求补充服务端搜索工具；默认关闭。启用后，服务端内部搜索子调用属于执行 trace，不是客户端待执行工具调用。
+_Avoid_: 客户端显式工具声明、Codex Alpha Search、默认联网搜索

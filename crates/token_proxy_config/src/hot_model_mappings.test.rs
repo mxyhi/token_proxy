@@ -57,6 +57,14 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
         Some(&"gemini-3.5-flash".to_string())
     );
     assert_eq!(
+        mappings.get("google/gemini-3.6-flash"),
+        Some(&"gemini-3.6-flash".to_string())
+    );
+    assert_eq!(
+        mappings.get("models/gemini-3.6-flash"),
+        Some(&"gemini-3.6-flash".to_string())
+    );
+    assert_eq!(
         mappings.get("deepseek/deepseek-v4-pro"),
         Some(&"deepseek-v4-pro".to_string())
     );

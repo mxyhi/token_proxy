@@ -117,13 +117,25 @@ pub(super) async fn build_buffered_response(
     } else {
         bytes
     };
-    let bytes = if status.is_success() && response_transform == FormatTransform::None {
+    let bytes = if status.is_success() {
         if let Some(mapping) = xai_client_tools.as_ref() {
-            match token_proxy_protocol::xai_client_tools::restore_json_payload(&bytes, mapping) {
+            let adapted = if response_transform == FormatTransform::None {
+                token_proxy_protocol::xai_client_tools::restore_json_payload(&bytes, mapping)
+            } else if mapping.filters_internal_x_search() {
+                token_proxy_protocol::xai_client_tools::filter_internal_x_search_json_payload(
+                    &bytes, mapping,
+                )
+            } else {
+                Ok((bytes.to_vec(), false))
+            };
+            match adapted {
                 Ok((restored, changed)) => {
                     if changed {
                         headers.remove(CONTENT_LENGTH);
-                        tracing::debug!("restored xAI client tools in buffered Responses payload");
+                        tracing::debug!(
+                            restore_client_tools = response_transform == FormatTransform::None,
+                            "adapted xAI buffered Responses payload"
+                        );
                     }
                     Bytes::from(restored)
                 }

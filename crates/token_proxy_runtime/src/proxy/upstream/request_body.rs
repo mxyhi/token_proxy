@@ -2,7 +2,7 @@ use axum::{
     body::Bytes,
     http::{HeaderMap, StatusCode},
 };
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 
 use super::super::{
     config::UpstreamRuntime, http, model, request_body::ReplayableBody, RequestMeta,
@@ -31,6 +31,7 @@ pub(super) async fn build_upstream_body(
     meta: &RequestMeta,
     codex_openai_device_id: Option<&str>,
     request_headers: &HeaderMap,
+    xai_inject_x_search: bool,
 ) -> Result<reqwest::Body, AttemptOutcome> {
     let transformed = build_json_transformed_body_with_headers(
         provider,
@@ -40,6 +41,7 @@ pub(super) async fn build_upstream_body(
         meta,
         codex_openai_device_id,
         request_headers,
+        xai_inject_x_search,
     )
     .await?;
     let final_source = transformed.as_ref().unwrap_or(body);
@@ -55,6 +57,7 @@ pub(super) async fn xai_client_tool_mapping(
     provider: &str,
     upstream_path_with_query: &str,
     body: &ReplayableBody,
+    xai_inject_x_search: bool,
 ) -> Result<Option<XaiClientToolMapping>, AttemptOutcome> {
     let upstream_path = split_path_query(upstream_path_with_query).0;
     if !should_filter_xai_responses_request(provider, upstream_path) {
@@ -79,10 +82,13 @@ pub(super) async fn xai_client_tool_mapping(
         return Ok(None);
     };
     promote_xai_additional_tools(object);
-    let (mapping, _) =
+    let (mut mapping, _) =
         token_proxy_protocol::xai_client_tools::adapt_request(object).map_err(|message| {
             AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
         })?;
+    if xai_inject_x_search && upstream_path == OPENAI_RESPONSES_PATH {
+        mapping.enable_internal_x_search_filter();
+    }
     Ok((!mapping.is_empty()).then_some(mapping))
 }
 
@@ -103,6 +109,7 @@ async fn build_json_transformed_body(
         meta,
         codex_openai_device_id,
         &HeaderMap::new(),
+        false,
     )
     .await
 }
@@ -115,6 +122,7 @@ async fn build_json_transformed_body_with_headers(
     meta: &RequestMeta,
     codex_openai_device_id: Option<&str>,
     request_headers: &HeaderMap,
+    xai_inject_x_search: bool,
 ) -> Result<Option<ReplayableBody>, AttemptOutcome> {
     let upstream_path = split_path_query(upstream_path_with_query).0;
     if !needs_json_transform(
@@ -174,7 +182,14 @@ async fn build_json_transformed_body_with_headers(
     changed |= apply_reasoning_effort(provider, upstream_path, object, meta, body_len);
     changed |= filter_openai_responses_fields(provider, upstream, upstream_path, object, body_len);
     changed |= sanitize_native_openai_responses_input(provider, upstream_path, object, body_len);
-    changed |= filter_xai_responses_request(provider, upstream_path, object, meta, body_len)?;
+    changed |= filter_xai_responses_request(
+        provider,
+        upstream_path,
+        object,
+        meta,
+        body_len,
+        xai_inject_x_search,
+    )?;
     changed |= normalize_xai_image_refs(provider, object, body_len);
     changed |= force_codex_responses_lite_parallel_tool_calls(
         provider,
@@ -569,6 +584,7 @@ fn filter_xai_responses_request(
     object: &mut Map<String, Value>,
     meta: &RequestMeta,
     body_len: usize,
+    xai_inject_x_search: bool,
 ) -> Result<bool, AttemptOutcome> {
     if body_len > REQUEST_FILTER_LIMIT_BYTES
         || !should_filter_xai_responses_request(provider, upstream_path)
@@ -623,6 +639,9 @@ fn filter_xai_responses_request(
             })?;
         changed |= client_tools_changed;
         changed |= normalize_xai_root_tool_union_branches(object);
+        if xai_inject_x_search {
+            changed |= ensure_xai_native_x_search_tool(object);
+        }
         if !has_xai_request_tools(object) {
             changed |= remove_json_fields(object, &["tools", "tool_choice", "parallel_tool_calls"]);
         }
@@ -635,6 +654,58 @@ fn filter_xai_responses_request(
         );
     }
     Ok(changed)
+}
+
+// xAI 的原生 X Search 同时需要出现在根工具集和 allowed_tools 白名单中。
+fn ensure_xai_native_x_search_tool(object: &mut Map<String, Value>) -> bool {
+    let tool_added = match object.get_mut("tools") {
+        Some(Value::Array(tools)) => {
+            if tools.iter().any(is_xai_native_x_search_tool) {
+                false
+            } else {
+                tools.push(json!({"type": "x_search"}));
+                true
+            }
+        }
+        _ => {
+            object.insert("tools".to_string(), json!([{"type": "x_search"}]));
+            true
+        }
+    };
+
+    let allowed_tool_added = object
+        .get_mut("tool_choice")
+        .and_then(Value::as_object_mut)
+        .filter(|choice| choice.get("type").and_then(Value::as_str) == Some("allowed_tools"))
+        .is_some_and(|choice| match choice.get_mut("tools") {
+            Some(Value::Array(tools)) => {
+                if tools.iter().any(is_xai_native_x_search_tool) {
+                    false
+                } else {
+                    tools.push(json!({"type": "x_search"}));
+                    true
+                }
+            }
+            _ => {
+                choice.insert("tools".to_string(), json!([{"type": "x_search"}]));
+                true
+            }
+        });
+
+    if tool_added || allowed_tool_added {
+        tracing::debug!(
+            tool_added,
+            allowed_tool_added,
+            "injected native xAI X Search tool"
+        );
+    }
+    tool_added || allowed_tool_added
+}
+
+fn is_xai_native_x_search_tool(tool: &Value) -> bool {
+    tool.get("type")
+        .and_then(Value::as_str)
+        .is_some_and(|tool_type| tool_type.trim() == "x_search")
 }
 
 // Responses Lite encodes extra declarations as input items, while xAI accepts

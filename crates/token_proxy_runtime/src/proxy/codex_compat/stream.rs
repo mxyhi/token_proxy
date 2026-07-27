@@ -224,7 +224,7 @@ where
     }
 
     fn handle_output_item_done(&mut self, value: &Value, token_texts: &mut Vec<String>) {
-        self.handle_function_call_item(value);
+        self.handle_tool_call_item(value);
         self.handle_image_generation_item(value, token_texts);
     }
 
@@ -246,11 +246,12 @@ where
         }
     }
 
-    fn handle_function_call_item(&mut self, value: &Value) {
+    fn handle_tool_call_item(&mut self, value: &Value) {
         let Some(item) = value.get("item").and_then(Value::as_object) else {
             return;
         };
-        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+        let item_type = item.get("type").and_then(Value::as_str);
+        if !matches!(item_type, Some("function_call" | "custom_tool_call")) {
             return;
         }
         let name = item.get("name").and_then(Value::as_str).unwrap_or("");
@@ -259,7 +260,12 @@ where
             .get(name)
             .map(|identity| identity.name.as_str())
             .unwrap_or(name);
-        let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("");
+        // Chat Completions represents custom freeform input in function.arguments.
+        let arguments = if item_type == Some("custom_tool_call") {
+            item.get("input").and_then(Value::as_str).unwrap_or("")
+        } else {
+            item.get("arguments").and_then(Value::as_str).unwrap_or("")
+        };
         let id = item
             .get("call_id")
             .and_then(Value::as_str)
@@ -868,7 +874,10 @@ fn restore_tool_names_in_item(
     item: &mut Map<String, Value>,
     tool_name_map: &HashMap<String, RestoredToolName>,
 ) {
-    if item.get("type").and_then(Value::as_str) != Some("function_call") {
+    if !matches!(
+        item.get("type").and_then(Value::as_str),
+        Some("function_call" | "custom_tool_call")
+    ) {
         return;
     }
     let Some(name) = item.get("name").and_then(Value::as_str) else {
@@ -912,7 +921,7 @@ fn is_realtime_output_delta_event(event_type: &str) -> bool {
         )
 }
 
-fn is_codex_business_output_event(value: &Value) -> bool {
+pub(super) fn is_codex_business_output_event(value: &Value) -> bool {
     match value.get("type").and_then(Value::as_str) {
         Some("response.output_text.delta" | "response.reasoning_summary_text.delta") => value
             .get("delta")
@@ -924,7 +933,10 @@ fn is_codex_business_output_event(value: &Value) -> bool {
             .and_then(|item| item.get("type"))
             .and_then(Value::as_str)
             .is_some_and(|item_type| {
-                matches!(item_type, "function_call" | "image_generation_call")
+                matches!(
+                    item_type,
+                    "function_call" | "custom_tool_call" | "image_generation_call"
+                )
             }),
         _ => false,
     }

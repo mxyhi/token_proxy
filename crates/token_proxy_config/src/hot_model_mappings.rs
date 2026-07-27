@@ -47,6 +47,8 @@ const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
     ),
     ("models/gemini-3.5-flash", "gemini-3.5-flash"),
     ("google/gemini-3.5-flash", "gemini-3.5-flash"),
+    ("models/gemini-3.6-flash", "gemini-3.6-flash"),
+    ("google/gemini-3.6-flash", "gemini-3.6-flash"),
     ("models/gemini-3-pro", "gemini-3-pro"),
     ("google/gemini-3-pro", "gemini-3-pro"),
     (

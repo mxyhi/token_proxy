@@ -36,6 +36,7 @@ fn config_with_addr_and_body_limit(
         retryable_failure_cooldown: Duration::from_secs(15),
         same_upstream_retry_count: 1,
         codex_session_scoped_cooldown_enabled: false,
+        xai_inject_x_search: false,
         stream_first_output_timeout: Duration::from_secs(60),
         sync_response_timeout: Duration::from_secs(120),
         upstream_strategy: token_proxy_config::UpstreamStrategyRuntime::default(),

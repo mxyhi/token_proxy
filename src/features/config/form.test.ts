@@ -168,6 +168,7 @@ describe("config/form", () => {
     expect(payload.retryable_failure_cooldown_secs).toBe(15);
     expect(payload.same_upstream_retry_count).toBe(1);
     expect(payload.codex_session_scoped_cooldown_enabled).toBe(false);
+    expect(payload.xai_inject_x_search).toBe(false);
     expect(payload.stream_first_output_timeout_secs).toBe(60);
     expect(payload.sync_response_timeout_secs).toBe(300);
     expect("upstream_no_data_timeout_secs" in payload).toBe(false);
@@ -179,6 +180,16 @@ describe("config/form", () => {
     expect(payload.upstreams[0]?.credential).toEqual({ type: "passthrough" });
     // openai_chat 对 openai 是 native 格式，应被清理；unknown provider 也应被丢弃。
     expect(payload.upstreams[0]?.convert_from_map).toBeUndefined();
+  });
+
+  it("loads and serializes the xAI X Search injection switch", () => {
+    const source = { ...toPayload(EMPTY_FORM), xai_inject_x_search: true };
+
+    const form = toForm(source);
+    expect(form.xaiInjectXSearch).toBe(true);
+
+    const payload = toPayload(form);
+    expect(payload.xai_inject_x_search).toBe(true);
   });
 
   it("serializes multiple upstream api keys into credential", () => {

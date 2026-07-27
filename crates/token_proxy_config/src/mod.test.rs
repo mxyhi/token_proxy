@@ -494,6 +494,16 @@ fn build_runtime_config_maps_codex_session_scoped_cooldown_switch() {
 }
 
 #[test]
+fn build_runtime_config_maps_xai_x_search_injection_switch() {
+    let mut config = ProxyConfigFile::default();
+    config.xai_inject_x_search = true;
+
+    let runtime = build_runtime_config(config).expect("runtime config");
+
+    assert!(runtime.xai_inject_x_search);
+}
+
+#[test]
 fn build_runtime_config_maps_hedged_strategy() {
     let mut config = ProxyConfigFile::default();
     config.upstream_strategy = UpstreamStrategy {

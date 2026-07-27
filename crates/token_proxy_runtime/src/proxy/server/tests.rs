@@ -147,6 +147,7 @@ fn config_with_runtime_upstreams(
             dispatch: UpstreamDispatchRuntime::Serial,
         },
         codex_session_scoped_cooldown_enabled: false,
+        xai_inject_x_search: false,
         hot_model_mappings: HashMap::new(),
         upstreams: provider_map,
         kiro_preferred_endpoint: None,

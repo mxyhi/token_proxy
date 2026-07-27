@@ -53,14 +53,19 @@ struct XaiClientToolStreamState {
 fn restore_xai_client_tool_stream(
     upstream: UpstreamBytesStream,
     mapping: token_proxy_protocol::xai_client_tools::XaiClientToolMapping,
+    restore_client_tools: bool,
 ) -> UpstreamBytesStream {
     try_unfold(
         XaiClientToolStreamState {
             upstream,
             parser: SseEventParser::new(),
-            restorer: token_proxy_protocol::xai_client_tools::XaiClientToolStreamRestorer::new(
-                mapping,
-            ),
+            restorer: if restore_client_tools {
+                token_proxy_protocol::xai_client_tools::XaiClientToolStreamRestorer::new(mapping)
+            } else {
+                token_proxy_protocol::xai_client_tools::XaiClientToolStreamRestorer::new_filter_only(
+                    mapping,
+                )
+            },
             out: VecDeque::new(),
             ended: false,
         },
@@ -160,8 +165,13 @@ pub(super) async fn build_stream_response(
     )
     .await;
     let upstream = log_upstream_stream_if_debug(upstream);
-    let upstream = match (response_transform, xai_client_tools) {
-        (FormatTransform::None, Some(mapping)) => restore_xai_client_tool_stream(upstream, mapping),
+    let upstream = match xai_client_tools {
+        Some(mapping) if response_transform == FormatTransform::None => {
+            restore_xai_client_tool_stream(upstream, mapping, true)
+        }
+        Some(mapping) if mapping.filters_internal_x_search() => {
+            restore_xai_client_tool_stream(upstream, mapping, false)
+        }
         _ => upstream,
     };
 
@@ -1396,7 +1406,7 @@ mod tests {
         ))])
         .boxed();
 
-        let chunks = restore_xai_client_tool_stream(upstream, mapping)
+        let chunks = restore_xai_client_tool_stream(upstream, mapping, true)
             .collect::<Vec<_>>()
             .await;
         let body = chunks

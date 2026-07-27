@@ -172,6 +172,7 @@ async fn send_upstream_request_once(
             meta,
             codex_openai_device_id,
             request_headers,
+            state.config.xai_inject_x_search,
         )
         .await?;
         let response_header_timeout = response_header_timeout_for_request(&state.config, meta);
@@ -409,6 +410,7 @@ async fn send_codex_attempt(
         meta,
         codex_openai_device_id,
         request_headers,
+        state.config.xai_inject_x_search,
     )
     .await
     .map_err(CodexAttemptError::Fatal)?;
@@ -745,6 +747,7 @@ mod tests {
             retryable_failure_cooldown: Duration::from_secs(15),
             same_upstream_retry_count: 1,
             codex_session_scoped_cooldown_enabled: false,
+            xai_inject_x_search: false,
             stream_first_output_timeout: Duration::from_secs(60),
             sync_response_timeout: Duration::from_secs(120),
             upstream_strategy: UpstreamStrategyRuntime::default(),

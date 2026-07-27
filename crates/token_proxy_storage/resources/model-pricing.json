@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "version": "catalog.6c9b84cc.139de8a9",
+  "version": "catalog.6c762580.0812af25",
   "source": {
     "url": "https://github.com/Wei-Shaw/sub2api/blob/main/backend/resources/model-pricing/model_prices_and_context_window.json",
-    "commit": "6c9b84cc7aaddd8e1490f8c4c194c650134aaeb5",
-    "sha256": "139de8a906ce61dc3f086ed394cd01b6c2110341054d7576dce4c4775f358569",
-    "commitTime": "2026-07-25T11:22:42+08:00"
+    "commit": "6c7625800a78a37afdeb8b4afbd8e869ef84241c",
+    "sha256": "0812af2528fcd49c48b6806ed83e924ef6427a26fd363db168c3fe89b208796b",
+    "commitTime": "2026-07-26T01:56:10+08:00"
   },
   "models": [
     {
@@ -495,6 +495,33 @@
         "priority": {
           "inputNanoUsdPerToken": 2700,
           "outputNanoUsdPerToken": 16200,
+          "cacheReadNanoUsdPerToken": 270
+        }
+      },
+      "longContext": null
+    },
+    {
+      "modelId": "gemini-3.6-flash",
+      "sourceModelId": "gemini-3.6-flash",
+      "aliases": [
+        "google/gemini-3.6-flash",
+        "models/gemini-3.6-flash"
+      ],
+      "priceMultiplierScaled": 1000000000000,
+      "standard": {
+        "inputNanoUsdPerToken": 1500,
+        "outputNanoUsdPerToken": 7500,
+        "cacheReadNanoUsdPerToken": 150,
+        "cacheWriteNanoUsdPerToken": null,
+        "cacheWrite5mNanoUsdPerToken": null,
+        "cacheWrite1hNanoUsdPerToken": null,
+        "imageInputNanoUsdPerToken": null,
+        "imageOutputNanoUsdPerToken": null
+      },
+      "serviceTierProfiles": {
+        "priority": {
+          "inputNanoUsdPerToken": 2700,
+          "outputNanoUsdPerToken": 13500,
           "cacheReadNanoUsdPerToken": 270
         }
       },

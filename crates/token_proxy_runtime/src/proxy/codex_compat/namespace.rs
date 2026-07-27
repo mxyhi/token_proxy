@@ -12,7 +12,8 @@ pub(super) fn collect_tool_identities(value: &Value) -> Vec<(String, RestoredToo
     };
     for tool in tools {
         let tool_type = tool.get("type").and_then(Value::as_str);
-        if tool_type == Some("function") {
+        if matches!(tool_type, Some("function" | "custom")) {
+            // Custom tools keep the name at the top level; function tools may nest it.
             let name = tool
                 .get("function")
                 .and_then(|function| function.get("name"))

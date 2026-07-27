@@ -332,6 +332,9 @@ pub struct ProxyConfigFile {
     pub same_upstream_retry_count: u64,
     #[serde(default, skip_serializing_if = "is_false")]
     pub codex_session_scoped_cooldown_enabled: bool,
+    /// 是否为原生 xAI Responses 请求自动补充服务端 `x_search` 工具。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub xai_inject_x_search: bool,
     #[serde(
         default = "default_stream_first_output_timeout_secs",
         skip_serializing_if = "is_default_stream_first_output_timeout_secs"
@@ -367,6 +370,7 @@ impl Default for ProxyConfigFile {
             retryable_failure_cooldown_secs: default_retryable_failure_cooldown_secs(),
             same_upstream_retry_count: default_same_upstream_retry_count(),
             codex_session_scoped_cooldown_enabled: false,
+            xai_inject_x_search: false,
             stream_first_output_timeout_secs: default_stream_first_output_timeout_secs(),
             sync_response_timeout_secs: default_sync_response_timeout_secs(),
             tray_token_rate: TrayTokenRateConfig::default(),
@@ -409,6 +413,8 @@ pub struct ProxyConfig {
     /// 同一上游原地额外重试次数（不含首次）；运行时已校验上限。
     pub same_upstream_retry_count: u32,
     pub codex_session_scoped_cooldown_enabled: bool,
+    /// 原生 xAI Responses 是否注入服务端 X Search 工具。
+    pub xai_inject_x_search: bool,
     pub stream_first_output_timeout: std::time::Duration,
     pub sync_response_timeout: std::time::Duration,
     pub upstream_strategy: UpstreamStrategyRuntime,

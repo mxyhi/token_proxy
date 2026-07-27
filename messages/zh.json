@@ -74,6 +74,8 @@
   "proxy_core_same_upstream_retry_count_help": "默认 1。可重试错误时先在同一上游额外重试该次数（不含首次发送），用尽后再跨上游切换。填 0 关闭原地重试；最大 5。",
   "proxy_core_codex_session_scoped_cooldown_label": "Codex Responses 会话级冷却",
   "proxy_core_codex_session_scoped_cooldown_help": "默认关闭。开启后，Codex 账号的 OpenAI Responses 请求冷却按 session_id 隔离；最终成功会清除本会话冷却，缺少 session_id 的请求不共享冷却。",
+  "proxy_core_xai_inject_x_search_label": "注入 xAI X Search",
+  "proxy_core_xai_inject_x_search_help": "默认关闭。开启后，仅为原生 xAI `/v1/responses` 请求补充服务端 `x_search` 工具，并过滤内部搜索子调用。",
   "proxy_core_stream_first_output_timeout_secs_label": "流式首个输出超时（秒）",
   "proxy_core_stream_first_output_timeout_secs_help": "默认 60。仅限制首个客户端可见流式输出之前的等待；超时后可重试其他上游 attempt。",
   "proxy_core_sync_response_timeout_secs_label": "同步响应超时（秒）",

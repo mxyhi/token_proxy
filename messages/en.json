@@ -74,6 +74,8 @@
   "proxy_core_same_upstream_retry_count_help": "Default is 1. After a retryable failure, retry the same upstream this many extra times (excluding the first attempt) before failing over. Use 0 to disable. Maximum is 5.",
   "proxy_core_codex_session_scoped_cooldown_label": "Codex Responses session cooldown",
   "proxy_core_codex_session_scoped_cooldown_help": "Off by default. When enabled, Codex account-backed OpenAI Responses requests isolate cooldown by session_id; final success clears that session, and requests without session_id do not share cooldown.",
+  "proxy_core_xai_inject_x_search_label": "Inject xAI X Search",
+  "proxy_core_xai_inject_x_search_help": "Off by default. Adds the server-side `x_search` tool only to native xAI `/v1/responses` requests and filters internal search subcalls.",
   "proxy_core_stream_first_output_timeout_secs_label": "Stream first output timeout (seconds)",
   "proxy_core_stream_first_output_timeout_secs_help": "Default is 60. Applies before the first client-visible stream output; timeout can retry another upstream attempt.",
   "proxy_core_sync_response_timeout_secs_label": "Synchronous response timeout (seconds)",

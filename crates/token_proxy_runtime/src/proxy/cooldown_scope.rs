@@ -134,6 +134,7 @@ mod tests {
             retryable_failure_cooldown: Duration::from_secs(15),
             same_upstream_retry_count: 1,
             codex_session_scoped_cooldown_enabled: true,
+            xai_inject_x_search: false,
             stream_first_output_timeout: Duration::from_secs(60),
             sync_response_timeout: Duration::from_secs(120),
             upstream_strategy: UpstreamStrategyRuntime {

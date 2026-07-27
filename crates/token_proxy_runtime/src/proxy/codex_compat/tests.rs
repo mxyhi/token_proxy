@@ -10,6 +10,7 @@ use super::super::{
     log::{LogContext, LogWriter},
     token_rate::TokenRateTracker,
 };
+use super::stream::is_codex_business_output_event;
 use super::tool_names::shorten_name_if_needed;
 use super::{
     chat_request_to_codex, codex_response_to_chat, codex_response_to_responses,
@@ -430,6 +431,49 @@ fn codex_response_to_chat_restores_tool_name() {
 }
 
 #[test]
+fn codex_response_to_chat_restores_custom_tool_name_and_input() {
+    let original = "custom_tool_name_for_codex_restoration_check_with_a_very_long_suffix";
+    let short = shorten_name_if_needed(original);
+    assert_ne!(short, original);
+
+    let request_body = json!({
+        "tools": [{ "type": "custom", "name": original }]
+    })
+    .to_string();
+    let response = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_custom",
+            "created_at": 123,
+            "model": "gpt-5.6-sol",
+            "status": "completed",
+            "output": [{
+                "type": "custom_tool_call",
+                "call_id": "call_custom",
+                "name": short,
+                "input": "*** Begin Patch\n*** End Patch"
+            }]
+        }
+    });
+
+    let output = codex_response_to_chat(
+        &Bytes::from(response.to_string()),
+        Some(request_body.as_str()),
+    )
+    .expect("convert custom tool response");
+    let value: Value = serde_json::from_slice(&output).expect("json");
+    let tool_call = &value["choices"][0]["message"]["tool_calls"][0];
+
+    assert_eq!(tool_call["type"], json!("function"));
+    assert_eq!(tool_call["function"]["name"], json!(original));
+    assert_eq!(
+        tool_call["function"]["arguments"],
+        json!("*** Begin Patch\n*** End Patch")
+    );
+    assert_eq!(value["choices"][0]["finish_reason"], json!("tool_calls"));
+}
+
+#[test]
 fn codex_response_to_chat_preserves_image_generation_call_result() {
     let response = json!({
         "type": "response.completed",
@@ -802,6 +846,47 @@ async fn stream_codex_to_responses_accepts_canceled_terminal_event() {
 }
 
 #[tokio::test]
+async fn stream_codex_to_responses_restores_custom_tool_name() {
+    let original = "custom_tool_name_for_responses_stream_restoration_with_long_suffix";
+    let short = shorten_name_if_needed(original);
+    let upstream = futures_util::stream::iter(vec![
+        Ok::<Bytes, std::io::Error>(Bytes::from(format!(
+            "data: {}\n\n",
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "custom_tool_call",
+                    "call_id": "call_custom",
+                    "name": short,
+                    "input": "freeform input"
+                }
+            })
+        ))),
+        Ok::<Bytes, std::io::Error>(Bytes::from(
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_custom\",\"status\":\"completed\"}}\n\n",
+        )),
+    ]);
+    let tracker = TokenRateTracker::new().register(None, None).await;
+    let mut context = test_log_context();
+    context.request_body =
+        Some(json!({ "tools": [{ "type": "custom", "name": original }] }).to_string());
+    let log = Arc::new(LogWriter::new(None));
+
+    let chunks = stream_codex_to_responses(upstream, context, log, tracker)
+        .collect::<Vec<_>>()
+        .await;
+    let text = join_stream_chunks(&chunks);
+    let tool_event = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .find(|event| event["type"] == "response.output_item.done")
+        .expect("custom tool event");
+
+    assert_eq!(tool_event["item"]["name"], json!(original));
+}
+
+#[tokio::test]
 async fn stream_codex_to_chat_emits_error_event_for_invalid_json_event() {
     let upstream = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
         "data: not-json\n\n",
@@ -848,6 +933,54 @@ async fn stream_codex_to_chat_emits_image_generation_call_result() {
         "chunks: {text}"
     );
     assert!(text.contains("data: [DONE]"), "chunks: {text}");
+}
+
+#[tokio::test]
+async fn stream_codex_to_chat_emits_custom_tool_call() {
+    let original = "custom_tool_name_for_codex_stream_restoration_with_a_very_long_suffix";
+    let short = shorten_name_if_needed(original);
+    let upstream = futures_util::stream::iter(vec![
+        Ok::<Bytes, std::io::Error>(Bytes::from(format!(
+            "data: {}\n\n",
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "custom_tool_call",
+                    "call_id": "call_custom",
+                    "name": short,
+                    "input": "freeform input"
+                }
+            })
+        ))),
+        Ok::<Bytes, std::io::Error>(Bytes::from(
+            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_custom\",\"status\":\"completed\"}}\n\n",
+        )),
+    ]);
+    let tracker = TokenRateTracker::new().register(None, None).await;
+    let mut context = test_log_context();
+    context.request_body =
+        Some(json!({ "tools": [{ "type": "custom", "name": original }] }).to_string());
+    let log = Arc::new(LogWriter::new(None));
+
+    let chunks = stream_codex_to_chat(upstream, context, log, tracker)
+        .collect::<Vec<_>>()
+        .await;
+    let text = join_stream_chunks(&chunks);
+
+    assert!(text.contains(original), "chunks: {text}");
+    assert!(text.contains("freeform input"), "chunks: {text}");
+    assert!(
+        text.contains("\"finish_reason\":\"tool_calls\""),
+        "chunks: {text}"
+    );
+}
+
+#[test]
+fn custom_tool_call_is_codex_business_output() {
+    assert!(is_codex_business_output_event(&json!({
+        "type": "response.output_item.done",
+        "item": { "type": "custom_tool_call" }
+    })));
 }
 
 fn test_log_context() -> LogContext {
@@ -1072,6 +1205,40 @@ fn codex_response_to_responses_restores_namespace_function_calls_only() {
     assert_eq!(value["output"][0]["namespace"], "collaboration");
     assert_eq!(value["output"][1]["name"], "collaboration__spawn_agent");
     assert!(value["output"][1].get("namespace").is_none());
+}
+
+#[test]
+fn codex_response_to_responses_restores_custom_tool_name() {
+    let original = "custom_tool_name_for_responses_restoration_with_a_very_long_suffix";
+    let short = shorten_name_if_needed(original);
+    let request_body = json!({
+        "tools": [{ "type": "custom", "name": original }]
+    })
+    .to_string();
+    let response = json!({
+        "type": "response.completed",
+        "response": {
+            "id": "resp_custom",
+            "object": "response",
+            "status": "completed",
+            "output": [{
+                "type": "custom_tool_call",
+                "call_id": "call_custom",
+                "name": short,
+                "input": "freeform input"
+            }]
+        }
+    });
+
+    let output = codex_response_to_responses(
+        &Bytes::from(response.to_string()),
+        Some(request_body.as_str()),
+    )
+    .expect("convert custom tool response");
+    let value: Value = serde_json::from_slice(&output).expect("json");
+
+    assert_eq!(value["output"][0]["name"], json!(original));
+    assert_eq!(value["output"][0]["input"], json!("freeform input"));
 }
 
 #[test]

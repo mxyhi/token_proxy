@@ -68,6 +68,170 @@ async fn transformed_xai_body(path: &str, body: &'static [u8], model: &str) -> V
     serde_json::from_slice(&bytes).expect("transformed JSON")
 }
 
+async fn transformed_body_with_x_search(
+    provider: &str,
+    path: &str,
+    body: &[u8],
+    model: &str,
+    enabled: bool,
+) -> Value {
+    let upstream = test_upstream(false, false, false);
+    let original = ReplayableBody::from_bytes(Bytes::copy_from_slice(body));
+    let rewritten = match build_json_transformed_body_with_headers(
+        provider,
+        &upstream,
+        path,
+        &original,
+        &xai_meta(model, true),
+        None,
+        &axum::http::HeaderMap::new(),
+        enabled,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => panic!("xAI X Search transform should succeed"),
+    };
+    let final_body = rewritten.as_ref().unwrap_or(&original);
+    let bytes = final_body
+        .read_bytes_if_small(4096)
+        .await
+        .expect("read transformed body")
+        .expect("transformed bytes");
+    serde_json::from_slice(&bytes).expect("transformed JSON")
+}
+
+#[tokio::test]
+async fn xai_responses_does_not_inject_x_search_when_disabled() {
+    let value = transformed_body_with_x_search(
+        "xai",
+        "/v1/responses",
+        br#"{"model":"grok-4.5","input":"hi"}"#,
+        "grok-4.5",
+        false,
+    )
+    .await;
+
+    assert!(value.get("tools").is_none());
+}
+
+#[tokio::test]
+async fn xai_responses_injects_x_search_once_when_enabled() {
+    let value = transformed_body_with_x_search(
+        "xai",
+        "/v1/responses",
+        br#"{"model":"grok-4.5","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"input":"hi"}"#,
+        "grok-4.5",
+        true,
+    )
+    .await;
+
+    let tools = value["tools"].as_array().expect("tools");
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|tool| tool["type"] == serde_json::json!("x_search"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn xai_responses_keeps_existing_x_search_without_duplication() {
+    let value = transformed_body_with_x_search(
+        "xai",
+        "/v1/responses",
+        br#"{"model":"grok-4.5","tools":[{"type":"x_search"}],"input":"hi"}"#,
+        "grok-4.5",
+        true,
+    )
+    .await;
+
+    let tools = value["tools"].as_array().expect("tools");
+    assert_eq!(
+        tools
+            .iter()
+            .filter(|tool| tool["type"] == serde_json::json!("x_search"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn xai_responses_syncs_x_search_into_allowed_tools_without_duplication() {
+    for allowed_tools in [
+        r#"[{"type":"function","name":"lookup"}]"#,
+        r#"[{"type":"function","name":"lookup"},{"type":"x_search"}]"#,
+    ] {
+        let payload = format!(
+            r#"{{"model":"grok-4.5","tools":[{{"type":"function","name":"lookup","parameters":{{"type":"object"}}}}],"tool_choice":{{"type":"allowed_tools","tools":{allowed_tools}}},"input":"hi"}}"#
+        );
+        let value = transformed_body_with_x_search(
+            "xai",
+            "/v1/responses",
+            payload.as_bytes(),
+            "grok-4.5",
+            true,
+        )
+        .await;
+
+        let allowed = value["tool_choice"]["tools"]
+            .as_array()
+            .expect("allowed tools");
+        assert_eq!(
+            allowed
+                .iter()
+                .filter(|tool| tool["type"] == serde_json::json!("x_search"))
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn xai_x_search_injection_excludes_compact_and_other_providers() {
+    let compact = transformed_body_with_x_search(
+        "xai",
+        "/v1/responses/compact",
+        br#"{"model":"grok-4.5","input":"hi"}"#,
+        "grok-4.5",
+        true,
+    )
+    .await;
+    let openai = transformed_body_with_x_search(
+        "openai-response",
+        "/v1/responses",
+        br#"{"model":"grok-4.5","input":"hi"}"#,
+        "grok-4.5",
+        true,
+    )
+    .await;
+
+    assert!(compact.get("tools").is_none());
+    assert!(openai.get("tools").is_none());
+}
+
+#[tokio::test]
+async fn xai_x_search_injection_enables_internal_response_filter_without_client_tools() {
+    let body =
+        ReplayableBody::from_bytes(Bytes::from_static(br#"{"model":"grok-4.5","input":"hi"}"#));
+    let mapping = match xai_client_tool_mapping("xai", "/v1/responses", &body, true).await {
+        Ok(Some(mapping)) => mapping,
+        Ok(None) => panic!("enabled X Search should create a response filter mapping"),
+        Err(_) => panic!("response filter mapping should succeed"),
+    };
+    let payload = br#"{"output":[{"type":"custom_tool_call","name":"x_user_search","call_id":"xs_call_1"},{"type":"message","content":[]}]}"#;
+
+    let (filtered, changed) =
+        token_proxy_protocol::xai_client_tools::restore_json_payload(payload, &mapping)
+            .expect("filter response");
+    let value: Value = serde_json::from_slice(&filtered).expect("filtered JSON");
+
+    assert!(changed);
+    assert_eq!(value["output"].as_array().map(Vec::len), Some(1));
+    assert_eq!(value["output"][0]["type"], "message");
+}
+
 #[tokio::test]
 async fn xai_responses_filters_unsupported_fields_and_orphaned_tool_controls() {
     let value = transformed_xai_body(
@@ -280,6 +444,7 @@ async fn codex_responses_lite_header_and_metadata_force_parallel_tools_off() {
             &xai_meta("gpt-5.6", true),
             None,
             &headers,
+            false,
         )
         .await
         {
@@ -312,6 +477,7 @@ async fn codex_non_lite_request_does_not_change_parallel_tool_calls() {
         &xai_meta("gpt-5.6", true),
         None,
         &axum::http::HeaderMap::new(),
+        false,
     )
     .await
     {

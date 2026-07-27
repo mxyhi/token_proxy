@@ -313,6 +313,25 @@ fn proxy_config_file_defaults_codex_session_scoped_cooldown_disabled() {
 }
 
 #[test]
+fn proxy_config_file_defaults_xai_x_search_injection_disabled() {
+    let config = ProxyConfigFile::default();
+
+    assert!(!config.xai_inject_x_search);
+}
+
+#[test]
+fn proxy_config_file_roundtrips_xai_x_search_injection() {
+    let mut config = ProxyConfigFile::default();
+    config.xai_inject_x_search = true;
+
+    let value = serde_json::to_value(&config).expect("serialize config");
+    assert_eq!(value["xai_inject_x_search"], serde_json::json!(true));
+
+    let restored: ProxyConfigFile = serde_json::from_value(value).expect("deserialize config");
+    assert!(restored.xai_inject_x_search);
+}
+
+#[test]
 fn proxy_config_file_defaults_upstream_strategy_to_fill_first_serial() {
     let config = ProxyConfigFile::default();
 

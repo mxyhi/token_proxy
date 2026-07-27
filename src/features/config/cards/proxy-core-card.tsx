@@ -215,6 +215,21 @@ function ProxyCoreFields({
           }
         />
       </div>
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-1">
+          <Label htmlFor="xai-inject-x-search">
+            {m.proxy_core_xai_inject_x_search_label()}
+          </Label>
+          <p className="text-xs text-muted-foreground">
+            {m.proxy_core_xai_inject_x_search_help()}
+          </p>
+        </div>
+        <Switch
+          id="xai-inject-x-search"
+          checked={form.xaiInjectXSearch}
+          onCheckedChange={(checked) => onChange({ xaiInjectXSearch: checked })}
+        />
+      </div>
       <div className="grid gap-2">
         <Label htmlFor="stream-first-output-timeout-secs">
           {m.proxy_core_stream_first_output_timeout_secs_label()}

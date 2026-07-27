@@ -110,6 +110,7 @@ const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "retryable_failure_cooldown_secs",
   "same_upstream_retry_count",
   "codex_session_scoped_cooldown_enabled",
+  "xai_inject_x_search",
   "stream_first_output_timeout_secs",
   "sync_response_timeout_secs",
   "tray_token_rate",
@@ -135,6 +136,7 @@ export const EMPTY_FORM: ConfigForm = {
   retryableFailureCooldownSecs: "15",
   sameUpstreamRetryCount: "1",
   codexSessionScopedCooldownEnabled: false,
+  xaiInjectXSearch: false,
   streamFirstOutputTimeoutSecs: String(DEFAULT_STREAM_FIRST_OUTPUT_TIMEOUT_SECS),
   syncResponseTimeoutSecs: String(DEFAULT_SYNC_RESPONSE_TIMEOUT_SECS),
   trayTokenRate: { ...DEFAULT_TRAY_TOKEN_RATE },
@@ -254,6 +256,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     sameUpstreamRetryCount: String(config.same_upstream_retry_count ?? 1),
     codexSessionScopedCooldownEnabled:
       config.codex_session_scoped_cooldown_enabled ?? false,
+    xaiInjectXSearch: config.xai_inject_x_search ?? false,
     streamFirstOutputTimeoutSecs: String(
       config.stream_first_output_timeout_secs ?? DEFAULT_STREAM_FIRST_OUTPUT_TIMEOUT_SECS,
     ),
@@ -310,6 +313,7 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     ),
     same_upstream_retry_count: parseSameUpstreamRetryCount(form.sameUpstreamRetryCount),
     codex_session_scoped_cooldown_enabled: form.codexSessionScopedCooldownEnabled,
+    xai_inject_x_search: form.xaiInjectXSearch,
     stream_first_output_timeout_secs: parseTimeoutSecs(
       form.streamFirstOutputTimeoutSecs,
       DEFAULT_STREAM_FIRST_OUTPUT_TIMEOUT_SECS,

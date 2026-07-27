@@ -117,6 +117,7 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
             config.same_upstream_retry_count,
         )?,
         codex_session_scoped_cooldown_enabled: config.codex_session_scoped_cooldown_enabled,
+        xai_inject_x_search: config.xai_inject_x_search,
         stream_first_output_timeout: resolve_timeout_secs(
             "stream_first_output_timeout_secs",
             config.stream_first_output_timeout_secs,

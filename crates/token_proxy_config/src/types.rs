@@ -40,7 +40,12 @@ fn default_same_upstream_retry_count() -> u64 {
 }
 
 fn default_model_list_prefix() -> bool {
-    false
+    // 默认开启：/v1/models 并集后用 upstream_id/model 便于指定上游。
+    true
+}
+
+fn is_default_model_list_prefix(value: &bool) -> bool {
+    *value == default_model_list_prefix()
 }
 
 fn is_default_retryable_failure_cooldown_secs(value: &u64) -> bool {
@@ -307,9 +312,14 @@ pub struct ProxyConfigFile {
     pub cors_enabled: bool,
     #[serde(
         default = "default_model_list_prefix",
-        skip_serializing_if = "is_false"
+        // 默认 true：省略字段；显式 false 必须写出，否则 reload 会又变回 true。
+        skip_serializing_if = "is_default_model_list_prefix"
     )]
     pub model_list_prefix: bool,
+    /// 一次性迁移：旧配置已从「默认关」切到「默认开 model_list_prefix」。
+    /// 标记后用户可再手动关闭，不会被再次强制打开。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub model_list_prefix_default_on_migrated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kiro_preferred_endpoint: Option<KiroPreferredEndpoint>,
     #[serde(
@@ -364,6 +374,8 @@ impl Default for ProxyConfigFile {
             app_proxy_url: None,
             cors_enabled: false,
             model_list_prefix: default_model_list_prefix(),
+            // 新配置无需再跑默认开启迁移。
+            model_list_prefix_default_on_migrated: true,
             kiro_preferred_endpoint: None,
             log_level: LogLevel::default(),
             max_request_body_bytes: None,

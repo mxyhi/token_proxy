@@ -443,6 +443,8 @@ fn migrate_new_format_is_noop() {
         {
           "host": "127.0.0.1",
           "port": 9208,
+          "model_list_prefix": true,
+          "model_list_prefix_default_on_migrated": true,
           "hot_model_mappings": {
             "custom/alias": "custom-target"
           },
@@ -555,6 +557,8 @@ fn migrate_preserves_custom_hot_model_mappings() {
         {
           "host": "127.0.0.1",
           "port": 9208,
+          "model_list_prefix": true,
+          "model_list_prefix_default_on_migrated": true,
           "hot_model_mappings": {
             "custom/alias": "custom-target"
           },
@@ -572,6 +576,67 @@ fn migrate_preserves_custom_hot_model_mappings() {
     );
     assert!(value["hot_model_mappings"].get("openai/gpt-5.5").is_none());
     assert!(value.get("model_discovery_refresh_secs").is_none());
+}
+
+#[test]
+fn migrate_enables_model_list_prefix_when_missing_or_false() {
+    let mut missing = parse_json(
+        r#"
+        {
+          "host": "127.0.0.1",
+          "port": 9208,
+          "hot_model_mappings": { "a": "b" },
+          "upstreams": []
+        }
+        "#,
+    );
+    let changed = migrate_config_json(&mut missing).expect("migrate missing");
+    assert!(changed);
+    assert_eq!(missing["model_list_prefix"], serde_json::json!(true));
+    assert_eq!(
+        missing["model_list_prefix_default_on_migrated"],
+        serde_json::json!(true)
+    );
+
+    let mut explicit_false = parse_json(
+        r#"
+        {
+          "host": "127.0.0.1",
+          "port": 9208,
+          "model_list_prefix": false,
+          "hot_model_mappings": { "a": "b" },
+          "upstreams": []
+        }
+        "#,
+    );
+    let changed = migrate_config_json(&mut explicit_false).expect("migrate false");
+    assert!(changed);
+    assert_eq!(explicit_false["model_list_prefix"], serde_json::json!(true));
+    assert_eq!(
+        explicit_false["model_list_prefix_default_on_migrated"],
+        serde_json::json!(true)
+    );
+}
+
+#[test]
+fn migrate_does_not_reforce_model_list_prefix_after_user_disables() {
+    let mut value = parse_json(
+        r#"
+        {
+          "host": "127.0.0.1",
+          "port": 9208,
+          "model_list_prefix": false,
+          "model_list_prefix_default_on_migrated": true,
+          "hot_model_mappings": { "a": "b" },
+          "upstreams": []
+        }
+        "#,
+    );
+    let before = value.clone();
+    let changed = migrate_config_json(&mut value).expect("migrate");
+    assert!(!changed);
+    assert_eq!(value, before);
+    assert_eq!(value["model_list_prefix"], serde_json::json!(false));
 }
 
 #[test]

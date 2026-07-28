@@ -121,6 +121,8 @@ export type ProxyConfigFileBase = {
   app_proxy_url: string | null;
   cors_enabled?: boolean;
   model_list_prefix?: boolean;
+  /** 后端一次性迁移标记：旧配置已默认打开 model_list_prefix */
+  model_list_prefix_default_on_migrated?: boolean;
   kiro_preferred_endpoint?: KiroPreferredEndpoint | null;
   log_level?: LogLevel;
   retryable_failure_cooldown_secs?: number;

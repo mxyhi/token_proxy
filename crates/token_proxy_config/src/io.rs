@@ -28,6 +28,8 @@ const DEFAULT_CONFIG_HEADER: &str = concat!(
     "// upstreams[].proxy_url (optional): empty => direct; \"$app_proxy_url\" => use app_proxy_url; or an explicit proxy URL.\n",
     "// upstreams[].providers (required): one upstream can serve multiple providers. Example: [\"openai\", \"openai-response\"].\n",
     "// hot_model_mappings (optional): global alias -> target model map. Delete this field to reset defaults on next load.\n",
+    "// model_list_prefix (optional): default true; when true /v1/models emits upstream_id/model prefixes.\n",
+    "// model_list_prefix_default_on_migrated (internal): one-shot migration marker; after true, user can disable prefix.\n",
     "// upstreams[].convert_from_map (optional): explicitly allow inbound format conversion per provider.\n",
     "//   Example: { \"openai-response\": [\"openai_chat\", \"anthropic_messages\"] }\n"
 );

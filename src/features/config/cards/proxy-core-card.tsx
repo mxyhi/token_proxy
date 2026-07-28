@@ -114,7 +114,8 @@ function ProxyCoreFields({
         <div className="space-y-1">
           <Label htmlFor="model-list-prefix">模型列表显示渠道前缀</Label>
           <p className="text-xs text-muted-foreground">
-            开启后，`/v1/models` 会返回 `upstream_id/模型名`；同名模型额外保留无前缀入口用于轮询。
+            默认：`/v1/models` 合并全部启用上游的可广告模型并去重。开启后额外返回
+            `upstream_id/模型名` 便于指定上游；同名模型仍保留无前缀入口用于轮询。
           </p>
         </div>
         <Switch

@@ -4217,6 +4217,7 @@ fn models_index_aggregates_unique_ids_when_prefix_disabled() {
             .filter_map(|item| item["id"].as_str().map(str::to_string))
             .collect::<Vec<_>>();
         ids.sort();
+        // 默认并集去重：同名只保留一个裸名，不自动加前缀。
         assert_eq!(ids, vec!["gpt-4.1", "gpt-5", "o3"]);
         let alpha_requests = upstream_a.requests();
         let beta_requests = upstream_b.requests();
@@ -4227,6 +4228,103 @@ fn models_index_aggregates_unique_ids_when_prefix_disabled() {
 
         upstream_a.abort();
         upstream_b.abort();
+    });
+}
+
+#[test]
+fn models_index_unions_models_across_providers() {
+    run_async(async {
+        let openai = spawn_model_catalog_upstream(json!({
+            "object": "list",
+            "data": [
+                { "id": "gpt-from-openai", "object": "model" },
+                { "id": "shared-model", "object": "model" }
+            ]
+        }))
+        .await;
+        let anthropic = spawn_model_catalog_upstream(json!({
+            "object": "list",
+            "data": [
+                { "id": "claude-from-anthropic", "object": "model" },
+                { "id": "shared-model", "object": "model" }
+            ]
+        }))
+        .await;
+        let data_dir = next_test_data_dir("models_index_unions_models_across_providers");
+        let config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                0,
+                "u-openai",
+                openai.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_ANTHROPIC,
+                100,
+                "u-anthropic",
+                anthropic.base_url.as_str(),
+                FORMATS_MESSAGES,
+            ),
+        ]);
+        let state = build_test_state_handle(config, data_dir).await;
+
+        let (status, body) = send_models_request(state).await;
+        assert_eq!(status, StatusCode::OK);
+        let mut ids = body["data"]
+            .as_array()
+            .expect("models data")
+            .iter()
+            .filter_map(|item| item["id"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        ids.sort();
+        // 跨 provider 并集去重；默认无前缀。
+        assert_eq!(
+            ids,
+            vec![
+                "claude-from-anthropic",
+                "gpt-from-openai",
+                "shared-model",
+            ]
+        );
+        assert_eq!(openai.requests().len(), 1);
+        assert_eq!(anthropic.requests().len(), 1);
+
+        openai.abort();
+        anthropic.abort();
+    });
+}
+
+#[test]
+fn models_index_includes_codex_builtin_when_only_codex_configured() {
+    run_async(async {
+        let data_dir =
+            next_test_data_dir("models_index_includes_codex_builtin_when_only_codex_configured");
+        let config = config_with_runtime_upstreams(&[(
+            PROVIDER_CODEX,
+            0,
+            "codex-only",
+            "https://chatgpt.com/backend-api/codex",
+            FORMATS_RESPONSES,
+        )]);
+        let state = build_test_state_handle(config, data_dir).await;
+
+        let (status, body) = send_models_request(state).await;
+        assert_eq!(status, StatusCode::OK);
+        let ids = body["data"]
+            .as_array()
+            .expect("models data")
+            .iter()
+            .filter_map(|item| item["id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(
+            !ids.is_empty(),
+            "codex builtin models should appear on /v1/models without client_version"
+        );
+        assert!(
+            ids.iter().any(|id| id.contains("gpt") || id.contains("o")),
+            "expected codex-like model ids, got {ids:?}"
+        );
     });
 }
 

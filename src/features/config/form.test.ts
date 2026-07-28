@@ -317,7 +317,7 @@ describe("config/form", () => {
     expect(form.streamFirstOutputTimeoutSecs).toBe("60");
     expect(form.syncResponseTimeoutSecs).toBe("300");
     expect(form.corsEnabled).toBe(false);
-    expect(form.modelListPrefix).toBe(false);
+    expect(form.modelListPrefix).toBe(true);
     expect(form.codexSessionScopedCooldownEnabled).toBe(false);
     expect(form.upstreams[0]?.apiKeys).toBe("key-a, key-b");
     expect(form.upstreamStrategy).toEqual({

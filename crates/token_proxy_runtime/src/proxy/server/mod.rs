@@ -13,8 +13,11 @@ use tokio::sync::RwLock;
 
 use super::{
     codex_models_manifest, http, server_helpers::extract_request_path,
-    upstream::aggregate_model_catalog_request, ProxyState, RequestMeta,
+    upstream::aggregate_all_providers_model_catalog, ProxyState,
 };
+// 测试模块 `use super::*` 需要可见；生产路径不直接使用。
+#[cfg(test)]
+use super::RequestMeta;
 
 const PROVIDER_ANTHROPIC: &str = "anthropic";
 const PROVIDER_GEMINI: &str = "gemini";
@@ -40,20 +43,18 @@ use super::openai_compat::{
     FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES, RESPONSES_PATH,
 };
 pub(crate) use bootstrap::{build_router, build_upstream_cursors};
-use dispatch::{
-    is_openai_compatible_models_index_path, is_openai_models_index_path, resolve_outbound_path,
-    DispatchPlan,
-};
+use dispatch::{is_openai_compatible_models_index_path, is_openai_models_index_path};
 #[cfg(test)]
 use dispatch::{
-    resolve_dispatch_plan, resolve_dispatch_plan_with_request, resolve_retry_fallback_plan,
+    resolve_dispatch_plan, resolve_dispatch_plan_with_request, resolve_outbound_path,
+    resolve_retry_fallback_plan, DispatchPlan,
 };
 use execute::is_debug_log_enabled;
 use fallback::forward_with_provider_fallbacks;
-use inbound::{ensure_local_auth_or_respond, prepare_inbound_request, resolve_plan_or_respond};
-use prepared::{
-    build_outbound_path_with_query, finalize_prepared_request, resolve_request_auth_or_respond,
-};
+use inbound::{ensure_local_auth_or_respond, prepare_inbound_request};
+use prepared::{finalize_prepared_request, resolve_request_auth_or_respond};
+#[cfg(test)]
+use prepared::build_outbound_path_with_query;
 
 const ERROR_NO_UPSTREAM: &str = "No available upstream configured.";
 
@@ -130,11 +131,13 @@ async fn proxy_request_inner(
 
     let is_codex_models_manifest =
         codex_models_manifest::is_request(&method, &path, query.as_deref());
+    // OpenAI 兼容模型索引：跨全部 enabled upstream 并集，不按 priority 单选 provider。
+    // Codex 带 client_version 的 manifest 仍走后续转发路径。
     if method == Method::GET
         && !is_codex_models_manifest
         && (is_openai_models_index_path(&path) || is_openai_compatible_models_index_path(&path))
     {
-        let body = match ensure_local_auth_or_respond(
+        let _body = match ensure_local_auth_or_respond(
             &state.config,
             &state.log,
             &headers,
@@ -152,24 +155,6 @@ async fn proxy_request_inner(
             Ok(body) => body,
             Err(response) => return http::with_cors_headers(&state.config, &headers, response),
         };
-        let (plan, _body) = match resolve_plan_or_respond(
-            &state.config,
-            &state.log,
-            &method,
-            &headers,
-            body,
-            capture_request_detail_enabled,
-            client_ip.clone(),
-            &path,
-            query.as_deref(),
-            request_start,
-            state.config.max_request_body_bytes,
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(response) => return http::with_cors_headers(&state.config, &headers, response),
-        };
         let request_auth = match resolve_request_auth_or_respond(
             &state.config,
             &headers,
@@ -177,33 +162,15 @@ async fn proxy_request_inner(
             None,
             client_ip.clone(),
             &path,
-            plan.provider,
+            "models",
             request_start,
         ) {
             Ok(request_auth) => request_auth,
             Err(response) => return http::with_cors_headers(&state.config, &headers, response),
         };
-        let meta = RequestMeta {
-            client_ip: client_ip.clone(),
-            stream: false,
-            original_model: None,
-            mapped_model: None,
-            reasoning_effort: None,
-            response_format: None,
-            estimated_input_tokens: None,
-            billing: Default::default(),
-        };
-        let outbound_path = resolve_outbound_path(&path, &plan, &meta);
-        let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, &uri);
-        let response = aggregate_model_catalog_request(
-            state.clone(),
-            plan.provider,
-            &path,
-            &outbound_path_with_query,
-            &headers,
-            &request_auth,
-        )
-        .await;
+        tracing::debug!(path = %path, "serving aggregated multi-provider model catalog");
+        let response =
+            aggregate_all_providers_model_catalog(state.clone(), &headers, &request_auth).await;
         return http::with_cors_headers(&state.config, &headers, response);
     }
 

@@ -31,16 +31,48 @@ struct ModelDiscoveryJob {
     account_id: Option<String>,
 }
 
-pub(super) async fn aggregate_model_catalog_request(
+/// 聚合全部已配置 provider 的模型目录（OpenAI 兼容 `/v1/models` 入口）。
+/// 不再按 priority 只选一个 provider，避免模型选择器只露出 1/3 上游。
+pub(super) async fn aggregate_all_providers_model_catalog(
     state: Arc<ProxyState>,
-    provider: &str,
-    inbound_path: &str,
-    upstream_path_with_query: &str,
     headers: &HeaderMap,
     request_auth: &RequestAuth,
 ) -> Response {
+    let mut providers: Vec<String> = state.config.upstreams.keys().cloned().collect();
+    providers.sort();
+    tracing::debug!(
+        provider_count = providers.len(),
+        providers = ?providers,
+        "aggregating model catalog across all providers"
+    );
+
+    let mut sources: Vec<(String, Vec<String>)> = Vec::new();
+    let mut successful = 0usize;
+    for provider in &providers {
+        let (count, provider_sources) =
+            collect_provider_model_sources(state.as_ref(), provider, headers, request_auth).await;
+        successful += count;
+        sources.extend(provider_sources);
+    }
+
+    if successful == 0 {
+        return http::error_response(
+            StatusCode::BAD_GATEWAY,
+            "No upstream model catalog available.",
+        );
+    }
+
+    model_catalog_list_response(&sources, state.config.model_list_prefix)
+}
+
+async fn collect_provider_model_sources(
+    state: &ProxyState,
+    provider: &str,
+    headers: &HeaderMap,
+    request_auth: &RequestAuth,
+) -> (usize, Vec<(String, Vec<String>)>) {
     let Some(provider_upstreams) = state.config.provider_upstreams(provider) else {
-        return http::error_response(StatusCode::BAD_GATEWAY, "No available upstream configured.");
+        return (0, Vec::new());
     };
 
     let mut sources: Vec<(String, Vec<String>)> = Vec::new();
@@ -56,6 +88,8 @@ pub(super) async fn aggregate_model_catalog_request(
         billing: Default::default(),
     };
     let empty_body = ReplayableBody::from_bytes(Bytes::new());
+    // 探测路径按 provider 自身能力，不跟客户端请求 path 绑定（跨 provider 并集时尤为重要）。
+    let probe_paths = model_catalog_probe_paths(provider);
 
     for group in &provider_upstreams.groups {
         for upstream in &group.items {
@@ -63,20 +97,20 @@ pub(super) async fn aggregate_model_catalog_request(
             merge_model_catalog_ids(&mut models, builtin_model_ids(provider));
             expand_model_ids_with_mappings(&mut models, &state.config.hot_model_mappings);
             upstream.restrict_model_catalog(&mut models);
-            if model_catalog_probe_paths(provider).is_none() {
+            let Some((inbound_path, upstream_path)) = probe_paths else {
                 if !models.is_empty() {
                     successful += 1;
                     sources.push((upstream.id.clone(), models));
                 }
                 continue;
-            }
+            };
 
             let upstream_model_catalog = fetch_upstream_model_catalog(
-                state.as_ref(),
+                state,
                 provider,
                 upstream,
                 inbound_path,
-                upstream_path_with_query,
+                upstream_path,
                 headers,
                 &meta,
                 request_auth,
@@ -108,14 +142,14 @@ pub(super) async fn aggregate_model_catalog_request(
         }
     }
 
-    if successful == 0 {
-        return http::error_response(
-            StatusCode::BAD_GATEWAY,
-            "No upstream model catalog available.",
-        );
-    }
+    (successful, sources)
+}
 
-    let response_body = build_model_catalog_response_body(&sources, state.config.model_list_prefix);
+fn model_catalog_list_response(
+    sources: &[(String, Vec<String>)],
+    include_prefixed: bool,
+) -> Response {
+    let response_body = build_model_catalog_response_body(sources, include_prefixed);
     let mut response_headers = HeaderMap::new();
     response_headers.insert(
         axum::http::header::CONTENT_TYPE,
@@ -483,6 +517,7 @@ fn build_model_catalog_response_body(
             continue;
         };
         if include_prefixed {
+            // model_list_prefix：每条上游出 `upstream_id/model`；同名额外保留裸名供轮询/failover。
             if upstream_ids.len() > 1 {
                 data.push(model_catalog_item(model.as_str(), model.as_str(), created));
             }
@@ -492,6 +527,7 @@ fn build_model_catalog_response_body(
             }
             continue;
         }
+        // 默认：全上游可广告模型去重并集，仅裸名。
         data.push(model_catalog_item(model.as_str(), "token_proxy", created));
     }
 
@@ -513,6 +549,61 @@ fn model_catalog_item(id: &str, owned_by: &str, created: i64) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_catalog_response_default_dedupes_bare_ids_without_prefix() {
+        let sources = vec![
+            (
+                "alpha".to_string(),
+                vec!["gpt-unique-a".to_string(), "gpt-shared".to_string()],
+            ),
+            (
+                "beta".to_string(),
+                vec!["gpt-unique-b".to_string(), "gpt-shared".to_string()],
+            ),
+        ];
+        let body = build_model_catalog_response_body(&sources, false);
+        let mut ids = body["data"]
+            .as_array()
+            .expect("data")
+            .iter()
+            .filter_map(|item| item["id"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(ids, vec!["gpt-shared", "gpt-unique-a", "gpt-unique-b"]);
+    }
+
+    #[test]
+    fn model_catalog_response_prefix_mode_emits_upstream_id_paths() {
+        let sources = vec![
+            (
+                "alpha".to_string(),
+                vec!["gpt-unique-a".to_string(), "gpt-shared".to_string()],
+            ),
+            (
+                "beta".to_string(),
+                vec!["gpt-unique-b".to_string(), "gpt-shared".to_string()],
+            ),
+        ];
+        let body = build_model_catalog_response_body(&sources, true);
+        let mut ids = body["data"]
+            .as_array()
+            .expect("data")
+            .iter()
+            .filter_map(|item| item["id"].as_str().map(str::to_string))
+            .collect::<Vec<_>>();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec![
+                "alpha/gpt-shared",
+                "alpha/gpt-unique-a",
+                "beta/gpt-shared",
+                "beta/gpt-unique-b",
+                "gpt-shared",
+            ]
+        );
+    }
 
     #[test]
     fn xai_catalog_uses_protocol_ids_before_display_names() {

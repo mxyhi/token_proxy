@@ -8,6 +8,7 @@ use super::InboundApiFormat;
 /// - `upstreams[].provider` -> `upstreams[].providers: string[]`
 /// - 按旧开关补齐 `convert_from_map`
 /// - 平铺 `api_keys` / `*_account_id` -> `credential` 判别联合
+/// - 一次性将 `model_list_prefix` 默认开启（含旧配置显式 false）
 ///
 /// 事务语义：全部变换在 `Value` 克隆上完成，成功后才替换调用方传入的 `root`；
 /// 任一上游冲突/错误时返回 `Err`，且传入 `Value` 字节语义不变。
@@ -72,6 +73,7 @@ fn needs_migration(root: &Value) -> bool {
     let missing_hot_model_mappings = !root_obj.contains_key("hot_model_mappings");
     let has_legacy_model_discovery_refresh_secs =
         root_obj.contains_key("model_discovery_refresh_secs");
+    let needs_model_list_prefix_default_on = needs_model_list_prefix_default_on_migration(root_obj);
 
     had_legacy_enable
         || had_legacy_provider
@@ -80,6 +82,15 @@ fn needs_migration(root: &Value) -> bool {
         || had_legacy_upstream_strategy
         || missing_hot_model_mappings
         || has_legacy_model_discovery_refresh_secs
+        || needs_model_list_prefix_default_on
+}
+
+/// 未打一次性标记的配置：无论缺字段还是显式 false，都需要默认开启前缀。
+fn needs_model_list_prefix_default_on_migration(root_obj: &Map<String, Value>) -> bool {
+    !root_obj
+        .get("model_list_prefix_default_on_migrated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// 在克隆上执行全部迁移步骤；成功返回是否有实质修改。
@@ -98,6 +109,7 @@ fn apply_migrations(root: &mut Value) -> Result<bool, String> {
     changed |= migrate_legacy_upstream_strategy(root_obj);
     changed |= migrate_hot_model_mappings(root_obj);
     changed |= remove_legacy_model_discovery_refresh_secs(root_obj);
+    changed |= migrate_model_list_prefix_default_on(root_obj);
 
     let Some(upstreams_value) = root_obj.get_mut("upstreams") else {
         return Ok(changed);
@@ -124,6 +136,28 @@ fn migrate_hot_model_mappings(root_obj: &mut Map<String, Value>) -> bool {
     let value = serde_json::to_value(default_hot_model_mappings())
         .unwrap_or_else(|_| Value::Object(Map::new()));
     root_obj.insert("hot_model_mappings".to_string(), value);
+    true
+}
+
+/// 一次性把 model_list_prefix 拉到 true（覆盖旧默认关 / 显式 false）。
+/// 打标后用户可再关闭，不会二次强制。
+fn migrate_model_list_prefix_default_on(root_obj: &mut Map<String, Value>) -> bool {
+    if !needs_model_list_prefix_default_on_migration(root_obj) {
+        return false;
+    }
+    let previous = root_obj
+        .get("model_list_prefix")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    root_obj.insert("model_list_prefix".to_string(), Value::Bool(true));
+    root_obj.insert(
+        "model_list_prefix_default_on_migrated".to_string(),
+        Value::Bool(true),
+    );
+    tracing::info!(
+        previous_model_list_prefix = previous,
+        "migrated model_list_prefix to default on"
+    );
     true
 }
 

@@ -43,23 +43,12 @@ use super::{
     request_body::ReplayableBody, request_detail::RequestDetailSnapshot, ProxyState, RequestMeta,
 };
 
-pub(super) async fn aggregate_model_catalog_request(
+pub(super) async fn aggregate_all_providers_model_catalog(
     state: Arc<ProxyState>,
-    provider: &str,
-    inbound_path: &str,
-    upstream_path_with_query: &str,
     headers: &HeaderMap,
     request_auth: &RequestAuth,
 ) -> Response {
-    catalog::aggregate_model_catalog_request(
-        state,
-        provider,
-        inbound_path,
-        upstream_path_with_query,
-        headers,
-        request_auth,
-    )
-    .await
+    catalog::aggregate_all_providers_model_catalog(state, headers, request_auth).await
 }
 
 pub(super) async fn refresh_model_discovery(state: Arc<ProxyState>) {

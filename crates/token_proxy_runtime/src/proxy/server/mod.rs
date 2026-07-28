@@ -43,11 +43,14 @@ use super::openai_compat::{
     FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES, RESPONSES_PATH,
 };
 pub(crate) use bootstrap::{build_router, build_upstream_cursors};
-use dispatch::{is_openai_compatible_models_index_path, is_openai_models_index_path};
+// prepared / inbound 生产路径依赖 DispatchPlan 与 resolve_outbound_path，不可仅 cfg(test)。
+use dispatch::{
+    is_openai_compatible_models_index_path, is_openai_models_index_path, resolve_outbound_path,
+    DispatchPlan,
+};
 #[cfg(test)]
 use dispatch::{
-    resolve_dispatch_plan, resolve_dispatch_plan_with_request, resolve_outbound_path,
-    resolve_retry_fallback_plan, DispatchPlan,
+    resolve_dispatch_plan, resolve_dispatch_plan_with_request, resolve_retry_fallback_plan,
 };
 use execute::is_debug_log_enabled;
 use fallback::forward_with_provider_fallbacks;

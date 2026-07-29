@@ -50,7 +50,10 @@ fn map_responses_tool(value: &Value) -> Option<Value> {
             out.insert("description".to_string(), description.clone());
         }
         if let Some(parameters) = tool.get("parameters") {
-            out.insert("input_schema".to_string(), parameters.clone());
+            out.insert(
+                "input_schema".to_string(),
+                normalize_claude_tool_input_schema(parameters),
+            );
         }
         return Some(Value::Object(out));
     }
@@ -63,9 +66,111 @@ fn map_responses_tool(value: &Value) -> Option<Value> {
         out.insert("description".to_string(), description.clone());
     }
     if let Some(parameters) = function.get("parameters") {
-        out.insert("input_schema".to_string(), parameters.clone());
+        out.insert(
+            "input_schema".to_string(),
+            normalize_claude_tool_input_schema(parameters),
+        );
     }
     Some(Value::Object(out))
+}
+
+// Claude requires an object at the schema root. Root unions are flattened while
+// nested unions remain intact, because nested alternatives are valid properties.
+fn normalize_claude_tool_input_schema(schema: &Value) -> Value {
+    let Some(root) = schema.as_object() else {
+        tracing::debug!("replaced invalid Claude tool input schema with an empty object");
+        return empty_claude_tool_input_schema();
+    };
+    let mut root = root.clone();
+    let mut properties = root
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut normalized_unions = 0_u8;
+
+    for union_name in ["anyOf", "oneOf", "allOf"] {
+        let Some(union) = root.remove(union_name) else {
+            continue;
+        };
+        normalized_unions = normalized_unions.saturating_add(1);
+        let Some(branches) = union.as_array() else {
+            continue;
+        };
+        for branch in branches {
+            let Some(branch) = branch
+                .as_object()
+                .filter(|branch| claude_schema_can_be_object(branch))
+            else {
+                continue;
+            };
+            if let Some(branch_properties) = branch.get("properties").and_then(Value::as_object) {
+                for (name, property) in branch_properties {
+                    properties
+                        .entry(name.clone())
+                        .or_insert_with(|| property.clone());
+                }
+            }
+            if union_name == "allOf" {
+                merge_claude_schema_required(&mut root, branch.get("required"));
+            }
+        }
+    }
+
+    root.insert("type".to_string(), Value::String("object".to_string()));
+    root.insert("properties".to_string(), Value::Object(properties));
+    if normalized_unions > 0 {
+        tracing::debug!(
+            root_union_count = normalized_unions,
+            "normalized root unions in Claude tool input schema"
+        );
+    }
+    Value::Object(root)
+}
+
+fn empty_claude_tool_input_schema() -> Value {
+    json!({ "type": "object", "properties": {} })
+}
+
+fn claude_schema_can_be_object(schema: &Map<String, Value>) -> bool {
+    match schema.get("type") {
+        None => true,
+        Some(Value::String(schema_type)) => schema_type == "object",
+        Some(Value::Array(schema_types)) => schema_types
+            .iter()
+            .any(|schema_type| schema_type.as_str() == Some("object")),
+        Some(_) => false,
+    }
+}
+
+fn merge_claude_schema_required(root: &mut Map<String, Value>, branch_required: Option<&Value>) {
+    let Some(branch_required) = branch_required.and_then(Value::as_array) else {
+        return;
+    };
+    let mut required = root
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|required| {
+            required
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|name| Value::String(name.to_string()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let mut seen = required
+        .iter()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect::<std::collections::HashSet<_>>();
+    for name in branch_required.iter().filter_map(Value::as_str) {
+        if seen.insert(name.to_string()) {
+            required.push(Value::String(name.to_string()));
+        }
+    }
+    if !required.is_empty() {
+        root.insert("required".to_string(), Value::Array(required));
+    }
 }
 
 fn is_responses_web_search_tool(tool_type: &str, tool_name: Option<&str>) -> bool {
@@ -229,5 +334,118 @@ pub fn map_anthropic_stop_sequences_to_openai_stop(stop: Option<&Value>) -> Opti
         0 => None,
         1 => Some(items[0].clone()),
         _ => Some(Value::Array(items.clone())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn responses_tools_normalize_root_schema_unions_for_claude() {
+        let mapped = map_responses_tools_to_anthropic(&json!([
+            {
+                "type": "function",
+                "name": "any_tool",
+                "parameters": {
+                    "anyOf": [
+                        {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]},
+                        {"type": "object", "properties": {"b": {"type": "integer"}}, "required": ["b"]}
+                    ]
+                }
+            },
+            {
+                "type": "function",
+                "name": "one_tool",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"nested": {"oneOf": [{"type": "string"}, {"type": "number"}]}},
+                    "oneOf": [
+                        {"properties": {"a": {"type": "string"}}, "required": ["a"]},
+                        {"properties": {"b": {"type": "string"}}, "required": ["b"]}
+                    ]
+                }
+            },
+            {
+                "type": "function",
+                "name": "all_tool",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"base": {"type": "boolean"}},
+                    "required": ["base"],
+                    "allOf": [
+                        {"properties": {"a": {"type": "string"}}, "required": ["a"]},
+                        {"properties": {"b": {"type": "integer"}}, "required": ["a", "b"]}
+                    ]
+                }
+            }
+        ]));
+
+        assert_eq!(
+            mapped[0]["input_schema"],
+            json!({
+                "type": "object",
+                "properties": {"a": {"type": "string"}, "b": {"type": "integer"}}
+            })
+        );
+        assert_eq!(
+            mapped[1]["input_schema"],
+            json!({
+                "type": "object",
+                "properties": {
+                    "nested": {"oneOf": [{"type": "string"}, {"type": "number"}]},
+                    "a": {"type": "string"},
+                    "b": {"type": "string"}
+                }
+            })
+        );
+        assert_eq!(
+            mapped[2]["input_schema"],
+            json!({
+                "type": "object",
+                "properties": {
+                    "base": {"type": "boolean"},
+                    "a": {"type": "string"},
+                    "b": {"type": "integer"}
+                },
+                "required": ["base", "a", "b"]
+            })
+        );
+    }
+
+    #[test]
+    fn chat_tools_normalize_invalid_and_preserve_object_schemas() {
+        let mapped = map_responses_tools_to_anthropic(&json!([
+            {
+                "type": "function",
+                "function": {"name": "invalid", "parameters": true}
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "ordinary",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                        "additionalProperties": false
+                    }
+                }
+            }
+        ]));
+
+        assert_eq!(
+            mapped[0]["input_schema"],
+            json!({"type": "object", "properties": {}})
+        );
+        assert_eq!(
+            mapped[1]["input_schema"],
+            json!({
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+                "required": ["query"],
+                "additionalProperties": false
+            })
+        );
     }
 }

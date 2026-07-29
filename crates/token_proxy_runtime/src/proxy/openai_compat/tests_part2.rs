@@ -516,6 +516,46 @@ fn chat_request_to_responses_preserves_structured_tool_output() {
         json!("https://example.com/result.png")
     );
 }
+
+#[test]
+fn chat_request_to_responses_restores_stringified_multimodal_tool_output() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let image_content = r#"[{"type":"text","text":"done"},{"type":"image_url","image_url":{"url":"https://example.com/result.png"}},{"type":"input_image","image_url":"data:image/png;base64,AA=="}]"#;
+    let ordinary_json = r#"[{"type":"text","text":"text only"}]"#;
+    let invalid_image = r#"[{"type":"input_image","detail":"low"}]"#;
+    let value = transform_request_value(
+        FormatTransform::ChatToResponses,
+        json!({
+            "model": "gpt-4.1",
+            "messages": [
+                {"role": "tool", "tool_call_id": "image", "content": image_content},
+                {"role": "tool", "tool_call_id": "plain", "content": "plain text"},
+                {"role": "tool", "tool_call_id": "invalid", "content": "[not json"},
+                {"role": "tool", "tool_call_id": "json_text", "content": ordinary_json},
+                {"role": "tool", "tool_call_id": "invalid_image", "content": invalid_image}
+            ]
+        }),
+        &http_clients,
+        None,
+    );
+
+    assert_eq!(value["input"][0]["output"][0]["type"], json!("input_text"));
+    assert_eq!(value["input"][0]["output"][0]["text"], json!("done"));
+    assert_eq!(value["input"][0]["output"][1]["type"], json!("input_image"));
+    assert_eq!(
+        value["input"][0]["output"][1]["image_url"]["url"],
+        json!("https://example.com/result.png")
+    );
+    assert_eq!(value["input"][0]["output"][2]["type"], json!("input_image"));
+    assert_eq!(
+        value["input"][0]["output"][2]["image_url"],
+        json!("data:image/png;base64,AA==")
+    );
+    assert_eq!(value["input"][1]["output"], json!("plain text"));
+    assert_eq!(value["input"][2]["output"], json!("[not json"));
+    assert_eq!(value["input"][3]["output"], json!(ordinary_json));
+    assert_eq!(value["input"][4]["output"], json!(invalid_image));
+}
 #[test]
 fn responses_request_to_chat_accepts_additional_tool_output_item_types() {
     let http_clients = ProxyHttpClients::new().expect("http clients");

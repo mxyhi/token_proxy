@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "version": "curated.20260729",
+  "models": [
+    {
+      "source": {
+        "pricingUrl": "https://platform.kimi.ai/docs/pricing/chat-k3",
+        "verifiedAt": "2026-07-29"
+      },
+      "model": {
+        "modelId": "kimi-k3",
+        "aliases": [
+          "moonshotai/kimi-k3"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 3000,
+          "outputNanoUsdPerToken": 15000,
+          "cacheReadNanoUsdPerToken": 300
+        },
+        "serviceTierProfiles": {},
+        "longContext": null
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-07-29"
+      },
+      "model": {
+        "modelId": "gemini-3.5-flash-lite",
+        "aliases": [
+          "google/gemini-3.5-flash-lite",
+          "models/gemini-3.5-flash-lite"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 300,
+          "outputNanoUsdPerToken": 2500,
+          "cacheReadNanoUsdPerToken": 30
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 540,
+            "outputNanoUsdPerToken": 4500,
+            "cacheReadNanoUsdPerToken": 50
+          }
+        },
+        "longContext": null
+      }
+    }
+  ]
+}

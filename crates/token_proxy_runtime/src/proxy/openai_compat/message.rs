@@ -180,10 +180,9 @@ pub(super) fn stringify_any_json(value: Option<&Value>) -> String {
 pub(super) fn chat_tool_content_to_responses_output(content: Option<&Value>) -> Value {
     match content {
         None => Value::Array(Vec::new()),
-        Some(Value::String(text)) => Value::Array(vec![json!({
-            "type": "input_text",
-            "text": text
-        })]),
+        Some(Value::String(text)) => {
+            stringified_multimodal_tool_output(text).unwrap_or_else(|| Value::String(text.clone()))
+        }
         Some(Value::Array(_)) => Value::Array(
             chat_content_to_responses_message_parts(content, "input_text")
                 .unwrap_or_else(|_| Vec::new()),
@@ -192,6 +191,50 @@ pub(super) fn chat_tool_content_to_responses_output(content: Option<&Value>) -> 
             "type": "input_text",
             "text": stringify_any_json(Some(other))
         })]),
+    }
+}
+
+// Some Chat clients serialize multimodal tool output as a string. Only revive
+// arrays with a usable image so ordinary JSON text keeps its original meaning.
+fn stringified_multimodal_tool_output(text: &str) -> Option<Value> {
+    let parsed = serde_json::from_str::<Value>(text).ok()?;
+    let parts = parsed.as_array()?;
+    if !parts.iter().any(is_valid_tool_output_image_part) {
+        return None;
+    }
+    let normalized = chat_content_to_responses_message_parts(Some(&parsed), "input_text").ok()?;
+    if !normalized
+        .iter()
+        .any(|part| part.get("type").and_then(Value::as_str) == Some("input_image"))
+    {
+        return None;
+    }
+    tracing::debug!(
+        part_count = normalized.len(),
+        "restored stringified multimodal tool output"
+    );
+    Some(Value::Array(normalized))
+}
+
+fn is_valid_tool_output_image_part(part: &Value) -> bool {
+    let Some(part) = part.as_object() else {
+        return false;
+    };
+    match part.get("type").and_then(Value::as_str) {
+        Some("image_url") => valid_image_url_value(part.get("image_url")),
+        Some("input_image") => valid_image_url_value(part.get("image_url")),
+        _ => false,
+    }
+}
+
+fn valid_image_url_value(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::String(url)) => !url.trim().is_empty(),
+        Some(Value::Object(image)) => image
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(|url| !url.trim().is_empty()),
+        _ => false,
     }
 }
 

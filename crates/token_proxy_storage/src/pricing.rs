@@ -11,6 +11,10 @@ const BUNDLED_PRICING_CATALOG: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/resources/model-pricing.json"
 ));
+const CURATED_PRICING_OVERLAY: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/resources/curated-model-pricing.json"
+));
 const SETTINGS_ROW_ID: i64 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -84,6 +88,28 @@ struct PricingCatalog {
     version: String,
     source: PricingSource,
     models: Vec<ModelPricingModel>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CuratedPricingReference {
+    pricing_url: String,
+    verified_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CuratedPricingEntry {
+    source: CuratedPricingReference,
+    model: ModelPricingModel,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CuratedPricingOverlay {
+    schema_version: u32,
+    version: String,
+    models: Vec<CuratedPricingEntry>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -174,6 +200,7 @@ pub enum RemoteCatalogRefresh {
 }
 
 static BUNDLED_SETTINGS: OnceLock<ModelPricingSettings> = OnceLock::new();
+static CURATED_OVERLAY: OnceLock<CuratedPricingOverlay> = OnceLock::new();
 
 pub fn default_model_pricing_settings() -> ModelPricingSettings {
     BUNDLED_SETTINGS
@@ -521,10 +548,74 @@ fn parse_catalog(json: &str) -> Result<ModelPricingSettings, String> {
         return Err("Model pricing catalog version is required.".to_string());
     }
     let models = normalize_models(catalog.models)?;
-    Ok(ModelPricingSettings {
+    apply_curated_pricing_overlay(ModelPricingSettings {
         version: catalog.version,
         source: Some(catalog.source),
         models,
+    })
+}
+
+// Curated official prices stay separate from the sub2api snapshot provenance.
+// They are applied to every base catalog before user overrides are calculated.
+fn apply_curated_pricing_overlay(
+    mut settings: ModelPricingSettings,
+) -> Result<ModelPricingSettings, String> {
+    let overlay = curated_pricing_overlay();
+    let curated_keys: HashSet<String> = overlay
+        .models
+        .iter()
+        .flat_map(|entry| {
+            std::iter::once(&entry.model.model_id)
+                .chain(entry.model.aliases.iter())
+                .flat_map(|model| model_lookup_keys(model))
+        })
+        .collect();
+    settings.models.retain(|model| {
+        std::iter::once(&model.model_id)
+            .chain(model.aliases.iter())
+            .flat_map(|model| model_lookup_keys(model))
+            .all(|key| !curated_keys.contains(&key))
+    });
+    settings
+        .models
+        .extend(overlay.models.iter().map(|entry| entry.model.clone()));
+    settings.models = normalize_models(settings.models)?;
+    settings.version = format!("{}+{}", settings.version, overlay.version);
+    tracing::debug!(
+        version = %settings.version,
+        curated_model_count = overlay.models.len(),
+        "curated pricing overlay applied"
+    );
+    Ok(settings)
+}
+
+fn curated_pricing_overlay() -> &'static CuratedPricingOverlay {
+    CURATED_OVERLAY.get_or_init(|| {
+        let overlay = serde_json::from_str::<CuratedPricingOverlay>(CURATED_PRICING_OVERLAY)
+            .expect("bundled curated pricing overlay must be valid JSON");
+        assert_eq!(
+            overlay.schema_version, 1,
+            "bundled curated pricing overlay schema must be supported"
+        );
+        assert!(
+            !overlay.version.trim().is_empty(),
+            "bundled curated pricing overlay version is required"
+        );
+        assert!(
+            !overlay.models.is_empty(),
+            "bundled curated pricing overlay requires models"
+        );
+        for entry in &overlay.models {
+            assert!(
+                entry.source.pricing_url.starts_with("https://"),
+                "curated pricing source must use HTTPS"
+            );
+            assert!(
+                !entry.source.verified_at.trim().is_empty(),
+                "curated pricing source verification date is required"
+            );
+        }
+        overlay
     })
 }
 
@@ -980,9 +1071,45 @@ mod tests {
     #[test]
     fn bundled_catalog_uses_latest_upstream_snapshot() {
         let settings = default_model_pricing_settings();
-        assert_eq!(settings.version, "catalog.6c762580.0812af25");
+        assert_eq!(
+            settings.version,
+            "catalog.6c762580.0812af25+curated.20260729"
+        );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "6c7625800a78a37afdeb8b4afbd8e869ef84241c");
+    }
+
+    #[test]
+    fn curated_overlay_declares_official_model_sources() {
+        let overlay = curated_pricing_overlay();
+        let sources = overlay
+            .models
+            .iter()
+            .map(|entry| {
+                (
+                    entry.model.model_id.as_str(),
+                    (
+                        entry.source.pricing_url.as_str(),
+                        entry.source.verified_at.as_str(),
+                    ),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(
+            sources.get("kimi-k3"),
+            Some(&(
+                "https://platform.kimi.ai/docs/pricing/chat-k3",
+                "2026-07-29"
+            ))
+        );
+        assert_eq!(
+            sources.get("gemini-3.5-flash-lite"),
+            Some(&(
+                "https://ai.google.dev/gemini-api/docs/pricing",
+                "2026-07-29"
+            ))
+        );
     }
 
     #[test]
@@ -1010,6 +1137,93 @@ mod tests {
             assert_eq!(standard.cost_nano_usd, 9_150);
             assert_eq!(priority.cost_nano_usd, 16_470);
         }
+    }
+
+    #[test]
+    fn curated_models_apply_official_standard_and_priority_prices() {
+        let settings = default_model_pricing_settings();
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        for model in ["kimi-k3", "moonshotai/kimi-k3"] {
+            let cost = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                .expect("Kimi K3 standard price");
+            assert_eq!(cost.pricing_model, "kimi-k3");
+            assert_eq!(cost.cost_nano_usd, 18_300);
+        }
+
+        for model in [
+            "gemini-3.5-flash-lite",
+            "google/gemini-3.5-flash-lite",
+            "models/gemini-3.5-flash-lite",
+        ] {
+            let standard = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                .expect("Gemini 3.5 Flash-Lite standard price");
+            let priority =
+                calculate_request_cost(&settings, Some(model), None, Some("priority"), &usage)
+                    .expect("Gemini 3.5 Flash-Lite priority price");
+
+            assert_eq!(standard.pricing_model, "gemini-3.5-flash-lite");
+            assert_eq!(standard.cost_nano_usd, 2_830);
+            assert_eq!(priority.cost_nano_usd, 5_090);
+        }
+        assert!(settings.version.contains("+curated."));
+    }
+
+    #[test]
+    fn curated_overlay_replaces_base_price_before_user_overrides() {
+        let mut catalog = serde_json::from_str::<serde_json::Value>(BUNDLED_PRICING_CATALOG)
+            .expect("bundled catalog json");
+        catalog["version"] = serde_json::Value::String("remote.with-k3".to_string());
+        catalog["models"]
+            .as_array_mut()
+            .expect("catalog models")
+            .push(serde_json::json!({
+                "modelId": "kimi-k3",
+                "aliases": ["moonshotai/kimi-k3"],
+                "standard": {
+                    "inputNanoUsdPerToken": 1,
+                    "outputNanoUsdPerToken": 1,
+                    "cacheReadNanoUsdPerToken": 1
+                },
+                "serviceTierProfiles": {},
+                "longContext": null
+            }));
+        let base = parse_catalog(&serde_json::to_string(&catalog).expect("catalog body"))
+            .expect("catalog with curated overlay");
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+        assert_eq!(
+            calculate_request_cost(&base, Some("kimi-k3"), None, None, &usage)
+                .expect("curated Kimi K3 price")
+                .cost_nano_usd,
+            18_300
+        );
+
+        let mut customized = base.models.clone();
+        customized
+            .iter_mut()
+            .find(|model| model.model_id == "kimi-k3")
+            .expect("Kimi K3 model")
+            .standard
+            .input_nano_usd_per_token = Some(9_999);
+        let overrides = diff_overrides(&base.models, &customized);
+        let effective = effective_settings(&base, &overrides).expect("effective settings");
+        assert_eq!(
+            calculate_request_cost(&effective, Some("kimi-k3"), None, None, &usage)
+                .expect("custom Kimi K3 price")
+                .breakdown
+                .uncached_input_nano_usd,
+            9_999
+        );
     }
 
     #[test]
@@ -1172,7 +1386,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test");
+        assert_eq!(settings.version, "remote.test+curated.20260729");
     }
 
     #[test]

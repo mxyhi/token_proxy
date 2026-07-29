@@ -57,6 +57,14 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
         Some(&"gemini-3.5-flash".to_string())
     );
     assert_eq!(
+        mappings.get("google/gemini-3.5-flash-lite"),
+        Some(&"gemini-3.5-flash-lite".to_string())
+    );
+    assert_eq!(
+        mappings.get("models/gemini-3.5-flash-lite"),
+        Some(&"gemini-3.5-flash-lite".to_string())
+    );
+    assert_eq!(
         mappings.get("google/gemini-3.6-flash"),
         Some(&"gemini-3.6-flash".to_string())
     );
@@ -114,6 +122,10 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
     assert_eq!(
         mappings.get("moonshotai/kimi-k2.6"),
         Some(&"kimi-k2.6".to_string())
+    );
+    assert_eq!(
+        mappings.get("moonshotai/kimi-k3"),
+        Some(&"kimi-k3".to_string())
     );
     assert_eq!(mappings.get("z-ai/glm-5.2"), Some(&"glm-5.2".to_string()));
     assert_eq!(mappings.get("z-ai/glm-5.1"), Some(&"glm-5.1".to_string()));

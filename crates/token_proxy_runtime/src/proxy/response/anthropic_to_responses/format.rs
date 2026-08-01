@@ -45,9 +45,21 @@ pub(super) fn usage_to_value(usage: TokenUsage, cache_usage: Option<AnthropicCac
         "output_tokens_details": { "reasoning_tokens": 0 },
         "total_tokens": total_tokens
     });
-    if cache_read_tokens > 0 {
+    if cache_read_tokens > 0 || cache_creation_tokens > 0 {
         let mut details = Map::new();
-        details.insert("cached_tokens".to_string(), json!(cache_read_tokens));
+        if cache_read_tokens > 0 {
+            details.insert("cached_tokens".to_string(), json!(cache_read_tokens));
+        }
+        if cache_creation_tokens > 0 {
+            details.insert(
+                "cached_creation_tokens".to_string(),
+                json!(cache_creation_tokens),
+            );
+            tracing::debug!(
+                cache_creation_tokens,
+                "mapped streaming cache creation usage"
+            );
+        }
         value
             .as_object_mut()
             .expect("usage value is object")

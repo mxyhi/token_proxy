@@ -57,6 +57,75 @@ fn responses_and_gemini_request_conversions() {
 }
 
 #[test]
+fn reasoning_summary_visibility_round_trips_between_responses_and_gemini() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+
+    for (summary, include_thoughts) in [(json!("auto"), true), (Value::Null, false)] {
+        let gemini = transform_request_value(
+            FormatTransform::ResponsesToGemini,
+            json!({
+                "model": "gpt-5.6-sol",
+                "input": "hi",
+                "reasoning": { "effort": "high", "summary": summary }
+            }),
+            &http_clients,
+            None,
+        );
+        assert_eq!(
+            gemini["generationConfig"]["thinkingConfig"]["includeThoughts"],
+            json!(include_thoughts)
+        );
+
+        let responses = transform_request_value(
+            FormatTransform::GeminiToResponses,
+            gemini,
+            &http_clients,
+            Some("gpt-5.6-sol"),
+        );
+        assert_eq!(
+            responses["reasoning"]["summary"],
+            if include_thoughts {
+                json!("auto")
+            } else {
+                Value::Null
+            }
+        );
+    }
+}
+
+#[test]
+fn reasoning_effort_does_not_enable_gemini_thoughts_when_summary_is_missing() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let gemini = transform_request_value(
+        FormatTransform::ResponsesToGemini,
+        json!({
+            "model": "gpt-5.6-sol",
+            "input": "hi",
+            "reasoning": { "effort": "high" }
+        }),
+        &http_clients,
+        None,
+    );
+
+    assert!(gemini
+        .get("generationConfig")
+        .and_then(|config| config.get("thinkingConfig"))
+        .and_then(|thinking| thinking.get("includeThoughts"))
+        .is_none());
+
+    let responses = transform_request_value(
+        FormatTransform::GeminiToResponses,
+        json!({
+            "contents": [{ "role": "user", "parts": [{ "text": "hi" }] }],
+            "generationConfig": { "thinkingConfig": {} }
+        }),
+        &http_clients,
+        Some("gpt-5.6-sol"),
+    );
+    assert!(responses.get("reasoning").is_none());
+}
+
+#[test]
 fn gemini_to_responses_strips_sampling_params_for_reasoning_model_hint() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let gemini_value = transform_request_value(
@@ -716,6 +785,41 @@ fn gemini_and_anthropic_request_conversions() {
         anthropic_value["generationConfig"]["stopSequences"],
         json!(["x"])
     );
+}
+
+#[test]
+fn summary_visibility_round_trips_between_anthropic_and_gemini_fallbacks() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let gemini = transform_request_value(
+        FormatTransform::AnthropicToGemini,
+        json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 256,
+            "thinking": { "type": "adaptive", "display": "summarized" },
+            "output_config": { "effort": "high" },
+            "messages": [{ "role": "user", "content": "hi" }]
+        }),
+        &http_clients,
+        None,
+    );
+    assert_eq!(
+        gemini["generationConfig"]["thinkingConfig"]["includeThoughts"],
+        json!(true)
+    );
+
+    let anthropic = transform_request_value(
+        FormatTransform::GeminiToAnthropic,
+        json!({
+            "contents": [{ "role": "user", "parts": [{ "text": "hi" }] }],
+            "generationConfig": {
+                "thinkingConfig": { "includeThoughts": false }
+            }
+        }),
+        &http_clients,
+        Some("claude-sonnet-4-5"),
+    );
+    assert_eq!(anthropic["thinking"]["type"], json!("adaptive"));
+    assert_eq!(anthropic["thinking"]["display"], json!("omitted"));
 }
 #[test]
 fn responses_and_gemini_response_conversions() {

@@ -569,7 +569,11 @@ fn responses_response_to_chat_extracts_output_text_and_maps_usage() {
             "input_tokens": 1,
             "output_tokens": 2,
             "total_tokens": 3,
-            "input_tokens_details": { "cached_tokens": 4, "audio_tokens": 5 },
+            "input_tokens_details": {
+                "cached_tokens": 4,
+                "cached_creation_tokens": 6,
+                "audio_tokens": 5
+            },
             "output_tokens_details": {
                 "reasoning_tokens": 7,
                 "audio_tokens": 8,
@@ -603,6 +607,10 @@ fn responses_response_to_chat_extracts_output_text_and_maps_usage() {
     assert_eq!(
         value["usage"]["prompt_tokens_details"]["audio_tokens"],
         json!(5)
+    );
+    assert_eq!(
+        value["usage"]["prompt_tokens_details"]["cached_creation_tokens"],
+        json!(6)
     );
     assert_eq!(
         value["usage"]["completion_tokens_details"]["reasoning_tokens"],
@@ -641,7 +649,11 @@ fn responses_response_to_chat_omits_empty_usage_details() {
             "input_tokens": 1,
             "output_tokens": 2,
             "total_tokens": 3,
-            "input_tokens_details": { "cached_tokens": 0, "audio_tokens": 0 },
+            "input_tokens_details": {
+                "cached_tokens": 0,
+                "cached_creation_tokens": 0,
+                "audio_tokens": 0
+            },
             "output_tokens_details": {
                 "reasoning_tokens": 0,
                 "audio_tokens": 0,

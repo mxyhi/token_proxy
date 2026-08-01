@@ -3,6 +3,7 @@
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
+use token_proxy_protocol::compat_reason::SummaryVisibility;
 
 use super::tools::{
     gemini_function_call_to_chat_tool_call, map_chat_tool_choice_to_gemini,
@@ -11,6 +12,14 @@ use super::tools::{
 
 /// 将 OpenAI Chat 请求转换为 Gemini 格式
 pub(crate) fn chat_request_to_gemini(body: &Bytes) -> Result<Bytes, String> {
+    chat_request_to_gemini_with_summary_visibility(body, SummaryVisibility::Unspecified)
+}
+
+/// Chat 仅作内部结构中转；visibility 旁带传入，避免非标准字段泄漏到真实 Chat 上游。
+pub(crate) fn chat_request_to_gemini_with_summary_visibility(
+    body: &Bytes,
+    visibility: SummaryVisibility,
+) -> Result<Bytes, String> {
     let value: Value =
         serde_json::from_slice(body).map_err(|_| "Request body must be JSON.".to_string())?;
     let Some(object) = value.as_object() else {
@@ -68,6 +77,13 @@ pub(crate) fn chat_request_to_gemini(body: &Bytes) -> Result<Bytes, String> {
     }
     if let Some(seed) = object.get("seed").and_then(Value::as_i64) {
         gen_config.insert("seed".to_string(), json!(seed));
+    }
+    if let Some(include_thoughts) = visibility.gemini_include_thoughts() {
+        gen_config.insert(
+            "thinkingConfig".to_string(),
+            json!({ "includeThoughts": include_thoughts }),
+        );
+        tracing::debug!(?visibility, "mapped summary visibility to Gemini");
     }
     // 响应格式
     if let Some(response_format) = object.get("response_format").and_then(Value::as_object) {
@@ -127,6 +143,14 @@ pub(crate) fn gemini_request_to_chat(
     body: &Bytes,
     model_hint: Option<&str>,
 ) -> Result<Bytes, String> {
+    gemini_request_to_chat_with_summary_visibility(body, model_hint).map(|(body, _)| body)
+}
+
+/// 返回 Chat 中间体及独立 visibility intent，后续协议转换不得从 effort 推断它。
+pub(crate) fn gemini_request_to_chat_with_summary_visibility(
+    body: &Bytes,
+    model_hint: Option<&str>,
+) -> Result<(Bytes, SummaryVisibility), String> {
     let value: Value =
         serde_json::from_slice(body).map_err(|_| "Request body must be JSON.".to_string())?;
     let Some(object) = value.as_object() else {
@@ -164,8 +188,14 @@ pub(crate) fn gemini_request_to_chat(
         }
     }
 
+    let visibility =
+        SummaryVisibility::from_gemini_generation_config(object.get("generationConfig"));
+    if visibility.is_specified() {
+        tracing::debug!(?visibility, "read Gemini summary visibility");
+    }
     serde_json::to_vec(&Value::Object(out))
         .map(Bytes::from)
+        .map(|body| (body, visibility))
         .map_err(|err| format!("Failed to serialize Chat request: {err}"))
 }
 

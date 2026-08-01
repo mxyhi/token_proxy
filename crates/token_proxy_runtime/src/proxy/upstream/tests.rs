@@ -246,14 +246,48 @@ fn xai_routes_compact_and_media_to_official_api() {
         "/v1/videos/video-123/content?download=1",
     ] {
         assert!(
-            prepare::xai_request_url(path).starts_with("https://api.x.ai/v1/"),
+            prepare::xai_request_url(path)
+                .expect("valid xai path")
+                .starts_with("https://api.x.ai/v1/"),
             "path={path}"
         );
     }
     assert_eq!(
-        prepare::xai_request_url("/v1/responses"),
+        prepare::xai_request_url("/v1/responses").expect("valid xai path"),
         "https://cli-chat-proxy.grok.com/v1/responses"
     );
+}
+
+#[test]
+fn xai_video_url_rejects_nonconforming_request_id() {
+    for path in [
+        "/v1/videos/../content",
+        "/v1/videos/video%2fescape/content",
+        "/v1/videos/video#fragment/content",
+    ] {
+        assert!(prepare::xai_request_url(path).is_err(), "path={path}");
+    }
+}
+
+#[test]
+fn gemini_upstream_mapping_rejects_model_path_injection() {
+    let meta = RequestMeta {
+        client_ip: None,
+        stream: false,
+        original_model: Some("gpt-5.6-sol".to_string()),
+        mapped_model: Some("gemini-3.5-pro#fragment".to_string()),
+        reasoning_effort: None,
+        response_format: None,
+        estimated_input_tokens: None,
+        billing: Default::default(),
+    };
+
+    assert!(prepare::resolve_upstream_path_with_query(
+        "gemini",
+        "/v1beta/models/gemini-3.5-pro:generateContent",
+        &meta,
+    )
+    .is_err());
 }
 
 #[test]

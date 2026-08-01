@@ -1029,6 +1029,7 @@ fn filter_anthropic_count_tokens_request(
     // Anthropic count_tokens rejects generation-only fields accepted by messages.
     let mut changed = false;
     for key in [
+        "max_tokens",
         "temperature",
         "top_p",
         "top_k",

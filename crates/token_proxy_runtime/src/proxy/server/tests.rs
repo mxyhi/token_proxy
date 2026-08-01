@@ -9493,7 +9493,8 @@ fn responses_compact_prefers_responses_provider_and_preserves_path() {
             estimated_input_tokens: None,
             billing: Default::default(),
         },
-    );
+    )
+    .expect("valid outbound path");
     assert_eq!(outbound_path, RESPONSES_COMPACT_PATH);
 }
 
@@ -9522,7 +9523,8 @@ fn responses_compact_can_route_to_codex_and_preserve_compact_suffix() {
             estimated_input_tokens: None,
             billing: Default::default(),
         },
-    );
+    )
+    .expect("valid outbound path");
     assert_eq!(outbound_path, "/responses/compact");
 }
 
@@ -9548,8 +9550,79 @@ fn responses_compact_can_route_to_xai_and_preserve_compact_suffix() {
             estimated_input_tokens: None,
             billing: Default::default(),
         },
-    );
+    )
+    .expect("valid outbound path");
     assert_eq!(outbound_path, RESPONSES_COMPACT_PATH);
+}
+
+#[test]
+fn gemini_outbound_path_rejects_mapped_model_path_injection() {
+    let plan = DispatchPlan {
+        provider: PROVIDER_GEMINI,
+        outbound_path: None,
+        request_transform: FormatTransform::ResponsesToGemini,
+        response_transform: FormatTransform::GeminiToResponses,
+    };
+    let meta = RequestMeta {
+        client_ip: None,
+        stream: false,
+        original_model: Some("gpt-5.6-sol".to_string()),
+        mapped_model: Some("gemini-3.5-pro?alt=sse".to_string()),
+        reasoning_effort: None,
+        response_format: None,
+        estimated_input_tokens: None,
+        billing: Default::default(),
+    };
+
+    assert!(resolve_outbound_path(RESPONSES_PATH, &plan, &meta).is_err());
+}
+
+#[test]
+fn unsafe_responses_path_returns_400_and_redacts_persisted_log_path() {
+    run_async(async {
+        let config = config_with_providers(&[(PROVIDER_RESPONSES, FORMATS_RESPONSES)]);
+        let data_dir = next_test_data_dir("unsafe_responses_path");
+        let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;
+
+        let response = proxy_request(
+            State(state),
+            Method::POST,
+            Uri::from_static("/v1/responses/compact%2f.."),
+            HeaderMap::new(),
+            Body::from(r#"{"model":"gpt-5.6-sol","input":"hi"}"#),
+        )
+        .await;
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("error response body");
+        wait_for_request_log_count(&pool, 1).await;
+        let row = sqlx::query(
+            "SELECT path, response_error, request_body FROM request_logs ORDER BY id DESC LIMIT 1;",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("unsafe path log");
+        let logged_path = row.try_get::<String, _>("path").expect("logged path");
+        let response_error = row
+            .try_get::<Option<String>, _>("response_error")
+            .expect("response error")
+            .unwrap_or_default();
+        let request_body = row
+            .try_get::<Option<String>, _>("request_body")
+            .expect("request body");
+
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(logged_path, super::super::path_guard::REDACTED_INVALID_PATH);
+        assert_eq!(
+            response_error,
+            super::super::path_guard::INVALID_UPSTREAM_PATH_MESSAGE
+        );
+        assert!(request_body.is_none());
+        assert!(!String::from_utf8_lossy(&body).contains("compact%2f.."));
+    });
 }
 
 #[test]
@@ -9794,7 +9867,8 @@ fn anthropic_beta_query_is_not_forwarded_to_responses_fallback() {
             estimated_input_tokens: None,
             billing: Default::default(),
         },
-    );
+    )
+    .expect("valid outbound path");
     let uri = Uri::from_static("/v1/messages?beta=true");
     let outbound_with_query = build_outbound_path_with_query(&outbound, &uri);
     assert_eq!(outbound_with_query, RESPONSES_PATH);
@@ -9817,7 +9891,8 @@ fn anthropic_beta_query_is_preserved_for_native_anthropic() {
             estimated_input_tokens: None,
             billing: Default::default(),
         },
-    );
+    )
+    .expect("valid outbound path");
     let uri = Uri::from_static("/v1/messages?beta=true");
     let outbound_with_query = build_outbound_path_with_query(&outbound, &uri);
     assert_eq!(outbound_with_query, "/v1/messages?beta=true");
@@ -10244,7 +10319,8 @@ fn codex_alpha_search_preserves_query_on_outbound_path() {
             estimated_input_tokens: None,
             billing: Default::default(),
         },
-    );
+    )
+    .expect("valid outbound path");
     let uri = Uri::from_static("/v1/alpha/search?source=codex");
 
     assert_eq!(
@@ -10514,7 +10590,8 @@ fn openai_models_route_with_gemini_query_dispatches_to_gemini_and_rewrites_path(
             estimated_input_tokens: None,
             billing: Default::default(),
         },
-    );
+    )
+    .expect("valid outbound path");
     assert_eq!(outbound, "/v1beta/models");
 }
 
@@ -10548,7 +10625,8 @@ fn openai_model_detail_route_with_gemini_header_rewrites_to_gemini_model_detail(
             estimated_input_tokens: None,
             billing: Default::default(),
         },
-    );
+    )
+    .expect("valid outbound path");
     assert_eq!(outbound, "/v1beta/models/gemini-1.5-flash");
 }
 
@@ -10581,7 +10659,8 @@ fn openai_compatible_models_index_route_prefers_openai_provider_and_rewrites_pat
             estimated_input_tokens: None,
             billing: Default::default(),
         },
-    );
+    )
+    .expect("valid outbound path");
     assert_eq!(outbound, "/v1/models");
 }
 
@@ -10614,7 +10693,8 @@ fn openai_compatible_model_detail_route_rewrites_to_openai_models_detail() {
             estimated_input_tokens: None,
             billing: Default::default(),
         },
-    );
+    )
+    .expect("valid outbound path");
     assert_eq!(outbound, "/v1/models/gpt-5");
 }
 

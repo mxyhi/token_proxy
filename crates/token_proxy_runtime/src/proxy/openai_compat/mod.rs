@@ -1,5 +1,6 @@
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
+use token_proxy_protocol::compat_reason::SummaryVisibility;
 
 use super::{
     anthropic_compat, codex_compat, compat_content, compat_reason, gemini_compat,
@@ -507,13 +508,16 @@ fn responses_request_to_chat(body: &Bytes) -> Result<Bytes, String> {
 }
 
 fn responses_request_to_gemini(body: &Bytes) -> Result<Bytes, String> {
+    let visibility = responses_summary_visibility(body)?;
     let intermediate = responses_request_to_chat(body)?;
-    gemini_compat::chat_request_to_gemini(&intermediate)
+    gemini_compat::chat_request_to_gemini_with_summary_visibility(&intermediate, visibility)
 }
 
 fn gemini_request_to_responses(body: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {
-    let intermediate = gemini_compat::gemini_request_to_chat(body, model_hint)?;
-    chat_request_to_responses(&intermediate)
+    let (intermediate, visibility) =
+        gemini_compat::gemini_request_to_chat_with_summary_visibility(body, model_hint)?;
+    let responses = chat_request_to_responses(&intermediate)?;
+    apply_summary_visibility_to_responses(&responses, visibility)
 }
 
 fn responses_response_to_gemini(bytes: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {
@@ -531,8 +535,10 @@ async fn gemini_request_to_anthropic(
     http_clients: &ProxyHttpClients,
     model_hint: Option<&str>,
 ) -> Result<Bytes, String> {
-    let intermediate = gemini_compat::gemini_request_to_chat(body, model_hint)?;
+    let (intermediate, visibility) =
+        gemini_compat::gemini_request_to_chat_with_summary_visibility(body, model_hint)?;
     let intermediate = chat_request_to_responses(&intermediate)?;
+    let intermediate = apply_summary_visibility_to_responses(&intermediate, visibility)?;
     anthropic_compat::responses_request_to_anthropic(&intermediate, http_clients).await
 }
 
@@ -541,9 +547,40 @@ async fn anthropic_request_to_gemini(
     http_clients: &ProxyHttpClients,
 ) -> Result<Bytes, String> {
     let intermediate = anthropic_compat::anthropic_request_to_responses(body, http_clients).await?;
+    let visibility = responses_summary_visibility(&intermediate)?;
     let intermediate = responses_request_to_chat(&intermediate)?;
-    let gemini = gemini_compat::chat_request_to_gemini(&intermediate)?;
+    let gemini =
+        gemini_compat::chat_request_to_gemini_with_summary_visibility(&intermediate, visibility)?;
     preserve_anthropic_max_tokens_for_gemini(body, &gemini)
+}
+
+fn responses_summary_visibility(body: &Bytes) -> Result<SummaryVisibility, String> {
+    let value: Value =
+        serde_json::from_slice(body).map_err(|_| "Request body must be JSON.".to_string())?;
+    Ok(SummaryVisibility::from_responses_reasoning(
+        value.get("reasoning"),
+    ))
+}
+
+fn apply_summary_visibility_to_responses(
+    body: &Bytes,
+    visibility: SummaryVisibility,
+) -> Result<Bytes, String> {
+    let Some(summary) = visibility.responses_summary() else {
+        return Ok(body.clone());
+    };
+    tracing::debug!(?visibility, "mapped summary visibility to Responses");
+    update_json_body(body, |object| {
+        let reasoning = object
+            .entry("reasoning".to_string())
+            .or_insert_with(|| json!({}));
+        if !reasoning.is_object() {
+            *reasoning = json!({});
+        }
+        if let Some(reasoning) = reasoning.as_object_mut() {
+            reasoning.insert("summary".to_string(), summary);
+        }
+    })
 }
 
 fn preserve_anthropic_max_tokens_for_chat(

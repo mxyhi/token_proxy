@@ -1073,10 +1073,10 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.6c762580.0812af25+curated.20260729"
+            "catalog.b2d895fb.31f59061+curated.20260729"
         );
         let source = settings.source.expect("catalog source");
-        assert_eq!(source.commit, "6c7625800a78a37afdeb8b4afbd8e869ef84241c");
+        assert_eq!(source.commit, "b2d895fb8dcaa25c059785afa065b6743dfa7e6d");
     }
 
     #[test]
@@ -1283,23 +1283,30 @@ mod tests {
             output_tokens: 1,
             ..BillableUsage::default()
         };
-        let standard = calculate_request_cost(&settings, Some("gpt-5.6-terra"), None, None, &usage)
-            .expect("standard cost");
-        let priority = calculate_request_cost(
-            &settings,
-            Some("gpt-5.6-terra"),
-            None,
-            Some("priority"),
-            &usage,
-        )
-        .expect("priority cost");
-        let flex =
-            calculate_request_cost(&settings, Some("gpt-5.6-terra"), None, Some("flex"), &usage)
-                .expect("flex cost");
+        for (model, expected) in [
+            ("gpt-5.6-terra", [16_700, 33_400, 8_350]),
+            ("gpt-5.6-luna", [1_670, 3_340, 835]),
+        ] {
+            for (service_tier, expected_cost) in [
+                (None, expected[0]),
+                (Some("priority"), expected[1]),
+                (Some("flex"), expected[2]),
+            ] {
+                let cost =
+                    calculate_request_cost(&settings, Some(model), None, service_tier, &usage)
+                        .expect("profile cost");
 
-        assert_eq!(standard.cost_nano_usd, 20_875);
-        assert_eq!(priority.cost_nano_usd, 41_750);
-        assert_eq!(flex.cost_nano_usd, 10_438);
+                assert_eq!(
+                    cost.cost_nano_usd, expected_cost,
+                    "{model} {service_tier:?}"
+                );
+                assert_eq!(
+                    cost.breakdown.cache_write_nano_usd,
+                    cost.breakdown.uncached_input_nano_usd * 5 / 4,
+                    "{model} {service_tier:?} cache write"
+                );
+            }
+        }
     }
 
     #[test]

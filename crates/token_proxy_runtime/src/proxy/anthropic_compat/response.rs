@@ -375,10 +375,19 @@ fn map_anthropic_usage_to_openai_usage(usage: &Map<String, Value>) -> Value {
     let total_input_tokens = input_tokens
         .saturating_add(cache_read_tokens)
         .saturating_add(cache_creation_tokens);
+    if cache_creation_tokens > 0 {
+        tracing::debug!(
+            cache_creation_tokens,
+            "mapped Anthropic cache creation usage"
+        );
+    }
     json!({
         "input_tokens": total_input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_input_tokens + output_tokens,
-        "input_tokens_details": { "cached_tokens": cache_read_tokens }
+        "input_tokens_details": {
+            "cached_tokens": cache_read_tokens,
+            "cached_creation_tokens": cache_creation_tokens
+        }
     })
 }

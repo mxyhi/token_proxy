@@ -787,7 +787,7 @@ fn stream_responses_to_chat_emits_usage_chunk_from_terminal_event_usage() {
                 "data: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n",
             )),
             Ok(Bytes::from(
-                "data: {\"type\":\"response.completed\",\"usage\":{\"input_tokens\":8,\"output_tokens\":3,\"total_tokens\":11,\"input_tokens_details\":{\"cached_tokens\":5,\"audio_tokens\":2},\"output_tokens_details\":{\"reasoning_tokens\":4,\"audio_tokens\":6,\"accepted_prediction_tokens\":7,\"rejected_prediction_tokens\":8}},\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"}}\n\n",
+                "data: {\"type\":\"response.completed\",\"usage\":{\"input_tokens\":8,\"output_tokens\":3,\"total_tokens\":11,\"input_tokens_details\":{\"cached_tokens\":5,\"cached_creation_tokens\":1,\"audio_tokens\":2},\"output_tokens_details\":{\"reasoning_tokens\":4,\"audio_tokens\":6,\"accepted_prediction_tokens\":7,\"rejected_prediction_tokens\":8}},\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"}}\n\n",
             )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
@@ -812,6 +812,10 @@ fn stream_responses_to_chat_emits_usage_chunk_from_terminal_event_usage() {
         assert_eq!(
             usage["usage"]["prompt_tokens_details"]["audio_tokens"],
             json!(2)
+        );
+        assert_eq!(
+            usage["usage"]["prompt_tokens_details"]["cached_creation_tokens"],
+            json!(1)
         );
         assert_eq!(
             usage["usage"]["completion_tokens_details"]["reasoning_tokens"],
@@ -1353,6 +1357,10 @@ fn stream_anthropic_to_responses_adds_cache_tokens_to_openai_input_usage() {
         assert_eq!(usage["output_tokens"], json!(3));
         assert_eq!(usage["total_tokens"], json!(23));
         assert_eq!(usage["input_tokens_details"]["cached_tokens"], json!(4));
+        assert_eq!(
+            usage["input_tokens_details"]["cached_creation_tokens"],
+            json!(6)
+        );
     });
 }
 

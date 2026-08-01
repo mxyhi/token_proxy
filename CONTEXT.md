@@ -24,6 +24,18 @@ _Avoid_: Cache activity rate
 将 Provider 原始用量拆成未缓存输入、Cache Read、各类 Cache Write、输出和图像 token 的规范化用量。
 _Avoid_: Cached total
 
+**Cached Creation Tokens**:
+OpenAI-compatible usage 中单独表示 Cache Write 的输入 token 明细；它计入 Total Input，但不计入 Cache Read，也不构成缓存命中。
+_Avoid_: Cached tokens、Cache Hit
+
+**Reasoning Effort**:
+一次模型请求期望使用的推理计算强度；它不决定推理摘要是否对客户端可见。
+_Avoid_: Summary Visibility、Thinking Display
+
+**Summary Visibility**:
+推理摘要的跨 Provider 可见性意图，只有 Enabled、Disabled、Unspecified 三态；Unspecified 不得由 Reasoning Effort 自动推导为 Enabled。
+_Avoid_: Reasoning Effort、Thinking Budget
+
 **Error Request**:
 最终 HTTP 状态码大于等于 400 的请求记录；它不参与长期请求统计，保留期（7 天）结束后整条删除。
 _Avoid_: 仅以 response_error 是否存在判断错误请求

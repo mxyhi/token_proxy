@@ -83,7 +83,25 @@ pub(super) async fn finalize_prepared_request(
     request_start: Instant,
 ) -> Result<PreparedRequest, Response> {
     let source_body = inbound.body.clone();
-    let outbound_path = resolve_outbound_path(&inbound.path, &inbound.plan, &inbound.meta);
+    let outbound_path = resolve_outbound_path(&inbound.path, &inbound.plan, &inbound.meta)
+        .map_err(|message| {
+            tracing::warn!(
+                provider = inbound.plan.provider,
+                "rejected unsafe outbound path"
+            );
+            log_request_error(
+                &state.log,
+                None,
+                inbound.client_ip.clone(),
+                super::super::path_guard::REDACTED_INVALID_PATH,
+                inbound.plan.provider,
+                LOCAL_UPSTREAM_ID,
+                StatusCode::BAD_REQUEST,
+                message.to_string(),
+                request_start,
+            );
+            http::error_response(StatusCode::BAD_REQUEST, message)
+        })?;
     let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, uri);
     let client_gemini_api_key =
         http::resolve_client_gemini_api_key(&state.config, headers, &inbound.path, uri.query())

@@ -643,8 +643,12 @@ fn codex_response_transform(headers: &HeaderMap, transform: FormatTransform) -> 
     transform
 }
 
-pub(super) fn resolve_outbound_path(path: &str, plan: &DispatchPlan, meta: &RequestMeta) -> String {
-    match (plan.outbound_path, plan.provider) {
+pub(super) fn resolve_outbound_path(
+    path: &str,
+    plan: &DispatchPlan,
+    meta: &RequestMeta,
+) -> Result<String, &'static str> {
+    let outbound_path = match (plan.outbound_path, plan.provider) {
         (Some(CODEX_RESPONSES_PATH), PROVIDER_CODEX)
             if openai::is_openai_responses_compact_path(path) =>
         {
@@ -663,6 +667,7 @@ pub(super) fn resolve_outbound_path(path: &str, plan: &DispatchPlan, meta: &Requ
                 .as_deref()
                 .or(meta.original_model.as_deref())
                 .unwrap_or("gemini-1.5-flash");
+            super::super::path_guard::validate_path_segment(model)?;
             let suffix = if meta.stream {
                 ":streamGenerateContent"
             } else {
@@ -671,7 +676,9 @@ pub(super) fn resolve_outbound_path(path: &str, plan: &DispatchPlan, meta: &Requ
             format!("{}{}{}", gemini::GEMINI_MODELS_PREFIX, model, suffix)
         }
         (None, _) => path.to_string(),
-    }
+    };
+    super::super::path_guard::validate_sensitive_path(&outbound_path)?;
+    Ok(outbound_path)
 }
 
 fn build_retry_fallback_plan(path: &str, provider: &'static str) -> Option<DispatchPlan> {

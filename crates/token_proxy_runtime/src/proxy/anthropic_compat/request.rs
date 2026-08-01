@@ -1,6 +1,7 @@
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
+use token_proxy_protocol::compat_reason::SummaryVisibility;
 
 use super::super::{http_client::ProxyHttpClients, model};
 use super::media;
@@ -68,6 +69,8 @@ pub(super) async fn responses_request_to_anthropic(
     if let Some(top_p) = object.get("top_p") {
         out.insert("top_p".to_string(), top_p.clone());
     }
+
+    map_responses_reasoning_to_anthropic(object.get("reasoning"), &mut out);
 
     if let Some(stop_sequences) =
         tools::map_openai_stop_to_anthropic_stop_sequences(object.get("stop"))
@@ -1170,10 +1173,51 @@ fn map_anthropic_thinking_to_responses_reasoning(
         _ => return None,
     };
 
-    Some(json!({
-        "effort": effort,
-        "summary": "detailed"
-    }))
+    let visibility = SummaryVisibility::from_anthropic_thinking(value);
+    let mut reasoning = Map::new();
+    reasoning.insert("effort".to_string(), json!(effort));
+    if let Some(summary) = visibility.responses_summary() {
+        reasoning.insert("summary".to_string(), summary);
+    }
+    tracing::debug!(?visibility, "mapped Anthropic reasoning summary visibility");
+    Some(Value::Object(reasoning))
+}
+
+fn map_responses_reasoning_to_anthropic(value: Option<&Value>, out: &mut Map<String, Value>) {
+    let Some(reasoning) = value.and_then(Value::as_object) else {
+        return;
+    };
+    let visibility = SummaryVisibility::from_responses_reasoning(value);
+    let effort = reasoning
+        .get("effort")
+        .and_then(Value::as_str)
+        .and_then(normalize_anthropic_effort);
+    if effort.is_none() && !visibility.is_specified() {
+        return;
+    }
+
+    let mut thinking = Map::new();
+    thinking.insert("type".to_string(), json!("adaptive"));
+    if let Some(display) = visibility.anthropic_display() {
+        thinking.insert("display".to_string(), display);
+    }
+    out.insert("thinking".to_string(), Value::Object(thinking));
+    if let Some(effort) = effort {
+        out.insert("output_config".to_string(), json!({ "effort": effort }));
+    }
+    tracing::debug!(
+        ?visibility,
+        effort,
+        "mapped Responses reasoning to Anthropic"
+    );
+}
+
+fn normalize_anthropic_effort(effort: &str) -> Option<&str> {
+    match effort {
+        "minimal" => Some("low"),
+        "low" | "medium" | "high" | "xhigh" | "max" => Some(effort),
+        _ => None,
+    }
 }
 
 fn map_anthropic_output_format_to_responses_text(

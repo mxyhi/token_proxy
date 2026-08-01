@@ -11,7 +11,7 @@ use super::{
 };
 use crate::logging::LogLevel;
 use crate::proxy::{
-    config::InboundApiFormat, cooldown_scope::CooldownScope, openai_compat::FormatTransform,
+    config::InboundApiFormat, cooldown_scope::CooldownScope, http, openai_compat::FormatTransform,
 };
 
 pub(super) async fn forward_retry_fallback_request(
@@ -24,7 +24,14 @@ pub(super) async fn forward_retry_fallback_request(
     plan: &DispatchPlan,
     codex_cooldown_scope: &CooldownScope,
 ) -> Result<super::super::upstream::ForwardUpstreamResult, Response> {
-    let outbound_path = resolve_outbound_path(&prepared.path, plan, &prepared.meta);
+    let outbound_path =
+        resolve_outbound_path(&prepared.path, plan, &prepared.meta).map_err(|message| {
+            tracing::warn!(
+                provider = plan.provider,
+                "rejected unsafe fallback outbound path"
+            );
+            http::error_response(axum::http::StatusCode::BAD_REQUEST, message)
+        })?;
     let dispatch_inbound_format = bridge_inbound_format(plan.request_transform)
         .or_else(|| detect_inbound_api_format(&outbound_path));
     let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, uri);

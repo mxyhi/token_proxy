@@ -42,7 +42,15 @@ pub fn map_usage_responses_to_chat(usage: &Value) -> Option<Value> {
 fn map_responses_input_details_to_chat(details: &Map<String, Value>) -> Option<Value> {
     let mut mapped = Map::new();
     insert_nonzero_u64(&mut mapped, "cached_tokens", details.get("cached_tokens"));
+    insert_nonzero_u64(
+        &mut mapped,
+        "cached_creation_tokens",
+        details.get("cached_creation_tokens"),
+    );
     insert_nonzero_u64(&mut mapped, "audio_tokens", details.get("audio_tokens"));
+    if mapped.contains_key("cached_creation_tokens") {
+        tracing::debug!("preserved cache creation usage in Chat details");
+    }
     (!mapped.is_empty()).then_some(Value::Object(mapped))
 }
 

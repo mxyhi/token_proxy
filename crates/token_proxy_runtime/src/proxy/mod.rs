@@ -16,6 +16,7 @@ mod model;
 pub(crate) mod model_discovery;
 mod openai;
 mod openai_compat;
+mod path_guard;
 mod redact;
 mod request_body;
 pub mod request_detail;

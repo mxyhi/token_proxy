@@ -9,6 +9,7 @@ use super::super::{
     config::ProxyConfig,
     http,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
+    path_guard,
     request_body::ReplayableBody,
     request_detail::{capture_request_detail, serialize_request_headers, RequestDetailSnapshot},
     server_helpers::{log_debug_request, parse_request_meta_best_effort},
@@ -54,6 +55,21 @@ pub(super) async fn prepare_inbound_request(
         state.config.max_request_body_bytes,
     )
     .await?;
+    if let Err(message) = path_guard::validate_sensitive_path(&path) {
+        tracing::warn!("rejected unsafe inbound upstream path");
+        log_request_error(
+            &state.log,
+            None,
+            client_ip,
+            path_guard::REDACTED_INVALID_PATH,
+            PROVIDER_PROXY,
+            LOCAL_UPSTREAM_ID,
+            StatusCode::BAD_REQUEST,
+            message.to_string(),
+            request_start,
+        );
+        return Err(http::error_response(StatusCode::BAD_REQUEST, message));
+    }
     let (plan, body) = resolve_plan_or_respond(
         &state.config,
         &state.log,

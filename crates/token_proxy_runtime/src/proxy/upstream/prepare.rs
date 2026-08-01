@@ -59,7 +59,11 @@ pub(super) async fn prepare_upstream_request_with_body(
 ) -> Result<PreparedUpstreamRequest, AttemptOutcome> {
     let mapped_meta = build_mapped_meta(meta, upstream);
     let upstream_path_with_query =
-        resolve_upstream_path_with_query(provider, upstream_path_with_query, &mapped_meta);
+        resolve_upstream_path_with_query(provider, upstream_path_with_query, &mapped_meta)
+            .map_err(|message| {
+                tracing::warn!(provider, "rejected unsafe mapped upstream path");
+                AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
+            })?;
     let upstream_url = upstream.upstream_url(&upstream_path_with_query);
     let resolved = resolve_upstream_auth(
         state,
@@ -312,7 +316,10 @@ async fn resolve_xai_upstream(
         "prepared pinned xai upstream auth"
     );
     Ok(ResolvedUpstreamAuth {
-        upstream_url: xai_request_url(upstream_path_with_query),
+        upstream_url: xai_request_url(upstream_path_with_query).map_err(|message| {
+            tracing::warn!("rejected unsafe xai upstream path");
+            AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
+        })?,
         auth,
         extra_headers: Some(protected_headers),
         proxy_url,
@@ -398,7 +405,8 @@ const XAI_CLIENT_VERSION_HEADER: HeaderName =
     HeaderName::from_static(token_proxy_account_xai::CLI_CLIENT_VERSION_HEADER);
 const XAI_CONVERSATION_ID_HEADER: HeaderName = HeaderName::from_static("x-grok-conv-id");
 
-pub(super) fn xai_request_url(upstream_path_with_query: &str) -> String {
+pub(super) fn xai_request_url(upstream_path_with_query: &str) -> Result<String, &'static str> {
+    super::super::path_guard::validate_sensitive_path(upstream_path_with_query)?;
     let base_url = if is_xai_official_api_path(upstream_path_with_query) {
         token_proxy_account_xai::OFFICIAL_API_BASE_URL
     } else {
@@ -408,7 +416,7 @@ pub(super) fn xai_request_url(upstream_path_with_query: &str) -> String {
     let path = upstream_path_with_query
         .strip_prefix("/v1")
         .unwrap_or(upstream_path_with_query);
-    format!("{}{path}", base_url.trim_end_matches('/'))
+    Ok(format!("{}{path}", base_url.trim_end_matches('/')))
 }
 
 fn is_xai_official_api_path(path_with_query: &str) -> bool {
@@ -583,22 +591,27 @@ pub(super) fn normalize_mapped_model_reasoning_suffix(
     (Some(base_model), reasoning_effort)
 }
 
-fn resolve_upstream_path_with_query(
+pub(super) fn resolve_upstream_path_with_query(
     provider: &str,
     upstream_path_with_query: &str,
     meta: &RequestMeta,
-) -> String {
+) -> Result<String, &'static str> {
     if provider != "gemini" || meta.model_override().is_none() {
-        return upstream_path_with_query.to_string();
+        super::super::path_guard::validate_sensitive_path(upstream_path_with_query)?;
+        return Ok(upstream_path_with_query.to_string());
     }
     let Some(mapped_model) = meta.mapped_model.as_deref() else {
-        return upstream_path_with_query.to_string();
+        super::super::path_guard::validate_sensitive_path(upstream_path_with_query)?;
+        return Ok(upstream_path_with_query.to_string());
     };
+    super::super::path_guard::validate_path_segment(mapped_model)?;
     let (path, query) = request::split_path_query(upstream_path_with_query);
     let replaced = gemini::replace_gemini_model_in_path(path, mapped_model)
         .unwrap_or_else(|| path.to_string());
-    match query {
+    let resolved = match query {
         Some(query) => format!("{replaced}?{query}"),
         None => replaced,
-    }
+    };
+    super::super::path_guard::validate_sensitive_path(&resolved)?;
+    Ok(resolved)
 }

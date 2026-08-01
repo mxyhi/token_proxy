@@ -171,7 +171,7 @@ fn anthropic_request_to_responses_maps_reasoning_context_and_structured_output()
     let value = json_from_bytes(output);
 
     assert_eq!(value["reasoning"]["effort"], json!("medium"));
-    assert_eq!(value["reasoning"]["summary"], json!("detailed"));
+    assert!(value["reasoning"].get("summary").is_none());
     assert_eq!(value["text"]["format"]["type"], json!("json_schema"));
     assert_eq!(value["text"]["verbosity"], json!("medium"));
     assert_eq!(
@@ -230,13 +230,69 @@ fn anthropic_request_to_responses_filters_billing_header_and_maps_adaptive_think
 
     assert_eq!(value["max_output_tokens"], json!(128));
     assert_eq!(value["reasoning"]["effort"], json!("high"));
-    assert_eq!(value["reasoning"]["summary"], json!("detailed"));
+    assert!(value["reasoning"].get("summary").is_none());
     assert_eq!(input_items[0]["role"], json!("developer"));
     assert_eq!(
         input_items[0]["content"].as_array().expect("system").len(),
         1
     );
     assert_eq!(input_items[0]["content"][0]["text"], json!("real system"));
+}
+
+#[test]
+fn reasoning_summary_visibility_round_trips_between_anthropic_and_responses() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+
+    for (display, responses_summary) in [("summarized", json!("auto")), ("omitted", Value::Null)] {
+        let anthropic = bytes_from_json(json!({
+            "model": "claude-sonnet-4-5",
+            "max_tokens": 256,
+            "thinking": { "type": "adaptive", "display": display },
+            "output_config": { "effort": "high" },
+            "messages": [{ "role": "user", "content": "hi" }]
+        }));
+        let responses = run_async(async {
+            anthropic_request_to_responses(&anthropic, &http_clients)
+                .await
+                .expect("Anthropic to Responses")
+        });
+        let responses = json_from_bytes(responses);
+
+        assert_eq!(responses["reasoning"]["effort"], json!("high"));
+        assert_eq!(responses["reasoning"]["summary"], responses_summary);
+
+        let anthropic = run_async(async {
+            responses_request_to_anthropic(&bytes_from_json(responses), &http_clients)
+                .await
+                .expect("Responses to Anthropic")
+        });
+        let anthropic = json_from_bytes(anthropic);
+
+        assert_eq!(anthropic["thinking"]["type"], json!("adaptive"));
+        assert_eq!(anthropic["thinking"]["display"], json!(display));
+        assert_eq!(anthropic["output_config"]["effort"], json!("high"));
+    }
+}
+
+#[test]
+fn reasoning_effort_does_not_enable_missing_summary_visibility() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let responses = bytes_from_json(json!({
+        "model": "gpt-5.6-sol",
+        "input": "hi",
+        "reasoning": { "effort": "high" }
+    }));
+
+    let anthropic = run_async(async {
+        responses_request_to_anthropic(&responses, &http_clients)
+            .await
+            .expect("Responses to Anthropic")
+    });
+    let anthropic = json_from_bytes(anthropic);
+
+    assert_eq!(anthropic["thinking"]["type"], json!("adaptive"));
+    assert!(anthropic["thinking"].get("display").is_none());
+    assert_eq!(anthropic["output_config"]["effort"], json!("high"));
 }
 
 #[test]
@@ -835,6 +891,10 @@ fn anthropic_response_to_responses_adds_cache_tokens_to_openai_input_usage() {
     assert_eq!(
         value["usage"]["input_tokens_details"]["cached_tokens"],
         json!(4)
+    );
+    assert_eq!(
+        value["usage"]["input_tokens_details"]["cached_creation_tokens"],
+        json!(6)
     );
 }
 

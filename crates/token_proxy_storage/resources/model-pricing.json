@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "version": "catalog.6c762580.0812af25",
+  "version": "catalog.b2d895fb.31f59061",
   "source": {
     "url": "https://github.com/Wei-Shaw/sub2api/blob/main/backend/resources/model-pricing/model_prices_and_context_window.json",
-    "commit": "6c7625800a78a37afdeb8b4afbd8e869ef84241c",
-    "sha256": "0812af2528fcd49c48b6806ed83e924ef6427a26fd363db168c3fe89b208796b",
-    "commitTime": "2026-07-26T01:56:10+08:00"
+    "commit": "b2d895fb8dcaa25c059785afa065b6743dfa7e6d",
+    "sha256": "31f59061c7cd24fd3cab32040800782539e4e9037aad5b30377e1a99db01114b",
+    "commitTime": "2026-07-31T09:42:46+08:00"
   },
   "models": [
     {
@@ -61,31 +61,31 @@
       ],
       "priceMultiplierScaled": 1000000000000,
       "standard": {
-        "inputNanoUsdPerToken": 2500,
-        "outputNanoUsdPerToken": 15000,
-        "cacheReadNanoUsdPerToken": 250,
-        "cacheWriteNanoUsdPerToken": 3125,
-        "cacheWrite5mNanoUsdPerToken": 3125,
+        "inputNanoUsdPerToken": 2000,
+        "outputNanoUsdPerToken": 12000,
+        "cacheReadNanoUsdPerToken": 200,
+        "cacheWriteNanoUsdPerToken": 2500,
+        "cacheWrite5mNanoUsdPerToken": 2500,
         "cacheWrite1hNanoUsdPerToken": null,
         "imageInputNanoUsdPerToken": null,
         "imageOutputNanoUsdPerToken": null
       },
       "serviceTierProfiles": {
         "priority": {
-          "inputNanoUsdPerToken": 5000,
-          "outputNanoUsdPerToken": 30000,
-          "cacheReadNanoUsdPerToken": 500,
-          "cacheWriteNanoUsdPerToken": 6250,
+          "inputNanoUsdPerToken": 4000,
+          "outputNanoUsdPerToken": 24000,
+          "cacheReadNanoUsdPerToken": 400,
+          "cacheWriteNanoUsdPerToken": 5000,
           "cacheWrite5mNanoUsdPerToken": null,
           "cacheWrite1hNanoUsdPerToken": null,
           "imageInputNanoUsdPerToken": null,
           "imageOutputNanoUsdPerToken": null
         },
         "flex": {
-          "inputNanoUsdPerToken": 1250,
-          "outputNanoUsdPerToken": 7500,
-          "cacheReadNanoUsdPerToken": 125,
-          "cacheWriteNanoUsdPerToken": 1563,
+          "inputNanoUsdPerToken": 1000,
+          "outputNanoUsdPerToken": 6000,
+          "cacheReadNanoUsdPerToken": 100,
+          "cacheWriteNanoUsdPerToken": 1250,
           "cacheWrite5mNanoUsdPerToken": null,
           "cacheWrite1hNanoUsdPerToken": null,
           "imageInputNanoUsdPerToken": null,
@@ -106,31 +106,31 @@
       ],
       "priceMultiplierScaled": 1000000000000,
       "standard": {
-        "inputNanoUsdPerToken": 1000,
-        "outputNanoUsdPerToken": 6000,
-        "cacheReadNanoUsdPerToken": 100,
-        "cacheWriteNanoUsdPerToken": 1250,
-        "cacheWrite5mNanoUsdPerToken": 1250,
+        "inputNanoUsdPerToken": 200,
+        "outputNanoUsdPerToken": 1200,
+        "cacheReadNanoUsdPerToken": 20,
+        "cacheWriteNanoUsdPerToken": 250,
+        "cacheWrite5mNanoUsdPerToken": 250,
         "cacheWrite1hNanoUsdPerToken": null,
         "imageInputNanoUsdPerToken": null,
         "imageOutputNanoUsdPerToken": null
       },
       "serviceTierProfiles": {
         "priority": {
-          "inputNanoUsdPerToken": 2000,
-          "outputNanoUsdPerToken": 12000,
-          "cacheReadNanoUsdPerToken": 200,
-          "cacheWriteNanoUsdPerToken": 2500,
+          "inputNanoUsdPerToken": 400,
+          "outputNanoUsdPerToken": 2400,
+          "cacheReadNanoUsdPerToken": 40,
+          "cacheWriteNanoUsdPerToken": 500,
           "cacheWrite5mNanoUsdPerToken": null,
           "cacheWrite1hNanoUsdPerToken": null,
           "imageInputNanoUsdPerToken": null,
           "imageOutputNanoUsdPerToken": null
         },
         "flex": {
-          "inputNanoUsdPerToken": 500,
-          "outputNanoUsdPerToken": 3000,
-          "cacheReadNanoUsdPerToken": 50,
-          "cacheWriteNanoUsdPerToken": 625,
+          "inputNanoUsdPerToken": 100,
+          "outputNanoUsdPerToken": 600,
+          "cacheReadNanoUsdPerToken": 10,
+          "cacheWriteNanoUsdPerToken": 125,
           "cacheWrite5mNanoUsdPerToken": null,
           "cacheWrite1hNanoUsdPerToken": null,
           "imageInputNanoUsdPerToken": null,

@@ -740,6 +740,41 @@ async fn rejects_large_openai_responses_reasoning_body_when_sampling_params_cann
 }
 
 #[tokio::test]
+async fn anthropic_count_tokens_removes_max_tokens_and_keeps_input_fields() {
+    let upstream = test_upstream(false, false, false);
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"claude-sonnet-4-5","max_tokens":4096,"system":"guard","messages":[{"role":"user","content":"hi"}],"tools":[{"name":"lookup","input_schema":{"type":"object"}}]}"#,
+    ));
+
+    let rewritten = match build_json_transformed_body(
+        "anthropic",
+        &upstream,
+        "/v1/messages/count_tokens",
+        &body,
+        &xai_meta("claude-sonnet-4-5", false),
+        None,
+    )
+    .await
+    {
+        Ok(Some(body)) => body,
+        Ok(None) => panic!("body must change"),
+        Err(_) => panic!("count_tokens filter must succeed"),
+    };
+    let bytes = rewritten
+        .read_bytes_if_small(4096)
+        .await
+        .expect("read body")
+        .expect("rewritten bytes");
+    let value: Value = serde_json::from_slice(&bytes).expect("json");
+
+    assert!(value.get("max_tokens").is_none());
+    assert_eq!(value["model"], serde_json::json!("claude-sonnet-4-5"));
+    assert_eq!(value["system"], serde_json::json!("guard"));
+    assert_eq!(value["messages"][0]["content"], serde_json::json!("hi"));
+    assert_eq!(value["tools"][0]["name"], serde_json::json!("lookup"));
+}
+
+#[tokio::test]
 async fn filter_safety_identifier_is_noop_when_disabled() {
     let upstream = test_upstream(false, false, false);
     let body = ReplayableBody::from_bytes(Bytes::from_static(

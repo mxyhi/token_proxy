@@ -13,6 +13,7 @@ use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 use super::responses_error::{responses_stream_error, ResponsesStreamError};
 use super::streaming::STREAM_DROPPED_ERROR;
+use crate::proxy::claude_reasoning;
 
 pub(super) fn stream_responses_to_anthropic<E>(
     upstream: impl futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
@@ -47,6 +48,7 @@ struct ReasoningBlockState {
     sent_start: bool,
     sent_stop: bool,
     sent_delta: bool,
+    sent_signature: bool,
 }
 
 struct ResponsesToAnthropicState<S> {
@@ -383,8 +385,25 @@ where
                     return;
                 };
                 self.ensure_message_start();
-                self.stop_reasoning_block(item_id);
-                self.emit_redacted_reasoning(item);
+                if claude_reasoning::redacted_thinking_data(
+                    item.get("encrypted_content")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                )
+                .is_some()
+                {
+                    self.stop_reasoning_block(item_id);
+                    self.emit_redacted_reasoning(item);
+                } else {
+                    if let Some(signature) = item
+                        .get("encrypted_content")
+                        .and_then(Value::as_str)
+                        .filter(|value| !value.is_empty())
+                    {
+                        self.emit_reasoning_signature(item_id, signature);
+                    }
+                    self.stop_reasoning_block(item_id);
+                }
             }
             _ => {}
         }
@@ -440,14 +459,18 @@ where
                     }
                 }
                 Some("reasoning") => {
-                    let summary = extract_reasoning_summary(item);
-                    if summary.trim().is_empty() {
-                        if item.get("id").and_then(Value::as_str).is_some() {
-                            self.emit_redacted_reasoning(item);
-                        }
+                    if self.emit_redacted_reasoning(item) {
                         continue;
                     }
+                    let summary = extract_reasoning_text_from_item(item);
                     if let Some(item_id) = item.get("id").and_then(Value::as_str) {
+                        let Some(signature) = item
+                            .get("encrypted_content")
+                            .and_then(Value::as_str)
+                            .filter(|value| !value.is_empty())
+                        else {
+                            continue;
+                        };
                         let already_emitted = self
                             .reasoning_blocks
                             .get(item_id)
@@ -455,9 +478,9 @@ where
                         if !already_emitted {
                             self.emit_reasoning_summary_for_item(item_id, &summary);
                         }
+                        self.emit_reasoning_signature(item_id, signature);
                         self.stop_reasoning_block(item_id);
-                        self.emit_redacted_reasoning(item);
-                    } else if reasoning_snapshot.is_empty() {
+                    } else if reasoning_snapshot.is_empty() && !summary.is_empty() {
                         reasoning_snapshot = summary;
                     }
                 }
@@ -552,6 +575,7 @@ where
                     sent_start: false,
                     sent_stop: false,
                     sent_delta: false,
+                    sent_signature: false,
                 }
             })
     }
@@ -621,13 +645,40 @@ where
         }
     }
 
-    fn emit_redacted_reasoning(&mut self, item: &Map<String, Value>) {
+    fn emit_reasoning_signature(&mut self, item_id: &str, signature: &str) {
+        if signature.is_empty()
+            || self
+                .reasoning_blocks
+                .get(item_id)
+                .is_some_and(|state| state.sent_signature || state.sent_stop)
+        {
+            return;
+        }
+        self.ensure_message_start();
+        let index = self.ensure_reasoning_block(item_id);
+        self.out.push_back(super::anthropic_event_sse(
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": { "type": "signature_delta", "signature": signature }
+            }),
+        ));
+        if let Some(state) = self.reasoning_blocks.get_mut(item_id) {
+            state.sent_signature = true;
+        }
+    }
+
+    fn emit_redacted_reasoning(&mut self, item: &Map<String, Value>) -> bool {
         let Some(encrypted_content) = item
             .get("encrypted_content")
             .and_then(Value::as_str)
             .filter(|value| !value.is_empty())
         else {
-            return;
+            return false;
+        };
+        let Some(data) = claude_reasoning::redacted_thinking_data(encrypted_content) else {
+            return false;
         };
 
         let dedupe_key = item
@@ -637,7 +688,7 @@ where
             .unwrap_or(encrypted_content)
             .to_string();
         if !self.redacted_reasoning_emitted.insert(dedupe_key) {
-            return;
+            return true;
         }
 
         self.ensure_message_start();
@@ -651,7 +702,7 @@ where
                 "index": index,
                 "content_block": {
                     "type": "redacted_thinking",
-                    "data": encrypted_content
+                    "data": data
                 }
             }),
         ));
@@ -662,6 +713,7 @@ where
                 "index": index
             }),
         ));
+        true
     }
 
     fn stop_reasoning_block(&mut self, item_id: &str) {
@@ -1002,4 +1054,15 @@ fn extract_reasoning_summary(item: &Map<String, Value>) -> String {
         }
     }
     combined
+}
+
+fn extract_reasoning_text_from_item(item: &Map<String, Value>) -> String {
+    let summary = extract_reasoning_summary(item);
+    if !summary.is_empty() {
+        return summary;
+    }
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|parts| extract_reasoning_text(parts))
+        .unwrap_or_default()
 }

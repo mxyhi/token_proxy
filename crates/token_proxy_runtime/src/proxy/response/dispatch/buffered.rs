@@ -290,7 +290,7 @@ fn buffer_event_stream_response_with_kind(
     let mut terminal_response = None;
     for event in events {
         if event == "[DONE]" {
-            continue;
+            break;
         }
         let value: Value = serde_json::from_str(&event)
             .map_err(|err| format!("Invalid event-stream JSON payload: {err}"))?;
@@ -301,6 +301,15 @@ fn buffer_event_stream_response_with_kind(
         }
     }
 
+    if let Some(response) = terminal_response.as_mut() {
+        let hydrated = responses_buffer.hydrate_terminal_output_ids(response);
+        if hydrated > 0 {
+            tracing::debug!(
+                hydrated,
+                "hydrated missing buffered Responses output item IDs"
+            );
+        }
+    }
     let responses_metadata = responses_buffer.metadata_value();
     let responses_value = responses_buffer.into_value();
     if let Some(response) = terminal_response {
@@ -473,6 +482,7 @@ impl ChatCompletionBuffer {
 struct ResponsesStreamBuffer {
     response: Map<String, Value>,
     output: BTreeMap<i64, Value>,
+    output_item_ids: BTreeMap<i64, String>,
     text: String,
     saw_response_event: bool,
 }
@@ -523,6 +533,14 @@ impl ResponsesStreamBuffer {
         let Some(item) = event.get("item").filter(|item| item.is_object()).cloned() else {
             return;
         };
+        if let (Some(index), Some(item_id)) = (
+            event.get("output_index").and_then(Value::as_i64),
+            item.get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty()),
+        ) {
+            self.output_item_ids.insert(index, item_id.to_string());
+        }
         let index = self.event_output_index(event);
         self.output.insert(index, item);
     }
@@ -554,6 +572,13 @@ impl ResponsesStreamBuffer {
             .get("output_index")
             .and_then(Value::as_i64)
             .unwrap_or(self.output.len() as i64)
+    }
+
+    fn hydrate_terminal_output_ids(&self, terminal: &mut Value) -> usize {
+        let Some(response) = terminal.as_object_mut() else {
+            return 0;
+        };
+        super::super::hydrate_responses_output_item_ids(response, &self.output_item_ids)
     }
 
     fn metadata_value(&self) -> Option<Value> {

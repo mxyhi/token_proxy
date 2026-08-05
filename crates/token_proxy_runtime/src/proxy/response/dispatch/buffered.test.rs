@@ -483,6 +483,25 @@ fn buffer_event_stream_response_returns_completed_responses_object() {
 }
 
 #[test]
+fn buffer_event_stream_response_hydrates_missing_terminal_output_ids() {
+    let sse = Bytes::from(concat!(
+        "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_buffered\",\"type\":\"message\"}}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"fc_buffered\",\"type\":\"function_call\"}}\n\n",
+        "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"rs_unindexed\",\"type\":\"reasoning\"}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"status\":\"completed\",\"output\":[{\"id\":null,\"type\":\"message\"},{\"id\":\"\",\"type\":\"function_call\"},{\"type\":\"reasoning\"},{\"id\":\"msg_existing\",\"type\":\"message\"}]}}\n\n",
+        "data: [DONE]\n\n"
+    ));
+
+    let output = buffer_event_stream_response(&sse).expect("buffer SSE");
+    let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
+
+    assert_eq!(value["output"][0]["id"], json!("msg_buffered"));
+    assert_eq!(value["output"][1]["id"], json!("fc_buffered"));
+    assert!(value["output"][2].get("id").is_none());
+    assert_eq!(value["output"][3]["id"], json!("msg_existing"));
+}
+
+#[test]
 fn buffer_event_stream_response_synthesizes_response_from_done_item() {
     let sse = Bytes::from(
         [

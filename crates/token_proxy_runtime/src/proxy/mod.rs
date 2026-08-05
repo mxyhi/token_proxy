@@ -1,5 +1,6 @@
 mod account_selector;
 mod anthropic_compat;
+mod claude_reasoning;
 mod codex_compat;
 mod codex_models_manifest;
 pub(crate) use token_proxy_config as config;

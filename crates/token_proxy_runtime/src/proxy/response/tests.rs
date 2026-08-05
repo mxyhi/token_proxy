@@ -921,3 +921,52 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
         assert_eq!(total_tokens, Some(3));
     });
 }
+
+#[test]
+fn stream_chat_to_responses_normalizes_empty_function_arguments() {
+    run_async(async {
+        let sqlite_pool = create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool)));
+        let context = LogContext {
+            client_ip: None,
+            path: "/v1/chat/completions".to_string(),
+            provider: "openai".to_string(),
+            upstream_id: "unit-test".to_string(),
+            account_id: None,
+            model: Some("unit-model".to_string()),
+            mapped_model: Some("unit-model".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            timings: Default::default(),
+            start: Instant::now(),
+        };
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_empty\",\"type\":\"function\",\"function\":{\"name\":\"noop\"}}]}}]}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+        let token_tracker = super::super::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let payloads = stream_chat_to_responses(upstream, context, log, token_tracker)
+            .filter_map(|item| async move { parse_sse_json(&item.expect("stream item")) })
+            .collect::<Vec<_>>()
+            .await;
+
+        let arguments_done = payloads
+            .iter()
+            .find(|payload| payload["type"] == "response.function_call_arguments.done")
+            .expect("arguments done");
+        assert_eq!(arguments_done["arguments"], "{}");
+        let completed = payloads
+            .iter()
+            .find(|payload| payload["type"] == "response.completed")
+            .expect("completed");
+        assert_eq!(completed["response"]["output"][0]["arguments"], "{}");
+    });
+}

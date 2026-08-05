@@ -1427,7 +1427,7 @@ fn responses_request_to_codex_strips_invalid_call_input_ids_only() {
     assert_eq!(input_items[6]["call_id"], "call_keep");
     assert_eq!(input_items[7]["id"], "item_output");
     assert_eq!(input_items[7]["call_id"], "call_output");
-    assert_eq!(input_items[8]["id"], "item_message");
+    assert_eq!(input_items[8]["id"], "msg_item_message");
     assert_eq!(input_items[8]["content"][0]["text"], "continue");
 }
 
@@ -1464,7 +1464,10 @@ fn responses_request_to_codex_bounds_all_retained_input_item_ids() {
             { "type": "function_call", "id": call_item_id, "call_id": "call_1", "name": "lookup", "arguments": "{}" },
             { "type": "function_call_output", "id": output_item_id, "call_id": "call_1", "output": "ok" },
             { "type": "message", "id": message_item_id, "role": "user", "content": [{ "type": "input_text", "text": "continue" }] },
-            { "type": "message", "id": "message_valid", "role": "user", "content": [{ "type": "input_text", "text": "valid" }] }
+            { "type": "message", "id": message_item_id, "role": "user", "content": [{ "type": "input_text", "text": "repeat" }] },
+            { "type": "message", "id": "message_valid", "role": "user", "content": [{ "type": "input_text", "text": "valid" }] },
+            { "type": "message", "id": "msg-1", "role": "assistant", "content": [{ "type": "input_text", "text": "already valid" }] },
+            { "type": "function_call_output", "id": "output_valid", "call_id": "call_2", "output": "unchanged" }
         ]
     });
 
@@ -1476,13 +1479,20 @@ fn responses_request_to_codex_bounds_all_retained_input_item_ids() {
     let second: Value = serde_json::from_slice(&second).expect("json");
     let items = first["input"].as_array().expect("input array");
 
-    for index in 0..3 {
+    for index in 0..4 {
         let id = items[index]["id"].as_str().expect("retained id");
         assert_eq!(id.chars().count(), 64, "index={index} id={id}");
         assert_eq!(second["input"][index]["id"], id);
     }
     assert_ne!(items[0]["id"], items[1]["id"]);
-    assert_eq!(items[3]["id"], "message_valid");
+    assert_eq!(items[2]["id"], items[3]["id"]);
+    assert!(items[2]["id"]
+        .as_str()
+        .expect("message id")
+        .starts_with("msg_"));
+    assert_eq!(items[4]["id"], "msg_message_valid");
+    assert_eq!(items[5]["id"], "msg-1");
+    assert_eq!(items[6]["id"], "output_valid");
     assert_eq!(items[0]["call_id"], items[1]["call_id"]);
 }
 

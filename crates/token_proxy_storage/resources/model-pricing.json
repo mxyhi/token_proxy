@@ -1,13 +1,33 @@
 {
   "schemaVersion": 1,
-  "version": "catalog.b2d895fb.31f59061",
+  "version": "catalog.69854741.b88b66df",
   "source": {
     "url": "https://github.com/Wei-Shaw/sub2api/blob/main/backend/resources/model-pricing/model_prices_and_context_window.json",
-    "commit": "b2d895fb8dcaa25c059785afa065b6743dfa7e6d",
-    "sha256": "31f59061c7cd24fd3cab32040800782539e4e9037aad5b30377e1a99db01114b",
-    "commitTime": "2026-07-31T09:42:46+08:00"
+    "commit": "698547418fc8b8fc5f597fd34516e7026e706d82",
+    "sha256": "b88b66df474afdb3f2a70168f29986225435c538a078def51e953918be0a11cd",
+    "commitTime": "2026-07-31T21:20:32+08:00"
   },
   "models": [
+    {
+      "modelId": "codex-auto-review",
+      "sourceModelId": "codex-auto-review",
+      "aliases": [
+        "openai/codex-auto-review"
+      ],
+      "priceMultiplierScaled": 1000000000000,
+      "standard": {
+        "inputNanoUsdPerToken": 200,
+        "outputNanoUsdPerToken": 1200,
+        "cacheReadNanoUsdPerToken": 20,
+        "cacheWriteNanoUsdPerToken": null,
+        "cacheWrite5mNanoUsdPerToken": null,
+        "cacheWrite1hNanoUsdPerToken": null,
+        "imageInputNanoUsdPerToken": null,
+        "imageOutputNanoUsdPerToken": null
+      },
+      "serviceTierProfiles": {},
+      "longContext": null
+    },
     {
       "modelId": "gpt-5.6-sol",
       "sourceModelId": "gpt-5.6-sol",

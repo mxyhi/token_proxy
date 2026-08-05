@@ -9,7 +9,7 @@ use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 use super::streaming::STREAM_DROPPED_ERROR;
-use crate::proxy::compat_reason;
+use crate::proxy::{claude_reasoning, compat_reason};
 use format::{snapshot_to_output_item, usage_to_value, AnthropicCacheUsage, OutputItemSnapshot};
 
 mod format;
@@ -61,7 +61,8 @@ struct AnthropicToResponsesState<S> {
     created_at: i64,
     model: String,
     next_output_index: u64,
-    message: Option<MessageOutput>,
+    messages: Vec<Option<MessageOutput>>,
+    message_by_block_index: HashMap<usize, usize>,
     reasonings: Vec<Option<ReasoningOutput>>,
     // Claude stream uses block index; map it to our reasoning slot.
     reasoning_by_block_index: HashMap<usize, usize>,
@@ -130,7 +131,8 @@ where
             created_at,
             model,
             next_output_index: 0,
-            message: None,
+            messages: Vec::new(),
+            message_by_block_index: HashMap::new(),
             reasonings: Vec::new(),
             reasoning_by_block_index: HashMap::new(),
             function_calls: Vec::new(),
@@ -285,6 +287,13 @@ where
         match block_type {
             "thinking" => {
                 let reasoning_index = self.ensure_reasoning_output(index);
+                if let Some(signature) = block
+                    .get("signature")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                {
+                    self.set_reasoning_carrier(reasoning_index, signature.to_string());
+                }
                 self.reasoning_by_block_index.insert(index, reasoning_index);
             }
             "redacted_thinking" => {
@@ -294,18 +303,14 @@ where
                     .and_then(Value::as_str)
                     .filter(|value| !value.is_empty())
                 {
-                    if let Some(reasoning) = self
-                        .reasonings
-                        .get_mut(reasoning_index)
-                        .and_then(Option::as_mut)
-                    {
-                        reasoning.encrypted_content = Some(data.to_string());
+                    if let Some(carrier) = claude_reasoning::redacted_thinking_carrier(data) {
+                        self.set_reasoning_carrier(reasoning_index, carrier);
                     }
                 }
                 self.reasoning_by_block_index.insert(index, reasoning_index);
             }
             "text" => {
-                self.ensure_message_output();
+                self.ensure_message_output(index);
             }
             "tool_use" => {
                 let call_id = block.get("id").and_then(Value::as_str).unwrap_or("");
@@ -355,13 +360,52 @@ where
                     "sequence_number": sequence_number
                 })));
             }
+            "signature_delta" => {
+                let Some(signature) = delta
+                    .get("signature")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+                else {
+                    return;
+                };
+                let reasoning_index = match self.reasoning_by_block_index.get(&index) {
+                    Some(idx) => *idx,
+                    None => {
+                        let reasoning_index = self.ensure_reasoning_output(index);
+                        self.reasoning_by_block_index.insert(index, reasoning_index);
+                        reasoning_index
+                    }
+                };
+                let reasoning = self
+                    .reasonings
+                    .get_mut(reasoning_index)
+                    .and_then(Option::as_mut)
+                    .expect("reasoning output exists");
+                if reasoning
+                    .encrypted_content
+                    .as_deref()
+                    .and_then(claude_reasoning::redacted_thinking_data)
+                    .is_some()
+                {
+                    return;
+                }
+                // Anthropic may split the opaque signature across multiple deltas.
+                reasoning
+                    .encrypted_content
+                    .get_or_insert_with(String::new)
+                    .push_str(signature);
+            }
             "text_delta" => {
                 let Some(text) = delta.get("text").and_then(Value::as_str) else {
                     return;
                 };
-                self.ensure_message_output();
+                let message_index = self.ensure_message_output(index);
                 let (item_id, output_index) = {
-                    let message = self.message.as_mut().expect("message output exists");
+                    let message = self
+                        .messages
+                        .get_mut(message_index)
+                        .and_then(Option::as_mut)
+                        .expect("message output exists");
                     message.text.push_str(text);
                     (message.id.clone(), message.output_index)
                 };
@@ -426,20 +470,34 @@ where
         reasoning_index
     }
 
-    fn ensure_message_output(&mut self) {
-        if self.message.is_some() {
-            return;
+    fn set_reasoning_carrier(&mut self, reasoning_index: usize, carrier: String) {
+        if let Some(reasoning) = self
+            .reasonings
+            .get_mut(reasoning_index)
+            .and_then(Option::as_mut)
+        {
+            reasoning.encrypted_content = Some(carrier);
         }
+    }
+
+    fn ensure_message_output(&mut self, block_index: usize) -> usize {
+        if let Some(message_index) = self.message_by_block_index.get(&block_index) {
+            return *message_index;
+        }
+        let message_index = self.messages.len();
         let output_index = self.next_output_index;
         self.next_output_index += 1;
-        let message_id = format!("msg_{}", self.id_seed);
+        let message_id = format!("msg_{}_{}", self.id_seed, block_index);
         self.push_message_item_added(&message_id, output_index);
         self.push_message_content_part_added(&message_id, output_index);
-        self.message = Some(MessageOutput {
+        self.messages.push(Some(MessageOutput {
             id: message_id,
             output_index,
             text: String::new(),
-        });
+        }));
+        self.message_by_block_index
+            .insert(block_index, message_index);
+        message_index
     }
 
     fn ensure_function_call_output(
@@ -581,7 +639,10 @@ where
                 encrypted_content: reasoning.encrypted_content.clone(),
             });
         }
-        if let Some(message) = &self.message {
+        for message in &self.messages {
+            let Some(message) = message else {
+                continue;
+            };
             snapshots.push(OutputItemSnapshot::Message {
                 id: message.id.clone(),
                 output_index: message.output_index,
@@ -597,7 +658,11 @@ where
                 output_index: call.output_index,
                 call_id: call.call_id.clone(),
                 name: call.name.clone(),
-                arguments: call.arguments.clone(),
+                arguments: if call.arguments.trim().is_empty() {
+                    "{}".to_string()
+                } else {
+                    call.arguments.clone()
+                },
             });
         }
         snapshots.sort_by_key(|item| match item {

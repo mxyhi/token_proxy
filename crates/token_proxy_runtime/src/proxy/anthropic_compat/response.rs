@@ -4,7 +4,7 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::proxy::compat_reason;
+use crate::proxy::{claude_reasoning, compat_reason};
 
 fn now_s() -> i64 {
     SystemTime::now()
@@ -46,7 +46,7 @@ pub(super) fn responses_response_to_anthropic(
         .unwrap_or(&[]);
     let mut combined_text = String::new();
     let mut thinking_text = String::new();
-    let mut redacted_thinking_blocks = Vec::new();
+    let mut reasoning_blocks = Vec::new();
     let mut tool_uses = Vec::new();
 
     for item in output {
@@ -55,19 +55,26 @@ pub(super) fn responses_response_to_anthropic(
         };
         match item.get("type").and_then(Value::as_str) {
             Some("reasoning") => {
-                let summary = extract_reasoning_summary(item);
-                if !summary.is_empty() {
-                    thinking_text.push_str(&summary);
-                }
                 if let Some(encrypted_content) = item
                     .get("encrypted_content")
                     .and_then(Value::as_str)
                     .filter(|value| !value.is_empty())
                 {
-                    redacted_thinking_blocks.push(json!({
-                        "type": "redacted_thinking",
-                        "data": encrypted_content
-                    }));
+                    if let Some(data) = claude_reasoning::redacted_thinking_data(encrypted_content)
+                    {
+                        reasoning_blocks.push(json!({
+                            "type": "redacted_thinking",
+                            "data": data
+                        }));
+                    } else {
+                        reasoning_blocks.push(json!({
+                            "type": "thinking",
+                            "thinking": extract_reasoning_text_from_item(item),
+                            "signature": encrypted_content
+                        }));
+                    }
+                } else {
+                    tracing::debug!("dropping Responses reasoning item without Claude carrier");
                 }
             }
             Some("message") => {
@@ -104,7 +111,7 @@ pub(super) fn responses_response_to_anthropic(
         }
     }
 
-    let mut content = Vec::new();
+    let mut content = reasoning_blocks;
     if !thinking_text.trim().is_empty() {
         let signature = thinking_signature(&thinking_text);
         let mut block = json!({ "type": "thinking", "thinking": thinking_text });
@@ -113,7 +120,6 @@ pub(super) fn responses_response_to_anthropic(
         }
         content.push(block);
     }
-    content.extend(redacted_thinking_blocks);
     if !combined_text.trim().is_empty() || tool_uses.is_empty() {
         content.push(json!({ "type": "text", "text": combined_text }));
     }
@@ -176,8 +182,7 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
         .unwrap_or(&[]);
     let mut output = Vec::new();
 
-    let mut thinking_text = String::new();
-    let mut encrypted_content = None;
+    let mut reasoning_items = Vec::new();
     let mut combined_text = String::new();
     let mut tool_calls = Vec::new();
     for block in content {
@@ -186,9 +191,32 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
         };
         match block.get("type").and_then(Value::as_str) {
             Some("thinking") => {
-                if let Some(text) = block.get("thinking").and_then(Value::as_str) {
-                    thinking_text.push_str(text);
+                let text = block.get("thinking").and_then(Value::as_str).unwrap_or("");
+                let signature = block
+                    .get("signature")
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty());
+                let mut item = json!({
+                    "type": "reasoning",
+                    "id": format!("rs_proxy_{}", reasoning_items.len()),
+                    "status": status,
+                    "summary": []
+                });
+                if let Some(item) = item.as_object_mut() {
+                    if !text.trim().is_empty() {
+                        item.insert(
+                            "summary".to_string(),
+                            json!([{ "type": "summary_text", "text": text }]),
+                        );
+                    }
+                    if let Some(signature) = signature {
+                        item.insert(
+                            "encrypted_content".to_string(),
+                            Value::String(signature.to_string()),
+                        );
+                    }
                 }
+                reasoning_items.push(item);
             }
             Some("redacted_thinking") => {
                 if let Some(data) = block
@@ -196,7 +224,15 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
                     .and_then(Value::as_str)
                     .filter(|value| !value.is_empty())
                 {
-                    encrypted_content = Some(data.to_string());
+                    if let Some(carrier) = claude_reasoning::redacted_thinking_carrier(data) {
+                        reasoning_items.push(json!({
+                            "type": "reasoning",
+                            "id": format!("rs_proxy_{}", reasoning_items.len()),
+                            "status": status,
+                            "summary": [],
+                            "encrypted_content": carrier
+                        }));
+                    }
                 }
             }
             Some("text") => {
@@ -215,29 +251,7 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
 
     let parallel_tool_calls = tool_calls.len() > 1;
 
-    if !thinking_text.trim().is_empty() || encrypted_content.is_some() {
-        let mut reasoning_item = json!({
-            "type": "reasoning",
-            "id": "rs_proxy",
-            "status": status,
-            "summary": []
-        });
-        if let Some(item) = reasoning_item.as_object_mut() {
-            if !thinking_text.trim().is_empty() {
-                item.insert(
-                    "summary".to_string(),
-                    json!([{ "type": "summary_text", "text": thinking_text }]),
-                );
-            }
-            if let Some(encrypted_content) = encrypted_content {
-                item.insert(
-                    "encrypted_content".to_string(),
-                    Value::String(encrypted_content),
-                );
-            }
-        }
-        output.push(reasoning_item);
-    }
+    output.extend(reasoning_items);
     if !combined_text.trim().is_empty() || tool_calls.is_empty() {
         output.push(json!({
             "type": "message",
@@ -286,6 +300,24 @@ fn extract_reasoning_summary(item: &Map<String, Value>) -> String {
         }
     }
     combined
+}
+
+fn extract_reasoning_text_from_item(item: &Map<String, Value>) -> String {
+    let summary = extract_reasoning_summary(item);
+    if !summary.is_empty() {
+        return summary;
+    }
+    item.get("content")
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter_map(Value::as_object)
+                .filter(|part| part.get("type").and_then(Value::as_str) == Some("reasoning_text"))
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect::<String>()
+        })
+        .unwrap_or_default()
 }
 
 fn responses_function_call_to_tool_use(item: &Map<String, Value>) -> Option<Value> {

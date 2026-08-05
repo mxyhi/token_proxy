@@ -2,7 +2,7 @@ use axum::body::Bytes;
 use futures_util::{stream::try_unfold, StreamExt};
 use serde_json::Value;
 use std::{
-    collections::VecDeque,
+    collections::{BTreeMap, VecDeque},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -157,9 +157,16 @@ where
                 let mut observation = StreamObservation::default();
                 let mut events = Vec::new();
                 self.parser.push_chunk(&out_chunk, |data| events.push(data));
-                for data in events {
+                let done_index = semantics
+                    .done_sentinel
+                    .then(|| events.iter().position(|data| data.trim() == "[DONE]"))
+                    .flatten();
+                for data in &events {
                     self.sequence.observe_data(&data);
                     observe_stream_data(semantics, &self.context.provider, &data, &mut observation);
+                    if data.trim() == "[DONE]" {
+                        break;
+                    }
                 }
                 if observation.semantic_event {
                     self.last_semantic_event_at = Instant::now();
@@ -170,6 +177,16 @@ where
                 apply_observed_error(&mut self.context, &mut self.terminal_error, &observation);
                 if observation.should_synthesize_done() {
                     out_chunk = append_openai_done(out_chunk);
+                }
+                if let Some(done_index) = done_index {
+                    // Preserve every complete SSE event through the terminal marker, then discard
+                    // non-spec payloads that share its upstream transport chunk.
+                    out_chunk = serialize_sse_data_events(&events[..=done_index]);
+                    tracing::debug!(
+                        provider = %self.context.provider,
+                        upstream_id = %self.context.upstream_id,
+                        "dropping OpenAI SSE data after [DONE]"
+                    );
                 }
                 self.collector.push_chunk(&out_chunk);
                 self.response_body_buf
@@ -342,6 +359,7 @@ struct ModelOverrideStreamState<S> {
     response_body_buf: String,
     sequence: ResponsesEventSequence,
     saw_sse_event: bool,
+    output_item_ids: BTreeMap<i64, String>,
 }
 
 impl<S> ModelOverrideStreamState<S> {
@@ -403,6 +421,7 @@ where
             response_body_buf: String::new(),
             sequence: ResponsesEventSequence::default(),
             saw_sse_event: false,
+            output_item_ids: BTreeMap::new(),
         }
     }
 
@@ -442,10 +461,19 @@ where
                             &mut event_observation,
                         );
                         let should_synthesize_done = event_observation.terminal_json && !saw_done;
+                        let event_saw_done = event_observation.saw_done;
                         observation.merge(event_observation);
                         self.push_event_output(&data);
                         if should_synthesize_done {
                             self.append_done_to_last_output();
+                        }
+                        if event_saw_done {
+                            tracing::debug!(
+                                provider = %self.context.provider,
+                                upstream_id = %self.context.upstream_id,
+                                "dropping Responses events after [DONE]"
+                            );
+                            break;
                         }
                     }
                     if observation.semantic_event {
@@ -509,10 +537,19 @@ where
                             &mut event_observation,
                         );
                         let should_synthesize_done = event_observation.terminal_json && !saw_done;
+                        let event_saw_done = event_observation.saw_done;
                         observation.merge(event_observation);
                         self.push_event_output(&data);
                         if should_synthesize_done {
                             self.append_done_to_last_output();
+                        }
+                        if event_saw_done {
+                            tracing::debug!(
+                                provider = %self.context.provider,
+                                upstream_id = %self.context.upstream_id,
+                                "dropping Responses events after [DONE] at EOF"
+                            );
+                            break;
                         }
                     }
                     if observation.semantic_event {
@@ -577,7 +614,25 @@ where
             .as_deref()
             .map(|model| rewrite_sse_data(data, model))
             .unwrap_or_else(|| data.to_string());
-        let output = self.normalize_failure_event(output);
+        let mut output = self.normalize_failure_event(output);
+        if let Ok(mut value) = serde_json::from_str::<Value>(&output) {
+            super::remember_responses_output_item_id(&value, &mut self.output_item_ids);
+            if value.get("type").and_then(Value::as_str) == Some("response.completed") {
+                if let Some(response) = value.get_mut("response").and_then(Value::as_object_mut) {
+                    let hydrated =
+                        super::hydrate_responses_output_item_ids(response, &self.output_item_ids);
+                    if hydrated > 0 {
+                        tracing::debug!(
+                            provider = %self.context.provider,
+                            upstream_id = %self.context.upstream_id,
+                            hydrated,
+                            "hydrated missing Responses output item IDs"
+                        );
+                        output = value.to_string();
+                    }
+                }
+            }
+        }
         if sse_data_type(&output).as_deref() == Some("response.failed") {
             self.out.push_back(Bytes::from(format!(
                 "event: response.failed\ndata: {output}\n\n"
@@ -733,6 +788,19 @@ fn append_openai_done(chunk: Bytes) -> Bytes {
     bytes.extend_from_slice(chunk.as_ref());
     bytes.extend_from_slice(b"data: [DONE]\n\n");
     Bytes::from(bytes)
+}
+
+fn serialize_sse_data_events(events: &[String]) -> Bytes {
+    let mut output = String::new();
+    for event in events {
+        for line in event.lines() {
+            output.push_str("data: ");
+            output.push_str(line);
+            output.push('\n');
+        }
+        output.push('\n');
+    }
+    Bytes::from(output)
 }
 
 fn openai_response_failed_done_chunk(

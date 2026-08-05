@@ -578,7 +578,11 @@ where
                 output_index: call.output_index,
                 call_id: call.call_id.clone(),
                 name: call.name.clone(),
-                arguments: call.arguments.clone(),
+                arguments: if call.arguments.trim().is_empty() {
+                    "{}".to_string()
+                } else {
+                    call.arguments.clone()
+                },
             });
         }
         snapshots.sort_by_key(|item| match item {

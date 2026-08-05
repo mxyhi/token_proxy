@@ -1,6 +1,7 @@
 use axum::{body::Bytes, http::StatusCode, response::Response};
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::{
+    collections::BTreeMap,
     sync::Arc,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -29,6 +30,61 @@ const GEMINI_PROXY_UPLOAD_TARGET_QUERY: &str = "tp_upload_target";
 const GEMINI_UPLOAD_PROXY_PATH: &str = "/upload/v1beta/files";
 const GEMINI_API_KEY_QUERY: &str = "key";
 const IMAGE_GENERATION_MIN_NO_DATA_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Track authoritative item IDs by Responses output index for terminal hydration.
+pub(super) fn remember_responses_output_item_id(
+    event: &Value,
+    output_item_ids: &mut BTreeMap<i64, String>,
+) {
+    if !matches!(
+        event.get("type").and_then(Value::as_str),
+        Some("response.output_item.added") | Some("response.output_item.done")
+    ) {
+        return;
+    }
+    let Some(output_index) = event.get("output_index").and_then(Value::as_i64) else {
+        return;
+    };
+    let Some(item_id) = event
+        .get("item")
+        .and_then(|item| item.get("id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+    else {
+        return;
+    };
+    output_item_ids.insert(output_index, item_id.to_string());
+}
+
+/// Fill only missing/null/empty terminal item IDs from prior lifecycle events.
+pub(super) fn hydrate_responses_output_item_ids(
+    response: &mut Map<String, Value>,
+    output_item_ids: &BTreeMap<i64, String>,
+) -> usize {
+    let Some(output) = response.get_mut("output").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    let mut hydrated = 0;
+    for (index, item) in output.iter_mut().enumerate() {
+        let Some(item_object) = item.as_object_mut() else {
+            continue;
+        };
+        let has_id = match item_object.get("id") {
+            Some(Value::String(id)) => !id.trim().is_empty(),
+            Some(Value::Null) | None => false,
+            Some(_) => true,
+        };
+        if has_id {
+            continue;
+        }
+        let Some(item_id) = output_item_ids.get(&(index as i64)) else {
+            continue;
+        };
+        item_object.insert("id".to_string(), Value::String(item_id.clone()));
+        hydrated += 1;
+    }
+    hydrated
+}
 
 #[derive(Clone)]
 pub(super) struct RetryableStreamResponse {

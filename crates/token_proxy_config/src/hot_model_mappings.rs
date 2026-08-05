@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
+    ("openai/codex-auto-review", "codex-auto-review"),
     ("openai/gpt-5.6-sol", "gpt-5.6-sol"),
     ("openai/gpt-5.6-terra", "gpt-5.6-terra"),
     ("openai/gpt-5.6-luna", "gpt-5.6-luna"),

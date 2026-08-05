@@ -1073,10 +1073,22 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.b2d895fb.31f59061+curated.20260729"
+            "catalog.69854741.b88b66df+curated.20260729"
         );
         let source = settings.source.expect("catalog source");
-        assert_eq!(source.commit, "b2d895fb8dcaa25c059785afa065b6743dfa7e6d");
+        assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
+
+        let model = settings
+            .models
+            .iter()
+            .find(|model| model.model_id == "codex-auto-review")
+            .expect("codex-auto-review pricing");
+        assert_eq!(model.aliases, vec!["openai/codex-auto-review"]);
+        assert_eq!(model.standard.input_nano_usd_per_token, Some(200));
+        assert_eq!(model.standard.output_nano_usd_per_token, Some(1_200));
+        assert_eq!(model.standard.cache_read_nano_usd_per_token, Some(20));
+        assert!(model.service_tier_profiles.is_empty());
+        assert!(model.long_context.is_none());
     }
 
     #[test]

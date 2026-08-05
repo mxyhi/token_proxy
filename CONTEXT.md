@@ -152,6 +152,18 @@ _Avoid_: Same-Upstream Retry、无限 401 重试、每请求注册
 Responses SSE 已以 HTTP 200 提交后用于终止流的 `response.failed` 事件。事件必须包含连续的 `sequence_number`，其 `response` 必须包含 `created_at`、`model` 和完整失败状态；请求日志仍记录真实 4xx/5xx 失败状态。
 _Avoid_: HTTP Error Response（响应头提交后已无法更改 HTTP 状态）
 
+**Codex Message Item ID**:
+Codex Responses 输入中 `type=message` 项的跨事件标识；非空值必须以 `msg` 开头，规范化时为不合规值添加 `msg_`，再执行长度压缩和去重。
+_Avoid_: 任意 Responses item id、reasoning item id
+
+**Ordered Content Block**:
+Anthropic 消息内容中按原始 `content_block.index` 排列的单个 thinking、text 或 tool_use 项；Responses 转换必须以该顺序生成 added、delta、done 和最终 output。
+_Avoid_: 单一 message 聚合、按类型合并
+
+**Function Arguments Object**:
+Responses function call 的最终参数 JSON 对象；即使上游没有发送 arguments delta，也必须输出 `{}`，不能输出空字符串。
+_Avoid_: 空参数字符串、缺省参数
+
 **xAI API Key Upstream（xAI API Key 上游）**:
 使用开发者 API Key 访问 xAI 官方 API 的普通上游；它没有账户生命周期，继续使用 OpenAI-compatible provider 配置。
 _Avoid_: xAI 账户、Grok OAuth 账户
@@ -171,3 +183,15 @@ _Avoid_: xAI CLI 网关、自定义 base URL
 **xAI X Search Injection（xAI X Search 注入）**:
 由用户显式启用的全局能力，为原生 xAI Responses 请求补充服务端搜索工具；默认关闭。启用后，服务端内部搜索子调用属于执行 trace，不是客户端待执行工具调用。
 _Avoid_: 客户端显式工具声明、Codex Alpha Search、默认联网搜索
+
+**Claude Reasoning Carrier（Claude 推理载体）**:
+Responses reasoning item 的 \`encrypted_content\` 在 Claude 双向转换中的语义载体；普通值表示 thinking signature，\`claude-redacted-thinking:\` 前缀值表示必须原样回放的 \`redacted_thinking\` 数据。
+_Avoid_: 将所有 encrypted content 都当作 redacted thinking、将 marker 当作 signature
+
+**Responses Output Item ID Hydration（Responses 输出项 ID 补全）**:
+当终态 \`response.output\` 项缺少 ID 时，依据同一 \`output_index\` 的 added/done 生命周期事件补回非空 ID；已有 ID 和无可靠来源的项保持不变。
+_Avoid_: 按类型猜 ID、伪造 ID、覆盖已有 ID
+
+**SSE Done Boundary（SSE Done 边界）**:
+OpenAI-compatible SSE 中的 \`[DONE]\` 终止哨兵；它只输出一次，哨兵后的同批及后续 payload 不属于客户端响应。
+_Avoid_: 把 \`[DONE]\` 当 JSON 事件、继续转发终止后的 payload

@@ -17,6 +17,10 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
         Some(&"gpt-5.6-luna".to_string())
     );
     assert_eq!(
+        mappings.get("openai/codex-auto-review"),
+        Some(&"codex-auto-review".to_string())
+    );
+    assert_eq!(
         mappings.get("openai/gpt-5.5-pro"),
         Some(&"gpt-5.5-pro".to_string())
     );

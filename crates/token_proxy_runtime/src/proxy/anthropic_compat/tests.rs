@@ -807,8 +807,12 @@ fn responses_response_to_anthropic_maps_reasoning_items_to_thinking_blocks() {
             {
                 "id": "rs_1",
                 "type": "reasoning",
+                "encrypted_content": "SIG_REASONING",
                 "summary": [
                     { "type": "summary_text", "text": "first analyze then answer" }
+                ],
+                "content": [
+                    { "type": "reasoning_text", "text": "first analyze then answer" }
                 ]
             },
             {
@@ -830,6 +834,7 @@ fn responses_response_to_anthropic_maps_reasoning_items_to_thinking_blocks() {
         value["content"][0]["thinking"],
         json!("first analyze then answer")
     );
+    assert_eq!(value["content"][0]["signature"], json!("SIG_REASONING"));
     assert_eq!(value["content"][1]["type"], json!("text"));
     assert_eq!(value["content"][1]["text"], json!("final answer"));
 }
@@ -840,7 +845,7 @@ fn anthropic_response_to_responses_maps_thinking_blocks_to_reasoning_items() {
         "id": "msg_thinking",
         "model": "claude-3-7-sonnet",
         "content": [
-            { "type": "thinking", "thinking": "analyze first" },
+            { "type": "thinking", "thinking": "analyze first", "signature": "SIG_ANTHROPIC" },
             { "type": "text", "text": "final answer" },
             { "type": "tool_use", "id": "call_1", "name": "search", "input": { "q": "x" } }
         ],
@@ -857,6 +862,7 @@ fn anthropic_response_to_responses_maps_thinking_blocks_to_reasoning_items() {
         output_items[0]["summary"][0],
         json!({ "type": "summary_text", "text": "analyze first" })
     );
+    assert_eq!(output_items[0]["encrypted_content"], json!("SIG_ANTHROPIC"));
     assert_eq!(output_items[1]["type"], json!("message"));
     assert_eq!(output_items[1]["content"][0]["type"], json!("output_text"));
     assert_eq!(output_items[1]["content"][0]["text"], json!("final answer"));
@@ -904,7 +910,6 @@ fn anthropic_response_to_responses_maps_redacted_thinking_to_encrypted_reasoning
         "id": "msg_redacted",
         "model": "claude-3-7-sonnet",
         "content": [
-            { "type": "thinking", "thinking": "analyze first" },
             { "type": "redacted_thinking", "data": "ENC123" },
             { "type": "text", "text": "final answer" }
         ],
@@ -916,11 +921,11 @@ fn anthropic_response_to_responses_maps_redacted_thinking_to_encrypted_reasoning
 
     let output_items = value["output"].as_array().expect("output array");
     assert_eq!(output_items[0]["type"], json!("reasoning"));
+    assert_eq!(output_items[0]["summary"], json!([]));
     assert_eq!(
-        output_items[0]["summary"][0],
-        json!({ "type": "summary_text", "text": "analyze first" })
+        output_items[0]["encrypted_content"],
+        json!("claude-redacted-thinking:ENC123")
     );
-    assert_eq!(output_items[0]["encrypted_content"], json!("ENC123"));
     assert_eq!(output_items[1]["type"], json!("message"));
     assert_eq!(output_items[1]["content"][0]["text"], json!("final answer"));
 }
@@ -962,7 +967,13 @@ fn responses_response_to_anthropic_maps_encrypted_reasoning_to_redacted_thinking
                 "summary": [
                     { "type": "summary_text", "text": "first analyze then answer" }
                 ],
-                "encrypted_content": "ENC456"
+                "encrypted_content": "SIG456"
+            },
+            {
+                "id": "rs_2",
+                "type": "reasoning",
+                "summary": [],
+                "encrypted_content": "claude-redacted-thinking:ENC456"
             },
             {
                 "type": "message",
@@ -983,6 +994,7 @@ fn responses_response_to_anthropic_maps_encrypted_reasoning_to_redacted_thinking
         value["content"][0]["thinking"],
         json!("first analyze then answer")
     );
+    assert_eq!(value["content"][0]["signature"], json!("SIG456"));
     assert_eq!(value["content"][1]["type"], json!("redacted_thinking"));
     assert_eq!(value["content"][1]["data"], json!("ENC456"));
     assert_eq!(value["content"][2]["type"], json!("text"));

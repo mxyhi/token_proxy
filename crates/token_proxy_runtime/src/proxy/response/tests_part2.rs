@@ -115,6 +115,115 @@ fn stream_with_logging_closes_after_responses_terminal_without_upstream_close() 
 }
 
 #[test]
+fn stream_with_logging_hydrates_missing_completed_output_item_ids() {
+    super::run_async(async {
+        let (log, context, _sqlite_pool) = super::setup_responses_stream().await;
+        let upstream = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
+            concat!(
+                "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"id\":\"msg_stream\",\"type\":\"message\"}}\n\n",
+                "data: {\"type\":\"response.output_item.done\",\"output_index\":1,\"item\":{\"id\":\"fc_stream\",\"type\":\"function_call\"}}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":null,\"type\":\"message\"},{\"id\":\"\",\"type\":\"function_call\"},{\"type\":\"reasoning\"},{\"id\":\"msg_existing\",\"type\":\"message\"}]}}\n\n",
+                "data: [DONE]\n\n"
+            ),
+        ))]);
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let chunks =
+            super::super::streaming::stream_with_logging(upstream, context, log, token_tracker)
+                .map(|item| item.expect("stream item"))
+                .collect::<Vec<_>>()
+                .await;
+        let completed = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .find(|value| value["type"] == "response.completed")
+            .expect("completed event");
+        let output = completed["response"]["output"]
+            .as_array()
+            .expect("output array");
+
+        assert_eq!(output[0]["id"], json!("msg_stream"));
+        assert_eq!(output[1]["id"], json!("fc_stream"));
+        assert!(
+            output[2].get("id").is_none(),
+            "must not synthesize unknown id"
+        );
+        assert_eq!(output[3]["id"], json!("msg_existing"));
+    });
+}
+
+#[test]
+fn stream_with_logging_drops_events_after_done() {
+    super::run_async(async {
+        let (log, context, _sqlite_pool) = super::setup_responses_stream().await;
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from(concat!(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"clean\"}\n\n",
+                "data: [DONE]\n\n",
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"dirty-same-chunk\"}\n\n"
+            ))),
+            Ok(Bytes::from(
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"dirty-next-chunk\"}\n\n",
+            )),
+        ]);
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let chunks =
+            super::super::streaming::stream_with_logging(upstream, context, log, token_tracker)
+                .map(|item| item.expect("stream item"))
+                .collect::<Vec<_>>()
+                .await;
+        let body = chunks
+            .iter()
+            .map(|chunk| String::from_utf8_lossy(chunk))
+            .collect::<String>();
+
+        assert!(body.contains("clean"), "body: {body}");
+        assert!(!body.contains("dirty-same-chunk"), "body: {body}");
+        assert!(!body.contains("dirty-next-chunk"), "body: {body}");
+        assert_eq!(body.matches("data: [DONE]").count(), 1, "body: {body}");
+    });
+}
+
+#[test]
+fn stream_with_logging_drops_chat_events_after_done() {
+    super::run_async(async {
+        let (log, mut context, _sqlite_pool) = super::setup_responses_stream().await;
+        context.provider = "openai".to_string();
+        context.path = "/v1/chat/completions".to_string();
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from(concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"clean\"}}]}\n\n",
+                "data: [DONE]\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"dirty-same-chunk\"}}]}\n\n"
+            ))),
+            Ok(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"dirty-next-chunk\"}}]}\n\n",
+            )),
+        ]);
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let chunks =
+            super::super::streaming::stream_with_logging(upstream, context, log, token_tracker)
+                .map(|item| item.expect("stream item"))
+                .collect::<Vec<_>>()
+                .await;
+        let body = chunks
+            .iter()
+            .map(|chunk| String::from_utf8_lossy(chunk))
+            .collect::<String>();
+
+        assert!(body.contains("clean"), "body: {body}");
+        assert!(!body.contains("dirty-same-chunk"), "body: {body}");
+        assert!(!body.contains("dirty-next-chunk"), "body: {body}");
+        assert_eq!(body.matches("data: [DONE]").count(), 1, "body: {body}");
+    });
+}
+
+#[test]
 fn stream_with_logging_semantic_timeout_emits_response_failed_and_done() {
     super::run_async(async {
         let (log, mut context, sqlite_pool) = super::setup_responses_stream().await;
@@ -636,7 +745,7 @@ fn stream_responses_to_anthropic_emits_thinking_from_reasoning_summary_events() 
                 "data: {\"type\":\"response.reasoning_summary_text.delta\",\"item_id\":\"rs_1\",\"delta\":\"think step by step\"}\n\n",
             )),
             Ok(Bytes::from(
-                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"think step by step\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"SIG123\",\"summary\":[{\"type\":\"summary_text\",\"text\":\"think step by step\"}],\"content\":[{\"type\":\"reasoning_text\",\"text\":\"think step by step\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
             )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
@@ -680,6 +789,95 @@ fn stream_responses_to_anthropic_emits_thinking_from_reasoning_summary_events() 
             saw_thinking_delta,
             "missing thinking_delta from reasoning summary"
         );
+        let thinking_text = chunks
+            .iter()
+            .filter_map(super::parse_anthropic_sse)
+            .filter(|(event_type, data)| {
+                event_type == "content_block_delta"
+                    && data["delta"]["type"] == json!("thinking_delta")
+            })
+            .map(|(_, data)| data["delta"]["thinking"].as_str().unwrap_or("").to_string())
+            .collect::<String>();
+        assert_eq!(thinking_text, "think step by step");
+        assert!(chunks
+            .iter()
+            .filter_map(super::parse_anthropic_sse)
+            .any(|(event_type, data)| {
+                event_type == "content_block_delta"
+                    && data["delta"]["type"] == json!("signature_delta")
+                    && data["delta"]["signature"] == json!("SIG123")
+            }));
+    });
+}
+
+#[test]
+fn stream_responses_to_anthropic_falls_back_to_reasoning_content_text() {
+    super::run_async(async {
+        let (_, context, _) = super::setup_responses_stream().await;
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"SIG456\",\"summary\":[],\"content\":[{\"type\":\"reasoning_text\",\"text\":\"fallback thought\"}]}]}}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let chunks = super::super::responses_to_anthropic::stream_responses_to_anthropic(
+            upstream,
+            context,
+            Arc::new(LogWriter::new(None)),
+            token_tracker,
+        )
+        .map(|item| item.expect("stream item"))
+        .collect::<Vec<_>>()
+        .await;
+
+        assert!(chunks
+            .iter()
+            .filter_map(super::parse_anthropic_sse)
+            .any(|(event_type, data)| {
+                event_type == "content_block_delta"
+                    && data["delta"]["type"] == json!("thinking_delta")
+                    && data["delta"]["thinking"] == json!("fallback thought")
+            }));
+    });
+}
+
+#[test]
+fn stream_responses_to_anthropic_emits_signature_from_output_item_done() {
+    super::run_async(async {
+        let (_, context, _) = super::setup_responses_stream().await;
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "data: {\"type\":\"response.output_item.added\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"SIG_DONE\"}}\n\n",
+            )),
+            Ok(Bytes::from("data: [DONE]\n\n")),
+        ]);
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let chunks = super::super::responses_to_anthropic::stream_responses_to_anthropic(
+            upstream,
+            context,
+            Arc::new(LogWriter::new(None)),
+            token_tracker,
+        )
+        .map(|item| item.expect("stream item"))
+        .collect::<Vec<_>>()
+        .await;
+
+        assert!(chunks
+            .iter()
+            .filter_map(super::parse_anthropic_sse)
+            .any(|(event_type, data)| {
+                event_type == "content_block_delta"
+                    && data["delta"]["type"] == json!("signature_delta")
+                    && data["delta"]["signature"] == json!("SIG_DONE")
+            }));
     });
 }
 
@@ -706,7 +904,7 @@ fn stream_responses_to_anthropic_emits_redacted_thinking_from_encrypted_reasonin
 
         let upstream = futures_util::stream::iter(vec![
             Ok::<Bytes, reqwest::Error>(Bytes::from(
-                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"ENC999\"}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"id\":\"rs_1\",\"type\":\"reasoning\",\"encrypted_content\":\"claude-redacted-thinking:ENC999\"}],\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n",
             )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
@@ -1289,6 +1487,108 @@ fn stream_anthropic_to_responses_emits_reasoning_summary_events_and_snapshot() {
 }
 
 #[test]
+fn stream_anthropic_to_responses_preserves_ordered_blocks_and_empty_arguments() {
+    super::run_async(async {
+        let sqlite_pool = super::create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool)));
+        let context = LogContext {
+            client_ip: None,
+            path: "/v1/responses".to_string(),
+            provider: "anthropic".to_string(),
+            upstream_id: "unit-test".to_string(),
+            account_id: None,
+            model: Some("claude-3-7-sonnet".to_string()),
+            mapped_model: Some("claude-3-7-sonnet".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            ttfb_ms: None,
+            timings: Default::default(),
+            start: Instant::now(),
+        };
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-3-7-sonnet\"}}\n\n",
+            )),
+            Ok(Bytes::from("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n")),
+            Ok(Bytes::from("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"first thought\"}}\n\n")),
+            Ok(Bytes::from("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")),
+            Ok(Bytes::from("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":1,\"delta\":{\"type\":\"text_delta\",\"text\":\"before\"}}\n\n")),
+            Ok(Bytes::from("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tool_1\",\"name\":\"noop\",\"input\":{}}}\n\n")),
+            Ok(Bytes::from("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")),
+            Ok(Bytes::from("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":3,\"delta\":{\"type\":\"text_delta\",\"text\":\"after\"}}\n\n")),
+            Ok(Bytes::from("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":4,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\"}}\n\n")),
+            Ok(Bytes::from("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":4,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"second thought\"}}\n\n")),
+            Ok(Bytes::from("event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":5,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n")),
+            Ok(Bytes::from("event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":5,\"delta\":{\"type\":\"text_delta\",\"text\":\"last\"}}\n\n")),
+            Ok(Bytes::from("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")),
+            Ok(Bytes::from("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")),
+        ]);
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let chunks = super::super::anthropic_to_responses::stream_anthropic_to_responses(
+            upstream,
+            context,
+            log,
+            token_tracker,
+        )
+        .map(|item| item.expect("stream item"))
+        .collect::<Vec<_>>()
+        .await;
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+        let completed_events = payloads
+            .iter()
+            .filter(|payload| payload["type"] == "response.completed")
+            .collect::<Vec<_>>();
+        assert_eq!(completed_events.len(), 1);
+        let output = completed_events[0]["response"]["output"]
+            .as_array()
+            .expect("output array");
+        assert_eq!(
+            output
+                .iter()
+                .map(|item| item["type"].as_str().expect("output type"))
+                .collect::<Vec<_>>(),
+            vec![
+                "reasoning",
+                "message",
+                "function_call",
+                "message",
+                "reasoning",
+                "message"
+            ]
+        );
+        assert_eq!(output[1]["content"][0]["text"], "before");
+        assert_eq!(output[2]["arguments"], "{}");
+        assert_eq!(output[3]["content"][0]["text"], "after");
+        assert_eq!(output[5]["content"][0]["text"], "last");
+        let message_ids = output
+            .iter()
+            .filter(|item| item["type"] == "message")
+            .map(|item| item["id"].as_str().expect("message id"))
+            .collect::<Vec<_>>();
+        assert_eq!(message_ids.len(), 3);
+        assert_ne!(message_ids[0], message_ids[1]);
+        assert_ne!(message_ids[1], message_ids[2]);
+        let arguments_done = payloads
+            .iter()
+            .find(|payload| payload["type"] == "response.function_call_arguments.done")
+            .expect("arguments done");
+        assert_eq!(arguments_done["arguments"], "{}");
+        assert_eq!(
+            String::from_utf8_lossy(chunks.last().expect("done sentinel")),
+            "data: [DONE]\n\n"
+        );
+    });
+}
+
+#[test]
 fn stream_anthropic_to_responses_adds_cache_tokens_to_openai_input_usage() {
     super::run_async(async {
         let sqlite_pool = super::create_test_sqlite_pool().await;
@@ -1432,7 +1732,50 @@ fn stream_anthropic_to_responses_maps_redacted_thinking_to_encrypted_reasoning()
         );
         assert_eq!(
             completed["response"]["output"][0]["encrypted_content"],
-            json!("ENC789")
+            json!("claude-redacted-thinking:ENC789")
+        );
+    });
+}
+
+#[test]
+fn stream_anthropic_to_responses_preserves_thinking_signature_delta() {
+    super::run_async(async {
+        let (_, context, _) = super::setup_responses_stream().await;
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"thought\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"signature_delta\",\"signature\":\"SIG789\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            )),
+        ]);
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let chunks = super::super::anthropic_to_responses::stream_anthropic_to_responses(
+            upstream,
+            context,
+            Arc::new(LogWriter::new(None)),
+            token_tracker,
+        )
+        .map(|item| item.expect("stream item"))
+        .collect::<Vec<_>>()
+        .await;
+        let completed = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .find(|value| value["type"] == "response.completed")
+            .expect("completed event");
+
+        assert_eq!(
+            completed["response"]["output"][0]["encrypted_content"],
+            json!("SIG789")
         );
     });
 }

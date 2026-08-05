@@ -1201,9 +1201,12 @@ fn sanitize_responses_input_for_codex(items: &[Value]) -> Vec<Value> {
 fn normalize_codex_input_item_ids(items: &mut [Value]) {
     let mut occupied = items
         .iter()
-        .filter_map(|item| item.get("id").and_then(Value::as_str))
-        .filter(|id| id.chars().count() <= CODEX_INPUT_ITEM_ID_MAX_CHARS)
-        .map(str::to_string)
+        .filter_map(|item| {
+            let id = item.get("id").and_then(Value::as_str)?;
+            let normalized =
+                normalize_codex_input_item_id(item.get("type").and_then(Value::as_str), id);
+            (normalized.chars().count() <= CODEX_INPUT_ITEM_ID_MAX_CHARS).then_some(normalized)
+        })
         .collect::<HashSet<_>>();
     let mut mapped = HashMap::new();
     let mut changed = 0usize;
@@ -1212,32 +1215,45 @@ fn normalize_codex_input_item_ids(items: &mut [Value]) {
         let Some(object) = item.as_object_mut() else {
             continue;
         };
-        let Some(id) = object
-            .get("id")
-            .and_then(Value::as_str)
-            .filter(|id| id.chars().count() > CODEX_INPUT_ITEM_ID_MAX_CHARS)
-            .map(str::to_string)
-        else {
+        let Some(source_id) = object.get("id").and_then(Value::as_str).map(str::to_string) else {
             continue;
         };
+        let id =
+            normalize_codex_input_item_id(object.get("type").and_then(Value::as_str), &source_id);
 
-        let shortened = mapped.entry(id.clone()).or_insert_with(|| {
-            let mut attempt = 0usize;
-            loop {
-                let candidate = shorten_codex_input_item_id(&id, attempt);
-                if occupied.insert(candidate.clone()) {
-                    break candidate;
-                }
-                attempt += 1;
-            }
-        });
-        object.insert("id".to_string(), Value::String(shortened.clone()));
-        changed += 1;
+        let normalized_id = if id.chars().count() > CODEX_INPUT_ITEM_ID_MAX_CHARS {
+            mapped
+                .entry(id.clone())
+                .or_insert_with(|| {
+                    let mut attempt = 0usize;
+                    loop {
+                        let candidate = shorten_codex_input_item_id(&id, attempt);
+                        if occupied.insert(candidate.clone()) {
+                            break candidate;
+                        }
+                        attempt += 1;
+                    }
+                })
+                .clone()
+        } else {
+            id
+        };
+        if object.get("id").and_then(Value::as_str) != Some(normalized_id.as_str()) {
+            object.insert("id".to_string(), Value::String(normalized_id));
+            changed += 1;
+        }
     }
 
     if changed > 0 {
-        tracing::debug!(changed, "compacted overlong Codex input item ids");
+        tracing::debug!(changed, "normalized Codex input item ids");
     }
+}
+
+fn normalize_codex_input_item_id(item_type: Option<&str>, id: &str) -> String {
+    if item_type == Some("message") && !id.is_empty() && !id.starts_with("msg") {
+        return format!("msg_{id}");
+    }
+    id.to_string()
 }
 
 fn shorten_codex_input_item_id(id: &str, attempt: usize) -> String {

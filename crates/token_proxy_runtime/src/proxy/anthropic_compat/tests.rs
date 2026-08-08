@@ -689,6 +689,53 @@ fn responses_request_to_anthropic_maps_new_tool_output_types_to_tool_results() {
 }
 
 #[test]
+fn responses_request_to_anthropic_pairs_custom_tool_calls_with_results() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let input = bytes_from_json(json!({
+        "model": "gpt-4.1",
+        "input": [
+            { "type": "message", "role": "user", "content": "run the patch" },
+            {
+                "type": "custom_tool_call",
+                "call_id": "call_custom",
+                "name": "apply_patch",
+                "input": "*** Begin Patch"
+            },
+            {
+                "type": "custom_tool_call_output",
+                "call_id": "call_custom",
+                "output": "Done!"
+            }
+        ]
+    }));
+
+    let output = run_async(async {
+        responses_request_to_anthropic(&input, &http_clients)
+            .await
+            .expect("transform")
+    });
+    let value = json_from_bytes(output);
+    let messages = value["messages"].as_array().expect("messages array");
+
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[1]["role"], json!("assistant"));
+    assert_eq!(messages[1]["content"][0]["type"], json!("tool_use"));
+    assert_eq!(messages[1]["content"][0]["id"], json!("call_custom"));
+    assert_eq!(messages[1]["content"][0]["name"], json!("apply_patch"));
+    assert_eq!(
+        messages[1]["content"][0]["input"],
+        json!({ "_raw": "*** Begin Patch" })
+    );
+    assert_eq!(messages[2]["role"], json!("user"));
+    assert_eq!(messages[2]["content"][0]["type"], json!("tool_result"));
+    assert_eq!(
+        messages[2]["content"][0]["tool_use_id"],
+        json!("call_custom")
+    );
+    assert_eq!(messages[2]["content"][0]["content"], json!("Done!"));
+}
+
+#[test]
 fn responses_request_to_anthropic_sanitizes_tool_use_ids_and_adds_missing_results() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
 

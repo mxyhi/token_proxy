@@ -295,18 +295,22 @@ async fn responses_input_item_to_claude_messages(
             let blocks = responses_message_content_to_claude_blocks(content, http_clients).await?;
             push_claude_message(messages, role, blocks);
         }
-        "function_call" => {
+        "function_call" | "custom_tool_call" => {
             let tool_use_id = object
                 .get("call_id")
                 .or_else(|| object.get("id"))
                 .and_then(Value::as_str)
                 .unwrap_or("tool_use_proxy");
             let name = object.get("name").and_then(Value::as_str).unwrap_or("");
-            let arguments = object
-                .get("arguments")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let input = parse_tool_input_object(arguments);
+            let input = if item_type == "custom_tool_call" {
+                custom_tool_input_to_claude_object(object.get("input"))
+            } else {
+                let arguments = object
+                    .get("arguments")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                parse_tool_input_object(arguments)
+            };
             let block = json!({
                 "type": "tool_use",
                 "id": tool_use_id,
@@ -314,6 +318,9 @@ async fn responses_input_item_to_claude_messages(
                 "input": input
             });
             push_tool_use_block(messages, block);
+            if item_type == "custom_tool_call" {
+                tracing::debug!("mapped Responses custom tool call to Anthropic tool use");
+            }
         }
         item_type if is_codex_tool_call_output_item_type(item_type) => {
             let tool_use_id = object.get("call_id").and_then(Value::as_str).unwrap_or("");
@@ -755,6 +762,16 @@ fn parse_tool_input_object(arguments: &str) -> Value {
         Some(Value::Object(object)) => Value::Object(object),
         Some(other) => json!({ "_": other }),
         None => json!({ "_raw": arguments }),
+    }
+}
+
+// Anthropic requires every tool input to be an object, while custom tools may carry freeform JSON.
+fn custom_tool_input_to_claude_object(input: Option<&Value>) -> Value {
+    match input {
+        Some(Value::String(input)) => parse_tool_input_object(input),
+        Some(Value::Object(input)) => Value::Object(input.clone()),
+        Some(input) => json!({ "_": input }),
+        None => json!({}),
     }
 }
 

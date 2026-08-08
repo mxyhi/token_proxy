@@ -1102,6 +1102,52 @@ fn responses_request_to_codex_uses_top_level_tool_name() {
 }
 
 #[test]
+fn responses_request_to_codex_replaces_explicit_null_tool_schema_types() {
+    let input = json!({
+        "model": "gpt-5.5",
+        "input": [
+            {
+                "type": "additional_tools",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "tools": [
+                            { "type": "function", "name": "nested", "parameters": { "type": null } }
+                        ]
+                    },
+                    {
+                        "type": "function",
+                        "function": { "name": "legacy", "parameters": { "type": null } }
+                    }
+                ]
+            },
+            { "type": "message", "role": "user", "content": "hi" }
+        ],
+        "tools": [
+            { "type": "function", "name": "root", "parameters": { "type": null } },
+            { "type": "function", "function": { "name": "chat", "parameters": { "type": null } } },
+            { "type": "function", "name": "unconstrained", "parameters": { "properties": {} } }
+        ]
+    });
+
+    let output = responses_request_to_codex(&Bytes::from(input.to_string()), None)
+        .expect("convert responses request");
+    let value: Value = serde_json::from_slice(&output).expect("json");
+
+    assert_eq!(value["tools"][0]["parameters"]["type"], "object");
+    assert_eq!(value["tools"][1]["parameters"]["type"], "object");
+    assert!(value["tools"][2]["parameters"].get("type").is_none());
+    assert_eq!(
+        value["input"][0]["tools"][0]["tools"][0]["parameters"]["type"],
+        "object"
+    );
+    assert_eq!(
+        value["input"][0]["tools"][1]["function"]["parameters"]["type"],
+        "object"
+    );
+}
+
+#[test]
 fn responses_request_to_codex_flattens_namespace_declaration_history_and_choice() {
     let input = json!({
         "model": "gpt-5.5",
@@ -1347,14 +1393,14 @@ fn responses_request_to_codex_sanitizes_store_false_reasoning_context() {
             {
                 "type": "reasoning",
                 "id": "rs_replayed_null_summary",
-                "encrypted_content": "encrypted-null",
+                "encrypted_content": null,
                 "content": [{ "type": "reasoning_text", "text": "private context" }],
                 "summary": null
             },
             {
                 "type": "reasoning",
                 "id": "rs_replayed_missing_summary",
-                "encrypted_content": "encrypted-missing",
+                "encrypted_content": "",
                 "content": []
             },
             {
@@ -1363,6 +1409,13 @@ fn responses_request_to_codex_sanitizes_store_false_reasoning_context() {
                 "encrypted_content": "encrypted-existing",
                 "content": [],
                 "summary": [{ "type": "summary_text", "text": "existing summary" }]
+            },
+            {
+                "type": "reasoning",
+                "id": "rs_existing_context",
+                "encrypted_content": "encrypted-prefixed",
+                "content": [],
+                "summary": []
             }
         ]
     });
@@ -1372,22 +1425,23 @@ fn responses_request_to_codex_sanitizes_store_false_reasoning_context() {
     let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
     let input_items = value["input"].as_array().expect("input array");
 
-    assert_eq!(input_items.len(), 3);
+    assert_eq!(input_items.len(), 4);
     assert!(input_items[..2].iter().all(|item| item.get("id").is_none()));
-    assert_eq!(input_items[0]["encrypted_content"], "encrypted-null");
+    assert!(input_items[0]["encrypted_content"].is_null());
     assert_eq!(
         input_items[0]["content"],
         json!([{ "type": "reasoning_text", "text": "private context" }])
     );
     assert_eq!(input_items[0]["summary"], json!([]));
-    assert_eq!(input_items[1]["encrypted_content"], "encrypted-missing");
+    assert_eq!(input_items[1]["encrypted_content"], "");
     assert_eq!(input_items[1]["content"], json!([]));
     assert_eq!(input_items[1]["summary"], json!([]));
-    assert_eq!(input_items[2]["id"], "reasoning_local_context");
+    assert_eq!(input_items[2]["id"], "rs_reasoning_local_context");
     assert_eq!(
         input_items[2]["summary"],
         json!([{ "type": "summary_text", "text": "existing summary" }])
     );
+    assert_eq!(input_items[3]["id"], "rs_existing_context");
 }
 
 #[test]
@@ -1412,8 +1466,8 @@ fn responses_request_to_codex_strips_invalid_call_input_ids_only() {
     let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
     let input_items = value["input"].as_array().expect("input array");
 
-    for (item, expected_call_id) in input_items[..6].iter().zip([
-        "call_function",
+    assert_eq!(input_items[0]["id"], "fc_item_function");
+    for (item, expected_call_id) in input_items[1..6].iter().zip([
         "call_tool",
         "call_shell",
         "call_search",
@@ -1423,6 +1477,7 @@ fn responses_request_to_codex_strips_invalid_call_input_ids_only() {
         assert!(item.get("id").is_none(), "item={item}");
         assert_eq!(item["call_id"], expected_call_id);
     }
+    assert_eq!(input_items[0]["call_id"], "call_function");
     assert_eq!(input_items[6]["id"], "fc_keep");
     assert_eq!(input_items[6]["call_id"], "call_keep");
     assert_eq!(input_items[7]["id"], "item_output");

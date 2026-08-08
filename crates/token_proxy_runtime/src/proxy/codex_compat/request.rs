@@ -21,6 +21,10 @@ const GPT5_2_DEFAULT_INSTRUCTIONS: &str =
 const CODEX_CALL_ID_MAX_BYTES: usize = 64;
 const CODEX_CALL_ID_PREFIX: &str = "fc_";
 const CODEX_INPUT_ITEM_ID_MAX_CHARS: usize = 64;
+const CODEX_MESSAGE_ITEM_ID_PREFIX: &str = "msg";
+const CODEX_REASONING_ITEM_ID_PREFIX: &str = "rs";
+const CODEX_FUNCTION_CALL_ITEM_ID_PREFIX: &str = "fc";
+const CODEX_TOOL_SCHEMA_MAX_DEPTH: usize = 4;
 
 fn normalize_codex_call_id(id: &str) -> String {
     let candidate = match id {
@@ -99,10 +103,11 @@ pub(crate) fn chat_request_to_codex_with_prompt_cache_key(
     model_hint: Option<&str>,
     prompt_cache_key: Option<&str>,
 ) -> Result<Bytes, String> {
-    let object = parse_object(body)?;
+    let mut object = parse_object(body)?;
     if is_responses_shaped_chat_request(&object) {
         return transform_responses_request_to_codex(body, model_hint, false, prompt_cache_key);
     }
+    normalize_codex_tool_schema_types(&mut object);
 
     let model = resolve_model(&object, model_hint);
     let effort = resolve_reasoning_effort(&object, Some(&model));
@@ -206,6 +211,7 @@ fn transform_responses_request_to_codex(
         prompt_cache_key,
     );
     flatten_responses_namespaces(&mut object)?;
+    normalize_codex_tool_schema_types(&mut object);
     let model = object
         .get("model")
         .and_then(Value::as_str)
@@ -590,6 +596,70 @@ fn map_tools(tools: &Value, tool_map: &ToolNameMap) -> Value {
         output.push(Value::Object(item));
     }
     Value::Array(output)
+}
+
+// Codex rejects explicit null schema types. Missing types remain valid and must stay absent.
+fn normalize_codex_tool_schema_types(object: &mut Map<String, Value>) {
+    let mut changed = 0usize;
+    if let Some(tools) = object.get_mut("tools") {
+        normalize_codex_tool_schema_types_in_tools(tools, 0, &mut changed);
+    }
+    if let Some(input) = object.get_mut("input").and_then(Value::as_array_mut) {
+        for item in input {
+            if let Some(tools) = item.get_mut("tools") {
+                normalize_codex_tool_schema_types_in_tools(tools, 0, &mut changed);
+            }
+        }
+    }
+    if changed > 0 {
+        tracing::debug!(changed, "normalized explicit null Codex tool schema types");
+    }
+}
+
+fn normalize_codex_tool_schema_types_in_tools(
+    tools: &mut Value,
+    depth: usize,
+    changed: &mut usize,
+) {
+    if depth > CODEX_TOOL_SCHEMA_MAX_DEPTH {
+        return;
+    }
+    let Some(tools) = tools.as_array_mut() else {
+        return;
+    };
+    for tool in tools {
+        let Some(tool) = tool.as_object_mut() else {
+            continue;
+        };
+        if tool
+            .get_mut("parameters")
+            .is_some_and(normalize_explicit_null_schema_type)
+        {
+            *changed += 1;
+        }
+        if tool
+            .get_mut("function")
+            .and_then(Value::as_object_mut)
+            .and_then(|function| function.get_mut("parameters"))
+            .is_some_and(normalize_explicit_null_schema_type)
+        {
+            *changed += 1;
+        }
+        if let Some(nested) = tool.get_mut("tools") {
+            normalize_codex_tool_schema_types_in_tools(nested, depth + 1, changed);
+        }
+    }
+}
+
+fn normalize_explicit_null_schema_type(parameters: &mut Value) -> bool {
+    let Some(parameters) = parameters.as_object_mut() else {
+        return false;
+    };
+    if !parameters.get("type").is_some_and(Value::is_null) {
+        return false;
+    }
+    parameters.insert("type".to_string(), Value::String("object".to_string()));
+    true
 }
 
 fn map_tool_choice(choice: &Value, tool_map: &ToolNameMap) -> Value {
@@ -1188,10 +1258,25 @@ fn non_empty_text(text: &str) -> Option<String> {
 }
 
 fn sanitize_responses_input_for_codex(items: &[Value]) -> Vec<Value> {
+    let mut removed_reasoning_ids = 0usize;
     let mut sanitized = items
         .iter()
-        .map(sanitize_responses_input_item_for_codex)
+        .map(|item| {
+            let had_reasoning_id = item.get("type").and_then(Value::as_str) == Some("reasoning")
+                && item.get("id").and_then(Value::as_str).is_some();
+            let sanitized = sanitize_responses_input_item_for_codex(item);
+            if had_reasoning_id && sanitized.get("id").is_none() {
+                removed_reasoning_ids += 1;
+            }
+            sanitized
+        })
         .collect::<Vec<_>>();
+    if removed_reasoning_ids > 0 {
+        tracing::debug!(
+            removed_reasoning_ids,
+            "removed non-replayable Codex reasoning item ids"
+        );
+    }
     normalize_codex_input_item_ids(&mut sanitized);
     sanitized
 }
@@ -1250,10 +1335,16 @@ fn normalize_codex_input_item_ids(items: &mut [Value]) {
 }
 
 fn normalize_codex_input_item_id(item_type: Option<&str>, id: &str) -> String {
-    if item_type == Some("message") && !id.is_empty() && !id.starts_with("msg") {
-        return format!("msg_{id}");
+    let prefix = match item_type {
+        Some("message") => CODEX_MESSAGE_ITEM_ID_PREFIX,
+        Some("reasoning") => CODEX_REASONING_ITEM_ID_PREFIX,
+        Some("function_call") => CODEX_FUNCTION_CALL_ITEM_ID_PREFIX,
+        _ => return id.to_string(),
+    };
+    if id.is_empty() || id.starts_with(prefix) {
+        return id.to_string();
     }
-    id.to_string()
+    format!("{prefix}_{id}")
 }
 
 fn shorten_codex_input_item_id(id: &str, attempt: usize) -> String {
@@ -1293,11 +1384,11 @@ fn sanitize_responses_input_item_for_codex(item: &Value) -> Value {
     let item_type = object.get("type").and_then(Value::as_str).unwrap_or("");
     if item_type == "reasoning" {
         let mut sanitized = object.clone();
-        // store=false 时 rs_* 只能作为回放内容，携带旧 id 会触发上游对象查询并返回 404。
-        if sanitized
-            .get("id")
+        // store=false can replay an item ID only when its encrypted carrier is usable.
+        if !sanitized
+            .get("encrypted_content")
             .and_then(Value::as_str)
-            .is_some_and(|id| id.starts_with("rs_"))
+            .is_some_and(|content| !content.is_empty())
         {
             sanitized.remove("id");
         }
@@ -1308,10 +1399,11 @@ fn sanitize_responses_input_item_for_codex(item: &Value) -> Value {
     }
     if is_codex_call_input_item_type(item_type) {
         let mut sanitized = object.clone();
-        // Codex 只接受 fc* call-input id；call_id 负责和 output 配对，必须保留。
-        if sanitized
-            .get("id")
-            .is_some_and(|id| !id.as_str().is_some_and(|id| id.starts_with("fc")))
+        // Standard function calls are normalized later; other call types retain existing cleanup.
+        if item_type != "function_call"
+            && sanitized
+                .get("id")
+                .is_some_and(|id| !id.as_str().is_some_and(|id| id.starts_with("fc")))
         {
             sanitized.remove("id");
         }

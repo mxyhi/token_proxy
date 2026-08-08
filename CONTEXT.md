@@ -156,6 +156,22 @@ _Avoid_: HTTP Error Response（响应头提交后已无法更改 HTTP 状态）
 Codex Responses 输入中 `type=message` 项的跨事件标识；非空值必须以 `msg` 开头，规范化时为不合规值添加 `msg_`，再执行长度压缩和去重。
 _Avoid_: 任意 Responses item id、reasoning item id
 
+**Codex Replayable Reasoning Item ID**:
+`store=false` Responses 输入中可回放 reasoning 项的标识；只有携带有效 `encrypted_content` 的项可保留 ID，且非空 ID 使用 `rs` 前缀。
+_Avoid_: 无载体 reasoning ID、message item ID
+
+**Codex Function Call Item ID**:
+Codex Responses 输入中 `type=function_call` 项的标识；非空值使用 `fc` 前缀。它与 `call_id` 及 function-call-output item ID 是不同身份。
+_Avoid_: call_id、function-call-output item ID
+
+**Custom Tool Call（自定义自由格式工具调用）**:
+携带自由格式 `input` 的 Responses 工具调用项；它与输出项通过 `call_id` 配对，在仅接受对象参数的 Provider 协议中仍保留同一调用身份。
+_Avoid_: Function Arguments Object、孤立 tool result
+
+**Explicit Null Tool Schema Type（显式空工具 Schema 类型）**:
+工具参数 schema 中明确声明的 `type: null`，它不是缺失类型，属于无效 schema；缺失 `type` 表示不约束类型，语义不同。
+_Avoid_: 缺失 type、空 parameters、schema type array
+
 **Ordered Content Block**:
 Anthropic 消息内容中按原始 `content_block.index` 排列的单个 thinking、text 或 tool_use 项；Responses 转换必须以该顺序生成 added、delta、done 和最终 output。
 _Avoid_: 单一 message 聚合、按类型合并

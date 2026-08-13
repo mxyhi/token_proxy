@@ -100,6 +100,19 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
         mappings.get("x-ai/grok-4.20-0309-non-reasoning"),
         Some(&"grok-4.20".to_string())
     );
+    assert_eq!(mappings.get("x-ai/grok-4.6"), Some(&"grok-4.6".to_string()));
+    assert_eq!(
+        mappings.get("x-ai/grok-4.6-high"),
+        Some(&"grok-4.6".to_string())
+    );
+    assert_eq!(
+        mappings.get("x-ai/grok-4.6-xhigh"),
+        Some(&"grok-4.6".to_string())
+    );
+    assert_eq!(
+        mappings.get("xai/grok-4.6xhigh"),
+        Some(&"grok-4.6".to_string())
+    );
     assert_eq!(mappings.get("x-ai/grok-4.5"), Some(&"grok-4.5".to_string()));
     assert_eq!(
         mappings.get("x-ai/grok-4.5-high"),

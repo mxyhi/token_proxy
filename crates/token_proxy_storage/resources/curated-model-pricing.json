@@ -1,7 +1,41 @@
 {
   "schemaVersion": 1,
-  "version": "curated.20260729",
+  "version": "curated.20260813",
   "models": [
+    {
+      "source": {
+        "pricingUrl": "https://docs.x.ai/developers/pricing",
+        "verifiedAt": "2026-08-13"
+      },
+      "model": {
+        "modelId": "grok-4.6",
+        "aliases": [
+          "grok-4.6-high",
+          "grok-4.6-xhigh",
+          "grok-4.6xhigh",
+          "grok4.6xhigh",
+          "x-ai/grok-4.6",
+          "xai/grok-4.6",
+          "x-ai/grok-4.6-high",
+          "xai/grok-4.6-high",
+          "x-ai/grok-4.6-xhigh",
+          "xai/grok-4.6-xhigh"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 2000,
+          "outputNanoUsdPerToken": 6000,
+          "cacheReadNanoUsdPerToken": 500,
+          "cacheWriteNanoUsdPerToken": 2000
+        },
+        "serviceTierProfiles": {},
+        "longContext": {
+          "threshold": 200000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 2000000000000
+        }
+      }
+    },
     {
       "source": {
         "pricingUrl": "https://platform.kimi.ai/docs/pricing/chat-k3",

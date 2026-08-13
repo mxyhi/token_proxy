@@ -1073,7 +1073,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20260729"
+            "catalog.69854741.b88b66df+curated.20260813"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1108,6 +1108,10 @@ mod tests {
             })
             .collect::<HashMap<_, _>>();
 
+        assert_eq!(
+            sources.get("grok-4.6"),
+            Some(&("https://docs.x.ai/developers/pricing", "2026-08-13"))
+        );
         assert_eq!(
             sources.get("kimi-k3"),
             Some(&(
@@ -1149,6 +1153,47 @@ mod tests {
             assert_eq!(standard.cost_nano_usd, 9_150);
             assert_eq!(priority.cost_nano_usd, 16_470);
         }
+    }
+
+    #[test]
+    fn grok_4_6_aliases_apply_official_short_and_long_context_prices() {
+        let settings = default_model_pricing_settings();
+        let short_usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+        let long_usage = BillableUsage {
+            uncached_input_tokens: 200_001,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        // Official xAI grok-4.6: $2 / $0.50 / $6 per 1M; 200k+ prompts bill 2x.
+        for model in [
+            "grok-4.6",
+            "grok-4.6-high",
+            "grok-4.6-xhigh",
+            "grok-4.6xhigh",
+            "grok4.6xhigh",
+            "x-ai/grok-4.6",
+            "xai/grok-4.6-high",
+            "x-ai/grok-4.6-xhigh",
+        ] {
+            let short = calculate_request_cost(&settings, Some(model), None, None, &short_usage)
+                .expect("Grok 4.6 short-context price");
+            let long = calculate_request_cost(&settings, Some(model), None, None, &long_usage)
+                .expect("Grok 4.6 long-context price");
+
+            assert_eq!(short.pricing_model, "grok-4.6");
+            assert_eq!(short.cost_nano_usd, 8_500);
+            assert_eq!(short.context_tier, PricingContextTier::Standard);
+            assert_eq!(long.pricing_model, "grok-4.6");
+            assert_eq!(long.cost_nano_usd, 800_016_000);
+            assert_eq!(long.context_tier, PricingContextTier::Long);
+        }
+        assert!(settings.version.contains("+curated.20260813"));
     }
 
     #[test]
@@ -1405,7 +1450,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20260729");
+        assert_eq!(settings.version, "remote.test+curated.20260813");
     }
 
     #[test]

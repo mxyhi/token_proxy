@@ -29,7 +29,9 @@ pub(crate) const CLI_BILLING_USER_AGENT: &str =
     "grok-pager/0.2.93 grok-shell/0.2.93 (macos; aarch64)";
 
 /// CLI OAuth provider 不调用 `/models`，使用与当前参考实现一致的内建目录。
+/// `grok-4.6-high` / `grok-4.6-xhigh` 是同模型 effort 别名，不单独列入上游 ID。
 pub const BUILTIN_MODELS: &[&str] = &[
+    "grok-4.6",
     "grok-4.5",
     "grok-4.3",
     "grok-build-0.1",

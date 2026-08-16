@@ -844,7 +844,7 @@ fn openai_stream_semantics(provider: &str, path: &str) -> OpenAiStreamSemantics 
 
 fn is_openai_responses_stream_path(path: &str) -> bool {
     let path = path.split_once('?').map(|(path, _)| path).unwrap_or(path);
-    path == "/v1/responses" || path == "/v1/responses/compact" || path.starts_with("/v1/responses/")
+    path == "/v1/responses" || path.starts_with("/v1/responses/")
 }
 
 fn openai_stream_value_is_terminal(value: &Value) -> bool {

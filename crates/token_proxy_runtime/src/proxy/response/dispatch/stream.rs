@@ -248,7 +248,6 @@ fn is_simple_transform(transform: FormatTransform) -> bool {
             | FormatTransform::CodexToImagesGenerations
             | FormatTransform::ChatToCodex
             | FormatTransform::ResponsesToCodex
-            | FormatTransform::ResponsesCompactToCodex
     )
 }
 
@@ -387,9 +386,7 @@ fn stream_for_simple_extended(
             request_tracker,
             response_format,
         ),
-        FormatTransform::ChatToCodex
-        | FormatTransform::ResponsesToCodex
-        | FormatTransform::ResponsesCompactToCodex => {
+        FormatTransform::ChatToCodex | FormatTransform::ResponsesToCodex => {
             streaming::stream_with_logging(upstream, context, log, request_tracker).boxed()
         }
         _ => streaming::stream_with_logging(upstream, context, log, request_tracker).boxed(),
@@ -1852,5 +1849,5 @@ fn openai_semantic_timeout(provider: &str, path: &str, timeout: Duration) -> Opt
 
 fn is_openai_responses_stream_path(path: &str) -> bool {
     let path = path.split_once('?').map(|(path, _)| path).unwrap_or(path);
-    path == "/v1/responses" || path == "/v1/responses/compact" || path.starts_with("/v1/responses/")
+    path == "/v1/responses" || path.starts_with("/v1/responses/")
 }

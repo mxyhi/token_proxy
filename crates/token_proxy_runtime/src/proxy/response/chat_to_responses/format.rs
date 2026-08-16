@@ -8,12 +8,14 @@ pub(super) enum OutputItemSnapshot {
         output_index: u64,
         text: String,
         encrypted_content: Option<String>,
+        status: String,
     },
     Message {
         id: String,
         output_index: u64,
         text: String,
         audio: Option<Value>,
+        status: String,
     },
     FunctionCall {
         id: String,
@@ -21,6 +23,7 @@ pub(super) enum OutputItemSnapshot {
         call_id: String,
         name: String,
         arguments: String,
+        status: String,
     },
 }
 
@@ -47,12 +50,13 @@ pub(super) fn snapshot_to_output_item(snapshot: &OutputItemSnapshot) -> Value {
             id,
             text,
             encrypted_content,
+            status,
             ..
         } => {
             let mut item = json!({
                 "id": id,
                 "type": "reasoning",
-                "status": "completed",
+                "status": status,
                 "summary": [
                     { "type": "summary_text", "text": text }
                 ]
@@ -68,7 +72,11 @@ pub(super) fn snapshot_to_output_item(snapshot: &OutputItemSnapshot) -> Value {
             item
         }
         OutputItemSnapshot::Message {
-            id, text, audio, ..
+            id,
+            text,
+            audio,
+            status,
+            ..
         } => {
             let mut content = Vec::new();
             if !text.is_empty() {
@@ -87,7 +95,7 @@ pub(super) fn snapshot_to_output_item(snapshot: &OutputItemSnapshot) -> Value {
             json!({
                 "id": id,
                 "type": "message",
-                "status": "completed",
+                "status": status,
                 "role": "assistant",
                 "content": content
             })
@@ -97,11 +105,12 @@ pub(super) fn snapshot_to_output_item(snapshot: &OutputItemSnapshot) -> Value {
             call_id,
             name,
             arguments,
+            status,
             ..
         } => json!({
             "id": id,
             "type": "function_call",
-            "status": "completed",
+            "status": status,
             "call_id": call_id,
             "name": name,
             "arguments": arguments

@@ -642,6 +642,7 @@ async fn build_proxy_state(
         model_discovery: Arc::new(super::model_discovery::UpstreamModelDiscoveryCache::new()),
         kiro_accounts,
         codex_accounts,
+        codex_turn_state: super::codex_turn_state::CodexTurnStateProvenance::new(),
         xai_accounts,
     }))
 }

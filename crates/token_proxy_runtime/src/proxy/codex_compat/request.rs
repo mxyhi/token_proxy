@@ -24,6 +24,8 @@ const CODEX_INPUT_ITEM_ID_MAX_CHARS: usize = 64;
 const CODEX_MESSAGE_ITEM_ID_PREFIX: &str = "msg";
 const CODEX_REASONING_ITEM_ID_PREFIX: &str = "rs";
 const CODEX_FUNCTION_CALL_ITEM_ID_PREFIX: &str = "fc";
+const CODEX_CUSTOM_TOOL_CALL_ITEM_ID_PREFIX: &str = "ctc";
+const CODEX_CUSTOM_TOOL_CALL_OUTPUT_ITEM_ID_PREFIX: &str = "ctco";
 const CODEX_TOOL_SCHEMA_MAX_DEPTH: usize = 4;
 
 fn normalize_codex_call_id(id: &str) -> String {
@@ -105,7 +107,7 @@ pub(crate) fn chat_request_to_codex_with_prompt_cache_key(
 ) -> Result<Bytes, String> {
     let mut object = parse_object(body)?;
     if is_responses_shaped_chat_request(&object) {
-        return transform_responses_request_to_codex(body, model_hint, false, prompt_cache_key);
+        return transform_responses_request_to_codex(body, model_hint, prompt_cache_key);
     }
     normalize_codex_tool_schema_types(&mut object);
 
@@ -178,38 +180,16 @@ pub(crate) fn responses_request_to_codex_with_prompt_cache_key(
     model_hint: Option<&str>,
     prompt_cache_key: Option<&str>,
 ) -> Result<Bytes, String> {
-    transform_responses_request_to_codex(body, model_hint, false, prompt_cache_key)
-}
-
-#[cfg(test)]
-pub(crate) fn responses_compact_request_to_codex(
-    body: &Bytes,
-    model_hint: Option<&str>,
-) -> Result<Bytes, String> {
-    responses_compact_request_to_codex_with_prompt_cache_key(body, model_hint, None)
-}
-
-pub(crate) fn responses_compact_request_to_codex_with_prompt_cache_key(
-    body: &Bytes,
-    model_hint: Option<&str>,
-    prompt_cache_key: Option<&str>,
-) -> Result<Bytes, String> {
-    transform_responses_request_to_codex(body, model_hint, true, prompt_cache_key)
+    transform_responses_request_to_codex(body, model_hint, prompt_cache_key)
 }
 
 fn transform_responses_request_to_codex(
     body: &Bytes,
     model_hint: Option<&str>,
-    strip_reasoning_include: bool,
     prompt_cache_key: Option<&str>,
 ) -> Result<Bytes, String> {
     let mut object = parse_object(body)?;
-    normalize_responses_payload(
-        &mut object,
-        model_hint,
-        strip_reasoning_include,
-        prompt_cache_key,
-    );
+    normalize_responses_payload(&mut object, model_hint, prompt_cache_key);
     flatten_responses_namespaces(&mut object)?;
     normalize_codex_tool_schema_types(&mut object);
     let model = object
@@ -764,7 +744,6 @@ fn apply_text_format(
 fn normalize_responses_payload(
     object: &mut Map<String, Value>,
     model_hint: Option<&str>,
-    strip_reasoning_include: bool,
     prompt_cache_key: Option<&str>,
 ) {
     let requested_model = object
@@ -776,25 +755,17 @@ fn normalize_responses_payload(
     let inferred_effort = parse_gpt_5_6_effort_suffix(requested_model);
     let model = normalize_codex_model(requested_model);
     object.insert("model".to_string(), Value::String(model.clone()));
-    normalize_gpt_5_6_reasoning_effort(
-        object,
-        &model,
-        inferred_effort.as_deref(),
-        strip_reasoning_include,
-    );
+    normalize_gpt_5_6_reasoning_effort(object, &model, inferred_effort.as_deref());
     if !object.contains_key("parallel_tool_calls") {
         object.insert("parallel_tool_calls".to_string(), Value::Bool(true));
     }
     object.insert("stream".to_string(), Value::Bool(true));
     object.insert("store".to_string(), Value::Bool(false));
-    if strip_reasoning_include {
-        object.remove("include");
-    } else {
-        object.insert(
-            "include".to_string(),
-            json!(["reasoning.encrypted_content"]),
-        );
-    }
+    object.insert(
+        "include".to_string(),
+        json!(["reasoning.encrypted_content"]),
+    );
+    let removed_prompt_cache_options = object.remove("prompt_cache_options").is_some();
     for key in [
         "max_output_tokens",
         "max_completion_tokens",
@@ -812,7 +783,7 @@ fn normalize_responses_payload(
         object.remove(key);
     }
 
-    let input = match object.get("input") {
+    let mut input = match object.get("input") {
         Some(Value::String(text)) => vec![json!({
             "type": "message",
             "role": "user",
@@ -821,6 +792,14 @@ fn normalize_responses_payload(
         Some(Value::Array(items)) => sanitize_responses_input_for_codex(items),
         _ => Vec::new(),
     };
+    let removed_prompt_cache_breakpoints = remove_prompt_cache_breakpoints(&mut input);
+    if removed_prompt_cache_options || removed_prompt_cache_breakpoints > 0 {
+        tracing::debug!(
+            removed_prompt_cache_options,
+            removed_prompt_cache_breakpoints,
+            "removed unsupported Codex prompt cache fields"
+        );
+    }
     let (input, extracted_instructions) = extract_system_messages_from_input(input);
     merge_extracted_instructions(object, extracted_instructions);
     ensure_default_instructions(object, &model);
@@ -828,11 +807,32 @@ fn normalize_responses_payload(
     object.insert("input".to_string(), Value::Array(input));
 }
 
+fn remove_prompt_cache_breakpoints(items: &mut [Value]) -> usize {
+    let mut removed = 0usize;
+    for item in items {
+        let Some(content) = item
+            .as_object_mut()
+            .and_then(|object| object.get_mut("content"))
+            .and_then(Value::as_array_mut)
+        else {
+            continue;
+        };
+        for part in content {
+            if part
+                .as_object_mut()
+                .is_some_and(|object| object.remove("prompt_cache_breakpoint").is_some())
+            {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 fn normalize_gpt_5_6_reasoning_effort(
     object: &mut Map<String, Value>,
     model: &str,
     inferred_effort: Option<&str>,
-    is_compact: bool,
 ) {
     if !matches!(model, "gpt-5.6-sol" | "gpt-5.6-terra" | "gpt-5.6-luna") {
         return;
@@ -851,11 +851,7 @@ fn normalize_gpt_5_6_reasoning_effort(
     else {
         return;
     };
-    let normalized_effort = if is_compact && effort.trim().eq_ignore_ascii_case("max") {
-        "xhigh"
-    } else {
-        effort.as_str()
-    };
+    let normalized_effort = effort.as_str();
     if explicit_effort.as_deref() == Some(normalized_effort) {
         return;
     }
@@ -874,7 +870,6 @@ fn normalize_gpt_5_6_reasoning_effort(
         model,
         requested_effort = effort.as_str(),
         normalized_effort,
-        is_compact,
         "normalized GPT-5.6 reasoning effort"
     );
 }
@@ -1284,13 +1279,15 @@ fn sanitize_responses_input_for_codex(items: &[Value]) -> Vec<Value> {
 // Codex caps every retained input item id, not only function call ids. Keep a
 // request-wide map so repeated source ids stay paired and cannot collide.
 fn normalize_codex_input_item_ids(items: &mut [Value]) {
+    // 原样合法 ID 拥有优先权；待加前缀的 ID 再确定性避碰，保证顺序不影响保留项。
     let mut occupied = items
         .iter()
         .filter_map(|item| {
             let id = item.get("id").and_then(Value::as_str)?;
             let normalized =
                 normalize_codex_input_item_id(item.get("type").and_then(Value::as_str), id);
-            (normalized.chars().count() <= CODEX_INPUT_ITEM_ID_MAX_CHARS).then_some(normalized)
+            (normalized == id && normalized.chars().count() <= CODEX_INPUT_ITEM_ID_MAX_CHARS)
+                .then_some(normalized)
         })
         .collect::<HashSet<_>>();
     let mut mapped = HashMap::new();
@@ -1306,23 +1303,29 @@ fn normalize_codex_input_item_ids(items: &mut [Value]) {
         let id =
             normalize_codex_input_item_id(object.get("type").and_then(Value::as_str), &source_id);
 
-        let normalized_id = if id.chars().count() > CODEX_INPUT_ITEM_ID_MAX_CHARS {
-            mapped
-                .entry(id.clone())
-                .or_insert_with(|| {
-                    let mut attempt = 0usize;
-                    loop {
-                        let candidate = shorten_codex_input_item_id(&id, attempt);
-                        if occupied.insert(candidate.clone()) {
-                            break candidate;
+        let normalized_id =
+            if id == source_id && id.chars().count() <= CODEX_INPUT_ITEM_ID_MAX_CHARS {
+                id
+            } else {
+                mapped
+                    .entry(id.clone())
+                    .or_insert_with(|| {
+                        if id.chars().count() <= CODEX_INPUT_ITEM_ID_MAX_CHARS
+                            && occupied.insert(id.clone())
+                        {
+                            return id.clone();
                         }
-                        attempt += 1;
-                    }
-                })
-                .clone()
-        } else {
-            id
-        };
+                        let mut attempt = 0usize;
+                        loop {
+                            let candidate = shorten_codex_input_item_id(&id, attempt);
+                            if occupied.insert(candidate.clone()) {
+                                break candidate;
+                            }
+                            attempt += 1;
+                        }
+                    })
+                    .clone()
+            };
         if object.get("id").and_then(Value::as_str) != Some(normalized_id.as_str()) {
             object.insert("id".to_string(), Value::String(normalized_id));
             changed += 1;
@@ -1339,6 +1342,8 @@ fn normalize_codex_input_item_id(item_type: Option<&str>, id: &str) -> String {
         Some("message") => CODEX_MESSAGE_ITEM_ID_PREFIX,
         Some("reasoning") => CODEX_REASONING_ITEM_ID_PREFIX,
         Some("function_call") => CODEX_FUNCTION_CALL_ITEM_ID_PREFIX,
+        Some("custom_tool_call") => CODEX_CUSTOM_TOOL_CALL_ITEM_ID_PREFIX,
+        Some("custom_tool_call_output") => CODEX_CUSTOM_TOOL_CALL_OUTPUT_ITEM_ID_PREFIX,
         _ => return id.to_string(),
     };
     if id.is_empty() || id.starts_with(prefix) {
@@ -1400,7 +1405,7 @@ fn sanitize_responses_input_item_for_codex(item: &Value) -> Value {
     if is_codex_call_input_item_type(item_type) {
         let mut sanitized = object.clone();
         // Standard function calls are normalized later; other call types retain existing cleanup.
-        if item_type != "function_call"
+        if !matches!(item_type, "function_call" | "custom_tool_call")
             && sanitized
                 .get("id")
                 .is_some_and(|id| !id.as_str().is_some_and(|id| id.starts_with("fc")))

@@ -359,7 +359,6 @@ fn is_codex_request_transform(transform: FormatTransform) -> bool {
         FormatTransform::AnthropicToCodex
             | FormatTransform::ChatToCodex
             | FormatTransform::ResponsesToCodex
-            | FormatTransform::ResponsesCompactToCodex
             | FormatTransform::ImagesGenerationsToCodex
     )
 }

@@ -19,7 +19,6 @@ pub(crate) use usage::{map_usage_chat_to_responses, map_usage_responses_to_chat}
 
 pub(crate) const CHAT_PATH: &str = "/v1/chat/completions";
 pub(crate) const RESPONSES_PATH: &str = "/v1/responses";
-pub(crate) const RESPONSES_COMPACT_PATH: &str = "/v1/responses/compact";
 
 pub(crate) const PROVIDER_CHAT: &str = "openai";
 pub(crate) const PROVIDER_RESPONSES: &str = "openai-response";
@@ -51,7 +50,6 @@ pub(crate) enum FormatTransform {
     KiroToAnthropic,
     ChatToCodex,
     ResponsesToCodex,
-    ResponsesCompactToCodex,
     ImagesGenerationsToCodex,
     CodexToChat,
     CodexToResponses,
@@ -63,7 +61,7 @@ pub(crate) fn inbound_format(path: &str) -> Option<ApiFormat> {
     let path = strip_query(path);
     match path {
         CHAT_PATH => Some(ApiFormat::ChatCompletions),
-        RESPONSES_PATH | RESPONSES_COMPACT_PATH => Some(ApiFormat::Responses),
+        RESPONSES_PATH => Some(ApiFormat::Responses),
         _ => None,
     }
 }
@@ -145,13 +143,6 @@ pub(crate) async fn transform_request_body_with_prompt_cache_key(
                 prompt_cache_key,
             )
         }
-        FormatTransform::ResponsesCompactToCodex => {
-            codex_compat::responses_compact_request_to_codex_with_prompt_cache_key(
-                body,
-                model_hint,
-                prompt_cache_key,
-            )
-        }
         FormatTransform::ImagesGenerationsToCodex => {
             let responses_body = images::images_generation_request_to_responses(body)?;
             codex_compat::responses_request_to_codex_with_prompt_cache_key(
@@ -218,7 +209,6 @@ pub(crate) fn transform_response_body(
         }
         FormatTransform::ChatToCodex
         | FormatTransform::ResponsesToCodex
-        | FormatTransform::ResponsesCompactToCodex
         | FormatTransform::ImagesGenerationsToCodex
         | FormatTransform::AnthropicCountTokensToResponsesInputTokens => {
             Err("Codex response conversion is handled upstream.".to_string())

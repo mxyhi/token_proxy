@@ -55,7 +55,114 @@ fn gemini_request_to_chat_maps_function_response() {
     let value: Value = serde_json::from_slice(&output).expect("json");
     assert_eq!(value["messages"][0]["role"], json!("tool"));
     assert_eq!(value["messages"][0]["name"], json!("getFoo"));
-    assert_eq!(value["messages"][0]["tool_call_id"], json!("call_getFoo"));
+    assert!(value["messages"][0]["tool_call_id"]
+        .as_str()
+        .is_some_and(|id| id.starts_with("call_gemini_")));
+}
+
+#[test]
+fn gemini_request_to_chat_filters_hidden_thought_parts_everywhere() {
+    let input = json!({
+        "systemInstruction": {
+            "parts": [
+                { "text": "hidden system", "thought": true },
+                { "text": "visible system" }
+            ]
+        },
+        "contents": [{
+            "role": "user",
+            "parts": [
+                { "text": "hidden user", "thought": true },
+                { "functionResponse": { "name": "secret", "response": "hidden" }, "thought": true },
+                { "text": "visible user" }
+            ]
+        }]
+    });
+
+    let output = gemini_request_to_chat(&Bytes::from(input.to_string()), None).expect("convert");
+    let value: Value = serde_json::from_slice(&output).expect("json");
+
+    assert_eq!(value["messages"].as_array().expect("messages").len(), 2);
+    assert_eq!(value["messages"][0]["content"], "visible system");
+    assert_eq!(value["messages"][1]["content"], "visible user");
+}
+
+#[test]
+fn gemini_request_to_chat_pairs_same_name_calls_across_contents_fifo() {
+    let input = json!({
+        "contents": [
+            {
+                "role": "model",
+                "parts": [
+                    { "functionCall": { "id": "call-a", "name": "lookup", "args": { "q": "a" } } },
+                    { "functionCall": { "call_id": "call-b", "name": "lookup", "args": { "q": "b" } } }
+                ]
+            },
+            {
+                "role": "model",
+                "parts": [
+                    { "functionCall": { "callId": "call-c", "name": "lookup", "args": { "q": "c" } } }
+                ]
+            },
+            {
+                "role": "user",
+                "parts": [
+                    { "functionResponse": { "name": "lookup", "response": { "result": "a" } } },
+                    { "functionResponse": { "name": "lookup", "response": { "result": "b" } } },
+                    { "functionResponse": { "name": "lookup", "response": { "result": "c" } } }
+                ]
+            }
+        ]
+    });
+
+    let output = gemini_request_to_chat(&Bytes::from(input.to_string()), None).expect("convert");
+    let value: Value = serde_json::from_slice(&output).expect("json");
+    let calls = value["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter_map(|message| message.get("tool_calls"))
+        .flat_map(|calls| calls.as_array().expect("tool calls"))
+        .map(|call| call["id"].as_str().expect("call id"))
+        .collect::<Vec<_>>();
+    let results = value["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .filter(|message| message["role"] == "tool")
+        .map(|message| message["tool_call_id"].as_str().expect("result id"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(calls, ["call-a", "call-b", "call-c"]);
+    assert_eq!(results, calls);
+}
+
+#[test]
+fn gemini_request_to_chat_generates_stable_ids_for_missing_and_orphan_calls() {
+    let input = json!({
+        "contents": [
+            { "role": "model", "parts": [{ "functionCall": { "name": "lookup", "args": { "q": "x" } } }] },
+            { "role": "user", "parts": [
+                { "functionResponse": { "name": "lookup", "response": { "result": "x" } } },
+                { "functionResponse": { "name": "orphan", "response": { "result": "y" } } }
+            ] }
+        ]
+    });
+
+    let first = gemini_request_to_chat(&Bytes::from(input.to_string()), None).expect("convert");
+    let second = gemini_request_to_chat(&Bytes::from(input.to_string()), None).expect("repeat");
+    let first: Value = serde_json::from_slice(&first).expect("json");
+    let second: Value = serde_json::from_slice(&second).expect("json");
+
+    assert_eq!(first["messages"], second["messages"]);
+    assert_eq!(
+        first["messages"][0]["tool_calls"][0]["id"],
+        first["messages"][1]["tool_call_id"]
+    );
+    assert_ne!(
+        first["messages"][1]["tool_call_id"],
+        first["messages"][2]["tool_call_id"]
+    );
 }
 
 #[test]

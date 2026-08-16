@@ -15,8 +15,8 @@ use super::{
         },
         RequestMeta,
     },
-    CODEX_RESPONSES_COMPACT_PATH, CODEX_RESPONSES_PATH, ERROR_NO_UPSTREAM, PROVIDER_ANTHROPIC,
-    PROVIDER_CODEX, PROVIDER_GEMINI, PROVIDER_KIRO, PROVIDER_XAI,
+    CODEX_RESPONSES_PATH, ERROR_NO_UPSTREAM, PROVIDER_ANTHROPIC, PROVIDER_CODEX, PROVIDER_GEMINI,
+    PROVIDER_KIRO, PROVIDER_XAI,
 };
 
 #[derive(Clone, Copy)]
@@ -250,14 +250,17 @@ fn is_xai_media_path(path: &str) -> bool {
 }
 
 fn resolve_responses_compact_plan(
-    config: &ProxyConfig,
+    _config: &ProxyConfig,
     path: &str,
-    headers: &HeaderMap,
+    _headers: &HeaderMap,
 ) -> Option<Result<DispatchPlan, String>> {
     if !openai::is_openai_responses_compact_path(path) {
         return None;
     }
-    Some(resolve_responses_native_plan(config, headers))
+    Some(Err(
+        "Legacy /v1/responses/compact is no longer supported; use /v1/responses with context_management."
+            .to_string(),
+    ))
 }
 
 fn resolve_anthropic_plan(
@@ -482,46 +485,9 @@ pub(super) fn resolve_dispatch_plan_with_request(
 
     match format {
         InboundApiFormat::OpenaiChat => resolve_chat_plan(config),
-        InboundApiFormat::OpenaiResponses => {
-            if openai::is_openai_responses_compact_path(path) {
-                resolve_responses_native_plan(config, headers)
-            } else {
-                resolve_responses_plan(config, headers)
-            }
-        }
+        InboundApiFormat::OpenaiResponses => resolve_responses_plan(config, headers),
         _ => resolve_formatless_plan(config),
     }
-}
-
-fn resolve_responses_native_plan(
-    config: &ProxyConfig,
-    headers: &HeaderMap,
-) -> Result<DispatchPlan, String> {
-    let inbound_format = Some(InboundApiFormat::OpenaiResponses);
-    if let Some(selected) = choose_provider_by_priority(
-        config,
-        inbound_format,
-        &[PROVIDER_RESPONSES, PROVIDER_XAI, PROVIDER_CODEX],
-    ) {
-        return Ok(match selected {
-            PROVIDER_RESPONSES => base_plan(PROVIDER_RESPONSES),
-            PROVIDER_XAI => base_plan(PROVIDER_XAI),
-            PROVIDER_CODEX => DispatchPlan {
-                provider: PROVIDER_CODEX,
-                outbound_path: Some(CODEX_RESPONSES_PATH),
-                request_transform: codex_request_transform(
-                    headers,
-                    FormatTransform::ResponsesCompactToCodex,
-                ),
-                response_transform: codex_response_transform(
-                    headers,
-                    FormatTransform::CodexToResponses,
-                ),
-            },
-            _ => base_plan(PROVIDER_RESPONSES),
-        });
-    }
-    Err(ERROR_NO_UPSTREAM.to_string())
 }
 
 fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
@@ -649,11 +615,6 @@ pub(super) fn resolve_outbound_path(
     meta: &RequestMeta,
 ) -> Result<String, &'static str> {
     let outbound_path = match (plan.outbound_path, plan.provider) {
-        (Some(CODEX_RESPONSES_PATH), PROVIDER_CODEX)
-            if openai::is_openai_responses_compact_path(path) =>
-        {
-            CODEX_RESPONSES_COMPACT_PATH.to_string()
-        }
         (Some(outbound_path), _) => outbound_path.to_string(),
         (None, _) if is_openai_compatible_models_path(path) => {
             path.replacen(OPENAI_COMPATIBLE_MODELS_PATH, OPENAI_MODELS_PATH, 1)
@@ -741,11 +702,7 @@ fn build_retry_fallback_plan(path: &str, provider: &'static str) -> Option<Dispa
             PROVIDER_CODEX => Some(DispatchPlan {
                 provider: PROVIDER_CODEX,
                 outbound_path: Some(CODEX_RESPONSES_PATH),
-                request_transform: if openai::is_openai_responses_compact_path(path) {
-                    FormatTransform::ResponsesCompactToCodex
-                } else {
-                    FormatTransform::ResponsesToCodex
-                },
+                request_transform: FormatTransform::ResponsesToCodex,
                 response_transform: FormatTransform::CodexToResponses,
             }),
             _ => None,

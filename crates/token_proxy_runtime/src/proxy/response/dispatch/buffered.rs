@@ -705,7 +705,7 @@ fn is_chat_completions_path(path: &str) -> bool {
 
 fn is_openai_responses_path(path: &str) -> bool {
     let path = path.split_once('?').map(|(path, _)| path).unwrap_or(path);
-    path == "/v1/responses" || path == "/v1/responses/compact" || path.starts_with("/v1/responses/")
+    path == "/v1/responses" || path.starts_with("/v1/responses/")
 }
 
 fn now_unix_seconds() -> i64 {

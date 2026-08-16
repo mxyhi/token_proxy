@@ -948,6 +948,9 @@ fn stream_chat_to_responses_normalizes_empty_function_arguments() {
             Ok::<Bytes, reqwest::Error>(Bytes::from(
                 "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_empty\",\"type\":\"function\",\"function\":{\"name\":\"noop\"}}]}}]}\n\n",
             )),
+            Ok(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
+            )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_tracker = super::super::token_rate::TokenRateTracker::new()

@@ -244,6 +244,12 @@ fn codex_headers_do_not_send_version_header() {
     assert!(!built.contains_key("version"));
     assert!(!built.contains_key("openai-beta"));
     assert!(!built.contains_key("session_id"));
+    assert_eq!(
+        built
+            .get("x-codex-beta-features")
+            .and_then(|value| value.to_str().ok()),
+        Some("remote_compaction_v2")
+    );
     let user_agent = built
         .get("user-agent")
         .and_then(|value| value.to_str().ok())
@@ -286,6 +292,10 @@ fn codex_headers_override_non_codex_client_identity() {
         HeaderValue::from_static("request-inbound"),
     );
     headers.insert("accept", HeaderValue::from_static("application/json"));
+    headers.insert(
+        "x-codex-beta-features",
+        HeaderValue::from_static("client_feature"),
+    );
 
     let built = build_request_headers(
         "codex",
@@ -333,6 +343,12 @@ fn codex_headers_override_non_codex_client_identity() {
     );
     assert!(!built.contains_key("connection"));
     assert!(!built.contains_key("version"));
+    assert_eq!(
+        built
+            .get("x-codex-beta-features")
+            .and_then(|value| value.to_str().ok()),
+        Some("client_feature")
+    );
 }
 
 #[test]

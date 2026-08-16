@@ -2,12 +2,13 @@
 
 use axum::body::Bytes;
 use serde_json::{json, Map, Value};
-use std::collections::HashMap;
+use sha2::{Digest, Sha256};
+use std::collections::{HashMap, VecDeque};
 use token_proxy_protocol::compat_reason::SummaryVisibility;
 
 use super::tools::{
-    gemini_function_call_to_chat_tool_call, map_chat_tool_choice_to_gemini,
-    map_chat_tools_to_gemini, map_gemini_tool_config_to_chat, map_gemini_tools_to_chat,
+    map_chat_tool_choice_to_gemini, map_chat_tools_to_gemini, map_gemini_tool_config_to_chat,
+    map_gemini_tools_to_chat,
 };
 
 /// 将 OpenAI Chat 请求转换为 Gemini 格式
@@ -161,9 +162,16 @@ pub(crate) fn gemini_request_to_chat_with_summary_visibility(
         return Err("Gemini request must include contents.".to_string());
     };
 
+    let hidden_thought_parts = count_hidden_thought_parts(object);
     let mut messages = gemini_contents_to_chat_messages(contents)?;
     if let Some(system) = extract_system_instruction(object.get("systemInstruction")) {
         messages.insert(0, json!({ "role": "system", "content": system }));
+    }
+    if hidden_thought_parts > 0 {
+        tracing::debug!(
+            hidden_thought_parts,
+            "filtered hidden Gemini thought parts from request history"
+        );
     }
 
     let mut out = Map::new();
@@ -315,11 +323,12 @@ fn chat_messages_to_gemini_contents(
 
 fn gemini_contents_to_chat_messages(contents: &[Value]) -> Result<Vec<Value>, String> {
     let mut messages = Vec::new();
-    for content in contents {
+    let mut pairing = GeminiToolPairing::default();
+    for (content_index, content) in contents.iter().enumerate() {
         let Some(content) = content.as_object() else {
             continue;
         };
-        let mut converted = gemini_content_to_chat_messages(content)?;
+        let mut converted = gemini_content_to_chat_messages(content, content_index, &mut pairing)?;
         messages.append(&mut converted);
     }
     Ok(messages)
@@ -327,6 +336,8 @@ fn gemini_contents_to_chat_messages(contents: &[Value]) -> Result<Vec<Value>, St
 
 fn gemini_content_to_chat_messages(
     content: &serde_json::Map<String, Value>,
+    content_index: usize,
+    pairing: &mut GeminiToolPairing,
 ) -> Result<Vec<Value>, String> {
     let role = content
         .get("role")
@@ -343,11 +354,16 @@ fn gemini_content_to_chat_messages(
     let mut content_parts: Vec<Value> = Vec::new();
     let mut tool_calls: Vec<Value> = Vec::new();
 
-    for part in parts {
+    for (part_index, part) in parts.iter().enumerate() {
         let Some(part) = part.as_object() else {
             continue;
         };
-        if let Some(tool_message) = function_response_to_chat_message(part) {
+        if is_hidden_thought_part(part) {
+            continue;
+        }
+        if let Some(tool_message) =
+            function_response_to_chat_message(part, content_index, part_index, pairing)
+        {
             if !content_parts.is_empty() || !tool_calls.is_empty() {
                 messages.push(build_chat_message(role, &content_parts, &tool_calls));
                 content_parts.clear();
@@ -357,7 +373,8 @@ fn gemini_content_to_chat_messages(
             continue;
         }
         if let Some(function_call) = part.get("functionCall").and_then(Value::as_object) {
-            let tool_call = gemini_function_call_to_chat_tool_call(function_call, tool_calls.len());
+            let call_id = pairing.note_call(function_call, content_index, part_index);
+            let tool_call = gemini_function_call_to_chat_tool_call(function_call, &call_id);
             tool_calls.push(tool_call);
             continue;
         }
@@ -409,6 +426,9 @@ fn build_chat_content(parts: &[Value]) -> Value {
 }
 
 fn gemini_part_to_chat_content_part(part: &serde_json::Map<String, Value>) -> Option<Value> {
+    if is_hidden_thought_part(part) {
+        return None;
+    }
     if let Some(text) = part.get("text").and_then(Value::as_str) {
         return Some(json!({ "type": "text", "text": text }));
     }
@@ -467,7 +487,12 @@ fn gemini_file_data_to_chat_part(data: &serde_json::Map<String, Value>) -> Optio
     Some(json!({ "type": "input_file", "file_url": uri }))
 }
 
-fn function_response_to_chat_message(part: &serde_json::Map<String, Value>) -> Option<Value> {
+fn function_response_to_chat_message(
+    part: &serde_json::Map<String, Value>,
+    content_index: usize,
+    part_index: usize,
+    pairing: &mut GeminiToolPairing,
+) -> Option<Value> {
     let response = part.get("functionResponse")?.as_object()?;
     let name = response.get("name").and_then(Value::as_str).unwrap_or("");
     let payload = response
@@ -478,17 +503,172 @@ fn function_response_to_chat_message(part: &serde_json::Map<String, Value>) -> O
         Value::String(text) => text,
         other => serde_json::to_string(&other).unwrap_or_else(|_| "{}".to_string()),
     };
-    let mut message = json!({ "role": "tool", "content": content });
+    let call_id = pairing.match_response(response, content_index, part_index);
+    let mut message = json!({
+        "role": "tool",
+        "content": content,
+        "tool_call_id": call_id
+    });
     if !name.is_empty() {
-        if let Some(message) = message.as_object_mut() {
-            message.insert("name".to_string(), Value::String(name.to_string()));
-            message.insert(
-                "tool_call_id".to_string(),
-                Value::String(format!("call_{name}")),
-            );
-        }
+        message
+            .as_object_mut()?
+            .insert("name".to_string(), Value::String(name.to_string()));
     }
     Some(message)
+}
+
+#[derive(Default)]
+struct GeminiToolPairing {
+    pending_by_name: HashMap<String, VecDeque<String>>,
+}
+
+impl GeminiToolPairing {
+    fn note_call(
+        &mut self,
+        function_call: &Map<String, Value>,
+        content_index: usize,
+        part_index: usize,
+    ) -> String {
+        let name = function_call
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let call_id = explicit_gemini_tool_id(function_call).unwrap_or_else(|| {
+            deterministic_gemini_tool_id(
+                "call",
+                content_index,
+                part_index,
+                name,
+                function_call.get("args"),
+            )
+        });
+        self.pending_by_name
+            .entry(name.to_string())
+            .or_default()
+            .push_back(call_id.clone());
+        call_id
+    }
+
+    fn match_response(
+        &mut self,
+        response: &Map<String, Value>,
+        content_index: usize,
+        part_index: usize,
+    ) -> String {
+        let name = response
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if let Some(explicit) = explicit_gemini_tool_id(response) {
+            if let Some(queue) = self.pending_by_name.get_mut(name) {
+                if let Some(index) = queue.iter().position(|call_id| call_id == &explicit) {
+                    queue.remove(index);
+                }
+            }
+            return explicit;
+        }
+        if let Some(call_id) = self
+            .pending_by_name
+            .get_mut(name)
+            .and_then(VecDeque::pop_front)
+        {
+            return call_id;
+        }
+        deterministic_gemini_tool_id(
+            "response",
+            content_index,
+            part_index,
+            name,
+            response.get("response"),
+        )
+    }
+}
+
+fn explicit_gemini_tool_id(object: &Map<String, Value>) -> Option<String> {
+    ["id", "call_id", "callId"].into_iter().find_map(|key| {
+        object
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    })
+}
+
+fn deterministic_gemini_tool_id(
+    kind: &str,
+    content_index: usize,
+    part_index: usize,
+    name: &str,
+    payload: Option<&Value>,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"token-proxy:gemini-tool-id:v1:");
+    hasher.update(kind.as_bytes());
+    hasher.update(content_index.to_be_bytes());
+    hasher.update(part_index.to_be_bytes());
+    hasher.update(name.as_bytes());
+    if let Some(payload) = payload {
+        hasher.update(payload.to_string().as_bytes());
+    }
+    let digest = hasher.finalize();
+    let suffix = digest
+        .iter()
+        .take(12)
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    format!("call_gemini_{suffix}")
+}
+
+fn gemini_function_call_to_chat_tool_call(
+    function_call: &Map<String, Value>,
+    call_id: &str,
+) -> Value {
+    let name = function_call
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let args = function_call
+        .get("args")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let arguments = match args {
+        Value::String(arguments) => arguments,
+        other => serde_json::to_string(&other).unwrap_or_else(|_| "{}".to_string()),
+    };
+    json!({
+        "id": call_id,
+        "type": "function",
+        "function": { "name": name, "arguments": arguments }
+    })
+}
+
+fn is_hidden_thought_part(part: &Map<String, Value>) -> bool {
+    part.get("thought").and_then(Value::as_bool) == Some(true)
+}
+
+fn count_hidden_thought_parts(object: &Map<String, Value>) -> usize {
+    let system_count = object
+        .get("systemInstruction")
+        .and_then(|value| value.get("parts"))
+        .and_then(Value::as_array)
+        .map(|parts| {
+            parts
+                .iter()
+                .filter(|part| part.as_object().is_some_and(is_hidden_thought_part))
+                .count()
+        })
+        .unwrap_or(0);
+    let content_count = object
+        .get("contents")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|content| content.get("parts").and_then(Value::as_array))
+        .flatten()
+        .filter(|part| part.as_object().is_some_and(is_hidden_thought_part))
+        .count();
+    system_count + content_count
 }
 
 fn extract_system_instruction(value: Option<&Value>) -> Option<String> {
@@ -498,6 +678,9 @@ fn extract_system_instruction(value: Option<&Value>) -> Option<String> {
     let parts = value.get("parts").and_then(Value::as_array)?;
     let mut texts = Vec::new();
     for part in parts {
+        if part.as_object().is_some_and(is_hidden_thought_part) {
+            continue;
+        }
         let Some(text) = part.get("text").and_then(Value::as_str) else {
             continue;
         };

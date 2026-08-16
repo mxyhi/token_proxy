@@ -189,15 +189,7 @@ async fn xai_responses_syncs_x_search_into_allowed_tools_without_duplication() {
 }
 
 #[tokio::test]
-async fn xai_x_search_injection_excludes_compact_and_other_providers() {
-    let compact = transformed_body_with_x_search(
-        "xai",
-        "/v1/responses/compact",
-        br#"{"model":"grok-4.5","input":"hi"}"#,
-        "grok-4.5",
-        true,
-    )
-    .await;
+async fn xai_x_search_injection_excludes_other_providers() {
     let openai = transformed_body_with_x_search(
         "openai-response",
         "/v1/responses",
@@ -207,7 +199,6 @@ async fn xai_x_search_injection_excludes_compact_and_other_providers() {
     )
     .await;
 
-    assert!(compact.get("tools").is_none());
     assert!(openai.get("tools").is_none());
 }
 
@@ -370,29 +361,6 @@ async fn xai_non_45_model_keeps_penalties() {
     assert_eq!(value["frequency_penalty"], 1);
     assert_eq!(value["stop"][0], "done");
     assert!(value.get("previous_response_id").is_none());
-}
-
-#[tokio::test]
-async fn xai_compact_strips_stream_tools_and_compaction_trigger() {
-    let value = transformed_xai_body(
-        "/v1/responses/compact",
-        br#"{"model":"grok-4.5","stream":true,"prompt_cache_key":"compact-session","tools":[{"type":"function","name":"Bash"}],"tool_choice":"auto","parallel_tool_calls":true,"compaction_trigger":true,"input":[{"type":"message","role":"user","content":"hello"},{"type":"compaction_trigger"}]}"#,
-        "grok-4.5",
-    )
-    .await;
-
-    for field in [
-        "stream",
-        "tools",
-        "tool_choice",
-        "parallel_tool_calls",
-        "compaction_trigger",
-    ] {
-        assert!(value.get(field).is_none(), "field={field}");
-    }
-    assert_eq!(value["prompt_cache_key"], "compact-session");
-    assert_eq!(value["input"].as_array().map(Vec::len), Some(1));
-    assert_eq!(value["input"][0]["type"], "message");
 }
 
 #[tokio::test]
@@ -860,7 +828,7 @@ async fn native_openai_responses_sanitizer_ignores_other_paths() {
     let rewritten = match build_json_transformed_body(
         "openai-response",
         &upstream,
-        "/v1/responses/compact",
+        "/v1/chat/completions",
         &body,
         &meta,
         None,

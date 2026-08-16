@@ -3,6 +3,7 @@ mod anthropic_compat;
 mod claude_reasoning;
 mod codex_compat;
 mod codex_models_manifest;
+mod codex_turn_state;
 pub(crate) use token_proxy_config as config;
 pub(crate) use token_proxy_protocol::{codex_tool_types, compat_content, compat_reason};
 mod cooldown_scope;
@@ -53,6 +54,7 @@ struct ProxyState {
     model_discovery: Arc<model_discovery::UpstreamModelDiscoveryCache>,
     kiro_accounts: Arc<KiroAccountStore>,
     codex_accounts: Arc<CodexAccountStore>,
+    codex_turn_state: codex_turn_state::CodexTurnStateProvenance,
     xai_accounts: Arc<XaiAccountStore>,
 }
 

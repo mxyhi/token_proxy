@@ -15,6 +15,9 @@ const HEADER_ORIGINATOR_NAME: HeaderName = HeaderName::from_static("originator")
 const HEADER_SESSION_ID_NAME: HeaderName = HeaderName::from_static("session-id");
 const HEADER_THREAD_ID_NAME: HeaderName = HeaderName::from_static("thread-id");
 const HEADER_CLIENT_REQUEST_ID_NAME: HeaderName = HeaderName::from_static("x-client-request-id");
+const HEADER_CODEX_BETA_FEATURES_NAME: HeaderName =
+    HeaderName::from_static("x-codex-beta-features");
+const REMOTE_COMPACTION_V2: &str = "remote_compaction_v2";
 
 pub(crate) fn apply_codex_headers(headers: &mut HeaderMap, inbound: &HeaderMap) {
     headers.remove(&HEADER_OPENAI_BETA_NAME);
@@ -32,7 +35,50 @@ pub(crate) fn apply_codex_headers(headers: &mut HeaderMap, inbound: &HeaderMap) 
     copy_inbound_or_generate(headers, inbound, &HEADER_CLIENT_REQUEST_ID_NAME, &thread_id);
 
     apply_codex_identity_headers(headers, inbound);
+    apply_default_remote_compaction_feature(headers);
     force_header(headers, &HEADER_ACCEPT_NAME, "text/event-stream");
+}
+
+fn apply_default_remote_compaction_feature(headers: &mut HeaderMap) {
+    if headers
+        .get(&HEADER_CODEX_BETA_FEATURES_NAME)
+        .and_then(valid_header_value)
+        .is_some()
+    {
+        return;
+    }
+    force_header(
+        headers,
+        &HEADER_CODEX_BETA_FEATURES_NAME,
+        REMOTE_COMPACTION_V2,
+    );
+    tracing::debug!("enabled default Codex remote compaction feature");
+}
+
+pub(crate) fn ensure_remote_compaction_feature(headers: &mut HeaderMap) {
+    let existing = headers
+        .get(&HEADER_CODEX_BETA_FEATURES_NAME)
+        .and_then(valid_header_value)
+        .unwrap_or_default()
+        .to_string();
+    if existing
+        .split(',')
+        .map(str::trim)
+        .any(|feature| feature == REMOTE_COMPACTION_V2)
+    {
+        return;
+    }
+    let had_existing_features = !existing.is_empty();
+    let merged = if existing.is_empty() {
+        REMOTE_COMPACTION_V2.to_string()
+    } else {
+        format!("{existing},{REMOTE_COMPACTION_V2}")
+    };
+    force_header(headers, &HEADER_CODEX_BETA_FEATURES_NAME, &merged);
+    tracing::debug!(
+        had_existing_features,
+        "merged Codex remote compaction feature"
+    );
 }
 
 fn force_header(headers: &mut HeaderMap, name: &HeaderName, value: &str) {

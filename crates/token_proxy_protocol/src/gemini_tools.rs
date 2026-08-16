@@ -14,6 +14,10 @@ const GEMINI_UNSUPPORTED_SCHEMA_KEYS: &[&str] = &[
     "maxLength",
     "minItems",
     "maxItems",
+    "exclusiveMinimum",
+    "if",
+    "then",
+    "else",
 ];
 
 /// 将 OpenAI Chat 格式的 tools 转换为 Gemini 格式的 functionDeclarations
@@ -61,15 +65,107 @@ fn clean_tool_schema(schema: &Value) -> Value {
 }
 
 fn clean_tool_schema_object(object: &Map<String, Value>) -> Value {
+    let mut source = object.clone();
+    merge_conditional_properties(&mut source, object.get("then"));
+    merge_conditional_properties(&mut source, object.get("else"));
+    let all_of = source.get("allOf").cloned();
     let mut cleaned = Map::new();
-    for (key, value) in object {
-        if GEMINI_UNSUPPORTED_SCHEMA_KEYS.contains(&key.as_str()) {
+    for (key, value) in &source {
+        if GEMINI_UNSUPPORTED_SCHEMA_KEYS.contains(&key.as_str()) || key == "allOf" {
             continue;
         }
         cleaned.insert(key.clone(), clean_tool_schema(value));
     }
     normalize_gemini_schema_type(&mut cleaned);
+    normalize_integer_exclusive_minimum(&mut cleaned, object.get("exclusiveMinimum"));
+    merge_all_of_properties(&mut cleaned, all_of.as_ref());
     Value::Object(cleaned)
+}
+
+fn merge_conditional_properties(target: &mut Map<String, Value>, branch: Option<&Value>) {
+    let Some(branch_properties) = branch
+        .and_then(|value| value.get("properties"))
+        .and_then(Value::as_object)
+    else {
+        return;
+    };
+    let properties = target
+        .entry("properties".to_string())
+        .or_insert_with(|| Value::Object(Map::new()));
+    let Some(properties) = properties.as_object_mut() else {
+        return;
+    };
+    for (name, schema) in branch_properties {
+        properties
+            .entry(name.clone())
+            .or_insert_with(|| schema.clone());
+    }
+}
+
+fn merge_all_of_properties(cleaned: &mut Map<String, Value>, all_of: Option<&Value>) {
+    let Some(branches) = all_of.and_then(Value::as_array) else {
+        return;
+    };
+    for branch in branches {
+        let branch = clean_tool_schema(branch);
+        let Some(branch_properties) = branch.get("properties").and_then(Value::as_object) else {
+            continue;
+        };
+        let properties = cleaned
+            .entry("properties".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        let Some(properties) = properties.as_object_mut() else {
+            return;
+        };
+        for (name, schema) in branch_properties {
+            properties
+                .entry(name.clone())
+                .or_insert_with(|| schema.clone());
+        }
+    }
+}
+
+fn normalize_integer_exclusive_minimum(
+    cleaned: &mut Map<String, Value>,
+    exclusive_minimum: Option<&Value>,
+) {
+    if cleaned.get("type").and_then(Value::as_str) != Some("INTEGER") {
+        return;
+    }
+    let Some(candidate) = exclusive_minimum.and_then(increment_integral_bound) else {
+        return;
+    };
+    let should_replace = match cleaned.get("minimum") {
+        None => true,
+        Some(existing) => schema_number(existing)
+            .zip(schema_number(&candidate))
+            .is_some_and(|(existing, candidate)| existing < candidate),
+    };
+    if should_replace {
+        cleaned.insert("minimum".to_string(), candidate);
+    }
+}
+
+fn increment_integral_bound(value: &Value) -> Option<Value> {
+    let number = value.as_number()?;
+    if let Some(value) = number.as_i64() {
+        return value.checked_add(1).map(Value::from);
+    }
+    if let Some(value) = number.as_u64() {
+        return value.checked_add(1).map(Value::from);
+    }
+    let value = number.as_f64()?;
+    if !value.is_finite() || value.fract() != 0.0 || value + 1.0 <= value {
+        return None;
+    }
+    serde_json::Number::from_f64(value + 1.0).map(Value::Number)
+}
+
+fn schema_number(value: &Value) -> Option<f64> {
+    value
+        .as_number()?
+        .as_f64()
+        .filter(|value| value.is_finite())
 }
 
 fn normalize_gemini_schema_type(object: &mut Map<String, Value>) {
@@ -238,4 +334,86 @@ pub fn gemini_function_call_to_chat_tool_call(
             "arguments": arguments
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_schema_normalizes_integer_exclusive_minimum() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "count": { "type": "integer", "exclusiveMinimum": 2, "minimum": 1 },
+                "strict": { "type": "integer", "exclusiveMinimum": 2, "minimum": 5 },
+                "fractional": { "type": "integer", "exclusiveMinimum": 0.5 },
+                "number": { "type": "number", "exclusiveMinimum": 0 }
+            }
+        });
+
+        let cleaned = clean_tool_schema(&schema);
+
+        assert_eq!(cleaned["properties"]["count"]["minimum"], 3);
+        assert_eq!(cleaned["properties"]["strict"]["minimum"], 5);
+        assert!(cleaned["properties"]["fractional"].get("minimum").is_none());
+        assert!(cleaned["properties"]["number"].get("minimum").is_none());
+        for name in ["count", "strict", "fractional", "number"] {
+            assert!(cleaned["properties"][name]
+                .get("exclusiveMinimum")
+                .is_none());
+        }
+    }
+
+    #[test]
+    fn clean_schema_merges_conditional_properties_at_root_and_nested_paths() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "existing": { "type": "string", "description": "keep" },
+                "nested": {
+                    "type": "object",
+                    "then": { "properties": { "nested_then": { "type": "string" } } }
+                }
+            },
+            "if": { "properties": { "kind": { "const": "a" } } },
+            "then": { "properties": {
+                "existing": { "type": "number" },
+                "from_then": { "type": "string" }
+            } },
+            "else": { "properties": { "from_else": { "type": "integer" } } }
+        });
+
+        let cleaned = clean_tool_schema(&schema);
+
+        assert_eq!(cleaned["properties"]["existing"]["type"], "STRING");
+        assert_eq!(cleaned["properties"]["from_then"]["type"], "STRING");
+        assert_eq!(cleaned["properties"]["from_else"]["type"], "INTEGER");
+        assert_eq!(
+            cleaned["properties"]["nested"]["properties"]["nested_then"]["type"],
+            "STRING"
+        );
+        assert!(!cleaned.to_string().contains("\"then\""));
+        assert!(!cleaned.to_string().contains("\"else\""));
+        assert!(!cleaned.to_string().contains("\"if\""));
+    }
+
+    #[test]
+    fn clean_schema_hoists_conditional_properties_from_all_of() {
+        let schema = json!({
+            "type": "object",
+            "allOf": [{
+                "if": { "properties": { "kind": { "const": "sell" } } },
+                "then": { "properties": {
+                    "reason": { "type": "string", "description": "why" }
+                } }
+            }]
+        });
+
+        let cleaned = clean_tool_schema(&schema);
+
+        assert_eq!(cleaned["properties"]["reason"]["type"], "STRING");
+        assert_eq!(cleaned["properties"]["reason"]["description"], "why");
+        assert!(cleaned.get("allOf").is_none());
+    }
 }

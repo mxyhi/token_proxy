@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::super::http::RequestAuth;
 use super::super::{
-    codex_models_manifest,
+    codex_compat, codex_models_manifest,
     config::{ProviderUpstreams, UpstreamRuntime},
     cooldown_scope::CooldownScope,
     gemini, http,
@@ -106,6 +106,13 @@ pub(super) async fn prepare_upstream_request_with_body(
         &upstream_path_with_query,
         &mut request_headers,
     );
+    apply_codex_remote_compaction_for_body(provider, body, &mut request_headers);
+    state.codex_turn_state.guard_echo(
+        provider,
+        headers,
+        selected_account_id.as_deref(),
+        &mut request_headers,
+    );
     Ok(PreparedUpstreamRequest {
         upstream_path_with_query,
         upstream_url,
@@ -115,6 +122,27 @@ pub(super) async fn prepare_upstream_request_with_body(
         codex_openai_device_id,
         meta: mapped_meta,
     })
+}
+
+pub(super) fn apply_codex_remote_compaction_for_body(
+    provider: &str,
+    body: &ReplayableBody,
+    headers: &mut HeaderMap,
+) {
+    if provider != "codex" {
+        return;
+    }
+    let has_compaction_trigger = serde_json::from_slice::<Value>(body.as_bytes())
+        .ok()
+        .and_then(|value| {
+            value
+                .as_object()
+                .map(|object| object.contains_key("compaction_trigger"))
+        })
+        .unwrap_or(false);
+    if has_compaction_trigger {
+        codex_compat::ensure_remote_compaction_feature(headers);
+    }
 }
 
 async fn resolve_upstream_auth(
@@ -421,8 +449,7 @@ pub(super) fn xai_request_url(upstream_path_with_query: &str) -> Result<String, 
 
 fn is_xai_official_api_path(path_with_query: &str) -> bool {
     let path = xai_request_path(path_with_query);
-    path == "/v1/responses/compact"
-        || path == "/v1/videos"
+    path == "/v1/videos"
         || path.starts_with("/v1/videos/")
         || path == "/v1/images"
         || path.starts_with("/v1/images/")

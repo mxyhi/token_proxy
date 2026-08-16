@@ -12,7 +12,6 @@ use token_proxy_protocol::xai_client_tools::XaiClientToolMapping;
 
 const OPENAI_CHAT_PATH: &str = "/v1/chat/completions";
 const OPENAI_RESPONSES_PATH: &str = "/v1/responses";
-const XAI_RESPONSES_COMPACT_PATH: &str = "/v1/responses/compact";
 const ANTHROPIC_COUNT_TOKENS_PATH: &str = "/v1/messages/count_tokens";
 const ANTHROPIC_MESSAGES_PATH: &str = "/v1/messages";
 const REQUEST_MODEL_MAPPING_LIMIT_BYTES: usize = 4 * 1024 * 1024;
@@ -291,8 +290,7 @@ fn should_inspect_codex_responses_lite(
     upstream_path: &str,
     _request_headers: &HeaderMap,
 ) -> bool {
-    provider == "codex"
-        && (upstream_path == OPENAI_RESPONSES_PATH || upstream_path == XAI_RESPONSES_COMPACT_PATH)
+    provider == "codex" && upstream_path == OPENAI_RESPONSES_PATH
 }
 
 fn force_codex_responses_lite_parallel_tool_calls(
@@ -574,8 +572,7 @@ fn openai_responses_input_payload_too_large() -> AttemptOutcome {
 }
 
 fn should_filter_xai_responses_request(provider: &str, upstream_path: &str) -> bool {
-    provider == "xai"
-        && (upstream_path == OPENAI_RESPONSES_PATH || upstream_path == XAI_RESPONSES_COMPACT_PATH)
+    provider == "xai" && upstream_path == OPENAI_RESPONSES_PATH
 }
 
 fn filter_xai_responses_request(
@@ -619,32 +616,18 @@ fn filter_xai_responses_request(
         );
     }
 
-    if upstream_path == XAI_RESPONSES_COMPACT_PATH {
-        changed |= remove_json_fields(
-            object,
-            &[
-                "stream",
-                "tools",
-                "tool_choice",
-                "parallel_tool_calls",
-                "compaction_trigger",
-            ],
-        );
-        changed |= remove_xai_input_items_by_type(object, "compaction_trigger");
-    } else {
-        changed |= promote_xai_additional_tools(object);
-        let (_, client_tools_changed) =
-            token_proxy_protocol::xai_client_tools::adapt_request(object).map_err(|message| {
-                AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
-            })?;
-        changed |= client_tools_changed;
-        changed |= normalize_xai_root_tool_union_branches(object);
-        if xai_inject_x_search {
-            changed |= ensure_xai_native_x_search_tool(object);
-        }
-        if !has_xai_request_tools(object) {
-            changed |= remove_json_fields(object, &["tools", "tool_choice", "parallel_tool_calls"]);
-        }
+    changed |= promote_xai_additional_tools(object);
+    let (_, client_tools_changed) = token_proxy_protocol::xai_client_tools::adapt_request(object)
+        .map_err(|message| {
+        AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
+    })?;
+    changed |= client_tools_changed;
+    changed |= normalize_xai_root_tool_union_branches(object);
+    if xai_inject_x_search {
+        changed |= ensure_xai_native_x_search_tool(object);
+    }
+    if !has_xai_request_tools(object) {
+        changed |= remove_json_fields(object, &["tools", "tool_choice", "parallel_tool_calls"]);
     }
 
     if changed {
@@ -912,15 +895,6 @@ fn has_xai_request_tools(object: &Map<String, Value>) -> bool {
                         .is_some_and(|tools| !tools.is_empty())
             })
         })
-}
-
-fn remove_xai_input_items_by_type(object: &mut Map<String, Value>, item_type: &str) -> bool {
-    let Some(input) = object.get_mut("input").and_then(Value::as_array_mut) else {
-        return false;
-    };
-    let original_len = input.len();
-    input.retain(|item| item.get("type").and_then(Value::as_str) != Some(item_type));
-    input.len() != original_len
 }
 
 fn is_xai_grok_45_model(model: &str) -> bool {

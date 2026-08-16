@@ -9,7 +9,7 @@ use super::super::{
     config::ProxyConfig,
     http,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
-    path_guard,
+    openai, path_guard,
     request_body::ReplayableBody,
     request_detail::{capture_request_detail, serialize_request_headers, RequestDetailSnapshot},
     server_helpers::{log_debug_request, parse_request_meta_best_effort},
@@ -174,6 +174,12 @@ pub(super) async fn resolve_plan_or_respond(
         }
         Err(message) => {
             tracing::warn!("no dispatch plan found");
+            // Legacy compact 是已知无效客户端路由；其余 plan 缺失仍表示上游配置失败。
+            let status = if openai::is_openai_responses_compact_path(path) {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::BAD_GATEWAY
+            };
             let detail = if capture_request_detail_enabled {
                 Some(capture_detail_from_body(headers, body, max_body_bytes).await)
             } else {
@@ -186,11 +192,11 @@ pub(super) async fn resolve_plan_or_respond(
                 path,
                 PROVIDER_PROXY,
                 LOCAL_UPSTREAM_ID,
-                StatusCode::BAD_GATEWAY,
+                status,
                 message.clone(),
                 request_start,
             );
-            Err(http::error_response(StatusCode::BAD_GATEWAY, message))
+            Err(http::error_response(status, message))
         }
     }
 }

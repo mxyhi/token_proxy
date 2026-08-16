@@ -20,6 +20,27 @@ fn retryable_status_matches_proxy_policy() {
 }
 
 #[test]
+fn codex_compaction_trigger_merges_remote_compaction_feature() {
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"gpt-5.5","compaction_trigger":true,"input":"hi"}"#,
+    ));
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "x-codex-beta-features",
+        axum::http::HeaderValue::from_static("client_feature"),
+    );
+
+    prepare::apply_codex_remote_compaction_for_body("codex", &body, &mut headers);
+
+    assert_eq!(
+        headers
+            .get("x-codex-beta-features")
+            .and_then(|value| value.to_str().ok()),
+        Some("client_feature,remote_compaction_v2")
+    );
+}
+
+#[test]
 fn cooldown_status_matches_proxy_policy() {
     assert!(result::should_cooldown_retryable_status(
         StatusCode::UNAUTHORIZED
@@ -236,10 +257,8 @@ fn mapped_model_reasoning_suffix_does_not_override_existing_effort() {
 }
 
 #[test]
-fn xai_routes_compact_and_media_to_official_api() {
+fn xai_routes_media_to_official_api() {
     for path in [
-        "/v1/responses/compact",
-        "/v1/responses/compact?mode=test",
         "/v1/images/generations",
         "/v1/images/edits",
         "/v1/videos/video-123",
@@ -295,11 +314,7 @@ fn xai_official_api_headers_keep_bearer_and_remove_cli_identity() {
     use axum::http::{header, HeaderMap, HeaderValue};
 
     let body = ReplayableBody::from_bytes(Default::default());
-    for path in [
-        "/v1/responses/compact",
-        "/v1/images/generations",
-        "/v1/videos/video-123",
-    ] {
+    for path in ["/v1/images/generations", "/v1/videos/video-123"] {
         let mut headers = HeaderMap::new();
         headers.insert(
             header::AUTHORIZATION,

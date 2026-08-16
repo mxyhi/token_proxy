@@ -7,6 +7,7 @@ use super::dispatch::ForwardAttemptState;
 use super::utils::{is_retryable_error, is_retryable_status, sanitize_upstream_error};
 use super::{AttemptOutcome, RetryDirective, RetryScope};
 use crate::proxy::account_selector::AccountSelectorRuntime;
+use crate::proxy::codex_turn_state::CodexResponseIdentity;
 use crate::proxy::cooldown_scope::CooldownScope;
 use crate::proxy::http;
 use crate::proxy::log::{build_log_entry, LogContext, LogWriter, RequestTimings, UsageSnapshot};
@@ -138,7 +139,11 @@ pub(super) async fn handle_upstream_result(
                 .get::<NonRetryableSemanticResponse>()
                 .is_some()
             {
-                return AttemptOutcome::Success(response);
+                return AttemptOutcome::Success(attach_codex_response_identity(
+                    response,
+                    provider,
+                    account_id_value.as_deref(),
+                ));
             }
             update_account_cooldown_from_response(
                 &state.account_selector,
@@ -238,7 +243,11 @@ pub(super) async fn handle_upstream_result(
                 &response_headers,
                 cooldown_scope,
             );
-            AttemptOutcome::Success(response)
+            AttemptOutcome::Success(attach_codex_response_identity(
+                response,
+                provider,
+                account_id_value.as_deref(),
+            ))
         }
         Err(err) if is_retryable_error(&err) => {
             // 无 response body 可统计，释放发送前 register 的窗口。
@@ -281,6 +290,21 @@ pub(super) async fn handle_upstream_result(
             ))
         }
     }
+}
+
+fn attach_codex_response_identity(
+    mut response: Response,
+    provider: &str,
+    account_id: Option<&str>,
+) -> Response {
+    if provider == "codex" {
+        if let Some(account_id) = account_id.filter(|value| !value.trim().is_empty()) {
+            response.extensions_mut().insert(CodexResponseIdentity {
+                account_id: account_id.to_string(),
+            });
+        }
+    }
+    response
 }
 
 pub(super) fn resolve_provider_upstreams<'a>(

@@ -14,10 +14,9 @@ use super::stream::is_codex_business_output_event;
 use super::tool_names::shorten_name_if_needed;
 use super::{
     chat_request_to_codex, codex_response_to_chat, codex_response_to_responses,
-    responses_compact_request_to_codex, responses_request_to_codex,
-    responses_request_to_codex_with_prompt_cache_key, stream_codex_to_chat,
-    stream_codex_to_responses, stream_codex_to_responses_with_semantic_timeout,
-    supported_codex_model_ids,
+    responses_request_to_codex, responses_request_to_codex_with_prompt_cache_key,
+    stream_codex_to_chat, stream_codex_to_responses,
+    stream_codex_to_responses_with_semantic_timeout, supported_codex_model_ids,
 };
 
 #[test]
@@ -321,29 +320,6 @@ fn responses_request_to_codex_uses_prompt_cache_key_hint_when_missing() {
 }
 
 #[test]
-fn responses_compact_request_to_codex_normalizes_gpt_5_5_and_removes_stream_store() {
-    let input = json!({
-        "model": "gpt-5.5-medium",
-        "stream": true,
-        "store": true,
-        "input": "hi"
-    });
-
-    let output = responses_compact_request_to_codex(&Bytes::from(input.to_string()), None)
-        .expect("convert compact responses request");
-    let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
-
-    assert_eq!(value["model"], "gpt-5.5");
-    assert_eq!(
-        value["instructions"],
-        "You are GPT-5.1 running in the Codex CLI, a terminal-based coding assistant."
-    );
-    assert_eq!(value["stream"], true);
-    assert_eq!(value["store"], false);
-    assert!(value.get("include").is_none());
-}
-
-#[test]
 fn responses_request_to_codex_preserves_gpt_5_6_max_effort() {
     let input = json!({
         "model": "gpt-5.6-max",
@@ -356,42 +332,6 @@ fn responses_request_to_codex_preserves_gpt_5_6_max_effort() {
 
     assert_eq!(value["model"], "gpt-5.6-sol");
     assert_eq!(value["reasoning"]["effort"], "max");
-}
-
-#[test]
-fn responses_compact_request_to_codex_downgrades_gpt_5_6_max_effort() {
-    let input = json!({
-        "model": "gpt-5.6-sol",
-        "reasoning": { "effort": "max", "summary": "auto" },
-        "input": "hi"
-    });
-
-    let output = responses_compact_request_to_codex(&Bytes::from(input.to_string()), None)
-        .expect("convert compact responses request");
-    let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
-
-    assert_eq!(value["model"], "gpt-5.6-sol");
-    assert_eq!(value["reasoning"]["effort"], "xhigh");
-    assert_eq!(value["reasoning"]["summary"], "auto");
-}
-
-#[test]
-fn responses_compact_request_to_codex_normalizes_openai_message_input() {
-    let input = json!({
-        "model": "gpt-5.5",
-        "input": [
-            { "role": "user", "content": "hi" }
-        ]
-    });
-
-    let output = responses_compact_request_to_codex(&Bytes::from(input.to_string()), None)
-        .expect("convert compact responses request");
-    let value: serde_json::Value = serde_json::from_slice(&output).expect("json");
-
-    assert_eq!(value["input"][0]["type"], "message");
-    assert_eq!(value["input"][0]["role"], "user");
-    assert_eq!(value["input"][0]["content"][0]["type"], "input_text");
-    assert_eq!(value["input"][0]["content"][0]["text"], "hi");
 }
 
 #[test]
@@ -1305,6 +1245,41 @@ fn responses_request_to_codex_strips_prompt_cache_retention() {
 }
 
 #[test]
+fn responses_request_to_codex_strips_unsupported_prompt_cache_fields() {
+    let input = json!({
+        "model": "gpt-5.5",
+        "prompt_cache_options": { "retention": "24h" },
+        "input": [{
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "hi",
+                    "prompt_cache_breakpoint": { "type": "ephemeral" }
+                },
+                {
+                    "type": "input_image",
+                    "image_url": "data:image/png;base64,AA==",
+                    "prompt_cache_breakpoint": true
+                }
+            ]
+        }]
+    });
+
+    let output = responses_request_to_codex(&Bytes::from(input.to_string()), None)
+        .expect("convert responses request");
+    let value: Value = serde_json::from_slice(&output).expect("json");
+
+    assert!(value.get("prompt_cache_options").is_none());
+    assert!(value["input"][0]["content"]
+        .as_array()
+        .expect("content array")
+        .iter()
+        .all(|part| part.get("prompt_cache_breakpoint").is_none()));
+}
+
+#[test]
 fn responses_request_to_codex_preserves_parallel_tool_calls_false() {
     let input = json!({
         "model": "gpt-5",
@@ -1445,7 +1420,7 @@ fn responses_request_to_codex_sanitizes_store_false_reasoning_context() {
 }
 
 #[test]
-fn responses_request_to_codex_strips_invalid_call_input_ids_only() {
+fn responses_request_to_codex_normalizes_supported_call_input_ids_only() {
     let input = json!({
         "model": "gpt-5.5",
         "input": [
@@ -1467,16 +1442,18 @@ fn responses_request_to_codex_strips_invalid_call_input_ids_only() {
     let input_items = value["input"].as_array().expect("input array");
 
     assert_eq!(input_items[0]["id"], "fc_item_function");
-    for (item, expected_call_id) in input_items[1..6].iter().zip([
-        "call_tool",
-        "call_shell",
-        "call_search",
-        "call_custom",
-        "call_mcp",
-    ]) {
+    for (item, expected_call_id) in
+        input_items[1..4]
+            .iter()
+            .zip(["call_tool", "call_shell", "call_search"])
+    {
         assert!(item.get("id").is_none(), "item={item}");
         assert_eq!(item["call_id"], expected_call_id);
     }
+    assert_eq!(input_items[4]["id"], "ctc_item_custom");
+    assert_eq!(input_items[4]["call_id"], "call_custom");
+    assert!(input_items[5].get("id").is_none());
+    assert_eq!(input_items[5]["call_id"], "call_mcp");
     assert_eq!(input_items[0]["call_id"], "call_function");
     assert_eq!(input_items[6]["id"], "fc_keep");
     assert_eq!(input_items[6]["call_id"], "call_keep");
@@ -1549,6 +1526,41 @@ fn responses_request_to_codex_bounds_all_retained_input_item_ids() {
     assert_eq!(items[5]["id"], "msg-1");
     assert_eq!(items[6]["id"], "output_valid");
     assert_eq!(items[0]["call_id"], items[1]["call_id"]);
+}
+
+#[test]
+fn responses_request_to_codex_normalizes_custom_item_ids_without_collisions() {
+    let input = json!({
+        "model": "gpt-5.5",
+        "input": [
+            { "type": "message", "id": "collision", "role": "user", "content": "first" },
+            { "type": "message", "id": "msg_collision", "role": "user", "content": "preserved" },
+            { "type": "custom_tool_call", "id": "custom", "call_id": "call_custom", "name": "shell", "input": "pwd" },
+            { "type": "custom_tool_call_output", "id": "custom_output", "call_id": "call_custom", "output": "ok" }
+        ]
+    });
+
+    let first = responses_request_to_codex(&Bytes::from(input.to_string()), None)
+        .expect("convert responses request");
+    let second = responses_request_to_codex(&first, None).expect("repeat conversion");
+    let first: Value = serde_json::from_slice(&first).expect("json");
+    let second: Value = serde_json::from_slice(&second).expect("json");
+    let items = first["input"].as_array().expect("input array");
+    let ids = items
+        .iter()
+        .map(|item| item["id"].as_str().expect("item id"))
+        .collect::<std::collections::HashSet<_>>();
+
+    assert_eq!(ids.len(), items.len());
+    assert_eq!(items[1]["id"], "msg_collision");
+    assert_ne!(items[0]["id"], "msg_collision");
+    assert!(items[0]["id"]
+        .as_str()
+        .expect("message id")
+        .starts_with("msg_"));
+    assert_eq!(items[2]["id"], "ctc_custom");
+    assert_eq!(items[3]["id"], "ctco_custom_output");
+    assert_eq!(second["input"], first["input"]);
 }
 
 #[test]

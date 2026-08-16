@@ -23,4 +23,6 @@ pub(super) struct FunctionCallOutput {
     pub(super) call_id: String,
     pub(super) name: String,
     pub(super) arguments: String,
+    pub(super) item_added: bool,
+    pub(super) has_source_id: bool,
 }

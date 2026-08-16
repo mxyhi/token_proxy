@@ -6,6 +6,137 @@ use std::{sync::Arc, time::Duration, time::Instant};
 
 use crate::proxy::log::{LogContext, LogWriter};
 
+async fn collect_chat_to_responses_payloads(events: Vec<String>) -> Vec<Value> {
+    let context = LogContext {
+        client_ip: None,
+        path: "/v1/responses".to_string(),
+        provider: "openai".to_string(),
+        upstream_id: "unit-test".to_string(),
+        account_id: None,
+        model: Some("unit-model".to_string()),
+        mapped_model: None,
+        stream: true,
+        status: 200,
+        upstream_request_id: None,
+        request_headers: None,
+        request_body: None,
+        ttfb_ms: None,
+        timings: Default::default(),
+        start: Instant::now(),
+    };
+    let upstream = futures_util::stream::iter(
+        events
+            .into_iter()
+            .map(|event| Ok::<Bytes, std::io::Error>(Bytes::from(format!("data: {event}\n\n")))),
+    );
+    let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+        .register(None, None)
+        .await;
+    super::super::chat_to_responses::stream_chat_to_responses(
+        upstream,
+        context,
+        Arc::new(LogWriter::new(None)),
+        token_tracker,
+    )
+    .map(|item| item.expect("stream item"))
+    .filter_map(|chunk| future::ready(super::parse_sse_json(&chunk)))
+    .collect()
+    .await
+}
+
+#[test]
+fn stream_chat_to_responses_marks_length_finish_as_incomplete() {
+    super::run_async(async {
+        let payloads = collect_chat_to_responses_payloads(vec![
+            json!({
+                "choices": [{ "delta": { "content": "truncated" }, "finish_reason": null }]
+            })
+            .to_string(),
+            json!({
+                "choices": [{ "delta": {}, "finish_reason": "length" }]
+            })
+            .to_string(),
+            "[DONE]".to_string(),
+        ])
+        .await;
+
+        let terminal = payloads
+            .iter()
+            .find(|payload| payload["type"] == "response.incomplete")
+            .expect("incomplete event");
+        assert_eq!(terminal["response"]["status"], "incomplete");
+        assert_eq!(
+            terminal["response"]["incomplete_details"]["reason"],
+            "max_output_tokens"
+        );
+        assert_eq!(terminal["response"]["output"][0]["status"], "incomplete");
+        assert!(!payloads
+            .iter()
+            .any(|payload| payload["type"] == "response.completed"));
+    });
+}
+
+#[test]
+fn stream_chat_to_responses_does_not_complete_partial_tool_without_finish_reason() {
+    super::run_async(async {
+        let payloads = collect_chat_to_responses_payloads(vec![
+            json!({
+                "choices": [{
+                    "delta": { "tool_calls": [{
+                        "index": 0,
+                        "id": "call-a",
+                        "function": { "name": "apply_patch", "arguments": "{\"path\":\"x" }
+                    }] },
+                    "finish_reason": null
+                }]
+            })
+            .to_string(),
+            "[DONE]".to_string(),
+        ])
+        .await;
+
+        assert!(!payloads.iter().any(|payload| matches!(
+            payload["type"].as_str(),
+            Some(
+                "response.function_call_arguments.done"
+                    | "response.output_item.done"
+                    | "response.completed"
+            )
+        )));
+    });
+}
+
+#[test]
+fn stream_chat_to_responses_synthesizes_terminal_empty_tool_name() {
+    super::run_async(async {
+        let payloads = collect_chat_to_responses_payloads(vec![
+            json!({
+                "choices": [{
+                    "delta": { "tool_calls": [{
+                        "index": 0,
+                        "id": "call-a",
+                        "function": { "arguments": "{}" }
+                    }] },
+                    "finish_reason": null
+                }]
+            })
+            .to_string(),
+            json!({ "choices": [{ "delta": {}, "finish_reason": "tool_calls" }] }).to_string(),
+            "[DONE]".to_string(),
+        ])
+        .await;
+
+        let terminal = payloads
+            .iter()
+            .find(|payload| payload["type"] == "response.completed")
+            .expect("completed event");
+        assert_eq!(terminal["response"]["output"][0]["name"], "tool_0");
+        assert!(payloads
+            .iter()
+            .all(|payload| { payload["item"].get("name").is_none_or(|name| name != "") }));
+    });
+}
+
 #[test]
 fn stream_with_logging_marks_first_output_on_responses_non_preamble_event() {
     super::run_async(async {

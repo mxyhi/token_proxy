@@ -28,7 +28,6 @@ const PROVIDER_PROXY: &str = "proxy";
 const LOCAL_UPSTREAM_ID: &str = "local";
 const LOCALHOST_CLIENT_IP: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const CODEX_RESPONSES_PATH: &str = "/responses";
-const CODEX_RESPONSES_COMPACT_PATH: &str = "/responses/compact";
 
 type ProxyStateHandle = Arc<RwLock<Arc<ProxyState>>>;
 
@@ -55,9 +54,9 @@ use dispatch::{
 use execute::is_debug_log_enabled;
 use fallback::forward_with_provider_fallbacks;
 use inbound::{ensure_local_auth_or_respond, prepare_inbound_request};
-use prepared::{finalize_prepared_request, resolve_request_auth_or_respond};
 #[cfg(test)]
 use prepared::build_outbound_path_with_query;
+use prepared::{finalize_prepared_request, resolve_request_auth_or_respond};
 
 const ERROR_NO_UPSTREAM: &str = "No available upstream configured.";
 

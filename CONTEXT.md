@@ -108,6 +108,10 @@ _Avoid_: 上游未配置、上游暂时不可用
 `/v1/responses` 流中的单个 JSON 生命周期事件。每个事件都必须携带单调递增的 `sequence_number`；错误终止事件也不例外。`[DONE]` 是流结束哨兵，不是事件，不编号。
 _Avoid_: SSE Chunk（传输分块可能拆分或合并事件）
 
+**Responses Incomplete（Responses 未完成终态）**:
+响应因 token 上限、长度限制或内容过滤而提前结束的终态；输出项保持 incomplete，客户端不得将其视为 completed 或伪造完整工具参数。
+_Avoid_: 正常完成、传输中断、空工具参数自动完成
+
 **Pre-stream Error Response**:
 Responses 流尚未向客户端提交时返回的 HTTP 4xx/5xx JSON 错误。它必须保留真实 HTTP 状态，并满足 OpenAI `ErrorResponse` 的 `type/message/param/code` 字段合同。
 _Avoid_: `response.failed`（只用于已经提交的 SSE 流）
@@ -140,6 +144,14 @@ _Avoid_: OAuth 登录开关、access token 别名、应用内生成身份
 Codex 账户提供的原生搜索能力；入站 `/v1/alpha/search` 只能路由到 Codex，并保持请求、响应和查询参数的原生合同。
 _Avoid_: OpenAI-compatible 搜索、formatless fallback、Responses 格式转换
 
+**Codex Remote Compaction v2（Codex 远程压缩 v2）**:
+Codex OAuth 普通 Responses 请求上的远程上下文压缩能力；通过非空 beta capability 集合声明，并由 `compaction_trigger` 触发。公开 OpenAI compaction 仍使用普通 `/v1/responses` 的 `context_management`；legacy `/v1/responses/compact` 不受支持。
+_Avoid_: 独立 compact endpoint、公开 OpenAI context management、客户端本地摘要
+
+**Codex Turn-State Provenance（Codex Turn-State 来源）**:
+`x-codex-turn-state` 是某个 Codex 账户为一个客户端会话铸造的不透明状态；已知来源时只能回送同一账户，跨账户 failover 必须删除。未知、无会话或已过期来源不建立归属。
+_Avoid_: 全局会话状态、可解析业务数据、跨账户共享状态
+
 **AgentAssertion（Agent Assertion）**:
 每次 Codex 请求根据 runtime ID、当前 task ID 和 UTC 时间动态签名生成的 `Authorization` 值；断言本身不得写入日志或持久化。
 _Avoid_: Bearer token、静态 API Key
@@ -164,6 +176,10 @@ _Avoid_: 无载体 reasoning ID、message item ID
 Codex Responses 输入中 `type=function_call` 项的标识；非空值使用 `fc` 前缀。它与 `call_id` 及 function-call-output item ID 是不同身份。
 _Avoid_: call_id、function-call-output item ID
 
+**Codex Custom Tool Item ID**:
+Codex Responses 输入中 custom tool 调用及输出项的标识；调用使用 `ctc` 前缀，输出使用 `ctco` 前缀，并在单次请求内确定、幂等且无碰撞。
+_Avoid_: call_id、function-call item ID、随机 ID
+
 **Custom Tool Call（自定义自由格式工具调用）**:
 携带自由格式 `input` 的 Responses 工具调用项；它与输出项通过 `call_id` 配对，在仅接受对象参数的 Provider 协议中仍保留同一调用身份。
 _Avoid_: Function Arguments Object、孤立 tool result
@@ -171,6 +187,14 @@ _Avoid_: Function Arguments Object、孤立 tool result
 **Explicit Null Tool Schema Type（显式空工具 Schema 类型）**:
 工具参数 schema 中明确声明的 `type: null`，它不是缺失类型，属于无效 schema；缺失 `type` 表示不约束类型，语义不同。
 _Avoid_: 缺失 type、空 parameters、schema type array
+
+**Gemini Hidden Thought（Gemini 隐藏思考）**:
+Gemini 历史 part 中 `thought=true` 的内部推理内容；system instruction 与普通 contents 都不得把它转换为可见对话历史。
+_Avoid_: 可见 assistant 文本、推理摘要、普通 thought signature
+
+**Gemini Tool Pairing（Gemini 工具配对）**:
+Gemini function call 与 function response 的稳定关联；优先保留显式 `id`、`call_id` 或 `callId`，缺失时确定性生成，并按函数名 FIFO 消费待配对调用。
+_Avoid_: 仅按数组位置配对、同名调用复用 ID、随机 ID
 
 **Ordered Content Block**:
 Anthropic 消息内容中按原始 `content_block.index` 排列的单个 thinking、text 或 tool_use 项；Responses 转换必须以该顺序生成 added、delta、done 和最终 output。
@@ -193,7 +217,7 @@ xAI OAuth 账户发送文本 Responses 请求并读取该身份实时模型目�
 _Avoid_: xAI 官方 API、OpenAI-compatible base URL
 
 **xAI Official API（xAI 官方 API）**:
-xAI OAuth 账户发送仓库已有图片、视频和 Responses Compact 请求的受信服务端点 `api.x.ai`；它与 CLI 网关使用同一账户身份，承接 CLI 网关明确不支持的端点能力。
+xAI OAuth 账户发送仓库已有图片和视频请求的受信服务端点 `api.x.ai`；它与 CLI 网关使用同一账户身份，承接 CLI 网关明确不支持的媒体端点能力。
 _Avoid_: xAI CLI 网关、自定义 base URL
 
 **xAI X Search Injection（xAI X Search 注入）**:

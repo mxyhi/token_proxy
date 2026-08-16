@@ -44,6 +44,7 @@ struct ChatToResponsesState<S> {
     message: Option<MessageOutput>,
     function_calls: Vec<Option<FunctionCallOutput>>,
     sequence: u64,
+    finish_reason: Option<String>,
     sent_done: bool,
     logged: bool,
     upstream_ended: bool,
@@ -104,6 +105,7 @@ where
             message: None,
             function_calls: Vec::new(),
             sequence: 0,
+            finish_reason: None,
             sent_done: false,
             logged: false,
             upstream_ended: false,
@@ -182,12 +184,22 @@ where
             return;
         };
 
-        let Some(delta) = value
+        let Some(choice) = value
             .get("choices")
             .and_then(Value::as_array)
             .and_then(|choices| choices.first())
-            .and_then(|choice| choice.get("delta"))
         else {
+            return;
+        };
+        if let Some(finish_reason) = choice
+            .get("finish_reason")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            self.finish_reason = Some(finish_reason.to_string());
+        }
+        let Some(delta) = choice.get("delta") else {
             return;
         };
 
@@ -313,14 +325,24 @@ where
             .and_then(Value::as_str);
 
         if let Some(arguments_delta) = arguments_delta {
-            let (item_id, output_index) = {
+            let was_added = {
                 let state = self.ensure_function_call_output(call_index, call_id, name);
+                let was_added = state.item_added;
                 state.arguments.push_str(arguments_delta);
-                (state.id.clone(), state.output_index)
+                was_added
             };
-            self.push_function_call_arguments_delta(&item_id, output_index, arguments_delta);
+            let added_now = self.emit_function_call_if_ready(call_index, false);
+            if was_added && !added_now {
+                let state = self.function_calls[call_index]
+                    .as_ref()
+                    .expect("call output must exist");
+                let item_id = state.id.clone();
+                let output_index = state.output_index;
+                self.push_function_call_arguments_delta(&item_id, output_index, arguments_delta);
+            }
         } else {
             self.ensure_function_call_output(call_index, call_id, name);
+            self.emit_function_call_if_ready(call_index, false);
         }
     }
 
@@ -332,14 +354,24 @@ where
         let arguments_delta = function_call.get("arguments").and_then(Value::as_str);
 
         if let Some(arguments_delta) = arguments_delta {
-            let (item_id, output_index) = {
+            let was_added = {
                 let state = self.ensure_function_call_output(0, None, name);
+                let was_added = state.item_added;
                 state.arguments.push_str(arguments_delta);
-                (state.id.clone(), state.output_index)
+                was_added
             };
-            self.push_function_call_arguments_delta(&item_id, output_index, arguments_delta);
+            let added_now = self.emit_function_call_if_ready(0, false);
+            if was_added && !added_now {
+                let state = self.function_calls[0]
+                    .as_ref()
+                    .expect("call output must exist");
+                let item_id = state.id.clone();
+                let output_index = state.output_index;
+                self.push_function_call_arguments_delta(&item_id, output_index, arguments_delta);
+            }
         } else {
             self.ensure_function_call_output(0, None, name);
+            self.emit_function_call_if_ready(0, false);
         }
     }
 
@@ -406,25 +438,30 @@ where
             let output_index = self.next_output_index;
             self.next_output_index += 1;
             let item_id = format!("fc_{}_{}", self.id_seed, call_index);
+            let has_source_id = call_id.is_some_and(|value| !value.trim().is_empty());
             let call_id = call_id
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| format!("call_{}_{}", self.id_seed, call_index));
             let name = name.unwrap_or("").to_string();
 
-            self.push_function_call_item_added(&item_id, output_index, &call_id, &name);
             self.function_calls[call_index] = Some(FunctionCallOutput {
                 id: item_id,
                 output_index,
                 call_id,
                 name,
                 arguments: String::new(),
+                item_added: false,
+                has_source_id,
             });
         } else {
             let state = self.function_calls[call_index]
                 .as_mut()
                 .expect("call output must exist");
             if let Some(call_id) = call_id {
-                if state.call_id.is_empty() {
+                if !call_id.trim().is_empty() {
+                    state.has_source_id = true;
+                }
+                if !state.item_added && !call_id.trim().is_empty() {
                     state.call_id = call_id.to_string();
                 }
             }
@@ -438,6 +475,37 @@ where
         self.function_calls[call_index]
             .as_mut()
             .expect("call output must exist")
+    }
+
+    /// 发布前必须已有工具名；终止时仅为有实际身份/参数的空名调用合成名称。
+    fn emit_function_call_if_ready(&mut self, call_index: usize, terminal: bool) -> bool {
+        let Some(call) = self
+            .function_calls
+            .get_mut(call_index)
+            .and_then(Option::as_mut)
+        else {
+            return false;
+        };
+        if call.item_added {
+            return false;
+        }
+        if call.name.trim().is_empty() {
+            if !terminal || (!call.has_source_id && call.arguments.trim().is_empty()) {
+                return false;
+            }
+            call.name = format!("tool_{call_index}");
+        }
+        call.item_added = true;
+        let item_id = call.id.clone();
+        let output_index = call.output_index;
+        let call_id = call.call_id.clone();
+        let name = call.name.clone();
+        let arguments = call.arguments.clone();
+        self.push_function_call_item_added(&item_id, output_index, &call_id, &name);
+        if !arguments.is_empty() {
+            self.push_function_call_arguments_delta(&item_id, output_index, &arguments);
+        }
+        true
     }
 
     fn push_response_created(&mut self) {
@@ -543,6 +611,45 @@ where
         self.sent_done = true;
 
         let completed_at = (super::now_ms() / 1000) as i64;
+        let (response_status, event_type, incomplete_reason) =
+            incomplete_status(self.finish_reason.as_deref());
+        let explicit_tool_finish = matches!(
+            self.finish_reason.as_deref(),
+            Some("stop" | "tool_calls" | "function_call")
+        );
+        let mut finalizable_calls = Vec::new();
+        let mut unfinished_tool_calls = 0usize;
+        let mut dropped_empty_tool_calls = 0usize;
+        for (call_index, call) in self.function_calls.iter().enumerate() {
+            let Some(call) = call else {
+                continue;
+            };
+            let meaningful = call.has_source_id
+                || !call.name.trim().is_empty()
+                || !call.arguments.trim().is_empty();
+            if !meaningful {
+                dropped_empty_tool_calls += 1;
+                continue;
+            }
+            let valid_without_finish = self.finish_reason.is_none()
+                && !call.arguments.trim().is_empty()
+                && serde_json::from_str::<Value>(&call.arguments).is_ok();
+            if incomplete_reason.is_some() || explicit_tool_finish || valid_without_finish {
+                finalizable_calls.push(call_index);
+            } else {
+                unfinished_tool_calls += 1;
+            }
+        }
+        for call_index in &finalizable_calls {
+            self.emit_function_call_if_ready(*call_index, true);
+        }
+        if dropped_empty_tool_calls > 0 || unfinished_tool_calls > 0 {
+            tracing::debug!(
+                dropped_empty_tool_calls,
+                unfinished_tool_calls,
+                "normalized terminal Chat tool calls"
+            );
+        }
         let usage_snapshot = self.collector.finish();
         // Prefer upstream `usage` JSON to preserve breakdown fields (e.g. reasoning tokens).
         // Fallback to the normalized TokenUsage counters when upstream did not provide usage.
@@ -559,6 +666,7 @@ where
                 output_index: reasoning.output_index,
                 text: reasoning.text.clone(),
                 encrypted_content: reasoning.encrypted_content.clone(),
+                status: response_status.to_string(),
             });
         }
         if let Some(message) = &self.message {
@@ -567,10 +675,11 @@ where
                 output_index: message.output_index,
                 text: message.text.clone(),
                 audio: message.audio.clone(),
+                status: response_status.to_string(),
             });
         }
-        for call in &self.function_calls {
-            let Some(call) = call else {
+        for call_index in finalizable_calls {
+            let Some(call) = self.function_calls[call_index].as_ref() else {
                 continue;
             };
             snapshots.push(OutputItemSnapshot::FunctionCall {
@@ -578,11 +687,12 @@ where
                 output_index: call.output_index,
                 call_id: call.call_id.clone(),
                 name: call.name.clone(),
-                arguments: if call.arguments.trim().is_empty() {
+                arguments: if call.arguments.trim().is_empty() && incomplete_reason.is_none() {
                     "{}".to_string()
                 } else {
                     call.arguments.clone()
                 },
+                status: response_status.to_string(),
             });
         }
         snapshots.sort_by_key(|item| match item {
@@ -599,10 +709,24 @@ where
             self.push_item_done_events(snapshot);
         }
 
-        let response = self.build_response_object("completed", output, usage, Some(completed_at));
+        if unfinished_tool_calls > 0 {
+            self.out.push_back(Bytes::from("data: [DONE]\n\n"));
+            return;
+        }
+
+        let mut response =
+            self.build_response_object(response_status, output, usage, Some(completed_at));
+        if let Some(reason) = incomplete_reason {
+            if let Some(response) = response.as_object_mut() {
+                response.insert(
+                    "incomplete_details".to_string(),
+                    json!({ "reason": reason }),
+                );
+            }
+        }
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
-            "type": "response.completed",
+            "type": event_type,
             "response": response,
             "sequence_number": sequence_number
         })));
@@ -616,25 +740,36 @@ where
                 output_index,
                 text,
                 encrypted_content,
+                status,
             } => self.push_reasoning_done_events(
                 id,
                 *output_index,
                 text,
                 encrypted_content.as_deref(),
+                status,
             ),
             OutputItemSnapshot::Message {
                 id,
                 output_index,
                 text,
                 audio,
-            } => self.push_message_done_events(id, *output_index, text, audio.as_ref()),
+                status,
+            } => self.push_message_done_events(id, *output_index, text, audio.as_ref(), status),
             OutputItemSnapshot::FunctionCall {
                 id,
                 output_index,
                 call_id,
                 name,
                 arguments,
-            } => self.push_function_call_done_events(id, *output_index, call_id, name, arguments),
+                status,
+            } => self.push_function_call_done_events(
+                id,
+                *output_index,
+                call_id,
+                name,
+                arguments,
+                status,
+            ),
         }
     }
 
@@ -644,11 +779,12 @@ where
         output_index: u64,
         text: &str,
         encrypted_content: Option<&str>,
+        status: &str,
     ) {
         let mut item = json!({
             "id": item_id,
             "type": "reasoning",
-            "status": "completed",
+            "status": status,
             "summary": [
                 {
                     "type": "summary_text",
@@ -679,6 +815,7 @@ where
         output_index: u64,
         text: &str,
         audio: Option<&Value>,
+        status: &str,
     ) {
         if !text.is_empty() {
             let sequence_number = self.next_sequence_number();
@@ -728,7 +865,7 @@ where
             "item": {
                 "id": item_id,
                 "type": "message",
-                "status": "completed",
+                "status": status,
                 "role": "assistant",
                 "content": content
             },
@@ -743,6 +880,7 @@ where
         call_id: &str,
         name: &str,
         arguments: &str,
+        status: &str,
     ) {
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
@@ -761,7 +899,7 @@ where
             "item": {
                 "id": item_id,
                 "type": "function_call",
-                "status": "completed",
+                "status": status,
                 "call_id": call_id,
                 "name": name,
                 "arguments": arguments
@@ -808,6 +946,20 @@ where
         let current = self.sequence;
         self.sequence += 1;
         current
+    }
+}
+
+fn incomplete_status(
+    finish_reason: Option<&str>,
+) -> (&'static str, &'static str, Option<&'static str>) {
+    match finish_reason {
+        Some("length" | "max_tokens") => (
+            "incomplete",
+            "response.incomplete",
+            Some("max_output_tokens"),
+        ),
+        Some("content_filter") => ("incomplete", "response.incomplete", Some("content_filter")),
+        _ => ("completed", "response.completed", None),
     }
 }
 

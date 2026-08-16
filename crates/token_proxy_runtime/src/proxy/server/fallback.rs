@@ -108,6 +108,9 @@ pub(super) async fn forward_with_provider_fallbacks(
     }
 
     finalize_codex_responses_cooldown(&state, &codex_cooldown_scope, current_response.status());
+    state
+        .codex_turn_state
+        .note_committed_response(headers, &current_response);
     current_response
 }
 

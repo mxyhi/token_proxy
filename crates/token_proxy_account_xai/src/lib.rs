@@ -41,8 +41,19 @@ pub const BUILTIN_MODELS: &[&str] = &[
     "grok-4.20-multi-agent-0309",
     "grok-imagine",
     "grok-imagine-image",
+    "grok-imagine-image-2.0",
     "grok-imagine-image-quality",
     "grok-imagine-edit",
     "grok-imagine-video",
     "grok-imagine-video-1.5",
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::BUILTIN_MODELS;
+
+    #[test]
+    fn builtin_models_include_grok_imagine_image_2() {
+        assert!(BUILTIN_MODELS.contains(&"grok-imagine-image-2.0"));
+    }
+}

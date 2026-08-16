@@ -2081,6 +2081,7 @@ async fn build_test_state_handle_with_paths(
         ),
         kiro_accounts,
         codex_accounts,
+        codex_turn_state: super::super::codex_turn_state::CodexTurnStateProvenance::new(),
         xai_accounts,
     });
     Arc::new(RwLock::new(state))
@@ -4281,11 +4282,7 @@ fn models_index_unions_models_across_providers() {
         // 跨 provider 并集去重；默认无前缀。
         assert_eq!(
             ids,
-            vec![
-                "claude-from-anthropic",
-                "gpt-from-openai",
-                "shared-model",
-            ]
+            vec!["claude-from-anthropic", "gpt-from-openai", "shared-model",]
         );
         assert_eq!(openai.requests().len(), 1);
         assert_eq!(anthropic.requests().len(), 1);
@@ -9460,99 +9457,49 @@ fn responses_fallback_requires_format_conversion_enabled() {
 }
 
 #[test]
-fn responses_compact_requires_responses_family_provider() {
-    let config = config_with_providers(&[(PROVIDER_CHAT, FORMATS_ALL)]);
-    let error = resolve_dispatch_plan(&config, RESPONSES_COMPACT_PATH)
-        .err()
-        .expect("should reject");
-    assert_eq!(error, "No available upstream configured.");
+fn responses_compact_legacy_route_is_rejected_for_every_provider() {
+    for (provider, formats) in [
+        (PROVIDER_CHAT, FORMATS_ALL),
+        (PROVIDER_RESPONSES, FORMATS_RESPONSES),
+        (PROVIDER_CODEX, FORMATS_RESPONSES),
+        (PROVIDER_XAI, FORMATS_RESPONSES),
+    ] {
+        let config = config_with_providers(&[(provider, formats)]);
+        let error = resolve_dispatch_plan(&config, RESPONSES_COMPACT_PATH)
+            .err()
+            .expect("legacy compact route should reject");
+        assert!(
+            error.contains("context_management"),
+            "provider={provider}: {error}"
+        );
+    }
 }
 
 #[test]
-fn responses_compact_prefers_responses_provider_and_preserves_path() {
-    let config = config_with_upstreams(&[
-        (PROVIDER_CHAT, 10, "chat", FORMATS_ALL),
-        (PROVIDER_RESPONSES, 0, "responses", FORMATS_RESPONSES),
-    ]);
-    let plan = resolve_dispatch_plan(&config, RESPONSES_COMPACT_PATH).expect("should dispatch");
-    assert_eq!(plan.provider, PROVIDER_RESPONSES);
-    assert_eq!(plan.outbound_path, None);
-    assert_eq!(plan.request_transform, FormatTransform::None);
-    assert_eq!(plan.response_transform, FormatTransform::None);
+fn responses_compact_legacy_route_returns_bad_request() {
+    run_async(async {
+        let config = config_with_providers(&[(PROVIDER_RESPONSES, FORMATS_RESPONSES)]);
+        let data_dir = next_test_data_dir("responses_compact_rejected");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
 
-    let outbound_path = resolve_outbound_path(
-        RESPONSES_COMPACT_PATH,
-        &plan,
-        &RequestMeta {
-            client_ip: None,
-            stream: false,
-            original_model: Some("gpt-5.4".to_string()),
-            mapped_model: None,
-            reasoning_effort: None,
-            response_format: None,
-            estimated_input_tokens: None,
-            billing: Default::default(),
-        },
-    )
-    .expect("valid outbound path");
-    assert_eq!(outbound_path, RESPONSES_COMPACT_PATH);
-}
+        let response = proxy_request(
+            State(state),
+            Method::POST,
+            Uri::from_static(RESPONSES_COMPACT_PATH),
+            HeaderMap::new(),
+            Body::from(r#"{"model":"gpt-5.6-sol","input":"hi"}"#),
+        )
+        .await;
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("error response body");
 
-#[test]
-fn responses_compact_can_route_to_codex_and_preserve_compact_suffix() {
-    let config = config_with_providers(&[(PROVIDER_CODEX, FORMATS_RESPONSES)]);
-    let plan = resolve_dispatch_plan(&config, RESPONSES_COMPACT_PATH).expect("should dispatch");
-    assert_eq!(plan.provider, PROVIDER_CODEX);
-    assert_eq!(plan.outbound_path, Some(CODEX_RESPONSES_PATH));
-    assert_eq!(
-        plan.request_transform,
-        FormatTransform::ResponsesCompactToCodex
-    );
-    assert_eq!(plan.response_transform, FormatTransform::CodexToResponses);
+        let _ = std::fs::remove_dir_all(&data_dir);
 
-    let outbound_path = resolve_outbound_path(
-        RESPONSES_COMPACT_PATH,
-        &plan,
-        &RequestMeta {
-            client_ip: None,
-            stream: false,
-            original_model: Some("gpt-5.4".to_string()),
-            mapped_model: None,
-            reasoning_effort: None,
-            response_format: None,
-            estimated_input_tokens: None,
-            billing: Default::default(),
-        },
-    )
-    .expect("valid outbound path");
-    assert_eq!(outbound_path, "/responses/compact");
-}
-
-#[test]
-fn responses_compact_can_route_to_xai_and_preserve_compact_suffix() {
-    let config = config_with_providers(&[(PROVIDER_XAI, FORMATS_RESPONSES)]);
-    let plan = resolve_dispatch_plan(&config, RESPONSES_COMPACT_PATH).expect("should dispatch");
-    assert_eq!(plan.provider, PROVIDER_XAI);
-    assert_eq!(plan.outbound_path, None);
-    assert_eq!(plan.request_transform, FormatTransform::None);
-    assert_eq!(plan.response_transform, FormatTransform::None);
-
-    let outbound_path = resolve_outbound_path(
-        RESPONSES_COMPACT_PATH,
-        &plan,
-        &RequestMeta {
-            client_ip: None,
-            stream: false,
-            original_model: Some("grok-4.5".to_string()),
-            mapped_model: None,
-            reasoning_effort: None,
-            response_format: None,
-            estimated_input_tokens: None,
-            billing: Default::default(),
-        },
-    )
-    .expect("valid outbound path");
-    assert_eq!(outbound_path, RESPONSES_COMPACT_PATH);
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(String::from_utf8_lossy(&body).contains("context_management"));
+    });
 }
 
 #[test]
@@ -9691,23 +9638,6 @@ fn retry_fallback_plan_switches_responses_to_codex() {
     assert_eq!(plan.provider, PROVIDER_CODEX);
     assert_eq!(plan.outbound_path, Some(CODEX_RESPONSES_PATH));
     assert_eq!(plan.request_transform, FormatTransform::ResponsesToCodex);
-    assert_eq!(plan.response_transform, FormatTransform::CodexToResponses);
-}
-
-#[test]
-fn retry_fallback_plan_switches_compact_responses_to_codex() {
-    let config = config_with_providers(&[
-        (PROVIDER_RESPONSES, FORMATS_RESPONSES),
-        (PROVIDER_CODEX, FORMATS_RESPONSES),
-    ]);
-    let plan = resolve_retry_fallback_plan(&config, RESPONSES_COMPACT_PATH, PROVIDER_RESPONSES)
-        .expect("should fallback to codex");
-    assert_eq!(plan.provider, PROVIDER_CODEX);
-    assert_eq!(plan.outbound_path, Some(CODEX_RESPONSES_PATH));
-    assert_eq!(
-        plan.request_transform,
-        FormatTransform::ResponsesCompactToCodex
-    );
     assert_eq!(plan.response_transform, FormatTransform::CodexToResponses);
 }
 
@@ -10749,6 +10679,19 @@ fn openai_images_route_prefers_openai_provider_over_anthropic_priority() {
     ]);
     let plan = resolve_dispatch_plan(&config, "/v1/images/generations").expect("should dispatch");
     assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn openai_images_route_uses_xai_for_grok_image_catalog() {
+    assert!(token_proxy_account_xai::BUILTIN_MODELS.contains(&"grok-imagine-image-2.0"));
+    let config = config_with_providers(&[(PROVIDER_XAI, FORMATS_RESPONSES)]);
+
+    let plan = resolve_dispatch_plan(&config, "/v1/images/generations")
+        .expect("xAI image route should dispatch");
+
+    assert_eq!(plan.provider, PROVIDER_XAI);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
 }
 
 #[test]

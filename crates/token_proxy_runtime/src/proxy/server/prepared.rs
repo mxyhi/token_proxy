@@ -117,6 +117,7 @@ pub(super) async fn finalize_prepared_request(
         headers,
         inbound.body,
         request_start,
+        state.config.max_request_body_bytes,
     )
     .await?;
     let request_auth = resolve_request_auth_or_respond(
@@ -154,6 +155,7 @@ pub(super) async fn build_outbound_body_or_respond(
     headers: &HeaderMap,
     body: ReplayableBody,
     request_start: Instant,
+    max_request_body_bytes: usize,
 ) -> Result<ReplayableBody, Response> {
     let body = transform_body_or_respond(
         http_clients,
@@ -166,6 +168,7 @@ pub(super) async fn build_outbound_body_or_respond(
         headers,
         body,
         request_start,
+        max_request_body_bytes,
     )
     .await?;
     apply_openai_stream_options_or_respond(
@@ -177,6 +180,7 @@ pub(super) async fn build_outbound_body_or_respond(
         meta,
         body,
         request_start,
+        max_request_body_bytes,
     )
     .await
 }
@@ -192,6 +196,7 @@ async fn transform_body_or_respond(
     headers: &HeaderMap,
     body: ReplayableBody,
     request_start: Instant,
+    max_request_body_bytes: usize,
 ) -> Result<ReplayableBody, Response> {
     match maybe_transform_request_body(
         http_clients,
@@ -201,6 +206,7 @@ async fn transform_body_or_respond(
         meta.original_model.as_deref(),
         headers,
         body,
+        max_request_body_bytes,
     )
     .await
     {
@@ -231,12 +237,14 @@ async fn apply_openai_stream_options_or_respond(
     meta: &RequestMeta,
     body: ReplayableBody,
     request_start: Instant,
+    max_request_body_bytes: usize,
 ) -> Result<ReplayableBody, Response> {
     match maybe_force_openai_stream_options_include_usage(
         plan.provider,
         plan.outbound_path.unwrap_or(path),
         meta,
         body,
+        max_request_body_bytes,
     )
     .await
     {

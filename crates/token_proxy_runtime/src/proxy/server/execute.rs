@@ -46,6 +46,7 @@ pub(super) async fn forward_retry_fallback_request(
         headers,
         prepared.source_body.clone(),
         request_start,
+        state.config.max_request_body_bytes,
     )
     .await?;
     Ok(forward_upstream_request(

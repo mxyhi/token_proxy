@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 use token_proxy_account_store::paths::TokenProxyPaths;
 
+// 默认入站请求体上限，同时约束 JSON 过滤/格式转换；配置 0 或缺省回落到此值。
 const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 100 * 1024 * 1024;
 const MIN_TIMEOUT_SECS: u64 = 1;
 

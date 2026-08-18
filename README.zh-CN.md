@@ -101,7 +101,7 @@ pnpm exec tsc --noEmit
 | `local_api_key` | `null` | 设置后，本地鉴权按接口格式生效（见“鉴权规则”）；本地鉴权不会转给上游 |
 | `app_proxy_url` | `null` | 应用更新 & 上游可复用的代理；支持 `http/https/socks5/socks5h`；可在 upstream `proxy_url` 用 `"$app_proxy_url"` 占位 |
 | `log_level` | `silent` | `silent|error|warn|info|debug|trace`；debug/trace 会记录请求头（鉴权打码）与小体积请求体（≤64KiB）；release 强制 `silent` |
-| `max_request_body_bytes` | `104857600` (100 MiB) | 0 表示回落到默认；保护入站体积 |
+| `max_request_body_bytes` | `104857600` (100 MiB) | 0 表示回落到默认；入站、JSON 过滤和格式转换共用上限 |
 | `retryable_failure_cooldown_secs` | `15` | 对适合短时降级的可重试失败施加冷却窗口；`0` 表示关闭冷却。重载或重启运行中的代理会重置当前冷却状态 |
 | `same_upstream_retry_count` | `1` | 可重试错误时，同一上游原地额外重试次数（不含首次发送）；`0` 关闭原地重试；最大 `5` |
 | `codex_session_scoped_cooldown_enabled` | `false` | 仅对 Codex 账号 + OpenAI Responses 请求生效；开启后按 `session_id` 隔离冷却，最终成功会清除本会话冷却，缺少 `session_id` 的请求不共享冷却 |

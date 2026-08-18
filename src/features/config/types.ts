@@ -125,6 +125,8 @@ export type ProxyConfigFileBase = {
   model_list_prefix_default_on_migrated?: boolean;
   kiro_preferred_endpoint?: KiroPreferredEndpoint | null;
   log_level?: LogLevel;
+  /** 入站与 JSON 过滤/转换共用上限，单位字节；缺省 100 MiB。 */
+  max_request_body_bytes?: number;
   retryable_failure_cooldown_secs?: number;
   same_upstream_retry_count?: number;
   codex_session_scoped_cooldown_enabled?: boolean;
@@ -228,6 +230,7 @@ export type ConfigForm = {
   modelListPrefix: boolean;
   kiroPreferredEndpoint: "" | KiroPreferredEndpoint;
   logLevel: LogLevel;
+  maxRequestBodyMib: string;
   retryableFailureCooldownSecs: string;
   sameUpstreamRetryCount: string;
   codexSessionScopedCooldownEnabled: boolean;

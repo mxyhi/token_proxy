@@ -173,6 +173,7 @@ async fn send_upstream_request_once(
             codex_openai_device_id,
             request_headers,
             state.config.xai_inject_x_search,
+            state.config.max_request_body_bytes,
         )
         .await?;
         let response_header_timeout = response_header_timeout_for_request(&state.config, meta);
@@ -411,6 +412,7 @@ async fn send_codex_attempt(
         codex_openai_device_id,
         request_headers,
         state.config.xai_inject_x_search,
+        state.config.max_request_body_bytes,
     )
     .await
     .map_err(CodexAttemptError::Fatal)?;

@@ -101,7 +101,7 @@ Notes:
 | `local_api_key` | `null` | When set: local auth uses format-specific headers (see Auth rules); local auth inputs are **not** forwarded upstream. |
 | `app_proxy_url` | `null` | Proxy for app updater & as placeholder for upstreams (`"$app_proxy_url"`). Supports `http/https/socks5/socks5h`. |
 | `log_level` | `silent` | `silent|error|warn|info|debug|trace`; debug/trace log request headers (auth redacted) and small bodies (≤64KiB). Release builds force `silent`. |
-| `max_request_body_bytes` | `104857600` (100 MiB) | 0 = fallback to default. Protects inbound body size. |
+| `max_request_body_bytes` | `104857600` (100 MiB) | 0 = fallback to default. Shared inbound, JSON filter, and format-conversion ceiling. |
 | `retryable_failure_cooldown_secs` | `15` | Cooldown window after retryable failures that should temporarily sideline an upstream. `0` disables cooldown. Reloading or restarting the running proxy resets current cooldown state. |
 | `same_upstream_retry_count` | `1` | Extra same-upstream retries after a retryable failure (excluding the first attempt). `0` disables same-upstream retry; max `5`. |
 | `codex_session_scoped_cooldown_enabled` | `false` | Only applies to Codex account-backed OpenAI Responses requests. When enabled, cooldown is isolated by `session_id`; final success clears that session, and requests without `session_id` do not share cooldown. |

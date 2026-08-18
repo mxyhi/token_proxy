@@ -15,9 +15,8 @@ const OPENAI_RESPONSES_PATH: &str = "/v1/responses";
 const ANTHROPIC_COUNT_TOKENS_PATH: &str = "/v1/messages/count_tokens";
 const ANTHROPIC_MESSAGES_PATH: &str = "/v1/messages";
 const REQUEST_MODEL_MAPPING_LIMIT_BYTES: usize = 4 * 1024 * 1024;
-// 与默认入站上限 100 MiB 对齐。原先 20 MiB 会让 gpt-5* `/v1/responses` 在剥 sampling 前 413。
-const REQUEST_REASONING_LIMIT_BYTES: usize = 100 * 1024 * 1024;
-const REQUEST_FILTER_LIMIT_BYTES: usize = 100 * 1024 * 1024;
+/// 默认 JSON 过滤/转换上限；运行时用配置 `max_request_body_bytes` 覆盖。
+const DEFAULT_JSON_TRANSFORM_LIMIT_BYTES: usize = 100 * 1024 * 1024;
 const CODEX_INSTALLATION_ID_KEY: &str = "x-codex-installation-id";
 const CODEX_RESPONSES_LITE_HEADER: &str = "x-openai-internal-codex-responses-lite";
 const CODEX_RESPONSES_LITE_METADATA_KEY: &str =
@@ -32,6 +31,7 @@ pub(super) async fn build_upstream_body(
     codex_openai_device_id: Option<&str>,
     request_headers: &HeaderMap,
     xai_inject_x_search: bool,
+    filter_limit_bytes: usize,
 ) -> Result<reqwest::Body, AttemptOutcome> {
     let transformed = build_json_transformed_body_with_headers(
         provider,
@@ -42,6 +42,7 @@ pub(super) async fn build_upstream_body(
         codex_openai_device_id,
         request_headers,
         xai_inject_x_search,
+        filter_limit_bytes,
     )
     .await?;
     let final_source = transformed.as_ref().unwrap_or(body);
@@ -58,13 +59,14 @@ pub(super) async fn xai_client_tool_mapping(
     upstream_path_with_query: &str,
     body: &ReplayableBody,
     xai_inject_x_search: bool,
+    filter_limit_bytes: usize,
 ) -> Result<Option<XaiClientToolMapping>, AttemptOutcome> {
     let upstream_path = split_path_query(upstream_path_with_query).0;
     if !should_filter_xai_responses_request(provider, upstream_path) {
         return Ok(None);
     }
     let Some(bytes) = body
-        .read_bytes_if_small(REQUEST_FILTER_LIMIT_BYTES)
+        .read_bytes_if_small(filter_limit_bytes)
         .await
         .map_err(|error| {
             AttemptOutcome::Fatal(http::error_response(
@@ -110,6 +112,7 @@ async fn build_json_transformed_body(
         codex_openai_device_id,
         &HeaderMap::new(),
         false,
+        DEFAULT_JSON_TRANSFORM_LIMIT_BYTES,
     )
     .await
 }
@@ -123,6 +126,7 @@ async fn build_json_transformed_body_with_headers(
     codex_openai_device_id: Option<&str>,
     request_headers: &HeaderMap,
     xai_inject_x_search: bool,
+    filter_limit_bytes: usize,
 ) -> Result<Option<ReplayableBody>, AttemptOutcome> {
     let upstream_path = split_path_query(upstream_path_with_query).0;
     if !needs_json_transform(
@@ -148,6 +152,7 @@ async fn build_json_transformed_body_with_headers(
         meta,
         codex_openai_device_id,
         request_headers,
+        filter_limit_bytes,
     );
     let Some(bytes) = body.read_bytes_if_small(read_limit).await.map_err(|err| {
         AttemptOutcome::Fatal(http::error_response(
@@ -157,13 +162,15 @@ async fn build_json_transformed_body_with_headers(
     })?
     else {
         if must_strip_sampling {
-            return Err(openai_responses_sampling_params_payload_too_large());
+            return Err(openai_responses_sampling_params_payload_too_large(
+                filter_limit_bytes,
+            ));
         }
         if must_filter_xai {
-            return Err(xai_responses_payload_too_large());
+            return Err(xai_responses_payload_too_large(filter_limit_bytes));
         }
         if must_sanitize_responses_input {
-            return Err(openai_responses_input_payload_too_large());
+            return Err(openai_responses_input_payload_too_large(filter_limit_bytes));
         }
         return Ok(None);
     };
@@ -179,9 +186,29 @@ async fn build_json_transformed_body_with_headers(
     let body_len = bytes.len();
     changed |= normalize_anthropic_model(provider, upstream_path, object, meta, body_len);
     changed |= rewrite_model_mapping(object, meta, body_len);
-    changed |= apply_reasoning_effort(provider, upstream_path, object, meta, body_len);
-    changed |= filter_openai_responses_fields(provider, upstream, upstream_path, object, body_len);
-    changed |= sanitize_native_openai_responses_input(provider, upstream_path, object, body_len);
+    changed |= apply_reasoning_effort(
+        provider,
+        upstream_path,
+        object,
+        meta,
+        body_len,
+        filter_limit_bytes,
+    );
+    changed |= filter_openai_responses_fields(
+        provider,
+        upstream,
+        upstream_path,
+        object,
+        body_len,
+        filter_limit_bytes,
+    );
+    changed |= sanitize_native_openai_responses_input(
+        provider,
+        upstream_path,
+        object,
+        body_len,
+        filter_limit_bytes,
+    );
     changed |= filter_xai_responses_request(
         provider,
         upstream_path,
@@ -189,14 +216,16 @@ async fn build_json_transformed_body_with_headers(
         meta,
         body_len,
         xai_inject_x_search,
+        filter_limit_bytes,
     )?;
-    changed |= normalize_xai_image_refs(provider, object, body_len);
+    changed |= normalize_xai_image_refs(provider, object, body_len, filter_limit_bytes);
     changed |= force_codex_responses_lite_parallel_tool_calls(
         provider,
         upstream_path,
         request_headers,
         object,
         body_len,
+        filter_limit_bytes,
     );
     changed |= strip_openai_responses_sampling_params(
         provider,
@@ -205,9 +234,22 @@ async fn build_json_transformed_body_with_headers(
         meta,
         body_len,
         must_strip_sampling,
+        filter_limit_bytes,
     )?;
-    changed |= rewrite_developer_roles_if_needed(upstream, upstream_path, object, body_len);
-    changed |= filter_anthropic_count_tokens_request(provider, upstream_path, object, body_len);
+    changed |= rewrite_developer_roles_if_needed(
+        upstream,
+        upstream_path,
+        object,
+        body_len,
+        filter_limit_bytes,
+    );
+    changed |= filter_anthropic_count_tokens_request(
+        provider,
+        upstream_path,
+        object,
+        body_len,
+        filter_limit_bytes,
+    );
     changed |= inject_codex_installation_id(object, provider, codex_openai_device_id);
     if !changed {
         return Ok(None);
@@ -223,6 +265,7 @@ fn json_transform_read_limit(
     meta: &RequestMeta,
     codex_openai_device_id: Option<&str>,
     request_headers: &HeaderMap,
+    filter_limit_bytes: usize,
 ) -> usize {
     let mut limit = 0usize;
     if meta.model_override().is_some() && meta.mapped_model.is_some() {
@@ -231,35 +274,19 @@ fn json_transform_read_limit(
     if should_normalize_anthropic_model(provider, upstream_path, meta) {
         limit = limit.max(REQUEST_MODEL_MAPPING_LIMIT_BYTES);
     }
-    if should_apply_reasoning_effort(provider, upstream_path, meta) {
-        limit = limit.max(REQUEST_REASONING_LIMIT_BYTES);
-    }
-    if should_filter_openai_responses_fields(provider, upstream, upstream_path) {
-        limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
-    }
-    if should_sanitize_native_openai_responses_input(provider, upstream_path) {
-        limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
-    }
-    if should_filter_xai_responses_request(provider, upstream_path) {
-        limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
-    }
-    if should_normalize_xai_image_refs(provider) {
-        limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
-    }
-    if should_strip_openai_responses_sampling_params(provider, upstream_path, meta) {
-        limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
-    }
-    if should_rewrite_developer_roles(upstream, upstream_path) {
-        limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
-    }
-    if should_filter_anthropic_count_tokens_request(provider, upstream_path) {
-        limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
-    }
-    if should_inject_codex_installation_id(provider, codex_openai_device_id) {
-        limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
-    }
-    if should_inspect_codex_responses_lite(provider, upstream_path, request_headers) {
-        limit = limit.max(REQUEST_FILTER_LIMIT_BYTES);
+    // 其余 JSON 改写都受配置的入站上限约束。
+    if should_apply_reasoning_effort(provider, upstream_path, meta)
+        || should_filter_openai_responses_fields(provider, upstream, upstream_path)
+        || should_sanitize_native_openai_responses_input(provider, upstream_path)
+        || should_filter_xai_responses_request(provider, upstream_path)
+        || should_normalize_xai_image_refs(provider)
+        || should_strip_openai_responses_sampling_params(provider, upstream_path, meta)
+        || should_rewrite_developer_roles(upstream, upstream_path)
+        || should_filter_anthropic_count_tokens_request(provider, upstream_path)
+        || should_inject_codex_installation_id(provider, codex_openai_device_id)
+        || should_inspect_codex_responses_lite(provider, upstream_path, request_headers)
+    {
+        limit = limit.max(filter_limit_bytes);
     }
     limit
 }
@@ -300,8 +327,9 @@ fn force_codex_responses_lite_parallel_tool_calls(
     request_headers: &HeaderMap,
     object: &mut Map<String, Value>,
     body_len: usize,
+    filter_limit_bytes: usize,
 ) -> bool {
-    if body_len > REQUEST_FILTER_LIMIT_BYTES
+    if body_len > filter_limit_bytes
         || !should_inspect_codex_responses_lite(provider, upstream_path, request_headers)
     {
         return false;
@@ -413,8 +441,9 @@ fn apply_reasoning_effort(
     object: &mut Map<String, Value>,
     meta: &RequestMeta,
     body_len: usize,
+    filter_limit_bytes: usize,
 ) -> bool {
-    if body_len > REQUEST_REASONING_LIMIT_BYTES {
+    if body_len > filter_limit_bytes {
         return false;
     }
     let Some(effort) = meta.reasoning_effort.as_deref() else {
@@ -490,8 +519,9 @@ fn filter_openai_responses_fields(
     upstream_path: &str,
     object: &mut Map<String, Value>,
     body_len: usize,
+    filter_limit_bytes: usize,
 ) -> bool {
-    if body_len > REQUEST_FILTER_LIMIT_BYTES {
+    if body_len > filter_limit_bytes {
         return false;
     }
     if !should_filter_openai_responses_fields(provider, upstream, upstream_path) {
@@ -517,8 +547,9 @@ fn sanitize_native_openai_responses_input(
     upstream_path: &str,
     object: &mut Map<String, Value>,
     body_len: usize,
+    filter_limit_bytes: usize,
 ) -> bool {
-    if body_len > REQUEST_FILTER_LIMIT_BYTES
+    if body_len > filter_limit_bytes
         || !should_sanitize_native_openai_responses_input(provider, upstream_path)
     {
         return false;
@@ -563,15 +594,15 @@ fn sanitize_native_openai_responses_input(
     changed
 }
 
-fn openai_responses_input_payload_too_large() -> AttemptOutcome {
+fn openai_responses_input_payload_too_large(limit_bytes: usize) -> AttemptOutcome {
     tracing::warn!(
-        limit_bytes = REQUEST_FILTER_LIMIT_BYTES,
+        limit_bytes,
         "rejected OpenAI Responses request: body exceeds input sanitizer limit"
     );
     AttemptOutcome::Fatal(http::error_response(
         StatusCode::PAYLOAD_TOO_LARGE,
         format!(
-            "OpenAI Responses request is too large to sanitize input metadata; limit is {REQUEST_FILTER_LIMIT_BYTES} bytes."
+            "OpenAI Responses request is too large to sanitize input metadata; limit is {limit_bytes} bytes."
         ),
     ))
 }
@@ -587,8 +618,9 @@ fn filter_xai_responses_request(
     meta: &RequestMeta,
     body_len: usize,
     xai_inject_x_search: bool,
+    filter_limit_bytes: usize,
 ) -> Result<bool, AttemptOutcome> {
-    if body_len > REQUEST_FILTER_LIMIT_BYTES
+    if body_len > filter_limit_bytes
         || !should_filter_xai_responses_request(provider, upstream_path)
     {
         return Ok(false);
@@ -796,8 +828,9 @@ fn normalize_xai_image_refs(
     provider: &str,
     object: &mut Map<String, Value>,
     body_len: usize,
+    filter_limit_bytes: usize,
 ) -> bool {
-    if body_len > REQUEST_FILTER_LIMIT_BYTES || !should_normalize_xai_image_refs(provider) {
+    if body_len > filter_limit_bytes || !should_normalize_xai_image_refs(provider) {
         return false;
     }
     let changed = normalize_xai_image_refs_in_object(object);
@@ -913,15 +946,15 @@ fn is_xai_grok_45_model(model: &str) -> bool {
     model.eq_ignore_ascii_case("grok-4.5")
 }
 
-fn xai_responses_payload_too_large() -> AttemptOutcome {
+fn xai_responses_payload_too_large(limit_bytes: usize) -> AttemptOutcome {
     tracing::warn!(
-        limit_bytes = REQUEST_FILTER_LIMIT_BYTES,
+        limit_bytes,
         "rejected xAI Responses request: body exceeds field filter limit"
     );
     AttemptOutcome::Fatal(http::error_response(
         StatusCode::PAYLOAD_TOO_LARGE,
         format!(
-            "xAI Responses request is too large to filter unsupported fields; limit is {REQUEST_FILTER_LIMIT_BYTES} bytes."
+            "xAI Responses request is too large to filter unsupported fields; limit is {limit_bytes} bytes."
         ),
     ))
 }
@@ -947,9 +980,12 @@ fn strip_openai_responses_sampling_params(
     meta: &RequestMeta,
     body_len: usize,
     must_strip_sampling: bool,
+    filter_limit_bytes: usize,
 ) -> Result<bool, AttemptOutcome> {
-    if must_strip_sampling && body_len > REQUEST_FILTER_LIMIT_BYTES {
-        return Err(openai_responses_sampling_params_payload_too_large());
+    if must_strip_sampling && body_len > filter_limit_bytes {
+        return Err(openai_responses_sampling_params_payload_too_large(
+            filter_limit_bytes,
+        ));
     }
     if !should_strip_openai_responses_sampling_params(provider, upstream_path, meta) {
         return Ok(false);
@@ -960,15 +996,15 @@ fn strip_openai_responses_sampling_params(
     Ok(changed)
 }
 
-fn openai_responses_sampling_params_payload_too_large() -> AttemptOutcome {
+fn openai_responses_sampling_params_payload_too_large(limit_bytes: usize) -> AttemptOutcome {
     tracing::warn!(
-        limit_bytes = REQUEST_FILTER_LIMIT_BYTES,
+        limit_bytes,
         "rejected OpenAI Responses reasoning request: body exceeds sampling filter limit"
     );
     AttemptOutcome::Fatal(http::error_response(
         StatusCode::PAYLOAD_TOO_LARGE,
         format!(
-            "OpenAI Responses reasoning model request is too large to validate sampling parameters; limit is {REQUEST_FILTER_LIMIT_BYTES} bytes."
+            "OpenAI Responses reasoning model request is too large to validate sampling parameters; limit is {limit_bytes} bytes."
         ),
     ))
 }
@@ -983,8 +1019,9 @@ fn rewrite_developer_roles_if_needed(
     upstream_path: &str,
     object: &mut Map<String, Value>,
     body_len: usize,
+    filter_limit_bytes: usize,
 ) -> bool {
-    if body_len > REQUEST_FILTER_LIMIT_BYTES {
+    if body_len > filter_limit_bytes {
         return false;
     }
     if !should_rewrite_developer_roles(upstream, upstream_path) {
@@ -1005,8 +1042,9 @@ fn filter_anthropic_count_tokens_request(
     upstream_path: &str,
     object: &mut Map<String, Value>,
     body_len: usize,
+    filter_limit_bytes: usize,
 ) -> bool {
-    if body_len > REQUEST_FILTER_LIMIT_BYTES {
+    if body_len > filter_limit_bytes {
         return false;
     }
     if !should_filter_anthropic_count_tokens_request(provider, upstream_path) {
@@ -1097,7 +1135,7 @@ async fn maybe_rewrite_developer_role_to_system(
     }
 
     let Some(bytes) = body
-        .read_bytes_if_small(REQUEST_FILTER_LIMIT_BYTES)
+        .read_bytes_if_small(DEFAULT_JSON_TRANSFORM_LIMIT_BYTES)
         .await
         .map_err(|err| {
             AttemptOutcome::Fatal(http::error_response(
@@ -1195,7 +1233,7 @@ async fn maybe_filter_openai_responses_request_fields(
     }
 
     let Some(bytes) = body
-        .read_bytes_if_small(REQUEST_FILTER_LIMIT_BYTES)
+        .read_bytes_if_small(DEFAULT_JSON_TRANSFORM_LIMIT_BYTES)
         .await
         .map_err(|err| {
             AttemptOutcome::Fatal(http::error_response(

@@ -21,6 +21,15 @@ describe("config/form", () => {
     expect(validate({ ...EMPTY_FORM, port: "9208" }).valid).toBe(true);
   });
 
+  it("validates request body limit as integer 1..1024 MiB", () => {
+    expect(validate({ ...EMPTY_FORM, maxRequestBodyMib: "" }).valid).toBe(false);
+    expect(validate({ ...EMPTY_FORM, maxRequestBodyMib: "0" }).valid).toBe(false);
+    expect(validate({ ...EMPTY_FORM, maxRequestBodyMib: "1025" }).valid).toBe(false);
+    expect(validate({ ...EMPTY_FORM, maxRequestBodyMib: "1" }).valid).toBe(true);
+    expect(validate({ ...EMPTY_FORM, maxRequestBodyMib: "100" }).valid).toBe(true);
+    expect(validate({ ...EMPTY_FORM, maxRequestBodyMib: "1024" }).valid).toBe(true);
+  });
+
   it("validates retryable failure cooldown as non-negative integer", () => {
     expect(validate({ ...EMPTY_FORM, retryableFailureCooldownSecs: "-1" }).valid).toBe(false);
     expect(validate({ ...EMPTY_FORM, retryableFailureCooldownSecs: "" }).valid).toBe(false);
@@ -252,6 +261,29 @@ describe("config/form", () => {
 
     expect(result.valid).toBe(false);
     expect(result.message).toContain(upstream.id);
+  });
+
+  it("serializes request body limit as bytes", () => {
+    const payload = toPayload({
+      ...EMPTY_FORM,
+      maxRequestBodyMib: "200",
+    });
+
+    expect(payload.max_request_body_bytes).toBe(200 * 1024 * 1024);
+  });
+
+  it("defaults request body limit to 100 MiB when config omits it", () => {
+    expect(EMPTY_FORM.maxRequestBodyMib).toBe("100");
+    const form = toForm({
+      host: "127.0.0.1",
+      port: 9208,
+      local_api_key: null,
+      app_proxy_url: null,
+      upstreams: [],
+      tray_token_rate: { enabled: true, format: "split" },
+      upstream_strategy: { order: "fill_first", dispatch: { type: "serial" } },
+    });
+    expect(form.maxRequestBodyMib).toBe("100");
   });
 
   it("serializes retryable failure cooldown seconds", () => {

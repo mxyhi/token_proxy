@@ -2,6 +2,8 @@ use super::*;
 
 use axum::body::{Body, Bytes};
 
+const TEST_MAX_REQUEST_BODY_BYTES: usize = 100 * 1024 * 1024;
+
 #[test]
 fn debug_header_snapshot_redacts_credentials_but_keeps_safe_headers() {
     let mut headers = HeaderMap::new();
@@ -50,10 +52,15 @@ fn force_openai_chat_stream_usage_inserts_stream_options_include_usage() {
             billing: Default::default(),
         };
         let body = ReplayableBody::from_bytes(input);
-        let output =
-            maybe_force_openai_stream_options_include_usage(PROVIDER_CHAT, CHAT_PATH, &meta, body)
-                .await
-                .expect("ok");
+        let output = maybe_force_openai_stream_options_include_usage(
+            PROVIDER_CHAT,
+            CHAT_PATH,
+            &meta,
+            body,
+            TEST_MAX_REQUEST_BODY_BYTES,
+        )
+        .await
+        .expect("ok");
         let bytes = output
             .read_bytes_if_small(1024)
             .await
@@ -72,6 +79,7 @@ fn gemini_meta_prefers_path_for_stream_and_model() {
         let meta = parse_request_meta_best_effort(
             "/v1beta/models/gemini-1.5-flash:streamGenerateContent",
             &body,
+            TEST_MAX_REQUEST_BODY_BYTES,
         )
         .await;
         assert!(meta.stream);
@@ -87,6 +95,7 @@ fn gemini_meta_treats_generate_content_alt_sse_as_stream() {
         let meta = parse_request_meta_best_effort(
             "/v1beta/models/gemini-1.5-flash:generateContent?alt=sse",
             &body,
+            TEST_MAX_REQUEST_BODY_BYTES,
         )
         .await;
         assert!(meta.stream);
@@ -105,7 +114,9 @@ fn meta_parses_large_request_body_for_stream_and_model() {
             .await
             .expect("body");
 
-        let meta = parse_request_meta_best_effort(RESPONSES_PATH, &body).await;
+        let meta =
+            parse_request_meta_best_effort(RESPONSES_PATH, &body, TEST_MAX_REQUEST_BODY_BYTES)
+                .await;
 
         assert!(meta.stream);
         assert_eq!(meta.original_model.as_deref(), Some("gpt-5.4"));
@@ -119,7 +130,8 @@ fn meta_parses_reasoning_suffix_and_strips_model() {
         let body = ReplayableBody::from_bytes(Bytes::from_static(
             br#"{"model":"gpt-4.1-reasoning-high","messages":[]}"#,
         ));
-        let meta = parse_request_meta_best_effort(CHAT_PATH, &body).await;
+        let meta =
+            parse_request_meta_best_effort(CHAT_PATH, &body, TEST_MAX_REQUEST_BODY_BYTES).await;
         assert_eq!(meta.original_model.as_deref(), Some("gpt-4.1"));
         assert_eq!(meta.reasoning_effort.as_deref(), Some("high"));
     });
@@ -133,7 +145,12 @@ fn anthropic_meta_strips_repeated_case_insensitive_one_meg_suffixes() {
             br#"{"model":"claude-opus-4-6[1M][1m]","messages":[]}"#,
         ));
 
-        let meta = parse_request_meta_best_effort(ANTHROPIC_MESSAGES_PREFIX, &body).await;
+        let meta = parse_request_meta_best_effort(
+            ANTHROPIC_MESSAGES_PREFIX,
+            &body,
+            TEST_MAX_REQUEST_BODY_BYTES,
+        )
+        .await;
 
         assert_eq!(meta.original_model.as_deref(), Some("claude-opus-4-6"));
     });

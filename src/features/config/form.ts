@@ -108,6 +108,7 @@ const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   // model_list_prefix_default_on_migrated 走 extras 透传，避免前端保存时丢掉一次性迁移标记。
   "kiro_preferred_endpoint",
   "log_level",
+  "max_request_body_bytes",
   "retryable_failure_cooldown_secs",
   "same_upstream_retry_count",
   "codex_session_scoped_cooldown_enabled",
@@ -134,6 +135,7 @@ export const EMPTY_FORM: ConfigForm = {
   modelListPrefix: true,
   kiroPreferredEndpoint: "ide",
   logLevel: "silent",
+  maxRequestBodyMib: "100",
   retryableFailureCooldownSecs: "15",
   sameUpstreamRetryCount: "1",
   codexSessionScopedCooldownEnabled: false,
@@ -253,6 +255,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     modelListPrefix: config.model_list_prefix ?? true,
     kiroPreferredEndpoint: config.kiro_preferred_endpoint ?? "ide",
     logLevel: config.log_level ?? "silent",
+    maxRequestBodyMib: bytesToMibString(config.max_request_body_bytes),
     retryableFailureCooldownSecs: String(config.retryable_failure_cooldown_secs ?? 15),
     sameUpstreamRetryCount: String(config.same_upstream_retry_count ?? 1),
     codexSessionScopedCooldownEnabled:
@@ -309,6 +312,7 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     model_list_prefix: form.modelListPrefix,
     kiro_preferred_endpoint: normalizeKiroPreferredEndpoint(form.kiroPreferredEndpoint),
     log_level: form.logLevel,
+    max_request_body_bytes: parseMaxRequestBodyBytes(form.maxRequestBodyMib),
     retryable_failure_cooldown_secs: parseRetryableFailureCooldownSecs(
       form.retryableFailureCooldownSecs,
     ),
@@ -366,6 +370,12 @@ export function validate(form: ConfigForm) {
   }
   if (form.appProxyUrl.trim() && !isValidProxyUrl(form.appProxyUrl.trim())) {
     return { valid: false, message: m.error_app_proxy_url_invalid() };
+  }
+  if (!isValidMaxRequestBodyMib(form.maxRequestBodyMib)) {
+    return {
+      valid: false,
+      message: m.error_max_request_body_mib_range(),
+    };
   }
   if (!isValidRetryableFailureCooldownSecs(form.retryableFailureCooldownSecs)) {
     return {
@@ -777,6 +787,47 @@ function isValidRetryableFailureCooldownSecs(value: string) {
     return false;
   }
   return NON_NEGATIVE_INTEGER_PATTERN.test(trimmed);
+}
+
+const DEFAULT_MAX_REQUEST_BODY_MIB = 100;
+const MIN_MAX_REQUEST_BODY_MIB = 1;
+const MAX_MAX_REQUEST_BODY_MIB = 1024;
+const BYTES_PER_MIB = 1024 * 1024;
+
+function bytesToMibString(bytes: number | undefined) {
+  if (bytes === undefined || !Number.isFinite(bytes) || bytes <= 0) {
+    return String(DEFAULT_MAX_REQUEST_BODY_MIB);
+  }
+  return String(Math.max(MIN_MAX_REQUEST_BODY_MIB, Math.round(bytes / BYTES_PER_MIB)));
+}
+
+function isValidMaxRequestBodyMib(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed || !POSITIVE_INTEGER_PATTERN.test(trimmed)) {
+    return false;
+  }
+  const number = Number.parseInt(trimmed, 10);
+  return (
+    Number.isFinite(number) &&
+    number >= MIN_MAX_REQUEST_BODY_MIB &&
+    number <= MAX_MAX_REQUEST_BODY_MIB
+  );
+}
+
+function parseMaxRequestBodyBytes(value: string) {
+  const trimmed = value.trim();
+  if (!POSITIVE_INTEGER_PATTERN.test(trimmed)) {
+    return DEFAULT_MAX_REQUEST_BODY_MIB * BYTES_PER_MIB;
+  }
+  const mib = Number.parseInt(trimmed, 10);
+  if (
+    !Number.isFinite(mib) ||
+    mib < MIN_MAX_REQUEST_BODY_MIB ||
+    mib > MAX_MAX_REQUEST_BODY_MIB
+  ) {
+    return DEFAULT_MAX_REQUEST_BODY_MIB * BYTES_PER_MIB;
+  }
+  return mib * BYTES_PER_MIB;
 }
 
 function parseRetryableFailureCooldownSecs(value: string) {

@@ -166,6 +166,21 @@ function ProxyCoreFields({
         </p>
       </div>
       <div className="grid gap-2">
+        <Label htmlFor="max-request-body-mib">
+          {m.proxy_core_max_request_body_mib_label()}
+        </Label>
+        <Input
+          id="max-request-body-mib"
+          value={form.maxRequestBodyMib}
+          onChange={(event) => onChange({ maxRequestBodyMib: event.target.value })}
+          placeholder="100"
+          inputMode="numeric"
+        />
+        <p className="text-xs text-muted-foreground">
+          {m.proxy_core_max_request_body_mib_help()}
+        </p>
+      </div>
+      <div className="grid gap-2">
         <Label htmlFor="retryable-failure-cooldown-secs">
           {m.proxy_core_retryable_failure_cooldown_secs_label()}
         </Label>

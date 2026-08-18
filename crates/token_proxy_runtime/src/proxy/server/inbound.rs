@@ -101,7 +101,12 @@ pub(super) async fn prepare_inbound_request(
         .as_deref()
         .map(|query| format!("{path}?{query}"))
         .unwrap_or_else(|| path.clone());
-    let mut meta = parse_request_meta_best_effort(&path_with_query, &body).await;
+    let mut meta = parse_request_meta_best_effort(
+        &path_with_query,
+        &body,
+        state.config.max_request_body_bytes,
+    )
+    .await;
     meta.client_ip = client_ip.clone();
     let request_detail = if capture_request_detail_enabled {
         Some(capture_request_detail(headers, &body, state.config.max_request_body_bytes).await)

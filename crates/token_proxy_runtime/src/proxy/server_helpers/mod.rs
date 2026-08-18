@@ -18,9 +18,7 @@ use super::{
 
 const ANTHROPIC_MESSAGES_PREFIX: &str = "/v1/messages";
 const ANTHROPIC_COMPLETE_PATH: &str = "/v1/complete";
-const REQUEST_META_LIMIT_BYTES: usize = 100 * 1024 * 1024;
-// Format conversion needs the full JSON body; keep this aligned with the default max_request_body_bytes.
-const REQUEST_TRANSFORM_LIMIT_BYTES: usize = 100 * 1024 * 1024;
+// 解析/转换上限由配置 max_request_body_bytes 传入，默认 100 MiB。
 const DEBUG_BODY_LOG_LIMIT_BYTES: usize = usize::MAX;
 const OPENAI_REASONING_MODEL_SUFFIX_PREFIX: &str = "-reasoning-";
 
@@ -63,6 +61,7 @@ pub(crate) fn is_anthropic_path(path: &str) -> bool {
 pub(crate) async fn parse_request_meta_best_effort(
     path: &str,
     body: &ReplayableBody,
+    max_request_body_bytes: usize,
 ) -> RequestMeta {
     let stream_from_path = gemini::is_gemini_stream_request(path);
     let model_from_path = gemini::parse_gemini_model_from_path(path);
@@ -78,7 +77,7 @@ pub(crate) async fn parse_request_meta_best_effort(
     };
 
     let Some(bytes) = body
-        .read_bytes_if_small(REQUEST_META_LIMIT_BYTES)
+        .read_bytes_if_small(max_request_body_bytes)
         .await
         .unwrap_or(None)
     else {
@@ -277,13 +276,14 @@ pub(crate) async fn maybe_transform_request_body(
     model_hint: Option<&str>,
     headers: &HeaderMap,
     body: ReplayableBody,
+    max_request_body_bytes: usize,
 ) -> Result<ReplayableBody, RequestError> {
     if transform == FormatTransform::None {
         return Ok(body);
     }
 
     let Some(bytes) = body
-        .read_bytes_if_small(REQUEST_TRANSFORM_LIMIT_BYTES)
+        .read_bytes_if_small(max_request_body_bytes)
         .await
         .map_err(|err| {
             RequestError::new(
@@ -377,13 +377,14 @@ pub(crate) async fn maybe_force_openai_stream_options_include_usage(
     outbound_path: &str,
     meta: &RequestMeta,
     body: ReplayableBody,
+    max_request_body_bytes: usize,
 ) -> Result<ReplayableBody, RequestError> {
     if provider != PROVIDER_CHAT || outbound_path != CHAT_PATH || !meta.stream {
         return Ok(body);
     }
 
     let Some(bytes) = body
-        .read_bytes_if_small(REQUEST_TRANSFORM_LIMIT_BYTES)
+        .read_bytes_if_small(max_request_body_bytes)
         .await
         .map_err(|err| {
             RequestError::new(
@@ -438,7 +439,7 @@ pub(crate) async fn maybe_rewrite_openai_reasoning_effort_from_model_suffix(
     }
 
     let Some(bytes) = body
-        .read_bytes_if_small(REQUEST_TRANSFORM_LIMIT_BYTES)
+        .read_bytes_if_small(100 * 1024 * 1024)
         .await
         .map_err(|err| {
             RequestError::new(

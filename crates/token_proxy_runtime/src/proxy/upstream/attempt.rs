@@ -342,6 +342,7 @@ pub(super) async fn attempt_send(
         upstream_path_with_query,
         body,
         state.config.xai_inject_x_search,
+        state.config.max_request_body_bytes,
     )
     .await
     .map_err(|outcome| UpstreamAttemptFailure {

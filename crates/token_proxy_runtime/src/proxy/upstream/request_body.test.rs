@@ -86,6 +86,7 @@ async fn transformed_body_with_x_search(
         None,
         &axum::http::HeaderMap::new(),
         enabled,
+        DEFAULT_JSON_TRANSFORM_LIMIT_BYTES,
     )
     .await
     {
@@ -206,7 +207,15 @@ async fn xai_x_search_injection_excludes_other_providers() {
 async fn xai_x_search_injection_enables_internal_response_filter_without_client_tools() {
     let body =
         ReplayableBody::from_bytes(Bytes::from_static(br#"{"model":"grok-4.5","input":"hi"}"#));
-    let mapping = match xai_client_tool_mapping("xai", "/v1/responses", &body, true).await {
+    let mapping = match xai_client_tool_mapping(
+        "xai",
+        "/v1/responses",
+        &body,
+        true,
+        DEFAULT_JSON_TRANSFORM_LIMIT_BYTES,
+    )
+    .await
+    {
         Ok(Some(mapping)) => mapping,
         Ok(None) => panic!("enabled X Search should create a response filter mapping"),
         Err(_) => panic!("response filter mapping should succeed"),
@@ -413,6 +422,7 @@ async fn codex_responses_lite_header_and_metadata_force_parallel_tools_off() {
             None,
             &headers,
             false,
+            DEFAULT_JSON_TRANSFORM_LIMIT_BYTES,
         )
         .await
         {
@@ -446,6 +456,7 @@ async fn codex_non_lite_request_does_not_change_parallel_tool_calls() {
         None,
         &axum::http::HeaderMap::new(),
         false,
+        DEFAULT_JSON_TRANSFORM_LIMIT_BYTES,
     )
     .await
     {
@@ -671,9 +682,11 @@ async fn strips_sampling_params_for_openai_responses_reasoning_model_from_prefix
     assert!(value.get("top_p").is_none());
 }
 
-#[test]
-fn rejects_large_openai_responses_reasoning_body_when_sampling_params_cannot_be_checked() {
-    // 上限 100 MiB，不再构造真实超大体。只验证超限时 fail closed。
+#[tokio::test]
+async fn rejects_large_openai_responses_reasoning_body_when_sampling_params_cannot_be_checked() {
+    // 用很小的配置上限覆盖真实 unread 分支，避免分配 100 MiB body。
+    let filter_limit_bytes = 32;
+    let upstream = test_upstream(false, false, false);
     let meta = RequestMeta {
         client_ip: None,
         stream: false,
@@ -684,18 +697,22 @@ fn rejects_large_openai_responses_reasoning_body_when_sampling_params_cannot_be_
         estimated_input_tokens: None,
         billing: Default::default(),
     };
-    let mut object = Map::new();
-    object.insert("model".to_string(), Value::String("gpt-5.5".to_string()));
-    object.insert("temperature".to_string(), json!(0.7));
+    let body = ReplayableBody::from_bytes(Bytes::from(
+        r#"{"model":"gpt-5.5","temperature":0.7,"input":"0123456789abcdef0123456789abcdef"}"#,
+    ));
 
-    let result = strip_openai_responses_sampling_params(
+    let result = build_json_transformed_body_with_headers(
         "openai-response",
+        &upstream,
         "/v1/responses",
-        &mut object,
+        &body,
         &meta,
-        REQUEST_FILTER_LIMIT_BYTES + 1,
-        true,
-    );
+        None,
+        &axum::http::HeaderMap::new(),
+        false,
+        filter_limit_bytes,
+    )
+    .await;
 
     match result {
         Err(AttemptOutcome::Fatal(response)) => {

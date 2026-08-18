@@ -671,9 +671,9 @@ async fn strips_sampling_params_for_openai_responses_reasoning_model_from_prefix
     assert!(value.get("top_p").is_none());
 }
 
-#[tokio::test]
-async fn rejects_large_openai_responses_reasoning_body_when_sampling_params_cannot_be_checked() {
-    let upstream = test_upstream(false, false, false);
+#[test]
+fn rejects_large_openai_responses_reasoning_body_when_sampling_params_cannot_be_checked() {
+    // 上限 100 MiB，不再构造真实超大体。只验证超限时 fail closed。
     let meta = RequestMeta {
         client_ip: None,
         stream: false,
@@ -684,20 +684,18 @@ async fn rejects_large_openai_responses_reasoning_body_when_sampling_params_cann
         estimated_input_tokens: None,
         billing: Default::default(),
     };
-    let input = "x".repeat(REQUEST_FILTER_LIMIT_BYTES + 1);
-    let body = ReplayableBody::from_bytes(Bytes::from(format!(
-        r#"{{"model":"gpt-5.5","temperature":0.7,"input":"{input}"}}"#
-    )));
+    let mut object = Map::new();
+    object.insert("model".to_string(), Value::String("gpt-5.5".to_string()));
+    object.insert("temperature".to_string(), json!(0.7));
 
-    let result = build_json_transformed_body(
+    let result = strip_openai_responses_sampling_params(
         "openai-response",
-        &upstream,
         "/v1/responses",
-        &body,
+        &mut object,
         &meta,
-        None,
-    )
-    .await;
+        REQUEST_FILTER_LIMIT_BYTES + 1,
+        true,
+    );
 
     match result {
         Err(AttemptOutcome::Fatal(response)) => {

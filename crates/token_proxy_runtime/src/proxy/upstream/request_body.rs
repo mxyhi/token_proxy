@@ -15,8 +15,9 @@ const OPENAI_RESPONSES_PATH: &str = "/v1/responses";
 const ANTHROPIC_COUNT_TOKENS_PATH: &str = "/v1/messages/count_tokens";
 const ANTHROPIC_MESSAGES_PATH: &str = "/v1/messages";
 const REQUEST_MODEL_MAPPING_LIMIT_BYTES: usize = 4 * 1024 * 1024;
+// 与默认入站上限 100 MiB 对齐。原先 20 MiB 会让 gpt-5* `/v1/responses` 在剥 sampling 前 413。
 const REQUEST_REASONING_LIMIT_BYTES: usize = 100 * 1024 * 1024;
-const REQUEST_FILTER_LIMIT_BYTES: usize = 20 * 1024 * 1024;
+const REQUEST_FILTER_LIMIT_BYTES: usize = 100 * 1024 * 1024;
 const CODEX_INSTALLATION_ID_KEY: &str = "x-codex-installation-id";
 const CODEX_RESPONSES_LITE_HEADER: &str = "x-openai-internal-codex-responses-lite";
 const CODEX_RESPONSES_LITE_METADATA_KEY: &str =
@@ -563,6 +564,10 @@ fn sanitize_native_openai_responses_input(
 }
 
 fn openai_responses_input_payload_too_large() -> AttemptOutcome {
+    tracing::warn!(
+        limit_bytes = REQUEST_FILTER_LIMIT_BYTES,
+        "rejected OpenAI Responses request: body exceeds input sanitizer limit"
+    );
     AttemptOutcome::Fatal(http::error_response(
         StatusCode::PAYLOAD_TOO_LARGE,
         format!(
@@ -909,6 +914,10 @@ fn is_xai_grok_45_model(model: &str) -> bool {
 }
 
 fn xai_responses_payload_too_large() -> AttemptOutcome {
+    tracing::warn!(
+        limit_bytes = REQUEST_FILTER_LIMIT_BYTES,
+        "rejected xAI Responses request: body exceeds field filter limit"
+    );
     AttemptOutcome::Fatal(http::error_response(
         StatusCode::PAYLOAD_TOO_LARGE,
         format!(
@@ -952,6 +961,10 @@ fn strip_openai_responses_sampling_params(
 }
 
 fn openai_responses_sampling_params_payload_too_large() -> AttemptOutcome {
+    tracing::warn!(
+        limit_bytes = REQUEST_FILTER_LIMIT_BYTES,
+        "rejected OpenAI Responses reasoning request: body exceeds sampling filter limit"
+    );
     AttemptOutcome::Fatal(http::error_response(
         StatusCode::PAYLOAD_TOO_LARGE,
         format!(

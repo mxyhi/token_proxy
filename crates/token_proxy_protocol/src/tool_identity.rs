@@ -1,4 +1,4 @@
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 
 /// Flattens Responses namespaces for protocols without native namespace support.
@@ -69,7 +69,10 @@ fn collect_namespace_names(
             continue;
         };
         for child in namespace_children(tool) {
-            if child.get("type").and_then(Value::as_str) != Some("function") {
+            if !matches!(
+                child.get("type").and_then(Value::as_str),
+                Some("function" | "custom")
+            ) {
                 continue;
             }
             let Some(name) = child_name(child) else {
@@ -117,7 +120,10 @@ fn flatten_tools(
             continue;
         };
         for child in namespace_children(tool) {
-            if child.get("type").and_then(Value::as_str) != Some("function") {
+            if !matches!(
+                child.get("type").and_then(Value::as_str),
+                Some("function" | "custom")
+            ) {
                 continue;
             }
             let Some(name) = child_name(child) else {
@@ -129,6 +135,17 @@ fn flatten_tools(
             }
             let mut child = child.as_object().cloned().unwrap_or_default();
             child.insert("name".to_string(), Value::String(flat_name));
+            if child.get("type").and_then(Value::as_str) == Some("custom") {
+                child.insert("type".to_string(), Value::String("function".to_string()));
+                child.insert(
+                    "parameters".to_string(),
+                    serde_json::json!({
+                        "type": "object",
+                        "properties": { "input": { "type": "string" } },
+                        "required": ["input"]
+                    }),
+                );
+            }
             flattened.push(Value::Object(child));
         }
     }
@@ -165,6 +182,356 @@ fn flatten_tool_name(namespace: &str, name: &str) -> String {
     format!("{}__{}", namespace.trim(), name.trim())
 }
 
+/// Restores namespace and custom-tool identity on Responses output produced by
+/// a provider that only understands flattened function calls.
+pub fn restore_responses_tool_identities(output: &mut Value, request: &Value) -> usize {
+    let mut custom_item_ids = HashSet::new();
+    restore_responses_tool_identities_with_state(output, request, &mut custom_item_ids)
+}
+
+/// Restores tool identities while retaining custom item ids across SSE events.
+pub fn restore_responses_tool_identities_with_state(
+    output: &mut Value,
+    request: &Value,
+    custom_item_ids: &mut HashSet<String>,
+) -> usize {
+    let identities = collect_response_tool_identities(request);
+    if identities.is_empty() {
+        return 0;
+    }
+    let mut restored = 0;
+    collect_custom_item_ids(output, &identities, custom_item_ids);
+    restore_tool_identities(output, &identities, custom_item_ids, &mut restored);
+    if restored > 0 {
+        tracing::debug!(
+            restored,
+            "restored Responses namespace and custom tool identities"
+        );
+    }
+    restored
+}
+
+fn collect_response_tool_identities(request: &Value) -> HashMap<String, (String, String, bool)> {
+    let mut identities = HashMap::new();
+    let Some(request) = request.as_object() else {
+        return identities;
+    };
+    let mut sources = Vec::new();
+    if let Some(tools) = request.get("tools").and_then(Value::as_array) {
+        sources.extend(tools.iter());
+    }
+    if let Some(input) = request.get("input").and_then(Value::as_array) {
+        for item in input {
+            if item.get("type").and_then(Value::as_str) == Some("additional_tools") {
+                if let Some(tools) = item.get("tools").and_then(Value::as_array) {
+                    sources.extend(tools.iter());
+                }
+            }
+        }
+    }
+    for tool in sources {
+        let tool_type = tool.get("type").and_then(Value::as_str);
+        match tool_type {
+            Some("function") | Some("custom") | None => {
+                let Some(name) = tool.get("name").and_then(Value::as_str) else {
+                    continue;
+                };
+                let name = name.trim();
+                if !name.is_empty() {
+                    identities.insert(
+                        name.to_string(),
+                        (name.to_string(), String::new(), tool_type == Some("custom")),
+                    );
+                }
+            }
+            Some("namespace") => {
+                let Some(namespace) = tool.get("name").and_then(Value::as_str).map(str::trim)
+                else {
+                    continue;
+                };
+                if namespace.is_empty() {
+                    continue;
+                }
+                for child in namespace_children(tool) {
+                    let child_type = child.get("type").and_then(Value::as_str);
+                    if !matches!(child_type, Some("function" | "custom")) {
+                        continue;
+                    }
+                    let Some(name) = child_name(child) else {
+                        continue;
+                    };
+                    identities.insert(
+                        flatten_tool_name(namespace, name),
+                        (
+                            name.to_string(),
+                            namespace.to_string(),
+                            child_type == Some("custom"),
+                        ),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    identities
+}
+
+fn restore_tool_identities(
+    value: &mut Value,
+    identities: &HashMap<String, (String, String, bool)>,
+    custom_item_ids: &mut HashSet<String>,
+    restored: &mut usize,
+) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                restore_tool_identities(item, identities, custom_item_ids, restored);
+            }
+        }
+        Value::Object(object) => {
+            if object.get("type").and_then(Value::as_str)
+                == Some("response.function_call_arguments.delta")
+                && object
+                    .get("item_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|item_id| custom_item_ids.contains(item_id))
+            {
+                object.insert(
+                    "type".to_string(),
+                    Value::String("response.custom_tool_call_input.delta".to_string()),
+                );
+                *restored += 1;
+            }
+            restore_function_call_event(object, identities, custom_item_ids, restored);
+            if matches!(
+                object.get("type").and_then(Value::as_str),
+                Some("function_call" | "custom_tool_call")
+            ) {
+                let name = object.get("name").and_then(Value::as_str).unwrap_or("");
+                if let Some((local_name, namespace, custom)) = identities.get(name) {
+                    object.insert("name".to_string(), Value::String(local_name.clone()));
+                    if namespace.is_empty() {
+                        object.remove("namespace");
+                    } else {
+                        object.insert("namespace".to_string(), Value::String(namespace.clone()));
+                    }
+                    if *custom
+                        && object.get("type").and_then(Value::as_str) == Some("function_call")
+                    {
+                        object.insert("type".to_string(), json!("custom_tool_call"));
+                        if let Some(item_id) = object.get("id").and_then(Value::as_str) {
+                            custom_item_ids.insert(item_id.to_string());
+                        }
+                        let input = object
+                            .get("arguments")
+                            .and_then(Value::as_str)
+                            .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+                            .and_then(|arguments| arguments.get("input").cloned())
+                            .unwrap_or_else(|| {
+                                object
+                                    .get("arguments")
+                                    .cloned()
+                                    .unwrap_or(Value::String(String::new()))
+                            });
+                        object.remove("arguments");
+                        object.insert("input".to_string(), input);
+                    }
+                    *restored += 1;
+                }
+            }
+            for child in object.values_mut() {
+                restore_tool_identities(child, identities, custom_item_ids, restored);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn restore_function_call_event(
+    object: &mut Map<String, Value>,
+    identities: &HashMap<String, (String, String, bool)>,
+    custom_item_ids: &mut HashSet<String>,
+    restored: &mut usize,
+) {
+    if object.get("type").and_then(Value::as_str) != Some("response.function_call_arguments.done") {
+        return;
+    }
+    let name = object.get("name").and_then(Value::as_str).unwrap_or("");
+    let Some((local_name, namespace, custom)) = identities.get(name) else {
+        return;
+    };
+    object.insert("name".to_string(), Value::String(local_name.clone()));
+    if namespace.is_empty() {
+        object.remove("namespace");
+    } else {
+        object.insert("namespace".to_string(), Value::String(namespace.clone()));
+    }
+    if *custom {
+        if let Some(item_id) = object.get("item_id").and_then(Value::as_str) {
+            custom_item_ids.insert(item_id.to_string());
+        }
+        object.insert(
+            "type".to_string(),
+            Value::String("response.custom_tool_call_input.done".to_string()),
+        );
+        let input = object
+            .get("arguments")
+            .and_then(Value::as_str)
+            .and_then(|arguments| serde_json::from_str::<Value>(arguments).ok())
+            .and_then(|arguments| arguments.get("input").cloned())
+            .unwrap_or_else(|| {
+                object
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(Value::String(String::new()))
+            });
+        object.remove("arguments");
+        object.insert("input".to_string(), input);
+    }
+    *restored += 1;
+}
+
+fn collect_custom_item_ids(
+    value: &Value,
+    identities: &HashMap<String, (String, String, bool)>,
+    custom_item_ids: &mut HashSet<String>,
+) {
+    match value {
+        Value::Array(items) => {
+            for item in items {
+                collect_custom_item_ids(item, identities, custom_item_ids);
+            }
+        }
+        Value::Object(object) => {
+            if matches!(
+                object.get("type").and_then(Value::as_str),
+                Some("function_call" | "custom_tool_call")
+            ) {
+                let name = object.get("name").and_then(Value::as_str).unwrap_or("");
+                if identities.get(name).is_some_and(|(_, _, custom)| *custom) {
+                    if let Some(item_id) = object.get("id").and_then(Value::as_str) {
+                        custom_item_ids.insert(item_id.to_string());
+                    }
+                }
+            }
+            for child in object.values() {
+                collect_custom_item_ids(child, identities, custom_item_ids);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restores_namespace_custom_call_and_unwraps_input() {
+        let request = json!({
+            "tools": [{
+                "type": "namespace",
+                "name": "shell",
+                "tools": [{ "type": "custom", "name": "exec" }]
+            }]
+        });
+        let mut output = json!({
+            "output": [{
+                "type": "function_call",
+                "name": "shell__exec",
+                "arguments": "{\"input\":\"pwd\"}"
+            }]
+        });
+
+        assert_eq!(restore_responses_tool_identities(&mut output, &request), 1);
+        assert_eq!(output["output"][0]["type"], "custom_tool_call");
+        assert_eq!(output["output"][0]["name"], "exec");
+        assert_eq!(output["output"][0]["namespace"], "shell");
+        assert_eq!(output["output"][0]["input"], "pwd");
+        assert!(output["output"][0].get("arguments").is_none());
+    }
+
+    #[test]
+    fn restores_function_call_without_changing_unknown_names() {
+        let request = json!({
+            "tools": [{
+                "type": "namespace",
+                "name": "mcp",
+                "tools": [{ "type": "function", "name": "lookup" }]
+            }]
+        });
+        let mut output = json!({
+            "output": [
+                { "type": "function_call", "name": "mcp__lookup", "arguments": "{}" },
+                { "type": "function_call", "name": "unknown", "arguments": "{}" }
+            ]
+        });
+
+        assert_eq!(restore_responses_tool_identities(&mut output, &request), 1);
+        assert_eq!(output["output"][0]["name"], "lookup");
+        assert_eq!(output["output"][0]["namespace"], "mcp");
+        assert_eq!(output["output"][1]["name"], "unknown");
+    }
+
+    #[test]
+    fn preserves_existing_custom_tool_input() {
+        let request = json!({
+            "tools": [{
+                "type": "custom",
+                "name": "exec"
+            }]
+        });
+        let mut output = json!({
+            "output": [{
+                "type": "custom_tool_call",
+                "name": "exec",
+                "input": "pwd"
+            }]
+        });
+
+        assert_eq!(restore_responses_tool_identities(&mut output, &request), 1);
+        assert_eq!(output["output"][0]["input"], "pwd");
+        assert_eq!(output["output"][0]["type"], "custom_tool_call");
+    }
+
+    #[test]
+    fn restores_custom_stream_delta_using_item_state() {
+        let request = json!({
+            "tools": [{
+                "type": "custom",
+                "name": "exec"
+            }]
+        });
+        let mut item_ids = HashSet::new();
+        let mut added = json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "function_call",
+                "id": "ctc_1",
+                "name": "exec",
+                "arguments": ""
+            }
+        });
+        assert_eq!(
+            restore_responses_tool_identities_with_state(&mut added, &request, &mut item_ids),
+            1
+        );
+        assert_eq!(added["item"]["type"], "custom_tool_call");
+        assert!(item_ids.contains("ctc_1"));
+
+        let mut delta = json!({
+            "type": "response.function_call_arguments.delta",
+            "item_id": "ctc_1",
+            "delta": "pwd"
+        });
+        assert_eq!(
+            restore_responses_tool_identities_with_state(&mut delta, &request, &mut item_ids),
+            1
+        );
+        assert_eq!(delta["type"], "response.custom_tool_call_input.delta");
+    }
+}
+
 fn rewrite_function_calls(value: &mut Value, names: &HashMap<String, (String, String)>) {
     match value {
         Value::Array(items) => {
@@ -173,7 +540,10 @@ fn rewrite_function_calls(value: &mut Value, names: &HashMap<String, (String, St
             }
         }
         Value::Object(object) => {
-            if object.get("type").and_then(Value::as_str) == Some("function_call") {
+            if matches!(
+                object.get("type").and_then(Value::as_str),
+                Some("function_call" | "custom_tool_call")
+            ) {
                 rewrite_function_call_object(object, names);
             }
             for child in object.values_mut() {

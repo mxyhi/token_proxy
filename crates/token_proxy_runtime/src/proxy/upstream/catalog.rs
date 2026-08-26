@@ -24,6 +24,12 @@ use super::{utils::sanitize_upstream_error, AttemptOutcome};
 
 const MODEL_DISCOVERY_MAX_PARALLEL: usize = 8;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ModelCatalogEntry {
+    id: String,
+    display_name: Option<String>,
+}
+
 #[derive(Clone)]
 struct ModelDiscoveryJob {
     provider: String,
@@ -46,7 +52,7 @@ pub(super) async fn aggregate_all_providers_model_catalog(
         "aggregating model catalog across all providers"
     );
 
-    let mut sources: Vec<(String, Vec<String>)> = Vec::new();
+    let mut sources: Vec<(String, Vec<ModelCatalogEntry>)> = Vec::new();
     let mut successful = 0usize;
     for provider in &providers {
         let (count, provider_sources) =
@@ -65,17 +71,60 @@ pub(super) async fn aggregate_all_providers_model_catalog(
     model_catalog_list_response(&sources, state.config.model_list_prefix)
 }
 
+/// 为 Codex App manifest 提供跨 provider 的稳定模型键与展示名。
+///
+/// manifest 只补充本地目录中不存在的模型；原始 Codex manifest 的字段和顺序由调用方保留。
+pub(super) async fn collect_model_catalog_entries_for_manifest(
+    state: &ProxyState,
+    headers: &HeaderMap,
+    request_auth: &RequestAuth,
+) -> Vec<(String, Option<String>)> {
+    let mut providers: Vec<String> = state.config.upstreams.keys().cloned().collect();
+    providers.sort();
+    let mut sources = Vec::new();
+    for provider in providers {
+        // Codex manifest already owns the GPT catalog returned by ChatGPT; only supplement it
+        // with models from other configured providers/local gateways.
+        if provider == "codex" {
+            continue;
+        }
+        let (_, provider_sources) =
+            collect_provider_model_sources(state, &provider, headers, request_auth).await;
+        sources.extend(provider_sources);
+    }
+
+    let mut entries: Vec<(String, Option<String>)> = Vec::new();
+    let mut positions: HashMap<String, usize> = HashMap::new();
+    for (_, models) in sources {
+        for model in models {
+            if let Some(index) = positions.get(&model.id).copied() {
+                if entries[index].1.is_none() {
+                    entries[index].1 = model.display_name;
+                }
+                continue;
+            }
+            positions.insert(model.id.clone(), entries.len());
+            entries.push((model.id, model.display_name));
+        }
+    }
+    tracing::debug!(
+        model_count = entries.len(),
+        "collected models for Codex manifest augmentation"
+    );
+    entries
+}
+
 async fn collect_provider_model_sources(
     state: &ProxyState,
     provider: &str,
     headers: &HeaderMap,
     request_auth: &RequestAuth,
-) -> (usize, Vec<(String, Vec<String>)>) {
+) -> (usize, Vec<(String, Vec<ModelCatalogEntry>)>) {
     let Some(provider_upstreams) = state.config.provider_upstreams(provider) else {
         return (0, Vec::new());
     };
 
-    let mut sources: Vec<(String, Vec<String>)> = Vec::new();
+    let mut sources: Vec<(String, Vec<ModelCatalogEntry>)> = Vec::new();
     let mut successful = 0usize;
     let meta = RequestMeta {
         client_ip: None,
@@ -93,10 +142,16 @@ async fn collect_provider_model_sources(
 
     for group in &provider_upstreams.groups {
         for upstream in &group.items {
-            let mut models = upstream.advertised_model_ids.clone();
-            merge_model_catalog_ids(&mut models, builtin_model_ids(provider));
-            expand_model_ids_with_mappings(&mut models, &state.config.hot_model_mappings);
-            upstream.restrict_model_catalog(&mut models);
+            let mut models = model_catalog_entries_from_ids(&upstream.advertised_model_ids);
+            merge_model_catalog_entries(
+                &mut models,
+                model_catalog_entries_from_ids(&builtin_model_ids(provider)),
+            );
+            expand_model_catalog_entries_with_mappings(
+                &mut models,
+                &state.config.hot_model_mappings,
+            );
+            restrict_model_catalog_entries(upstream, &mut models);
             let Some((inbound_path, upstream_path)) = probe_paths else {
                 if !models.is_empty() {
                     successful += 1;
@@ -120,9 +175,12 @@ async fn collect_provider_model_sources(
             match upstream_model_catalog {
                 Ok(fetched_models) => {
                     successful += 1;
-                    merge_model_catalog_ids(&mut models, fetched_models);
-                    expand_model_ids_with_mappings(&mut models, &state.config.hot_model_mappings);
-                    upstream.restrict_model_catalog(&mut models);
+                    merge_model_catalog_entries(&mut models, fetched_models);
+                    expand_model_catalog_entries_with_mappings(
+                        &mut models,
+                        &state.config.hot_model_mappings,
+                    );
+                    restrict_model_catalog_entries(upstream, &mut models);
                     sources.push((upstream.id.clone(), models));
                 }
                 Err(err) => {
@@ -146,7 +204,7 @@ async fn collect_provider_model_sources(
 }
 
 fn model_catalog_list_response(
-    sources: &[(String, Vec<String>)],
+    sources: &[(String, Vec<ModelCatalogEntry>)],
     include_prefixed: bool,
 ) -> Response {
     let response_body = build_model_catalog_response_body(sources, include_prefixed);
@@ -162,13 +220,60 @@ fn model_catalog_list_response(
     )
 }
 
-fn merge_model_catalog_ids(target: &mut Vec<String>, extra: Vec<String>) {
-    let mut seen = target.iter().cloned().collect::<HashSet<_>>();
-    for model in extra {
-        if seen.insert(model.clone()) {
-            target.push(model);
+fn model_catalog_entries_from_ids(ids: &[String]) -> Vec<ModelCatalogEntry> {
+    ids.iter()
+        .filter_map(|id| {
+            let id = id.trim();
+            (!id.is_empty()).then(|| ModelCatalogEntry {
+                id: id.to_string(),
+                display_name: None,
+            })
+        })
+        .collect()
+}
+
+fn merge_model_catalog_entries(target: &mut Vec<ModelCatalogEntry>, extra: Vec<ModelCatalogEntry>) {
+    let mut positions = target
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| (entry.id.clone(), index))
+        .collect::<HashMap<_, _>>();
+    for entry in extra {
+        if let Some(index) = positions.get(&entry.id).copied() {
+            if target[index].display_name.is_none() {
+                target[index].display_name = entry.display_name;
+            }
+            continue;
         }
+        positions.insert(entry.id.clone(), target.len());
+        target.push(entry);
     }
+}
+
+fn expand_model_catalog_entries_with_mappings(
+    entries: &mut Vec<ModelCatalogEntry>,
+    mappings: &HashMap<String, String>,
+) {
+    let ids = entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    let mut expanded_ids = ids.clone();
+    expand_model_ids_with_mappings(&mut expanded_ids, mappings);
+    merge_model_catalog_entries(entries, model_catalog_entries_from_ids(&expanded_ids));
+}
+
+fn restrict_model_catalog_entries(
+    upstream: &UpstreamRuntime,
+    entries: &mut Vec<ModelCatalogEntry>,
+) {
+    let mut ids = entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    upstream.restrict_model_catalog(&mut ids);
+    let allowed = ids.into_iter().collect::<HashSet<_>>();
+    entries.retain(|entry| allowed.contains(&entry.id));
 }
 
 pub(super) async fn refresh_model_discovery(state: Arc<ProxyState>) {
@@ -237,14 +342,21 @@ async fn refresh_model_discovery_job(
     state: &ProxyState,
     job: ModelDiscoveryJob,
 ) -> UpstreamModelProbe {
-    let mut models = job.upstream.advertised_model_ids.clone();
-    merge_model_catalog_ids(&mut models, builtin_model_ids(job.provider.as_str()));
-    expand_model_ids_with_mappings(&mut models, &state.config.hot_model_mappings);
-    job.upstream.restrict_model_catalog(&mut models);
+    let mut models = model_catalog_entries_from_ids(&job.upstream.advertised_model_ids);
+    merge_model_catalog_entries(
+        &mut models,
+        model_catalog_entries_from_ids(&builtin_model_ids(job.provider.as_str())),
+    );
+    expand_model_catalog_entries_with_mappings(&mut models, &state.config.hot_model_mappings);
+    restrict_model_catalog_entries(&job.upstream, &mut models);
+    let model_ids = models
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
 
     let Some((inbound_path, upstream_path)) = model_catalog_probe_paths(job.provider.as_str())
     else {
-        let (status, error) = if models.is_empty() {
+        let (status, error) = if model_ids.is_empty() {
             (
                 UpstreamModelProbeStatus::Unsupported,
                 Some("Model list endpoint is not supported for this provider.".to_string()),
@@ -258,7 +370,7 @@ async fn refresh_model_discovery_job(
             job.account_id,
             status,
             error,
-            models,
+            model_ids,
         );
     };
 
@@ -290,16 +402,19 @@ async fn refresh_model_discovery_job(
     .await
     {
         Ok(fetched_models) => {
-            merge_model_catalog_ids(&mut models, fetched_models);
-            expand_model_ids_with_mappings(&mut models, &state.config.hot_model_mappings);
-            job.upstream.restrict_model_catalog(&mut models);
+            merge_model_catalog_entries(&mut models, fetched_models);
+            expand_model_catalog_entries_with_mappings(
+                &mut models,
+                &state.config.hot_model_mappings,
+            );
+            restrict_model_catalog_entries(&job.upstream, &mut models);
             UpstreamModelProbe::completed(
                 job.upstream.id.as_str(),
                 job.provider.as_str(),
                 job.account_id,
                 UpstreamModelProbeStatus::Ok,
                 None,
-                models,
+                models.iter().map(|entry| entry.id.clone()).collect(),
             )
         }
         Err(error) => UpstreamModelProbe::completed(
@@ -308,7 +423,7 @@ async fn refresh_model_discovery_job(
             job.account_id,
             UpstreamModelProbeStatus::Failed,
             Some(error),
-            models,
+            model_ids,
         ),
     }
 }
@@ -342,7 +457,7 @@ async fn fetch_upstream_model_catalog(
     meta: &RequestMeta,
     request_auth: &RequestAuth,
     body: &ReplayableBody,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<ModelCatalogEntry>, String> {
     let prepared = super::prepare_upstream_request(
         state,
         provider,
@@ -394,7 +509,7 @@ async fn fetch_upstream_model_catalog(
         .json::<Value>()
         .await
         .map_err(|err| format!("Failed to parse upstream model catalog JSON: {err}"))?;
-    Ok(extract_model_ids_from_catalog(provider, &value))
+    Ok(extract_model_entries_from_catalog(provider, &value))
 }
 
 fn model_catalog_prepare_error(outcome: AttemptOutcome) -> String {
@@ -415,15 +530,26 @@ fn model_catalog_prepare_error(outcome: AttemptOutcome) -> String {
     }
 }
 
-fn extract_model_ids_from_catalog(provider: &str, value: &Value) -> Vec<String> {
+fn extract_model_entries_from_catalog(provider: &str, value: &Value) -> Vec<ModelCatalogEntry> {
     let items = model_catalog_items(provider, value);
     let mut models = items
         .into_iter()
-        .filter_map(|item| model_catalog_item_id(provider, item))
+        .filter_map(|item| {
+            let id = model_catalog_item_id(provider, item)?;
+            let display_name = if provider == "gemini" {
+                string_field(item, "displayName").or_else(|| string_field(item, "display_name"))
+            } else {
+                string_field(item, "display_name").or_else(|| string_field(item, "displayName"))
+            }
+            .map(str::to_string)
+            .filter(|value| value != &id);
+            Some(ModelCatalogEntry { id, display_name })
+        })
         .collect::<Vec<_>>();
     if provider == "xai" {
-        models.sort();
-        models.dedup();
+        models.sort_by(|left, right| left.id.cmp(&right.id));
+        let mut seen = HashSet::new();
+        models.retain(|entry| seen.insert(entry.id.clone()));
     }
     models
 }
@@ -484,7 +610,7 @@ fn string_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
 }
 
 fn build_model_catalog_response_body(
-    sources: &[(String, Vec<String>)],
+    sources: &[(String, Vec<ModelCatalogEntry>)],
     include_prefixed: bool,
 ) -> Value {
     let created = SystemTime::now()
@@ -492,12 +618,13 @@ fn build_model_catalog_response_body(
         .unwrap_or_default()
         .as_secs() as i64;
     let mut upstreams_by_model: HashMap<String, Vec<String>> = HashMap::new();
+    let mut display_names_by_model: HashMap<String, String> = HashMap::new();
     let mut base_order = Vec::new();
 
     for (upstream_id, models) in sources {
         let mut seen = HashSet::new();
         for model in models {
-            let trimmed = model.trim();
+            let trimmed = model.id.trim();
             if trimmed.is_empty() || !seen.insert(trimmed.to_string()) {
                 continue;
             }
@@ -508,6 +635,15 @@ fn build_model_catalog_response_body(
                 .entry(trimmed.to_string())
                 .or_default()
                 .push(upstream_id.clone());
+            if let Some(display_name) = model
+                .display_name
+                .as_deref()
+                .filter(|value| !value.is_empty())
+            {
+                display_names_by_model
+                    .entry(trimmed.to_string())
+                    .or_insert_with(|| display_name.to_string());
+            }
         }
     }
 
@@ -519,16 +655,31 @@ fn build_model_catalog_response_body(
         if include_prefixed {
             // model_list_prefix：每条上游出 `upstream_id/model`；同名额外保留裸名供轮询/failover。
             if upstream_ids.len() > 1 {
-                data.push(model_catalog_item(model.as_str(), model.as_str(), created));
+                data.push(model_catalog_item(
+                    model.as_str(),
+                    model.as_str(),
+                    created,
+                    display_names_by_model.get(&model),
+                ));
             }
             for upstream_id in upstream_ids {
                 let prefixed = format!("{upstream_id}/{model}");
-                data.push(model_catalog_item(&prefixed, upstream_id.as_str(), created));
+                data.push(model_catalog_item(
+                    &prefixed,
+                    upstream_id.as_str(),
+                    created,
+                    display_names_by_model.get(&model),
+                ));
             }
             continue;
         }
         // 默认：全上游可广告模型去重并集，仅裸名。
-        data.push(model_catalog_item(model.as_str(), "token_proxy", created));
+        data.push(model_catalog_item(
+            model.as_str(),
+            "token_proxy",
+            created,
+            display_names_by_model.get(&model),
+        ));
     }
 
     json!({
@@ -537,13 +688,24 @@ fn build_model_catalog_response_body(
     })
 }
 
-fn model_catalog_item(id: &str, owned_by: &str, created: i64) -> Value {
-    json!({
+fn model_catalog_item(
+    id: &str,
+    owned_by: &str,
+    created: i64,
+    display_name: Option<&String>,
+) -> Value {
+    let display_name = display_name
+        .filter(|value| !value.is_empty())
+        .map(|value| value.clone())
+        .unwrap_or_else(|| id.to_string());
+    let item = json!({
         "id": id,
         "object": "model",
         "created": created,
         "owned_by": owned_by,
-    })
+        "display_name": display_name,
+    });
+    item
 }
 
 #[cfg(test)]
@@ -555,11 +717,29 @@ mod tests {
         let sources = vec![
             (
                 "alpha".to_string(),
-                vec!["gpt-unique-a".to_string(), "gpt-shared".to_string()],
+                vec![
+                    ModelCatalogEntry {
+                        id: "gpt-unique-a".to_string(),
+                        display_name: None,
+                    },
+                    ModelCatalogEntry {
+                        id: "gpt-shared".to_string(),
+                        display_name: None,
+                    },
+                ],
             ),
             (
                 "beta".to_string(),
-                vec!["gpt-unique-b".to_string(), "gpt-shared".to_string()],
+                vec![
+                    ModelCatalogEntry {
+                        id: "gpt-unique-b".to_string(),
+                        display_name: None,
+                    },
+                    ModelCatalogEntry {
+                        id: "gpt-shared".to_string(),
+                        display_name: None,
+                    },
+                ],
             ),
         ];
         let body = build_model_catalog_response_body(&sources, false);
@@ -578,11 +758,29 @@ mod tests {
         let sources = vec![
             (
                 "alpha".to_string(),
-                vec!["gpt-unique-a".to_string(), "gpt-shared".to_string()],
+                vec![
+                    ModelCatalogEntry {
+                        id: "gpt-unique-a".to_string(),
+                        display_name: None,
+                    },
+                    ModelCatalogEntry {
+                        id: "gpt-shared".to_string(),
+                        display_name: None,
+                    },
+                ],
             ),
             (
                 "beta".to_string(),
-                vec!["gpt-unique-b".to_string(), "gpt-shared".to_string()],
+                vec![
+                    ModelCatalogEntry {
+                        id: "gpt-unique-b".to_string(),
+                        display_name: None,
+                    },
+                    ModelCatalogEntry {
+                        id: "gpt-shared".to_string(),
+                        display_name: None,
+                    },
+                ],
             ),
         ];
         let body = build_model_catalog_response_body(&sources, true);
@@ -620,7 +818,10 @@ mod tests {
         });
 
         assert_eq!(
-            extract_model_ids_from_catalog("xai", &value),
+            extract_model_entries_from_catalog("xai", &value)
+                .into_iter()
+                .map(|entry| entry.id)
+                .collect::<Vec<_>>(),
             vec![
                 "grok-4.5",
                 "grok-build-0.1",
@@ -641,12 +842,42 @@ mod tests {
     }
 
     #[test]
+    fn catalog_preserves_provider_display_names_and_model_id_fallback() {
+        let entries = extract_model_entries_from_catalog(
+            "gemini",
+            &json!({
+                "models": [
+                    { "name": "models/gemini-3-pro-preview", "displayName": "Gemini 3 Pro Preview" },
+                    { "name": "models/gemini-3-flash-preview" }
+                ]
+            }),
+        );
+        assert_eq!(entries[0].id, "gemini-3-pro-preview");
+        assert_eq!(
+            entries[0].display_name.as_deref(),
+            Some("Gemini 3 Pro Preview")
+        );
+        assert_eq!(entries[1].id, "gemini-3-flash-preview");
+        assert_eq!(entries[1].display_name, None);
+
+        let body = build_model_catalog_response_body(&[("gemini".to_string(), entries)], false);
+        let models = body["data"].as_array().expect("models");
+        assert_eq!(models[0]["display_name"], "Gemini 3 Pro Preview");
+        assert_eq!(models[1]["display_name"], "gemini-3-flash-preview");
+    }
+
+    #[test]
     fn xai_live_catalog_merges_with_builtin_fallback() {
         let mut models = builtin_model_ids("xai");
-        merge_model_catalog_ids(
-            &mut models,
-            extract_model_ids_from_catalog("xai", &json!({ "data": [{ "model": "grok-live" }] })),
+        let mut entries = model_catalog_entries_from_ids(&models);
+        merge_model_catalog_entries(
+            &mut entries,
+            extract_model_entries_from_catalog(
+                "xai",
+                &json!({ "data": [{ "model": "grok-live" }] }),
+            ),
         );
+        models = entries.into_iter().map(|entry| entry.id).collect();
 
         assert!(models.contains(&"grok-4.5".to_string()));
         assert!(models.contains(&"grok-live".to_string()));

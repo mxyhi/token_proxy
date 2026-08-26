@@ -1,7 +1,10 @@
 use axum::body::Bytes;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::{HashSet, VecDeque},
+    sync::Arc,
+};
 
 use super::super::log::{attach_response_body, build_log_entry, LogContext, LogWriter};
 use super::super::sse::SseEventParser;
@@ -49,6 +52,8 @@ struct ChatToResponsesState<S> {
     logged: bool,
     upstream_ended: bool,
     response_body_buf: String,
+    tool_identity_request: Option<Value>,
+    custom_tool_item_ids: HashSet<String>,
 }
 
 impl<S> ChatToResponsesState<S> {
@@ -87,6 +92,10 @@ where
             .model
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
+        let tool_identity_request = context
+            .request_body
+            .as_deref()
+            .and_then(|body| serde_json::from_str(body).ok());
 
         let mut state = Self {
             upstream,
@@ -110,6 +119,8 @@ where
             logged: false,
             upstream_ended: false,
             response_body_buf: String::new(),
+            tool_identity_request,
+            custom_tool_item_ids: HashSet::new(),
         };
         state.push_response_created();
         state
@@ -138,6 +149,7 @@ where
                     for data in events {
                         self.handle_event(&data, &mut texts);
                     }
+                    self.restore_queued_tool_identities();
                     for text in texts {
                         if !text.is_empty() {
                             self.context.mark_first_output();
@@ -163,11 +175,43 @@ where
                     if !self.sent_done {
                         self.push_done();
                     }
+                    self.restore_queued_tool_identities();
                     self.log_usage_once();
                     if self.out.is_empty() {
                         return Ok(None);
                     }
                 }
+            }
+        }
+    }
+
+    fn restore_queued_tool_identities(&mut self) {
+        let Some(request) = self.tool_identity_request.as_ref() else {
+            return;
+        };
+        for chunk in &mut self.out {
+            let Ok(text) = std::str::from_utf8(chunk.as_ref()) else {
+                continue;
+            };
+            let Some(data) = text
+                .strip_prefix("data: ")
+                .and_then(|value| value.strip_suffix("\n\n"))
+            else {
+                continue;
+            };
+            if data == "[DONE]" {
+                continue;
+            }
+            let Ok(mut value) = serde_json::from_str::<Value>(data) else {
+                continue;
+            };
+            if token_proxy_protocol::tool_identity::restore_responses_tool_identities_with_state(
+                &mut value,
+                request,
+                &mut self.custom_tool_item_ids,
+            ) > 0
+            {
+                *chunk = Bytes::from(format!("data: {value}\n\n"));
             }
         }
     }

@@ -553,6 +553,67 @@ fn responses_request_to_chat_merges_reasoning_and_parallel_function_calls() {
 }
 
 #[test]
+fn gemini_signature_carrier_binds_reasoning_to_following_tool_call() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let carrier = crate::proxy::gemini_compat::encode_function_signature_carrier("sig_gemini")
+        .expect("carrier");
+    let value = transform_request_value(
+        FormatTransform::ResponsesToGemini,
+        json!({
+            "model": "gemini-2.5-pro",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "encrypted_content": carrier
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_lookup",
+                    "name": "lookup",
+                    "arguments": "{}"
+                }
+            ]
+        }),
+        &http_clients,
+        None,
+    );
+
+    assert_eq!(
+        value["contents"][0]["parts"][1]["thoughtSignature"],
+        "sig_gemini"
+    );
+}
+
+#[test]
+fn non_gemini_reasoning_signature_is_not_forwarded_to_gemini() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let value = transform_request_value(
+        FormatTransform::ResponsesToGemini,
+        json!({
+            "model": "gemini-2.5-pro",
+            "input": [
+                {
+                    "type": "reasoning",
+                    "encrypted_content": "claude-signature"
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_lookup",
+                    "name": "lookup",
+                    "arguments": "{}"
+                }
+            ]
+        }),
+        &http_clients,
+        None,
+    );
+
+    assert!(value["contents"][0]["parts"][1]
+        .get("thoughtSignature")
+        .is_none());
+}
+
+#[test]
 fn chat_request_to_responses_preserves_structured_tool_output() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let value = transform_request_value(

@@ -278,6 +278,76 @@ fn responses_namespace_identity_stays_aligned_for_chat_and_gemini() {
 }
 
 #[test]
+fn responses_namespace_custom_tool_maps_to_gemini_and_restores_output_identity() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let request = json!({
+        "model": "gemini-2.5-pro",
+        "input": [{
+            "type": "custom_tool_call",
+            "call_id": "call_exec",
+            "namespace": "shell",
+            "name": "exec",
+            "input": "pwd"
+        }],
+        "tools": [{
+            "type": "namespace",
+            "name": "shell",
+            "tools": [{ "type": "custom", "name": "exec" }]
+        }]
+    });
+
+    let gemini = run_async(async {
+        transform_request_body(
+            FormatTransform::ResponsesToGemini,
+            &bytes_from_json(request.clone()),
+            &http_clients,
+            None,
+        )
+        .await
+        .expect("gemini transform")
+    });
+    let gemini = json_from_bytes(gemini);
+    assert_eq!(
+        gemini["tools"][0]["functionDeclarations"][0]["name"],
+        "shell__exec"
+    );
+    assert_eq!(
+        gemini["tools"][0]["functionDeclarations"][0]["parameters"]["properties"]["input"]["type"],
+        "STRING"
+    );
+    assert_eq!(
+        gemini["contents"][0]["parts"][1]["functionCall"]["name"],
+        "shell__exec"
+    );
+
+    let response = bytes_from_json(json!({
+        "id": "gemini-resp",
+        "candidates": [{
+            "content": {
+                "parts": [{
+                    "functionCall": {
+                        "name": "shell__exec",
+                        "args": { "input": "pwd" }
+                    }
+                }]
+            }
+        }]
+    }));
+    let restored = transform_response_body_with_request_body(
+        FormatTransform::GeminiToResponses,
+        &response,
+        Some("gemini-2.5-pro"),
+        Some(&request.to_string()),
+    )
+    .expect("restore Responses identity");
+    let restored = json_from_bytes(restored);
+    assert_eq!(restored["output"][0]["type"], "custom_tool_call");
+    assert_eq!(restored["output"][0]["namespace"], "shell");
+    assert_eq!(restored["output"][0]["name"], "exec");
+    assert_eq!(restored["output"][0]["input"], "pwd");
+}
+
+#[test]
 fn responses_namespace_flattening_rejects_ambiguous_names() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = bytes_from_json(json!({

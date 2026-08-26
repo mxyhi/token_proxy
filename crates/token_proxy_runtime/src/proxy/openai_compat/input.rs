@@ -7,8 +7,14 @@ use super::message::extract_text_from_part;
 pub(super) fn responses_input_to_chat_messages(items: &[Value]) -> Result<Vec<Value>, String> {
     let mut messages = Vec::with_capacity(items.len());
     let mut pending_reasoning = String::new();
+    let mut pending_gemini_signature = None;
     for item in items {
-        append_responses_input_item_to_chat_messages(item, &mut messages, &mut pending_reasoning)?;
+        append_responses_input_item_to_chat_messages(
+            item,
+            &mut messages,
+            &mut pending_reasoning,
+            &mut pending_gemini_signature,
+        )?;
     }
     Ok(messages)
 }
@@ -17,10 +23,12 @@ fn append_responses_input_item_to_chat_messages(
     item: &Value,
     messages: &mut Vec<Value>,
     pending_reasoning: &mut String,
+    pending_gemini_signature: &mut Option<String>,
 ) -> Result<(), String> {
     if let Some(text) = item.as_str() {
         messages.push(json!({ "role": "user", "content": text }));
         pending_reasoning.clear();
+        *pending_gemini_signature = None;
         return Ok(());
     }
 
@@ -42,6 +50,7 @@ fn append_responses_input_item_to_chat_messages(
             attach_pending_reasoning(&mut output, pending_reasoning);
         } else {
             pending_reasoning.clear();
+            *pending_gemini_signature = None;
         }
         messages.push(Value::Object(output));
         return Ok(());
@@ -68,12 +77,20 @@ fn append_responses_input_item_to_chat_messages(
             if !reasoning.trim().is_empty() {
                 pending_reasoning.push_str(&reasoning);
             }
+            if let Some(signature) = item
+                .get("encrypted_content")
+                .and_then(Value::as_str)
+                .and_then(crate::proxy::gemini_compat::decode_function_signature_carrier)
+            {
+                *pending_gemini_signature = Some(signature);
+            }
         }
         item_type if is_codex_tool_call_output_item_type(item_type) => {
             if let Some(message) = responses_tool_output_item_to_chat_message(item) {
                 messages.push(message);
             }
             pending_reasoning.clear();
+            *pending_gemini_signature = None;
         }
         "web_search_call" | "computer_call_output" | "tool_result" => {
             if let Some(message) = responses_tool_output_item_to_chat_message(item) {
@@ -81,8 +98,13 @@ fn append_responses_input_item_to_chat_messages(
             }
             pending_reasoning.clear();
         }
-        "function_call" => {
-            append_responses_function_call(messages, item, pending_reasoning)?;
+        "function_call" | "custom_tool_call" => {
+            append_responses_function_call(
+                messages,
+                item,
+                pending_reasoning,
+                pending_gemini_signature,
+            )?;
         }
         // Built-in tool call records have no Chat Completions message equivalent.
         // Skipping them preserves assistant tool_calls -> tool output adjacency.
@@ -107,8 +129,24 @@ fn append_responses_function_call(
     messages: &mut Vec<Value>,
     item: &Map<String, Value>,
     pending_reasoning: &mut String,
+    pending_gemini_signature: &mut Option<String>,
 ) -> Result<(), String> {
-    let tool_call = responses_function_call_item_to_chat_tool_call(item)?;
+    let mut tool_call = responses_tool_call_item_to_chat_tool_call(item)?;
+    if let Some(signature) = item
+        .get("provider_specific_fields")
+        .and_then(Value::as_object)
+        .filter(|fields| fields.get("provider").and_then(Value::as_str) == Some("gemini"))
+        .and_then(|fields| fields.get("thought_signature"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+        .or_else(|| pending_gemini_signature.take())
+    {
+        tool_call["provider_specific_fields"] = json!({
+            "provider": "gemini",
+            "thought_signature": signature,
+        });
+    }
     if let Some(last) = messages
         .last_mut()
         .and_then(Value::as_object_mut)
@@ -128,15 +166,26 @@ fn append_responses_function_call(
     Ok(())
 }
 
-fn responses_function_call_item_to_chat_tool_call(
-    item: &Map<String, Value>,
-) -> Result<Value, String> {
+fn responses_tool_call_item_to_chat_tool_call(item: &Map<String, Value>) -> Result<Value, String> {
     let call_id = item
         .get("call_id")
         .and_then(Value::as_str)
         .ok_or_else(|| "function_call must include call_id.".to_string())?;
     let name = item.get("name").and_then(Value::as_str).unwrap_or("");
-    let arguments = item.get("arguments").and_then(Value::as_str).unwrap_or("");
+    let item_type = item.get("type").and_then(Value::as_str).unwrap_or("");
+    let arguments = if item_type == "custom_tool_call" {
+        let input = item
+            .get("input")
+            .cloned()
+            .unwrap_or(Value::String(String::new()));
+        serde_json::to_string(&json!({ "input": input }))
+            .map_err(|_| "custom_tool_call input must be JSON serializable.".to_string())?
+    } else {
+        item.get("arguments")
+            .and_then(Value::as_str)
+            .unwrap_or("{}")
+            .to_string()
+    };
     Ok(json!({
         "id": call_id,
         "type": "function",

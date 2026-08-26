@@ -225,7 +225,10 @@ fn gemini_candidate_to_chat_choice(candidate: &Value, index: usize) -> Option<Va
                 if let Some(tool_call) = tool_call.as_object_mut() {
                     tool_call.insert(
                         "provider_specific_fields".to_string(),
-                        json!({ "thought_signature": signature }),
+                        json!({
+                            "provider": "gemini",
+                            "thought_signature": signature
+                        }),
                     );
                 }
             }

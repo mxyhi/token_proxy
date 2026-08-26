@@ -55,6 +55,14 @@ pub(super) async fn refresh_model_discovery(state: Arc<ProxyState>) {
     catalog::refresh_model_discovery(state).await;
 }
 
+pub(super) async fn collect_model_catalog_entries_for_manifest(
+    state: &ProxyState,
+    headers: &HeaderMap,
+    request_auth: &RequestAuth,
+) -> Vec<(String, Option<String>)> {
+    catalog::collect_model_catalog_entries_for_manifest(state, headers, request_auth).await
+}
+
 pub(super) async fn forward_upstream_request(
     state: Arc<ProxyState>,
     method: Method,

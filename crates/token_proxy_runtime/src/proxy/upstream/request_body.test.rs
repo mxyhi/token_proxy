@@ -442,6 +442,82 @@ async fn codex_responses_lite_header_and_metadata_force_parallel_tools_off() {
 }
 
 #[tokio::test]
+async fn codex_responses_lite_rejects_non_boolean_parallel_tool_calls() {
+    let upstream = test_upstream(false, false, false);
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "x-openai-internal-codex-responses-lite",
+        axum::http::HeaderValue::from_static("true"),
+    );
+
+    for value in [r#""false""#, "0", "null", "[]", "{}"] {
+        let payload =
+            format!(r#"{{"model":"gpt-5.6","input":"hi","parallel_tool_calls":{value}}}"#);
+        let body = ReplayableBody::from_bytes(Bytes::from(payload));
+        let result = build_json_transformed_body_with_headers(
+            "codex",
+            &upstream,
+            "/v1/responses",
+            &body,
+            &xai_meta("gpt-5.6", true),
+            None,
+            &headers,
+            false,
+            DEFAULT_JSON_TRANSFORM_LIMIT_BYTES,
+        )
+        .await;
+
+        match result {
+            Err(AttemptOutcome::Fatal(response)) => {
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "value={value}");
+            }
+            Ok(_) | Err(_) => panic!("non-boolean parallel_tool_calls must fail: {value}"),
+        }
+    }
+}
+
+#[tokio::test]
+async fn codex_responses_lite_preserves_large_integer_precision() {
+    const LARGE_SEQUENCE: &str = "900719925474099312345";
+    let upstream = test_upstream(false, false, false);
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        "x-openai-internal-codex-responses-lite",
+        axum::http::HeaderValue::from_static("true"),
+    );
+    let payload = format!(
+        r#"{{"model":"gpt-5.6","sequence":{LARGE_SEQUENCE},"input":"hi","parallel_tool_calls":true}}"#
+    );
+    let body = ReplayableBody::from_bytes(Bytes::from(payload));
+
+    let rewritten = match build_json_transformed_body_with_headers(
+        "codex",
+        &upstream,
+        "/v1/responses",
+        &body,
+        &xai_meta("gpt-5.6", true),
+        None,
+        &headers,
+        false,
+        DEFAULT_JSON_TRANSFORM_LIMIT_BYTES,
+    )
+    .await
+    {
+        Ok(Some(body)) => body,
+        Ok(None) => panic!("Lite body must change"),
+        Err(_) => panic!("Lite transform must succeed"),
+    };
+    let bytes = rewritten
+        .read_bytes_if_small(4096)
+        .await
+        .expect("read")
+        .expect("bytes");
+    let text = std::str::from_utf8(&bytes).expect("UTF-8 JSON");
+
+    assert!(text.contains(&format!(r#""sequence":{LARGE_SEQUENCE}"#)));
+}
+
+#[tokio::test]
 async fn codex_non_lite_request_does_not_change_parallel_tool_calls() {
     let upstream = test_upstream(false, false, false);
     let body = ReplayableBody::from_bytes(Bytes::from_static(

@@ -164,6 +164,15 @@ pub(crate) fn transform_response_body(
     bytes: &Bytes,
     model_hint: Option<&str>,
 ) -> Result<Bytes, String> {
+    transform_response_body_with_request_body(transform, bytes, model_hint, None)
+}
+
+pub(crate) fn transform_response_body_with_request_body(
+    transform: FormatTransform,
+    bytes: &Bytes,
+    model_hint: Option<&str>,
+    request_body: Option<&str>,
+) -> Result<Bytes, String> {
     match transform {
         FormatTransform::None => Ok(bytes.clone()),
         FormatTransform::ChatToResponses => chat_response_to_responses(bytes),
@@ -193,7 +202,9 @@ pub(crate) fn transform_response_body(
         FormatTransform::ChatToGemini => gemini_compat::chat_response_to_gemini(bytes, model_hint),
         FormatTransform::GeminiToChat => gemini_compat::gemini_response_to_chat(bytes, model_hint),
         FormatTransform::ResponsesToGemini => responses_response_to_gemini(bytes, model_hint),
-        FormatTransform::GeminiToResponses => gemini_response_to_responses(bytes, model_hint),
+        FormatTransform::GeminiToResponses => {
+            gemini_response_to_responses(bytes, model_hint, request_body)
+        }
         FormatTransform::KiroToAnthropic => {
             Err("Kiro response conversion is handled upstream.".to_string())
         }
@@ -515,9 +526,26 @@ fn responses_response_to_gemini(bytes: &Bytes, model_hint: Option<&str>) -> Resu
     gemini_compat::chat_response_to_gemini(&intermediate, model_hint)
 }
 
-fn gemini_response_to_responses(bytes: &Bytes, model_hint: Option<&str>) -> Result<Bytes, String> {
+fn gemini_response_to_responses(
+    bytes: &Bytes,
+    model_hint: Option<&str>,
+    request_body: Option<&str>,
+) -> Result<Bytes, String> {
     let intermediate = gemini_compat::gemini_response_to_chat(bytes, model_hint)?;
-    chat_response_to_responses(&intermediate)
+    let mut output = chat_response_to_responses(&intermediate)?;
+    if let Some(request_body) = request_body {
+        let request = serde_json::from_str::<Value>(request_body)
+            .map_err(|_| "Original Responses request must be JSON.".to_string())?;
+        let mut value: Value = serde_json::from_slice(&output)
+            .map_err(|_| "Converted Responses response must be JSON.".to_string())?;
+        token_proxy_protocol::tool_identity::restore_responses_tool_identities(
+            &mut value, &request,
+        );
+        output = serde_json::to_vec(&value)
+            .map(Bytes::from)
+            .map_err(|err| format!("Failed to serialize restored Responses response: {err}"))?;
+    }
+    Ok(output)
 }
 
 async fn gemini_request_to_anthropic(
@@ -1000,14 +1028,18 @@ fn chat_response_to_responses(bytes: &Bytes) -> Result<Bytes, String> {
         }));
     }
     for call in tool_calls {
-        output.push(json!({
+        let mut item = json!({
             "id": call.item_id,
             "type": "function_call",
             "status": "completed",
             "arguments": call.arguments,
             "call_id": call.call_id,
             "name": call.name
-        }));
+        });
+        if let Some(fields) = call.provider_specific_fields {
+            item["provider_specific_fields"] = fields;
+        }
+        output.push(item);
     }
 
     let output = json!({
@@ -1089,6 +1121,18 @@ fn chat_response_message_to_reasoning_item(
         {
             summary_text = reasoning_content.to_string();
         }
+    }
+
+    if let Some(signature) = message
+        .get("provider_specific_fields")
+        .and_then(Value::as_object)
+        .filter(|fields| fields.get("provider").and_then(Value::as_str) == Some("gemini"))
+        .and_then(|fields| fields.get("thought_signatures"))
+        .and_then(Value::as_array)
+        .and_then(|signatures| signatures.iter().find_map(Value::as_str))
+        .and_then(gemini_compat::encode_function_signature_carrier)
+    {
+        encrypted_content = Some(signature);
     }
 
     if summary_text.trim().is_empty() && encrypted_content.is_none() {

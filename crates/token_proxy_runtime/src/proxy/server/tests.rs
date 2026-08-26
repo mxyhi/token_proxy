@@ -4047,6 +4047,79 @@ fn codex_models_manifest_requires_get() {
 }
 
 #[test]
+fn codex_models_manifest_augments_non_gpt_models_and_preserves_unknown_fields() {
+    run_async(async {
+        let manifest = Bytes::from_static(
+            br#"{"models":[{"slug":"gpt-5.5","display_name":"GPT-5.5","opaque":{"kept":true}}],"manifest_meta":{"kept":true}}"#,
+        );
+        let codex = spawn_codex_models_manifest_upstream(manifest).await;
+        let anthropic = spawn_model_catalog_upstream(json!({
+            "object": "list",
+            "data": [{
+                "id": "claude-sonnet-4-6",
+                "display_name": "Claude Sonnet 4.6"
+            }]
+        }))
+        .await;
+        let data_dir = next_test_data_dir("codex_models_manifest_augments_non_gpt");
+        let config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_CODEX,
+                10,
+                "codex-manifest",
+                codex.base_url.as_str(),
+                FORMATS_RESPONSES,
+            ),
+            (
+                PROVIDER_ANTHROPIC,
+                0,
+                "anthropic-catalog",
+                anthropic.base_url.as_str(),
+                FORMATS_MESSAGES,
+            ),
+        ]);
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+
+        let response = proxy_request(
+            State(state),
+            Method::GET,
+            Uri::from_static("/v1/models?client_version=0.137.0"),
+            HeaderMap::new(),
+            Body::empty(),
+        )
+        .await;
+        let status = response.status();
+        let etag = response
+            .headers()
+            .get(axum::http::header::ETAG)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("augmented Codex manifest response bytes");
+        let value: Value = serde_json::from_slice(&body).expect("augmented manifest JSON");
+        let models = value["models"].as_array().expect("manifest models");
+        let claude = models
+            .iter()
+            .find(|model| model["slug"] == "claude-sonnet-4-6")
+            .expect("non-GPT model in manifest");
+        let requests = anthropic.requests();
+
+        codex.abort();
+        anthropic.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(etag.as_deref(), Some("W/\"manifest-v1\""));
+        assert_eq!(value["manifest_meta"]["kept"], true);
+        assert_eq!(models[0]["opaque"]["kept"], true);
+        assert_eq!(claude["display_name"], "Claude Sonnet 4.6");
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].path, "/v1/models");
+    });
+}
+
+#[test]
 fn codex_models_manifest_not_modified_does_not_switch_oauth_account() {
     run_async(async {
         let upstream =
@@ -4238,7 +4311,7 @@ fn models_index_unions_models_across_providers() {
         let openai = spawn_model_catalog_upstream(json!({
             "object": "list",
             "data": [
-                { "id": "gpt-from-openai", "object": "model" },
+                { "id": "gpt-from-openai", "object": "model", "display_name": "OpenAI GPT" },
                 { "id": "shared-model", "object": "model" }
             ]
         }))
@@ -4246,7 +4319,7 @@ fn models_index_unions_models_across_providers() {
         let anthropic = spawn_model_catalog_upstream(json!({
             "object": "list",
             "data": [
-                { "id": "claude-from-anthropic", "object": "model" },
+                { "id": "claude-from-anthropic", "object": "model", "display_name": "Claude Sonnet" },
                 { "id": "shared-model", "object": "model" }
             ]
         }))
@@ -4284,6 +4357,20 @@ fn models_index_unions_models_across_providers() {
             ids,
             vec!["claude-from-anthropic", "gpt-from-openai", "shared-model",]
         );
+        let display_names = body["data"]
+            .as_array()
+            .expect("models data")
+            .iter()
+            .filter_map(|item| {
+                Some((
+                    item["id"].as_str()?.to_string(),
+                    item["display_name"].as_str()?.to_string(),
+                ))
+            })
+            .collect::<HashMap<_, _>>();
+        assert_eq!(display_names["gpt-from-openai"], "OpenAI GPT");
+        assert_eq!(display_names["claude-from-anthropic"], "Claude Sonnet");
+        assert_eq!(display_names["shared-model"], "shared-model");
         assert_eq!(openai.requests().len(), 1);
         assert_eq!(anthropic.requests().len(), 1);
 

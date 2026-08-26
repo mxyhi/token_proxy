@@ -50,6 +50,174 @@ struct XaiClientToolStreamState {
     ended: bool,
 }
 
+struct RawChatToolDeltaStreamState {
+    upstream: UpstreamBytesStream,
+    pending: Vec<u8>,
+    out: VecDeque<Bytes>,
+    pending_error: Option<upstream_stream::UpstreamStreamError<reqwest::Error>>,
+    ended: bool,
+}
+
+fn normalize_raw_chat_tool_deltas(upstream: UpstreamBytesStream) -> UpstreamBytesStream {
+    try_unfold(
+        RawChatToolDeltaStreamState {
+            upstream,
+            pending: Vec::new(),
+            out: VecDeque::new(),
+            pending_error: None,
+            ended: false,
+        },
+        |mut state| async move {
+            loop {
+                if let Some(chunk) = state.out.pop_front() {
+                    return Ok(Some((chunk, state)));
+                }
+                if let Some(error) = state.pending_error.take() {
+                    return Err(error);
+                }
+                if state.ended {
+                    return Ok(None);
+                }
+                match state.upstream.next().await {
+                    Some(Ok(chunk)) => {
+                        state.pending.extend_from_slice(&chunk);
+                        state.drain_complete_frames();
+                    }
+                    Some(Err(error)) => {
+                        // 已接收的非完整帧仍属于客户端可见原始流，先发送后再报告错误。
+                        if state.pending.is_empty() {
+                            return Err(error);
+                        }
+                        state
+                            .out
+                            .push_back(Bytes::from(std::mem::take(&mut state.pending)));
+                        state.pending_error = Some(error);
+                    }
+                    None => {
+                        state.ended = true;
+                        if !state.pending.is_empty() {
+                            state
+                                .out
+                                .push_back(Bytes::from(std::mem::take(&mut state.pending)));
+                        }
+                    }
+                }
+            }
+        },
+    )
+    .boxed()
+}
+
+impl RawChatToolDeltaStreamState {
+    fn drain_complete_frames(&mut self) {
+        while let Some(frame_end) = find_sse_frame_end(&self.pending) {
+            let frame = self.pending.drain(..frame_end).collect::<Vec<_>>();
+            self.out
+                .push_back(normalize_raw_chat_tool_delta_frame(&frame));
+        }
+    }
+}
+
+fn find_sse_frame_end(bytes: &[u8]) -> Option<usize> {
+    let mut index = 0;
+    while index + 1 < bytes.len() {
+        if bytes[index..].starts_with(b"\r\n\r\n") {
+            return Some(index + 4);
+        }
+        if bytes[index..].starts_with(b"\n\n") || bytes[index..].starts_with(b"\r\r") {
+            return Some(index + 2);
+        }
+        index += 1;
+    }
+    None
+}
+
+fn normalize_raw_chat_tool_delta_frame(frame: &[u8]) -> Bytes {
+    let Some((payload_start, payload_end)) = single_sse_data_payload(frame) else {
+        return Bytes::copy_from_slice(frame);
+    };
+    let payload = &frame[payload_start..payload_end];
+    if payload == b"[DONE]" {
+        return Bytes::copy_from_slice(frame);
+    }
+    let Ok(mut value) = serde_json::from_slice::<Value>(payload) else {
+        return Bytes::copy_from_slice(frame);
+    };
+    let removed = remove_empty_chat_tool_delta_identities(&mut value);
+    if removed == 0 {
+        return Bytes::copy_from_slice(frame);
+    }
+    let Ok(payload) = serde_json::to_vec(&value) else {
+        return Bytes::copy_from_slice(frame);
+    };
+    let mut output = Vec::with_capacity(frame.len());
+    output.extend_from_slice(&frame[..payload_start]);
+    output.extend_from_slice(&payload);
+    output.extend_from_slice(&frame[payload_end..]);
+    tracing::debug!(removed, "removed empty raw Chat SSE tool identities");
+    Bytes::from(output)
+}
+
+fn single_sse_data_payload(frame: &[u8]) -> Option<(usize, usize)> {
+    let mut found = None;
+    let mut line_start = 0;
+    while line_start < frame.len() {
+        let line_end = frame[line_start..]
+            .iter()
+            .position(|byte| *byte == b'\n' || *byte == b'\r')
+            .map(|offset| line_start + offset)
+            .unwrap_or(frame.len());
+        let line = &frame[line_start..line_end];
+        if let Some(payload) = line.strip_prefix(b"data:") {
+            if found.is_some() {
+                return None;
+            }
+            let leading_space = usize::from(payload.first() == Some(&b' '));
+            found = Some((line_start + 5 + leading_space, line_end));
+        }
+        line_start = line_end;
+        while line_start < frame.len() && matches!(frame[line_start], b'\n' | b'\r') {
+            line_start += 1;
+        }
+    }
+    found
+}
+
+fn remove_empty_chat_tool_delta_identities(value: &mut Value) -> usize {
+    let Some(choices) = value.get_mut("choices").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    let mut removed = 0;
+    for call in choices
+        .iter_mut()
+        .filter_map(|choice| choice.get_mut("delta"))
+        .filter_map(|delta| delta.get_mut("tool_calls"))
+        .filter_map(Value::as_array_mut)
+        .flatten()
+        .filter_map(Value::as_object_mut)
+    {
+        if call
+            .get("id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| id.trim().is_empty())
+        {
+            call.remove("id");
+            removed += 1;
+        }
+        if let Some(function) = call.get_mut("function").and_then(Value::as_object_mut) {
+            if function
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.trim().is_empty())
+            {
+                function.remove("name");
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 fn restore_xai_client_tool_stream(
     upstream: UpstreamBytesStream,
     mapping: token_proxy_protocol::xai_client_tools::XaiClientToolMapping,
@@ -174,6 +342,12 @@ pub(super) async fn build_stream_response(
         }
         _ => upstream,
     };
+    let upstream =
+        if response_transform == FormatTransform::None && is_chat_completions_path(&context.path) {
+            normalize_raw_chat_tool_deltas(upstream)
+        } else {
+            upstream
+        };
 
     let stream = stream_for_transform(
         response_transform,
@@ -1789,6 +1963,30 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn raw_chat_tool_delta_removes_only_empty_identity_fields() {
+        let frame = Bytes::from_static(
+            br#"data: {"id":"chat_1","choices":[{"delta":{"tool_calls":[{"index":0,"id":"","function":{"name":"","arguments":"{\"x\":1}"}},{"index":1,"id":"call_2","function":{"name":"lookup","arguments":""}}]}}]}
+
+"#,
+        );
+        let normalized = normalize_raw_chat_tool_delta_frame(&frame);
+        let text = String::from_utf8(normalized.to_vec()).expect("UTF-8 SSE");
+        assert!(!text.contains("\"id\":\"\""));
+        assert!(!text.contains("\"name\":\"\""));
+        assert!(text.contains("\"arguments\":\"{\\\"x\\\":1}\""));
+        assert!(text.contains("\"id\":\"call_2\""));
+        assert!(text.contains("\"name\":\"lookup\""));
+    }
+
+    #[test]
+    fn raw_chat_tool_delta_preserves_non_json_frames_and_done() {
+        let heartbeat = Bytes::from_static(b": keep-alive\n\n");
+        assert_eq!(normalize_raw_chat_tool_delta_frame(&heartbeat), heartbeat);
+        let done = Bytes::from_static(b"data: [DONE]\n\n");
+        assert_eq!(normalize_raw_chat_tool_delta_frame(&done), done);
+    }
 }
 
 fn stream_with_optional_model_override<E>(
@@ -1850,4 +2048,8 @@ fn openai_semantic_timeout(provider: &str, path: &str, timeout: Duration) -> Opt
 fn is_openai_responses_stream_path(path: &str) -> bool {
     let path = path.split_once('?').map(|(path, _)| path).unwrap_or(path);
     path == "/v1/responses" || path.starts_with("/v1/responses/")
+}
+
+fn is_chat_completions_path(path: &str) -> bool {
+    path.split_once('?').map(|(path, _)| path).unwrap_or(path) == "/v1/chat/completions"
 }

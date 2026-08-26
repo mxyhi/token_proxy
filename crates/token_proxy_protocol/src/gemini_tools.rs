@@ -18,6 +18,37 @@ const GEMINI_UNSUPPORTED_SCHEMA_KEYS: &[&str] = &[
     "if",
     "then",
     "else",
+    "deprecated",
+];
+
+const SCHEMA_CONTAINER_KEYS: &[&str] = &[
+    "type",
+    "properties",
+    "required",
+    "items",
+    "prefixItems",
+    "anyOf",
+    "oneOf",
+    "allOf",
+    "$defs",
+    "definitions",
+    "description",
+    "title",
+    "enum",
+    "format",
+    "default",
+    "const",
+    "minimum",
+    "maximum",
+    "exclusiveMinimum",
+    "exclusiveMaximum",
+    "pattern",
+    "additionalProperties",
+    "additionalItems",
+    "not",
+    "if",
+    "then",
+    "else",
 ];
 
 /// 将 OpenAI Chat 格式的 tools 转换为 Gemini 格式的 functionDeclarations
@@ -30,10 +61,16 @@ pub fn map_chat_tools_to_gemini(tools: &Value) -> Value {
         .iter()
         .filter_map(|tool| {
             let tool = tool.as_object()?;
-            if tool.get("type").and_then(Value::as_str) != Some("function") {
+            if !matches!(
+                tool.get("type").and_then(Value::as_str),
+                Some("function" | "custom")
+            ) {
                 return None;
             }
-            let function = tool.get("function")?.as_object()?;
+            let function = tool
+                .get("function")
+                .and_then(Value::as_object)
+                .unwrap_or(tool);
             let name = function.get("name").and_then(Value::as_str)?;
             let description = function
                 .get("description")
@@ -41,6 +78,7 @@ pub fn map_chat_tools_to_gemini(tools: &Value) -> Value {
                 .unwrap_or("");
             let parameters = function
                 .get("parameters")
+                .or_else(|| function.get("format"))
                 .map(clean_tool_schema)
                 .unwrap_or_else(|| json!({}));
             Some(json!({
@@ -58,7 +96,9 @@ pub fn map_chat_tools_to_gemini(tools: &Value) -> Value {
 
 fn clean_tool_schema(schema: &Value) -> Value {
     match schema {
-        Value::Object(object) => clean_tool_schema_object(object),
+        Value::Object(object) => {
+            clean_tool_schema_object(&normalize_malformed_schema_object(object))
+        }
         Value::Array(items) => Value::Array(items.iter().map(clean_tool_schema).collect()),
         other => other.clone(),
     }
@@ -74,12 +114,118 @@ fn clean_tool_schema_object(object: &Map<String, Value>) -> Value {
         if GEMINI_UNSUPPORTED_SCHEMA_KEYS.contains(&key.as_str()) || key == "allOf" {
             continue;
         }
-        cleaned.insert(key.clone(), clean_tool_schema(value));
+        if key == "properties" {
+            let properties = value
+                .as_object()
+                .map(|properties| {
+                    properties
+                        .iter()
+                        .map(|(name, schema)| (name.clone(), clean_tool_schema(schema)))
+                        .collect::<Map<String, Value>>()
+                })
+                .unwrap_or_default();
+            cleaned.insert(key.clone(), Value::Object(properties));
+        } else if matches!(key.as_str(), "$defs" | "definitions") {
+            let definitions = value
+                .as_object()
+                .map(|definitions| {
+                    definitions
+                        .iter()
+                        .map(|(name, schema)| (name.clone(), clean_tool_schema(schema)))
+                        .collect::<Map<String, Value>>()
+                })
+                .unwrap_or_default();
+            cleaned.insert(key.clone(), Value::Object(definitions));
+        } else {
+            cleaned.insert(key.clone(), clean_tool_schema(value));
+        }
     }
+    normalize_gemini_enum(&mut cleaned);
     normalize_gemini_schema_type(&mut cleaned);
     normalize_integer_exclusive_minimum(&mut cleaned, object.get("exclusiveMinimum"));
     merge_all_of_properties(&mut cleaned, all_of.as_ref());
     Value::Object(cleaned)
+}
+
+fn normalize_malformed_schema_object(object: &Map<String, Value>) -> Map<String, Value> {
+    let mut normalized = object.clone();
+    let is_bare_property_map = !object.is_empty()
+        && !object.contains_key("type")
+        && !object
+            .keys()
+            .any(|key| SCHEMA_CONTAINER_KEYS.contains(&key.as_str()))
+        && object.values().all(Value::is_object);
+    if is_bare_property_map {
+        let (properties, required) = normalize_properties(object);
+        normalized.clear();
+        normalized.insert("type".to_string(), Value::String("object".to_string()));
+        normalized.insert("properties".to_string(), Value::Object(properties));
+        if !required.is_empty() {
+            normalized.insert("required".to_string(), json!(required));
+        }
+        return normalized;
+    }
+
+    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+        let (properties, promoted) = normalize_properties(properties);
+        normalized.insert("properties".to_string(), Value::Object(properties));
+        if !promoted.is_empty() {
+            let mut required = object
+                .get("required")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            for name in promoted {
+                if !required.contains(&name) {
+                    required.push(name);
+                }
+            }
+            normalized.insert("required".to_string(), json!(required));
+        }
+    }
+    normalized
+}
+
+fn normalize_properties(properties: &Map<String, Value>) -> (Map<String, Value>, Vec<String>) {
+    let mut normalized = Map::new();
+    let mut required = Vec::new();
+    for (name, value) in properties {
+        let Some(object) = value.as_object() else {
+            normalized.insert(name.clone(), value.clone());
+            continue;
+        };
+        let mut child = object.clone();
+        if let Some(Value::Bool(is_required)) = child.remove("required") {
+            if is_required {
+                required.push(name.clone());
+            }
+        }
+        normalized.insert(name.clone(), Value::Object(child));
+    }
+    (normalized, required)
+}
+
+fn normalize_gemini_enum(cleaned: &mut Map<String, Value>) {
+    let Some(Value::Array(values)) = cleaned.get("enum") else {
+        return;
+    };
+    let mut normalized = Vec::with_capacity(values.len());
+    for value in values {
+        match value {
+            Value::String(value) => normalized.push(Value::String(value.clone())),
+            Value::Null | Value::Bool(_) | Value::Number(_) => {
+                normalized.push(Value::String(value.to_string()))
+            }
+            Value::Array(_) | Value::Object(_) => {
+                cleaned.remove("enum");
+                return;
+            }
+        }
+    }
+    cleaned.insert("enum".to_string(), Value::Array(normalized));
 }
 
 fn merge_conditional_properties(target: &mut Map<String, Value>, branch: Option<&Value>) {
@@ -415,5 +561,56 @@ mod tests {
         assert_eq!(cleaned["properties"]["reason"]["type"], "STRING");
         assert_eq!(cleaned["properties"]["reason"]["description"], "why");
         assert!(cleaned.get("allOf").is_none());
+    }
+
+    #[test]
+    fn clean_schema_repairs_bare_properties_and_boolean_required_recursively() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "data": {
+                    "parent": { "type": "string", "required": true },
+                    "tasks": {
+                        "type": "array",
+                        "items": { "name": { "type": "string", "required": true } }
+                    }
+                }
+            }
+        });
+
+        let cleaned = clean_tool_schema(&schema);
+        assert_eq!(cleaned["properties"]["data"]["type"], "OBJECT");
+        assert_eq!(cleaned["properties"]["data"]["required"], json!(["parent"]));
+        assert!(cleaned["properties"]["data"]["properties"]["parent"]
+            .get("required")
+            .is_none());
+        assert_eq!(
+            cleaned["properties"]["data"]["properties"]["tasks"]["items"]["type"],
+            "OBJECT"
+        );
+        assert_eq!(
+            cleaned["properties"]["data"]["properties"]["tasks"]["items"]["required"],
+            json!(["name"])
+        );
+    }
+
+    #[test]
+    fn clean_schema_normalizes_nested_mixed_enum_and_drops_invalid_enum() {
+        let schema = json!({
+            "anyOf": [
+                { "deprecated": true, "enum": ["on", false, 1, null] },
+                { "enum": ["ok", { "invalid": true }] }
+            ],
+            "$defs": { "nested": { "deprecated": true, "enum": [2] } }
+        });
+
+        let cleaned = clean_tool_schema(&schema);
+        assert_eq!(
+            cleaned["anyOf"][0]["enum"],
+            json!(["on", "false", "1", "null"])
+        );
+        assert!(cleaned["anyOf"][0].get("deprecated").is_none());
+        assert!(cleaned["anyOf"][1].get("enum").is_none());
+        assert!(cleaned.get("$defs").is_none());
     }
 }

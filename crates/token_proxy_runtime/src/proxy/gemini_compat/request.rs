@@ -374,7 +374,17 @@ fn gemini_content_to_chat_messages(
         }
         if let Some(function_call) = part.get("functionCall").and_then(Value::as_object) {
             let call_id = pairing.note_call(function_call, content_index, part_index);
-            let tool_call = gemini_function_call_to_chat_tool_call(function_call, &call_id);
+            let mut tool_call = gemini_function_call_to_chat_tool_call(function_call, &call_id);
+            if let Some(signature) = part
+                .get("thoughtSignature")
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+            {
+                tool_call["provider_specific_fields"] = json!({
+                    "provider": "gemini",
+                    "thought_signature": signature
+                });
+            }
             tool_calls.push(tool_call);
             continue;
         }
@@ -1053,17 +1063,28 @@ fn chat_tool_call_to_gemini_function_call(tool_call: &Value) -> Option<Value> {
     let tool_call = tool_call.as_object()?;
     let function = tool_call.get("function")?.as_object()?;
     let name = function.get("name").and_then(Value::as_str)?;
+    let thought_signature = tool_call
+        .get("provider_specific_fields")
+        .and_then(Value::as_object)
+        .filter(|fields| fields.get("provider").and_then(Value::as_str) == Some("gemini"))
+        .and_then(|fields| fields.get("thought_signature"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty());
     let arguments = function
         .get("arguments")
         .and_then(Value::as_str)
         .unwrap_or("{}");
     let args: Value = serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
-    Some(json!({
+    let mut output = json!({
         "functionCall": {
             "name": name,
             "args": args
         }
-    }))
+    });
+    if let Some(signature) = thought_signature {
+        output["thoughtSignature"] = Value::String(signature.to_string());
+    }
+    Some(output)
 }
 
 /// 将旧版 function_call 转换为 Gemini functionCall

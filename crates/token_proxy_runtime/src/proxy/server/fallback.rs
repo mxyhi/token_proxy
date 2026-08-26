@@ -1,7 +1,9 @@
 use axum::{
-    http::{HeaderMap, Method, Uri},
+    body::{to_bytes, Body},
+    http::{header::CONTENT_LENGTH, HeaderMap, Method, StatusCode, Uri},
     response::Response,
 };
+use serde_json::Value;
 use std::{collections::HashSet, sync::Arc, time::Instant};
 
 use super::super::upstream::forward_upstream_request;
@@ -107,11 +109,89 @@ pub(super) async fn forward_with_provider_fallbacks(
         }
     }
 
+    current_response =
+        augment_codex_models_manifest(state.clone(), headers, prepared, current_response).await;
     finalize_codex_responses_cooldown(&state, &codex_cooldown_scope, current_response.status());
     state
         .codex_turn_state
         .note_committed_response(headers, &current_response);
     current_response
+}
+
+async fn augment_codex_models_manifest(
+    state: Arc<ProxyState>,
+    headers: &HeaderMap,
+    prepared: &PreparedRequest,
+    response: Response,
+) -> Response {
+    if prepared.plan.provider != CODEX_PROVIDER
+        || prepared.path != "/v1/models"
+        || response.status() != StatusCode::OK
+    {
+        return response;
+    }
+
+    let (parts, body) = response.into_parts();
+    let bytes = match to_bytes(body, state.config.max_request_body_bytes).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to read Codex models manifest for augmentation");
+            return Response::from_parts(parts, Body::empty());
+        }
+    };
+    let mut manifest = match serde_json::from_slice::<Value>(&bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(error = %error, "kept non-JSON Codex models manifest unchanged");
+            return Response::from_parts(parts, Body::from(bytes));
+        }
+    };
+    let Some(models) = manifest.get_mut("models").and_then(Value::as_array_mut) else {
+        tracing::debug!("Codex models manifest has no models array; kept upstream body");
+        return Response::from_parts(parts, Body::from(bytes));
+    };
+
+    let mut known_ids = models
+        .iter()
+        .filter_map(|model| model.get("slug").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect::<std::collections::HashSet<_>>();
+    let entries = super::super::upstream::collect_model_catalog_entries_for_manifest(
+        state.as_ref(),
+        headers,
+        &prepared.request_auth,
+    )
+    .await;
+    let mut added = 0usize;
+    for (id, display_name) in entries {
+        if !known_ids.insert(id.clone()) {
+            continue;
+        }
+        let display_name = display_name.unwrap_or_else(|| id.clone());
+        models.push(serde_json::json!({
+            "slug": id,
+            "display_name": display_name,
+        }));
+        added += 1;
+    }
+    if added == 0 {
+        return Response::from_parts(parts, Body::from(bytes));
+    }
+
+    tracing::info!(
+        added,
+        "augmented Codex models manifest with local model entries"
+    );
+    let output = match serde_json::to_vec(&manifest) {
+        Ok(output) => output,
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to serialize augmented Codex models manifest");
+            return Response::from_parts(parts, Body::from(bytes));
+        }
+    };
+    let mut parts = parts;
+    parts.headers.remove(CONTENT_LENGTH);
+    Response::from_parts(parts, Body::from(output))
 }
 
 fn bridge_inbound_format(transform: FormatTransform) -> Option<InboundApiFormat> {

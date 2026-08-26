@@ -5,6 +5,7 @@ pub(super) struct ChatToolCall {
     pub(super) call_id: String,
     pub(super) name: String,
     pub(super) arguments: String,
+    pub(super) provider_specific_fields: Option<Value>,
 }
 
 pub(super) struct ResponsesOutput {
@@ -63,12 +64,14 @@ fn extract_chat_message_tool_calls(tool_calls: &[Value]) -> Vec<ChatToolCall> {
             .and_then(|function| function.get("arguments"))
             .and_then(Value::as_str)
             .unwrap_or("");
+        let provider_specific_fields = call.get("provider_specific_fields").cloned();
 
         output.push(ChatToolCall {
             item_id: format!("fc_{call_id}"),
             call_id: call_id.to_string(),
             name: name.to_string(),
             arguments: arguments.to_string(),
+            provider_specific_fields,
         });
     }
     output
@@ -93,6 +96,7 @@ fn extract_chat_message_legacy_function_call(
         call_id: "call_proxy".to_string(),
         name: name.to_string(),
         arguments: arguments.to_string(),
+        provider_specific_fields: None,
     })
 }
 

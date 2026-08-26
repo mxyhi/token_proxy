@@ -226,7 +226,7 @@ async fn build_json_transformed_body_with_headers(
         object,
         body_len,
         filter_limit_bytes,
-    );
+    )?;
     changed |= strip_openai_responses_sampling_params(
         provider,
         upstream_path,
@@ -328,11 +328,11 @@ fn force_codex_responses_lite_parallel_tool_calls(
     object: &mut Map<String, Value>,
     body_len: usize,
     filter_limit_bytes: usize,
-) -> bool {
+) -> Result<bool, AttemptOutcome> {
     if body_len > filter_limit_bytes
         || !should_inspect_codex_responses_lite(provider, upstream_path, request_headers)
     {
-        return false;
+        return Ok(false);
     }
     let header_lite = request_headers
         .get(CODEX_RESPONSES_LITE_HEADER)
@@ -349,14 +349,22 @@ fn force_codex_responses_lite_parallel_tool_calls(
                     .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
         });
     if !header_lite && !metadata_lite {
-        return false;
+        return Ok(false);
     }
-    if object.get("parallel_tool_calls").and_then(Value::as_bool) == Some(false) {
-        return false;
+    if let Some(value) = object.get("parallel_tool_calls") {
+        if !value.is_boolean() {
+            return Err(AttemptOutcome::Fatal(http::error_response(
+                StatusCode::BAD_REQUEST,
+                "Responses Lite requires parallel_tool_calls to be a boolean",
+            )));
+        }
+        if value.as_bool() == Some(false) {
+            return Ok(false);
+        }
     }
     object.insert("parallel_tool_calls".to_string(), Value::Bool(false));
     tracing::debug!("forced parallel_tool_calls=false for Codex Responses Lite");
-    true
+    Ok(true)
 }
 
 fn should_normalize_anthropic_model(

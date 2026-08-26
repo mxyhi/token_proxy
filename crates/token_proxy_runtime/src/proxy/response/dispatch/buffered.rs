@@ -17,7 +17,9 @@ use super::super::super::{
     codex_compat, http,
     log::{attach_response_body, build_log_entry, LogContext, LogWriter, UsageSnapshot},
     model,
-    openai_compat::{transform_response_body, FormatTransform},
+    openai_compat::{
+        transform_response_body, transform_response_body_with_request_body, FormatTransform,
+    },
     redact::redact_query_param_value,
     request_body::ReplayableBody,
     server_helpers::log_debug_headers_body,
@@ -781,7 +783,7 @@ fn convert_success_body(
             convert_codex_to_anthropic_body(bytes, context, usage, log, request_body)
         }
         _ if transform != FormatTransform::None => {
-            convert_generic_body(transform, bytes, context, usage, log)
+            convert_generic_body(transform, bytes, context, usage, log, request_body)
         }
         _ => Ok(ConvertedBody {
             output: bytes.clone(),
@@ -917,8 +919,14 @@ fn convert_generic_body(
     context: &mut LogContext,
     usage: UsageSnapshot,
     log: Arc<LogWriter>,
+    request_body: Option<&str>,
 ) -> Result<ConvertedBody, Response> {
-    let converted = match transform_response_body(transform, bytes, context.model.as_deref()) {
+    let converted = match transform_response_body_with_request_body(
+        transform,
+        bytes,
+        context.model.as_deref(),
+        request_body,
+    ) {
         Ok(converted) => converted,
         Err(message) => {
             return Err(respond_transform_error(context, usage, log, message));

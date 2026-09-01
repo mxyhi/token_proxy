@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "curated.20260813",
+  "version": "curated.20260901",
   "models": [
     {
       "source": {
@@ -81,6 +81,191 @@
           }
         },
         "longContext": null
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-09-01"
+      },
+      "model": {
+        "modelId": "gemini-2.5-pro",
+        "aliases": [
+          "google/gemini-2.5-pro",
+          "models/gemini-2.5-pro",
+          "gemini-pro-latest"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 1250,
+          "outputNanoUsdPerToken": 10000,
+          "cacheReadNanoUsdPerToken": 125,
+          "cacheWriteNanoUsdPerToken": 1250
+        },
+        "serviceTierProfiles": {},
+        "longContext": {
+          "threshold": 200000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-09-01"
+      },
+      "model": {
+        "modelId": "gemini-3-pro-preview",
+        "aliases": [
+          "google/gemini-3-pro-preview",
+          "models/gemini-3-pro-preview"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 2000,
+          "outputNanoUsdPerToken": 12000,
+          "cacheReadNanoUsdPerToken": 200,
+          "cacheWriteNanoUsdPerToken": 2000
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 3600,
+            "outputNanoUsdPerToken": 21600,
+            "cacheReadNanoUsdPerToken": 360,
+            "cacheWriteNanoUsdPerToken": 3600
+          }
+        },
+        "longContext": {
+          "threshold": 200000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-09-01"
+      },
+      "model": {
+        "modelId": "gemini-3.1-pro-high",
+        "aliases": [
+          "google/gemini-3.1-pro-high",
+          "models/gemini-3.1-pro-high"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 2000,
+          "outputNanoUsdPerToken": 12000,
+          "cacheReadNanoUsdPerToken": 200,
+          "cacheWriteNanoUsdPerToken": 2000
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 3600,
+            "outputNanoUsdPerToken": 21600,
+            "cacheReadNanoUsdPerToken": 360,
+            "cacheWriteNanoUsdPerToken": 3600
+          }
+        },
+        "longContext": {
+          "threshold": 200000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-09-01"
+      },
+      "model": {
+        "modelId": "gemini-3.1-pro-low",
+        "aliases": [
+          "google/gemini-3.1-pro-low",
+          "models/gemini-3.1-pro-low"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 2000,
+          "outputNanoUsdPerToken": 12000,
+          "cacheReadNanoUsdPerToken": 200,
+          "cacheWriteNanoUsdPerToken": 2000
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 3600,
+            "outputNanoUsdPerToken": 21600,
+            "cacheReadNanoUsdPerToken": 360,
+            "cacheWriteNanoUsdPerToken": 3600
+          }
+        },
+        "longContext": {
+          "threshold": 200000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-09-01"
+      },
+      "model": {
+        "modelId": "gemini-3.1-pro-preview",
+        "aliases": [
+          "google/gemini-3.1-pro-preview",
+          "models/gemini-3.1-pro-preview"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 2000,
+          "outputNanoUsdPerToken": 12000,
+          "cacheReadNanoUsdPerToken": 200,
+          "cacheWriteNanoUsdPerToken": 2000
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 3600,
+            "outputNanoUsdPerToken": 21600,
+            "cacheReadNanoUsdPerToken": 360,
+            "cacheWriteNanoUsdPerToken": 3600
+          }
+        },
+        "longContext": {
+          "threshold": 200000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://ai.google.dev/gemini-api/docs/pricing",
+        "verifiedAt": "2026-09-01"
+      },
+      "model": {
+        "modelId": "gemini-3.1-pro-preview-customtools",
+        "aliases": [
+          "google/gemini-3.1-pro-preview-customtools",
+          "models/gemini-3.1-pro-preview-customtools"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 2000,
+          "outputNanoUsdPerToken": 12000,
+          "cacheReadNanoUsdPerToken": 200,
+          "cacheWriteNanoUsdPerToken": 2000
+        },
+        "serviceTierProfiles": {},
+        "longContext": {
+          "threshold": 200000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
       }
     }
   ]

@@ -26,6 +26,12 @@ pub(super) enum OutputItemSnapshot {
         name: String,
         arguments: String,
     },
+    WebSearch {
+        id: String,
+        output_index: u64,
+        query: String,
+        results: Option<Value>,
+    },
 }
 
 pub(super) fn usage_to_value(usage: TokenUsage, cache_usage: Option<AnthropicCacheUsage>) -> Value {
@@ -124,5 +130,21 @@ pub(super) fn snapshot_to_output_item(
             "name": name,
             "arguments": arguments
         }),
+        OutputItemSnapshot::WebSearch {
+            id, query, results, ..
+        } => {
+            let mut item = json!({
+                "id": id,
+                "type": "web_search_call",
+                "status": "completed",
+                "action": { "type": "search", "query": query }
+            });
+            if let Some(results) = results {
+                item.as_object_mut()
+                    .expect("web search item is object")
+                    .insert("results".to_string(), results.clone());
+            }
+            item
+        }
     }
 }

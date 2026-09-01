@@ -9,6 +9,7 @@ use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 use super::streaming::STREAM_DROPPED_ERROR;
+use crate::proxy::anthropic_compat::web_search;
 use crate::proxy::{claude_reasoning, compat_reason};
 use format::{snapshot_to_output_item, usage_to_value, AnthropicCacheUsage, OutputItemSnapshot};
 
@@ -48,6 +49,14 @@ struct FunctionCallOutput {
     arguments: String,
 }
 
+struct WebSearchOutput {
+    id: String,
+    output_index: u64,
+    query: String,
+    input_json: String,
+    results: Option<Value>,
+}
+
 struct AnthropicToResponsesState<S> {
     upstream: S,
     parser: SseEventParser,
@@ -69,6 +78,9 @@ struct AnthropicToResponsesState<S> {
     function_calls: Vec<Option<FunctionCallOutput>>,
     // Claude stream uses block index; map it to our function_call slot.
     tool_call_by_block_index: HashMap<usize, usize>,
+    web_searches: Vec<Option<WebSearchOutput>>,
+    web_search_by_block_index: HashMap<usize, usize>,
+    web_search_by_tool_use_id: HashMap<String, usize>,
     response_status: Option<&'static str>,
     incomplete_reason: Option<&'static str>,
     sequence: u64,
@@ -137,6 +149,9 @@ where
             reasoning_by_block_index: HashMap::new(),
             function_calls: Vec::new(),
             tool_call_by_block_index: HashMap::new(),
+            web_searches: Vec::new(),
+            web_search_by_block_index: HashMap::new(),
+            web_search_by_tool_use_id: HashMap::new(),
             response_status: None,
             incomplete_reason: None,
             sequence: 0,
@@ -239,8 +254,10 @@ where
             }
             "content_block_start" => self.handle_content_block_start(&value),
             "content_block_delta" => self.handle_content_block_delta(&value, token_texts),
+            "content_block_stop" => self.handle_content_block_stop(&value),
             "message_delta" => self.handle_message_delta(&value),
             "message_stop" => {
+                self.finish_web_search_queries();
                 self.push_done();
             }
             _ => {}
@@ -317,6 +334,40 @@ where
                 let name = block.get("name").and_then(Value::as_str).unwrap_or("");
                 let tool_index = self.ensure_function_call_output(index, Some(call_id), Some(name));
                 self.tool_call_by_block_index.insert(index, tool_index);
+            }
+            "server_tool_use"
+                if block.get("name").and_then(Value::as_str)
+                    == Some(web_search::CLAUDE_WEB_SEARCH_NAME) =>
+            {
+                let tool_use_id = block.get("id").and_then(Value::as_str).unwrap_or("");
+                if tool_use_id.is_empty() {
+                    tracing::debug!("丢弃缺少 ID 的 Claude 搜索调用块");
+                    return;
+                }
+                let query = web_search::claude_search_query(block.get("input"));
+                let search_index = self.ensure_web_search_output(index, tool_use_id, &query);
+                self.web_search_by_block_index.insert(index, search_index);
+                self.web_search_by_tool_use_id
+                    .insert(tool_use_id.to_string(), search_index);
+            }
+            "web_search_tool_result" => {
+                let tool_use_id = block
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let Some(search_index) = self.web_search_by_tool_use_id.get(tool_use_id).copied()
+                else {
+                    return;
+                };
+                if let Some(search) = self
+                    .web_searches
+                    .get_mut(search_index)
+                    .and_then(Option::as_mut)
+                {
+                    search.results = Some(web_search::responses_search_results_from_claude(
+                        block.get("content"),
+                    ));
+                }
             }
             _ => {}
         }
@@ -424,6 +475,16 @@ where
                 let Some(partial_json) = delta.get("partial_json").and_then(Value::as_str) else {
                     return;
                 };
+                if let Some(search_index) = self.web_search_by_block_index.get(&index).copied() {
+                    if let Some(search) = self
+                        .web_searches
+                        .get_mut(search_index)
+                        .and_then(Option::as_mut)
+                    {
+                        search.input_json.push_str(partial_json);
+                    }
+                    return;
+                }
                 let call_index = match self.tool_call_by_block_index.get(&index) {
                     Some(idx) => *idx,
                     None => {
@@ -451,6 +512,46 @@ where
                 })));
             }
             _ => {}
+        }
+    }
+
+    fn handle_content_block_stop(&mut self, value: &Value) {
+        let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        self.finish_web_search_query(index);
+    }
+
+    fn finish_web_search_queries(&mut self) {
+        let indexes = self
+            .web_search_by_block_index
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        for index in indexes {
+            self.finish_web_search_query(index);
+        }
+    }
+
+    fn finish_web_search_query(&mut self, block_index: usize) {
+        let Some(search_index) = self.web_search_by_block_index.get(&block_index).copied() else {
+            return;
+        };
+        let Some(search) = self
+            .web_searches
+            .get_mut(search_index)
+            .and_then(Option::as_mut)
+        else {
+            return;
+        };
+        if search.input_json.trim().is_empty() {
+            return;
+        }
+        match web_search::claude_search_query_json(&search.input_json) {
+            Some(query) if !query.is_empty() => search.query = query,
+            Some(_) => {}
+            None => tracing::debug!(
+                block_index,
+                "dropping incomplete Claude web search input JSON while retaining start query"
+            ),
         }
     }
 
@@ -526,6 +627,32 @@ where
             arguments: String::new(),
         }));
         call_index
+    }
+
+    fn ensure_web_search_output(
+        &mut self,
+        block_index: usize,
+        tool_use_id: &str,
+        query: &str,
+    ) -> usize {
+        if let Some(search_index) = self.web_search_by_block_index.get(&block_index) {
+            return *search_index;
+        }
+        let search_index = self.web_searches.len();
+        let output_index = self.next_output_index;
+        self.next_output_index += 1;
+        let id = web_search::responses_search_id(tool_use_id);
+        self.push_web_search_item_added(&id, output_index, query);
+        self.web_searches.push(Some(WebSearchOutput {
+            id,
+            output_index,
+            query: query.to_string(),
+            input_json: String::new(),
+            results: None,
+        }));
+        self.web_search_by_block_index
+            .insert(block_index, search_index);
+        search_index
     }
 
     fn push_response_created(&mut self) {
@@ -608,6 +735,21 @@ where
         })));
     }
 
+    fn push_web_search_item_added(&mut self, item_id: &str, output_index: u64, query: &str) {
+        let sequence_number = self.next_sequence_number();
+        self.out.push_back(super::responses_event_sse(json!({
+            "type": "response.output_item.added",
+            "output_index": output_index,
+            "item": {
+                "id": item_id,
+                "type": "web_search_call",
+                "status": "in_progress",
+                "action": { "type": "search", "query": query }
+            },
+            "sequence_number": sequence_number
+        })));
+    }
+
     fn push_done(&mut self) {
         if self.sent_done {
             return;
@@ -665,10 +807,22 @@ where
                 },
             });
         }
+        for search in &self.web_searches {
+            let Some(search) = search else {
+                continue;
+            };
+            snapshots.push(OutputItemSnapshot::WebSearch {
+                id: search.id.clone(),
+                output_index: search.output_index,
+                query: search.query.clone(),
+                results: search.results.clone(),
+            });
+        }
         snapshots.sort_by_key(|item| match item {
             OutputItemSnapshot::Reasoning { output_index, .. } => *output_index,
             OutputItemSnapshot::Message { output_index, .. } => *output_index,
             OutputItemSnapshot::FunctionCall { output_index, .. } => *output_index,
+            OutputItemSnapshot::WebSearch { output_index, .. } => *output_index,
         });
 
         let status = self.response_status.unwrap_or("completed");
@@ -730,6 +884,12 @@ where
                 name,
                 arguments,
             } => self.push_function_call_done_events(id, *output_index, call_id, name, arguments),
+            OutputItemSnapshot::WebSearch {
+                id,
+                output_index,
+                query,
+                results,
+            } => self.push_web_search_done_events(id, *output_index, query, results.as_ref()),
         }
     }
 
@@ -852,6 +1012,33 @@ where
         })));
     }
 
+    fn push_web_search_done_events(
+        &mut self,
+        item_id: &str,
+        output_index: u64,
+        query: &str,
+        results: Option<&Value>,
+    ) {
+        let mut item = json!({
+            "id": item_id,
+            "type": "web_search_call",
+            "status": "completed",
+            "action": { "type": "search", "query": query }
+        });
+        if let Some(results) = results {
+            item.as_object_mut()
+                .expect("web search item is object")
+                .insert("results".to_string(), results.clone());
+        }
+        let sequence_number = self.next_sequence_number();
+        self.out.push_back(super::responses_event_sse(json!({
+            "type": "response.output_item.done",
+            "output_index": output_index,
+            "item": item,
+            "sequence_number": sequence_number
+        })));
+    }
+
     fn build_response_object(
         &self,
         status: &str,
@@ -887,6 +1074,11 @@ where
             .iter()
             .filter(|call| call.is_some())
             .count()
+            + self
+                .web_searches
+                .iter()
+                .filter(|search| search.is_some())
+                .count()
             > 1
     }
 

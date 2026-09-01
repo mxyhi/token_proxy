@@ -2,7 +2,7 @@ use axum::body::Bytes;
 use futures_util::StreamExt;
 use serde_json::{json, Value};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     sync::Arc,
 };
 
@@ -53,7 +53,7 @@ struct ChatToResponsesState<S> {
     upstream_ended: bool,
     response_body_buf: String,
     tool_identity_request: Option<Value>,
-    custom_tool_item_ids: HashSet<String>,
+    custom_tool_item_ids: HashMap<String, String>,
 }
 
 impl<S> ChatToResponsesState<S> {
@@ -120,7 +120,7 @@ where
             upstream_ended: false,
             response_body_buf: String::new(),
             tool_identity_request,
-            custom_tool_item_ids: HashSet::new(),
+            custom_tool_item_ids: HashMap::new(),
         };
         state.push_response_created();
         state

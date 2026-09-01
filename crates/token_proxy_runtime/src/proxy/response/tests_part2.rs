@@ -1720,6 +1720,124 @@ fn stream_anthropic_to_responses_preserves_ordered_blocks_and_empty_arguments() 
 }
 
 #[test]
+fn stream_anthropic_to_responses_maps_split_web_search_queries_and_results() {
+    super::run_async(async {
+        let (_, context, _) = super::setup_responses_stream().await;
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_search\",\"model\":\"claude-3-7-sonnet\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_1\",\"name\":\"web_search\",\"input\":{}}}\n\n",
+            )),
+            Ok(Bytes::from(
+                format!(
+                    "event: content_block_delta\ndata: {}\n\n",
+                    json!({
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": "{\"query\":\"late"
+                        }
+                    })
+                ),
+            )),
+            Ok(Bytes::from(
+                format!(
+                    "event: content_block_delta\ndata: {}\n\n",
+                    json!({
+                        "type": "content_block_delta",
+                        "index": 0,
+                        "delta": {
+                            "type": "input_json_delta",
+                            "partial_json": "st docs\"}"
+                        }
+                    })
+                ),
+            )),
+            Ok(Bytes::from(
+                "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"web_search_tool_result\",\"tool_use_id\":\"srvtoolu_1\",\"content\":[{\"type\":\"web_search_result\",\"url\":\"https://example.com/docs\"}]}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":1}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":2,\"delta\":{\"type\":\"text_delta\",\"text\":\"answer\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            )),
+        ]);
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let chunks = super::super::anthropic_to_responses::stream_anthropic_to_responses(
+            upstream,
+            context,
+            Arc::new(LogWriter::new(None)),
+            token_tracker,
+        )
+        .map(|item| item.expect("stream item"))
+        .collect::<Vec<_>>()
+        .await;
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+
+        let completed = payloads
+            .iter()
+            .find(|payload| payload["type"] == "response.completed")
+            .expect("completed event");
+        let output = completed["response"]["output"]
+            .as_array()
+            .expect("output array");
+        assert_eq!(output.len(), 2);
+        assert_eq!(output[0]["type"], "web_search_call");
+        assert_eq!(output[0]["action"]["query"], "latest docs");
+        assert_eq!(
+            output[0]["results"],
+            json!([{ "type": "web_search_result", "url": "https://example.com/docs" }])
+        );
+        assert_eq!(output[1]["type"], "message");
+        assert_eq!(output[1]["content"][0]["text"], "answer");
+
+        let search_added = payloads
+            .iter()
+            .find(|payload| {
+                payload["type"] == "response.output_item.added"
+                    && payload["item"]["type"] == "web_search_call"
+            })
+            .expect("search added event");
+        assert_eq!(search_added["item"]["action"]["query"], "");
+        assert_eq!(
+            payloads
+                .iter()
+                .filter(|payload| payload["type"] == "response.completed")
+                .count(),
+            1
+        );
+        assert_eq!(
+            chunks
+                .iter()
+                .filter(|chunk| chunk.as_ref() == b"data: [DONE]\n\n")
+                .count(),
+            1
+        );
+    });
+}
+
+#[test]
 fn stream_anthropic_to_responses_adds_cache_tokens_to_openai_input_usage() {
     super::run_async(async {
         let sqlite_pool = super::create_test_sqlite_pool().await;

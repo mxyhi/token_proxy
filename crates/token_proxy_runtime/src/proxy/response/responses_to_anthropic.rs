@@ -13,6 +13,7 @@ use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 use super::responses_error::{responses_stream_error, ResponsesStreamError};
 use super::streaming::STREAM_DROPPED_ERROR;
+use crate::proxy::anthropic_compat::web_search;
 use crate::proxy::claude_reasoning;
 
 pub(super) fn stream_responses_to_anthropic<E>(
@@ -32,6 +33,7 @@ enum ActiveBlock {
     Text { index: usize },
     Thinking { index: usize },
     ToolUse { item_id: String },
+    WebSearch { item_id: String },
 }
 
 struct ToolUseState {
@@ -49,6 +51,17 @@ struct ReasoningBlockState {
     sent_stop: bool,
     sent_delta: bool,
     sent_signature: bool,
+}
+
+struct WebSearchState {
+    index: usize,
+    result_index: usize,
+    tool_use_id: String,
+    query: String,
+    results: Option<Value>,
+    sent_start: bool,
+    sent_stop: bool,
+    sent_result: bool,
 }
 
 struct ResponsesToAnthropicState<S> {
@@ -70,6 +83,7 @@ struct ResponsesToAnthropicState<S> {
     next_block_index: usize,
     tool_uses: HashMap<String, ToolUseState>,
     reasoning_blocks: HashMap<String, ReasoningBlockState>,
+    web_searches: HashMap<String, WebSearchState>,
     redacted_reasoning_emitted: HashSet<String>,
     saw_tool_use: bool,
     stop_reason_override: Option<&'static str>,
@@ -131,6 +145,7 @@ where
             next_block_index: 0,
             tool_uses: HashMap::new(),
             reasoning_blocks: HashMap::new(),
+            web_searches: HashMap::new(),
             redacted_reasoning_emitted: HashSet::new(),
             saw_tool_use: false,
             stop_reason_override: None,
@@ -317,6 +332,13 @@ where
                 self.ensure_message_start();
                 self.ensure_reasoning_block(item_id);
             }
+            Some("web_search_call") => {
+                let item_id = item.get("id").and_then(Value::as_str).unwrap_or("");
+                if !item_id.is_empty() {
+                    self.ensure_message_start();
+                    self.ensure_web_search(item_id, item);
+                }
+            }
             _ => {}
         }
     }
@@ -403,6 +425,13 @@ where
                         self.emit_reasoning_signature(item_id, signature);
                     }
                     self.stop_reasoning_block(item_id);
+                }
+            }
+            Some("web_search_call") => {
+                if let Some(item_id) = item.get("id").and_then(Value::as_str) {
+                    self.ensure_message_start();
+                    self.ensure_web_search(item_id, item);
+                    self.emit_web_search_result(item_id, item.get("results"));
                 }
             }
             _ => {}
@@ -493,6 +522,13 @@ where
                     };
                     if reasoning_snapshot.is_empty() {
                         reasoning_snapshot = extract_reasoning_text(content);
+                    }
+                }
+                Some("web_search_call") => {
+                    if let Some(item_id) = item.get("id").and_then(Value::as_str) {
+                        self.ensure_message_start();
+                        self.ensure_web_search(item_id, item);
+                        self.emit_web_search_result(item_id, item.get("results"));
                     }
                 }
                 _ => {}
@@ -889,6 +925,108 @@ where
         }
     }
 
+    fn ensure_web_search(&mut self, item_id: &str, item: &Map<String, Value>) {
+        let query = web_search::responses_search_query(item);
+        if !self.web_searches.contains_key(item_id) {
+            let index = self.next_block_index;
+            self.next_block_index += 1;
+            let result_index = self.next_block_index;
+            self.next_block_index += 1;
+            self.web_searches.insert(
+                item_id.to_string(),
+                WebSearchState {
+                    index,
+                    result_index,
+                    tool_use_id: web_search::claude_search_id(item_id),
+                    query,
+                    results: None,
+                    sent_start: false,
+                    sent_stop: false,
+                    sent_result: false,
+                },
+            );
+        } else if let Some(state) = self.web_searches.get_mut(item_id) {
+            if state.query.is_empty() {
+                state.query = query;
+            }
+        }
+
+        let Some((index, tool_use_id, query, sent_start)) =
+            self.web_searches.get(item_id).map(|state| {
+                (
+                    state.index,
+                    state.tool_use_id.clone(),
+                    state.query.clone(),
+                    state.sent_start,
+                )
+            })
+        else {
+            return;
+        };
+        if sent_start {
+            return;
+        }
+        self.stop_active_block();
+        if let Some(state) = self.web_searches.get_mut(item_id) {
+            state.sent_start = true;
+        }
+        self.out.push_back(super::anthropic_event_sse(
+            "content_block_start",
+            json!({
+                "type": "content_block_start",
+                "index": index,
+                "content_block": {
+                    "type": "server_tool_use",
+                    "id": tool_use_id,
+                    "name": web_search::CLAUDE_WEB_SEARCH_NAME,
+                    "input": { "query": query }
+                }
+            }),
+        ));
+        self.active_block = Some(ActiveBlock::WebSearch {
+            item_id: item_id.to_string(),
+        });
+    }
+
+    fn emit_web_search_result(&mut self, item_id: &str, results: Option<&Value>) {
+        let Some((result_index, tool_use_id, content)) =
+            self.web_searches.get_mut(item_id).and_then(|state| {
+                if let Some(results) = results {
+                    state.results = Some(results.clone());
+                }
+                if state.sent_result {
+                    return None;
+                }
+                state.sent_result = true;
+                Some((
+                    state.result_index,
+                    state.tool_use_id.clone(),
+                    web_search::claude_search_results_from_responses(state.results.as_ref()),
+                ))
+            })
+        else {
+            return;
+        };
+        self.stop_active_block();
+        self.stop_web_search_block(item_id);
+        self.out.push_back(super::anthropic_event_sse(
+            "content_block_start",
+            json!({
+                "type": "content_block_start",
+                "index": result_index,
+                "content_block": {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": content
+                }
+            }),
+        ));
+        self.out.push_back(super::anthropic_event_sse(
+            "content_block_stop",
+            json!({ "type": "content_block_stop", "index": result_index }),
+        ));
+    }
+
     fn stop_tool_use_block(&mut self, item_id: &str) {
         let Some(state) = self.tool_uses.get_mut(item_id) else {
             return;
@@ -929,7 +1067,33 @@ where
             ActiveBlock::ToolUse { item_id } => {
                 self.stop_tool_use_block(&item_id);
             }
+            ActiveBlock::WebSearch { item_id } => {
+                self.stop_web_search_block(&item_id);
+            }
         }
+    }
+
+    fn stop_web_search_block(&mut self, item_id: &str) {
+        let Some(index) = self.web_searches.get(item_id).map(|state| state.index) else {
+            return;
+        };
+        let Some(state) = self.web_searches.get_mut(item_id) else {
+            return;
+        };
+        if state.sent_stop {
+            return;
+        }
+        state.sent_stop = true;
+        if matches!(
+            &self.active_block,
+            Some(ActiveBlock::WebSearch { item_id: active }) if active == item_id
+        ) {
+            self.active_block = None;
+        }
+        self.out.push_back(super::anthropic_event_sse(
+            "content_block_stop",
+            json!({ "type": "content_block_stop", "index": index }),
+        ));
     }
 
     fn finish_message_if_needed(&mut self) {

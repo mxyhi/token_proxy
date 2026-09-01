@@ -339,6 +339,15 @@ async fn responses_input_item_to_claude_messages(
             }
             push_tool_result_block(messages, Value::Object(block));
         }
+        "web_search_call" => {
+            if let Some((use_block, result_block)) =
+                super::web_search::responses_search_call_to_claude(object)
+            {
+                push_tool_use_block(messages, use_block);
+                push_tool_result_block(messages, result_block);
+                tracing::debug!("mapped Responses web_search_call to Claude server tool blocks");
+            }
+        }
         _ => {}
     }
     Ok(())

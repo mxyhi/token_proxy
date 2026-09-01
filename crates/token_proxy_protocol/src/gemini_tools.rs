@@ -14,6 +14,7 @@ const GEMINI_UNSUPPORTED_SCHEMA_KEYS: &[&str] = &[
     "maxLength",
     "minItems",
     "maxItems",
+    "contains",
     "exclusiveMinimum",
     "if",
     "then",
@@ -45,6 +46,7 @@ const SCHEMA_CONTAINER_KEYS: &[&str] = &[
     "pattern",
     "additionalProperties",
     "additionalItems",
+    "contains",
     "not",
     "if",
     "then",
@@ -109,6 +111,9 @@ fn clean_tool_schema_object(object: &Map<String, Value>) -> Value {
     merge_conditional_properties(&mut source, object.get("then"));
     merge_conditional_properties(&mut source, object.get("else"));
     let all_of = source.get("allOf").cloned();
+    let any_of = source.get("anyOf").cloned();
+    let one_of = source.get("oneOf").cloned();
+    let contains_hint = source.get("contains").and_then(schema_constraint_hint);
     let mut cleaned = Map::new();
     for (key, value) in &source {
         if GEMINI_UNSUPPORTED_SCHEMA_KEYS.contains(&key.as_str()) || key == "allOf" {
@@ -144,7 +149,90 @@ fn clean_tool_schema_object(object: &Map<String, Value>) -> Value {
     normalize_gemini_schema_type(&mut cleaned);
     normalize_integer_exclusive_minimum(&mut cleaned, object.get("exclusiveMinimum"));
     merge_all_of_properties(&mut cleaned, all_of.as_ref());
+    merge_union_properties(&mut cleaned, "anyOf", any_of.as_ref());
+    merge_union_properties(&mut cleaned, "oneOf", one_of.as_ref());
+    if let Some(hint) = contains_hint {
+        append_schema_description(&mut cleaned, &format!("contains: {hint}"));
+    }
+    if cleaned.get("type").and_then(Value::as_str) == Some("ARRAY")
+        && !cleaned.contains_key("items")
+    {
+        cleaned.insert("items".to_string(), json!({ "type": "STRING" }));
+    }
+    if !cleaned.contains_key("properties") {
+        cleaned.remove("required");
+    }
     Value::Object(cleaned)
+}
+
+fn schema_constraint_hint(value: &Value) -> Option<String> {
+    match value {
+        Value::Object(_) | Value::Array(_) => serde_json::to_string(value).ok(),
+        Value::String(value) if !value.is_empty() => Some(value.clone()),
+        Value::Number(_) | Value::Bool(_) => Some(value.to_string()),
+        _ => None,
+    }
+}
+
+fn append_schema_description(cleaned: &mut Map<String, Value>, hint: &str) {
+    let description = cleaned
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let combined = if description.is_empty() {
+        hint.to_string()
+    } else {
+        format!("{description}; {hint}")
+    };
+    cleaned.insert("description".to_string(), Value::String(combined));
+}
+
+fn merge_union_properties(cleaned: &mut Map<String, Value>, key: &str, union: Option<&Value>) {
+    let Some(union) = union.and_then(Value::as_array) else {
+        return;
+    };
+    let branches = union.iter().map(clean_tool_schema).collect::<Vec<_>>();
+    let mut branch_properties = Map::new();
+    let mut accepted_types = Vec::new();
+    for branch in &branches {
+        if let Some(schema_type) = branch.get("type").and_then(Value::as_str) {
+            if !accepted_types.iter().any(|value| value == schema_type) {
+                accepted_types.push(schema_type.to_string());
+            }
+        }
+        if let Some(properties) = branch.get("properties").and_then(Value::as_object) {
+            for (name, schema) in properties {
+                branch_properties
+                    .entry(name.clone())
+                    .or_insert_with(|| schema.clone());
+            }
+        }
+    }
+
+    if !branch_properties.is_empty() {
+        let properties = cleaned
+            .entry("properties".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Some(properties) = properties.as_object_mut() {
+            for (name, schema) in branch_properties {
+                properties.entry(name).or_insert(schema);
+            }
+            cleaned
+                .entry("type".to_string())
+                .or_insert_with(|| Value::String("OBJECT".to_string()));
+        }
+    } else if let Some(selected) = branches.first().and_then(Value::as_object) {
+        for (name, value) in selected {
+            if name != "description" {
+                cleaned.entry(name.clone()).or_insert_with(|| value.clone());
+            }
+        }
+    }
+
+    cleaned.remove(key);
+    if accepted_types.len() > 1 {
+        append_schema_description(cleaned, &format!("Accepts: {}", accepted_types.join(" | ")));
+    }
 }
 
 fn normalize_malformed_schema_object(object: &Map<String, Value>) -> Map<String, Value> {
@@ -595,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_schema_normalizes_nested_mixed_enum_and_drops_invalid_enum() {
+    fn clean_schema_flattens_scalar_unions_and_drops_invalid_enum() {
         let schema = json!({
             "anyOf": [
                 { "deprecated": true, "enum": ["on", false, 1, null] },
@@ -605,12 +693,85 @@ mod tests {
         });
 
         let cleaned = clean_tool_schema(&schema);
-        assert_eq!(
-            cleaned["anyOf"][0]["enum"],
-            json!(["on", "false", "1", "null"])
-        );
-        assert!(cleaned["anyOf"][0].get("deprecated").is_none());
-        assert!(cleaned["anyOf"][1].get("enum").is_none());
+        assert_eq!(cleaned["enum"], json!(["on", "false", "1", "null"]));
+        assert!(cleaned.get("anyOf").is_none());
         assert!(cleaned.get("$defs").is_none());
+    }
+
+    #[test]
+    fn clean_schema_merges_union_properties_and_preserves_contains_hint() {
+        let schema = json!({
+            "type": "object",
+            "description": "query",
+            "properties": { "base": { "type": "string" } },
+            "required": ["base"],
+            "anyOf": [
+                { "properties": { "from_any": { "type": "integer" } }, "required": ["from_any"] },
+                { "properties": { "other": { "type": "boolean" } } }
+            ],
+            "contains": { "type": "string", "minLength": 2 }
+        });
+
+        let cleaned = clean_tool_schema(&schema);
+
+        assert!(cleaned.get("anyOf").is_none());
+        assert_eq!(cleaned["properties"]["from_any"]["type"], "INTEGER");
+        assert_eq!(cleaned["properties"]["other"]["type"], "BOOLEAN");
+        assert_eq!(cleaned["required"], json!(["base"]));
+        assert!(cleaned["description"]
+            .as_str()
+            .unwrap()
+            .contains("contains:"));
+        assert!(cleaned.get("contains").is_none());
+    }
+
+    #[test]
+    fn clean_schema_flattens_root_union_properties_without_leaking_union_keywords() {
+        let schema = json!({
+            "oneOf": [
+                { "type": "object", "properties": { "city": { "type": "string" } } },
+                { "type": "object", "properties": { "coordinates": { "type": "array" } } }
+            ]
+        });
+
+        let cleaned = clean_tool_schema(&schema);
+
+        assert_eq!(cleaned["type"], "OBJECT");
+        assert_eq!(cleaned["properties"]["city"]["type"], "STRING");
+        assert_eq!(cleaned["properties"]["coordinates"]["type"], "ARRAY");
+        assert_eq!(
+            cleaned["properties"]["coordinates"]["items"],
+            json!({ "type": "STRING" })
+        );
+        assert!(cleaned.get("oneOf").is_none());
+        assert!(cleaned.get("anyOf").is_none());
+    }
+
+    #[test]
+    fn clean_schema_removes_required_without_properties_and_repairs_array_items() {
+        let schema = json!({
+            "type": "array",
+            "required": ["missing"]
+        });
+
+        let cleaned = clean_tool_schema(&schema);
+
+        assert!(cleaned.get("required").is_none());
+        assert_eq!(cleaned["items"], json!({ "type": "STRING" }));
+    }
+
+    #[test]
+    fn clean_schema_drops_contains_in_a_schema_without_other_keywords() {
+        let schema = json!({
+            "contains": { "type": "string" }
+        });
+
+        let cleaned = clean_tool_schema(&schema);
+
+        assert!(cleaned.get("contains").is_none());
+        assert!(cleaned.get("properties").is_none());
+        assert!(cleaned["description"]
+            .as_str()
+            .is_some_and(|description| description.contains("contains:")));
     }
 }

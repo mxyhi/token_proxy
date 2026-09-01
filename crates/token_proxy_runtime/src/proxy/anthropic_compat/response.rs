@@ -2,8 +2,12 @@ use axum::body::Bytes;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    collections::HashMap,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
+use super::web_search;
 use crate::proxy::{claude_reasoning, compat_reason};
 
 fn now_s() -> i64 {
@@ -45,9 +49,8 @@ pub(super) fn responses_response_to_anthropic(
         .map(|items| items.as_slice())
         .unwrap_or(&[]);
     let mut combined_text = String::new();
-    let mut thinking_text = String::new();
-    let mut reasoning_blocks = Vec::new();
-    let mut tool_uses = Vec::new();
+    let mut content = Vec::new();
+    let mut tool_use_count = 0;
 
     for item in output {
         let Some(item) = item.as_object() else {
@@ -62,12 +65,12 @@ pub(super) fn responses_response_to_anthropic(
                 {
                     if let Some(data) = claude_reasoning::redacted_thinking_data(encrypted_content)
                     {
-                        reasoning_blocks.push(json!({
+                        content.push(json!({
                             "type": "redacted_thinking",
                             "data": data
                         }));
                     } else {
-                        reasoning_blocks.push(json!({
+                        content.push(json!({
                             "type": "thinking",
                             "thinking": extract_reasoning_text_from_item(item),
                             "signature": encrypted_content
@@ -81,8 +84,8 @@ pub(super) fn responses_response_to_anthropic(
                 if item.get("role").and_then(Value::as_str) != Some("assistant") {
                     continue;
                 }
-                if let Some(content) = item.get("content").and_then(Value::as_array) {
-                    for part in content {
+                if let Some(parts) = item.get("content").and_then(Value::as_array) {
+                    for part in parts {
                         let Some(part) = part.as_object() else {
                             continue;
                         };
@@ -90,11 +93,31 @@ pub(super) fn responses_response_to_anthropic(
                             Some("output_text") => {
                                 if let Some(text) = part.get("text").and_then(Value::as_str) {
                                     combined_text.push_str(text);
+                                    let mut block = json!({ "type": "text", "text": text });
+                                    let citations = web_search::annotations_to_citations(
+                                        part.get("annotations"),
+                                    );
+                                    if !citations.as_array().is_some_and(Vec::is_empty) {
+                                        block
+                                            .as_object_mut()
+                                            .expect("text block object")
+                                            .insert("citations".to_string(), citations);
+                                    }
+                                    content.push(block);
                                 }
                             }
                             Some("reasoning_text") => {
                                 if let Some(text) = part.get("text").and_then(Value::as_str) {
-                                    thinking_text.push_str(text);
+                                    let mut block = json!({ "type": "thinking", "thinking": text });
+                                    if let (Some(signature), Some(block)) =
+                                        (thinking_signature(text), block.as_object_mut())
+                                    {
+                                        block.insert(
+                                            "signature".to_string(),
+                                            Value::String(signature),
+                                        );
+                                    }
+                                    content.push(block);
                                 }
                             }
                             _ => {}
@@ -104,30 +127,28 @@ pub(super) fn responses_response_to_anthropic(
             }
             Some("function_call") => {
                 if let Some(tool_use) = responses_function_call_to_tool_use(item) {
-                    tool_uses.push(tool_use);
+                    content.push(tool_use);
+                    tool_use_count += 1;
+                }
+            }
+            Some("web_search_call") => {
+                if let Some((use_block, result_block)) =
+                    web_search::responses_search_call_to_claude(item)
+                {
+                    content.push(use_block);
+                    content.push(result_block);
                 }
             }
             _ => {}
         }
     }
 
-    let mut content = reasoning_blocks;
-    if !thinking_text.trim().is_empty() {
-        let signature = thinking_signature(&thinking_text);
-        let mut block = json!({ "type": "thinking", "thinking": thinking_text });
-        if let (Some(signature), Some(block)) = (signature, block.as_object_mut()) {
-            block.insert("signature".to_string(), Value::String(signature));
-        }
-        content.push(block);
-    }
-    if !combined_text.trim().is_empty() || tool_uses.is_empty() {
+    if content.is_empty() {
         content.push(json!({ "type": "text", "text": combined_text }));
     }
-    let has_tool_uses = !tool_uses.is_empty();
-    content.extend(tool_uses);
 
     let finish_reason =
-        compat_reason::chat_finish_reason_from_response_object(object, has_tool_uses);
+        compat_reason::chat_finish_reason_from_response_object(object, tool_use_count > 0);
     let stop_reason = compat_reason::anthropic_stop_reason_from_chat_finish_reason(finish_reason);
 
     let out = json!({
@@ -181,10 +202,11 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
         .map(|items| items.as_slice())
         .unwrap_or(&[]);
     let mut output = Vec::new();
-
-    let mut reasoning_items = Vec::new();
-    let mut combined_text = String::new();
-    let mut tool_calls = Vec::new();
+    let mut reasoning_count = 0;
+    let mut message_count = 0;
+    let mut tool_call_count = 0;
+    // One Responses item represents the Claude server-tool use and its later result.
+    let mut search_calls: HashMap<String, (usize, Value)> = HashMap::new();
     for block in content {
         let Some(block) = block.as_object() else {
             continue;
@@ -198,7 +220,7 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
                     .filter(|value| !value.is_empty());
                 let mut item = json!({
                     "type": "reasoning",
-                    "id": format!("rs_proxy_{}", reasoning_items.len()),
+                    "id": format!("rs_proxy_{reasoning_count}"),
                     "status": status,
                     "summary": []
                 });
@@ -216,7 +238,8 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
                         );
                     }
                 }
-                reasoning_items.push(item);
+                reasoning_count += 1;
+                output.push(item);
             }
             Some("redacted_thinking") => {
                 if let Some(data) = block
@@ -225,45 +248,90 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
                     .filter(|value| !value.is_empty())
                 {
                     if let Some(carrier) = claude_reasoning::redacted_thinking_carrier(data) {
-                        reasoning_items.push(json!({
+                        output.push(json!({
                             "type": "reasoning",
-                            "id": format!("rs_proxy_{}", reasoning_items.len()),
+                            "id": format!("rs_proxy_{reasoning_count}"),
                             "status": status,
                             "summary": [],
                             "encrypted_content": carrier
                         }));
+                        reasoning_count += 1;
                     }
                 }
             }
             Some("text") => {
                 if let Some(text) = block.get("text").and_then(Value::as_str) {
-                    combined_text.push_str(text);
+                    output.push(json!({
+                        "type": "message",
+                        "id": format!("msg_proxy_{message_count}"),
+                        "status": status,
+                        "role": "assistant",
+                        "content": [{
+                            "type": "output_text",
+                            "text": text,
+                            "annotations": web_search::citations_to_annotations(block.get("citations"))
+                        }]
+                    }));
+                    message_count += 1;
+                }
+            }
+            Some("server_tool_use") => {
+                if block.get("name").and_then(Value::as_str)
+                    == Some(web_search::CLAUDE_WEB_SEARCH_NAME)
+                {
+                    let tool_use_id = block.get("id").and_then(Value::as_str).unwrap_or("");
+                    if tool_use_id.is_empty() {
+                        tracing::debug!("dropping Claude web search block without id");
+                        continue;
+                    }
+                    let output_index = output.len();
+                    output.push(web_search::claude_search_blocks_to_responses(block, None));
+                    search_calls.insert(
+                        tool_use_id.to_string(),
+                        (output_index, Value::Object(block.clone())),
+                    );
+                } else {
+                    tracing::debug!("dropping unknown Anthropic server tool block");
+                }
+            }
+            Some("web_search_tool_result") => {
+                let tool_use_id = block
+                    .get("tool_use_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if let Some((output_index, use_block)) = search_calls.remove(tool_use_id) {
+                    let Some(use_block) = use_block.as_object() else {
+                        continue;
+                    };
+                    output[output_index] =
+                        web_search::claude_search_blocks_to_responses(use_block, Some(block));
+                } else {
+                    tracing::debug!(tool_use_id, "dropping unmatched Claude web search result");
                 }
             }
             Some("tool_use") => {
                 if let Some(call) = tool_use_to_responses_function_call(block) {
-                    tool_calls.push(call);
+                    output.push(call);
+                    tool_call_count += 1;
                 }
             }
             _ => {}
         }
     }
 
-    let parallel_tool_calls = tool_calls.len() > 1;
+    let parallel_tool_calls = tool_call_count > 1;
 
-    output.extend(reasoning_items);
-    if !combined_text.trim().is_empty() || tool_calls.is_empty() {
+    if output.is_empty() {
         output.push(json!({
             "type": "message",
-            "id": "msg_proxy",
+            "id": format!("msg_proxy_{message_count}"),
             "status": status,
             "role": "assistant",
             "content": [
-                { "type": "output_text", "text": combined_text, "annotations": [] }
+                { "type": "output_text", "text": "", "annotations": [] }
             ]
         }));
     }
-    output.extend(tool_calls);
 
     let out = json!({
         "id": id,

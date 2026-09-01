@@ -1073,7 +1073,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20260813"
+            "catalog.69854741.b88b66df+curated.20260901"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1124,6 +1124,13 @@ mod tests {
             Some(&(
                 "https://ai.google.dev/gemini-api/docs/pricing",
                 "2026-07-29"
+            ))
+        );
+        assert_eq!(
+            sources.get("gemini-2.5-pro"),
+            Some(&(
+                "https://ai.google.dev/gemini-api/docs/pricing",
+                "2026-09-01"
             ))
         );
     }
@@ -1193,7 +1200,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260813"));
+        assert!(settings.version.contains("+curated.20260901"));
     }
 
     #[test]
@@ -1229,6 +1236,71 @@ mod tests {
             assert_eq!(priority.cost_nano_usd, 5_090);
         }
         assert!(settings.version.contains("+curated."));
+    }
+
+    #[test]
+    fn gemini_pro_prices_cover_standard_priority_and_long_context_cache_writes() {
+        let settings = default_model_pricing_settings();
+        let standard_usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            cache_write_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+        let long_usage = BillableUsage {
+            uncached_input_tokens: 200_001,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        let gemini_25 = calculate_request_cost(
+            &settings,
+            Some("google/gemini-2.5-pro"),
+            None,
+            None,
+            &standard_usage,
+        )
+        .expect("Gemini 2.5 Pro standard price");
+        assert_eq!(gemini_25.pricing_model, "gemini-2.5-pro");
+        assert_eq!(gemini_25.cost_nano_usd, 12_625);
+        assert_eq!(gemini_25.breakdown.cache_write_nano_usd, 1_250);
+
+        for model in [
+            "gemini-3-pro-preview",
+            "gemini-3.1-pro-high",
+            "gemini-3.1-pro-low",
+            "models/gemini-3.1-pro-preview",
+        ] {
+            let standard =
+                calculate_request_cost(&settings, Some(model), None, None, &standard_usage)
+                    .expect("Gemini Pro standard price");
+            let priority = calculate_request_cost(
+                &settings,
+                Some(model),
+                None,
+                Some("priority"),
+                &standard_usage,
+            )
+            .expect("Gemini Pro priority price");
+            let long = calculate_request_cost(&settings, Some(model), None, None, &long_usage)
+                .expect("Gemini Pro long-context price");
+
+            assert_eq!(standard.cost_nano_usd, 16_200, "{model}");
+            assert_eq!(priority.cost_nano_usd, 29_160, "{model}");
+            assert_eq!(long.cost_nano_usd, 800_022_000, "{model}");
+            assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
+        }
+
+        let customtools = calculate_request_cost(
+            &settings,
+            Some("gemini-3.1-pro-preview-customtools"),
+            None,
+            Some("priority"),
+            &standard_usage,
+        )
+        .expect("Gemini customtools fallback price");
+        assert_eq!(customtools.cost_nano_usd, 16_200);
     }
 
     #[test]
@@ -1450,7 +1522,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20260813");
+        assert_eq!(settings.version, "remote.test+curated.20260901");
     }
 
     #[test]

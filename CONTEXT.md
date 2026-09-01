@@ -232,6 +232,10 @@ _Avoid_: 客户端显式工具声明、Codex Alpha Search、默认联网搜索
 Responses reasoning item 的 \`encrypted_content\` 在 Claude 双向转换中的语义载体；普通值表示 thinking signature，\`claude-redacted-thinking:\` 前缀值表示必须原样回放的 \`redacted_thinking\` 数据。
 _Avoid_: 将所有 encrypted content 都当作 redacted thinking、将 marker 当作 signature
 
+**Claude Server-side Web Search（Claude 服务端搜索）**:
+Claude 原生 \`server_tool_use\`/\`web_search_tool_result\` 内容块与 Responses \`web_search_call\` 的双向表示；搜索结果中的有效加密索引可成为文本引用，缺失或空结果按无结果降级。
+_Avoid_: 把服务端搜索当作客户端 function tool、把无效搜索结果伪造成有效引用
+
 **Responses Output Item ID Hydration（Responses 输出项 ID 补全）**:
 当终态 \`response.output\` 项缺少 ID 时，依据同一 \`output_index\` 的 added/done 生命周期事件补回非空 ID；已有 ID 和无可靠来源的项保持不变。
 _Avoid_: 按类型猜 ID、伪造 ID、覆盖已有 ID

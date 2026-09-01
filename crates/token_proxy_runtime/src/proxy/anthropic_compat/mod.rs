@@ -5,6 +5,7 @@ use super::http_client::ProxyHttpClients;
 mod media;
 mod request;
 mod response;
+pub(super) mod web_search;
 mod tools {
     pub(super) use token_proxy_protocol::anthropic_tools::*;
 }

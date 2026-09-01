@@ -586,6 +586,88 @@ fn responses_request_to_anthropic_maps_google_search_tool() {
 }
 
 #[test]
+fn responses_request_to_anthropic_maps_web_search_history() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let input = bytes_from_json(json!({
+        "model": "claude-3-7-sonnet",
+        "input": [
+            {
+                "id": "ws_search-1",
+                "type": "web_search_call",
+                "status": "completed",
+                "action": { "type": "search", "query": "current docs" },
+                "results": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/docs",
+                        "title": "Docs",
+                        "encrypted_content": "enc_result"
+                    },
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/no-content"
+                    },
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/empty-content",
+                        "encrypted_content": " "
+                    },
+                    {
+                        "type": "web_search_tool_result_error",
+                        "error_code": "invalid_search_query"
+                    }
+                ]
+            }
+        ]
+    }));
+
+    let output = run_async(async {
+        responses_request_to_anthropic(&input, &http_clients)
+            .await
+            .expect("transform")
+    });
+    let value = json_from_bytes(output);
+    let messages = value["messages"].as_array().expect("messages array");
+
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0]["role"], json!("user"));
+    assert_eq!(messages[0]["content"][0]["text"], json!("..."));
+    assert_eq!(messages[1]["role"], json!("assistant"));
+    assert_eq!(messages[1]["content"][0]["type"], json!("server_tool_use"));
+    assert_eq!(messages[1]["content"][0]["id"], json!("srvtoolu_search_1"));
+    assert_eq!(messages[1]["content"][0]["name"], json!("web_search"));
+    assert_eq!(
+        messages[1]["content"][0]["input"],
+        json!({ "query": "current docs" })
+    );
+
+    assert_eq!(messages[2]["role"], json!("user"));
+    assert_eq!(
+        messages[2]["content"][0]["type"],
+        json!("web_search_tool_result")
+    );
+    assert_eq!(
+        messages[2]["content"][0]["tool_use_id"],
+        json!("srvtoolu_search_1")
+    );
+    assert_eq!(
+        messages[2]["content"][0]["content"],
+        json!([
+            {
+                "type": "web_search_result",
+                "url": "https://example.com/docs",
+                "title": "Docs",
+                "encrypted_content": "enc_result"
+            },
+            {
+                "type": "web_search_tool_result_error",
+                "error_code": "invalid_search_query"
+            }
+        ])
+    );
+}
+
+#[test]
 fn responses_request_to_anthropic_preserves_structured_tool_result_parts_and_error() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
 
@@ -887,6 +969,71 @@ fn responses_response_to_anthropic_maps_reasoning_items_to_thinking_blocks() {
 }
 
 #[test]
+fn responses_response_to_anthropic_maps_web_search_call_and_filters_empty_results() {
+    let input = bytes_from_json(json!({
+        "id": "resp_search",
+        "model": "gpt-5",
+        "output": [
+            {
+                "id": "ws_search_1",
+                "type": "web_search_call",
+                "status": "completed",
+                "action": { "type": "search", "query": "latest docs" },
+                "results": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/docs",
+                        "encrypted_content": "enc_result"
+                    },
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/missing"
+                    },
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/empty",
+                        "encrypted_content": ""
+                    }
+                ]
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "See the sources.",
+                        "annotations": [
+                            { "type": "url_citation", "encrypted_index": "citation_1" },
+                            { "type": "url_citation", "encrypted_index": " " }
+                        ]
+                    }
+                ]
+            }
+        ]
+    }));
+
+    let output = responses_response_to_anthropic(&input, None).expect("transform");
+    let value = json_from_bytes(output);
+    assert_eq!(value["content"][0]["type"], json!("server_tool_use"));
+    assert_eq!(value["content"][0]["id"], json!("srvtoolu_search_1"));
+    assert_eq!(
+        value["content"][0]["input"],
+        json!({ "query": "latest docs" })
+    );
+    assert_eq!(value["content"][1]["type"], json!("web_search_tool_result"));
+    assert_eq!(
+        value["content"][1]["content"],
+        json!([{ "type": "web_search_result", "url": "https://example.com/docs", "encrypted_content": "enc_result" }])
+    );
+    assert_eq!(value["content"][2]["type"], json!("text"));
+    assert_eq!(
+        value["content"][2]["citations"],
+        json!([{ "type": "url_citation", "encrypted_index": "citation_1" }])
+    );
+}
+
+#[test]
 fn anthropic_response_to_responses_maps_thinking_blocks_to_reasoning_items() {
     let input = bytes_from_json(json!({
         "id": "msg_thinking",
@@ -917,6 +1064,73 @@ fn anthropic_response_to_responses_maps_thinking_blocks_to_reasoning_items() {
     assert_eq!(output_items[2]["call_id"], json!("call_1"));
     assert_eq!(output_items[2]["name"], json!("search"));
     assert_eq!(output_items[2]["arguments"], json!("{\"q\":\"x\"}"));
+}
+
+#[test]
+fn anthropic_response_to_responses_maps_web_search_results_and_citations() {
+    let input = bytes_from_json(json!({
+        "id": "msg_search",
+        "model": "claude-3-7-sonnet",
+        "content": [
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_search_1",
+                "name": "web_search",
+                "input": { "query": "latest docs" }
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_search_1",
+                "content": [
+                    {
+                        "type": "web_search_result",
+                        "url": "https://example.com/docs",
+                        "encrypted_content": "enc_result"
+                    },
+                    { "type": "web_search_result", "url": "https://example.com/ignored" },
+                    { "type": "web_search_tool_result_error", "error_code": "search_failed" }
+                ]
+            },
+            {
+                "type": "text",
+                "text": "Use the current docs.",
+                "citations": [
+                    { "type": "web_search_result_location", "encrypted_index": "citation_1" },
+                    { "type": "web_search_result_location", "encrypted_index": "" },
+                    { "type": "web_search_result_location" }
+                ]
+            }
+        ],
+        "usage": { "input_tokens": 2, "output_tokens": 4 }
+    }));
+
+    let output = anthropic_response_to_responses(&input).expect("transform");
+    let value = json_from_bytes(output);
+    let output_items = value["output"].as_array().expect("output array");
+
+    assert_eq!(output_items[0]["type"], json!("web_search_call"));
+    assert_eq!(output_items[0]["id"], json!("ws_srvtoolu_search_1"));
+    assert_eq!(
+        output_items[0]["action"],
+        json!({ "type": "search", "query": "latest docs" })
+    );
+    assert_eq!(
+        output_items[0]["results"],
+        json!([
+            {
+                "type": "web_search_result",
+                "url": "https://example.com/docs",
+                "encrypted_content": "enc_result"
+            },
+            { "type": "web_search_result", "url": "https://example.com/ignored" },
+            { "type": "web_search_tool_result_error", "error_code": "search_failed" }
+        ])
+    );
+    assert_eq!(output_items[1]["type"], json!("message"));
+    assert_eq!(
+        output_items[1]["content"][0]["annotations"],
+        json!([{ "type": "web_search_result_location", "encrypted_index": "citation_1" }])
+    );
 }
 
 #[test]

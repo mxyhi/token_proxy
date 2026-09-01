@@ -237,6 +237,7 @@ fn rewrite_history(value: &mut Value, mapping: &XaiClientToolMapping) -> bool {
                         .is_some_and(|name| mapping.custom_tools.contains(name)) =>
                 {
                     object.insert("type".to_string(), json!("function_call"));
+                    normalize_lowered_function_item_id(object);
                     let input = object
                         .remove("input")
                         .and_then(|value| value.as_str().map(str::to_string))
@@ -249,11 +250,13 @@ fn rewrite_history(value: &mut Value, mapping: &XaiClientToolMapping) -> bool {
                 }
                 Some("custom_tool_call_output") => {
                     object.insert("type".to_string(), json!("function_call_output"));
+                    normalize_lowered_function_item_id(object);
                     stringify_field(object, "output");
                     true
                 }
                 Some("tool_search_call") if mapping.tool_search => {
                     object.insert("type".to_string(), json!("function_call"));
+                    normalize_lowered_function_item_id(object);
                     object.insert("name".to_string(), json!(TOOL_SEARCH_PROXY_NAME));
                     stringify_field(object, "arguments");
                     object.remove("execution");
@@ -261,6 +264,7 @@ fn rewrite_history(value: &mut Value, mapping: &XaiClientToolMapping) -> bool {
                 }
                 Some("tool_search_output") if mapping.tool_search => {
                     object.insert("type".to_string(), json!("function_call_output"));
+                    normalize_lowered_function_item_id(object);
                     stringify_field(object, "output");
                     true
                 }
@@ -287,6 +291,16 @@ fn stringify_field(object: &mut Map<String, Value>, key: &str) {
     } else {
         value.to_string()
     });
+}
+
+fn normalize_lowered_function_item_id(object: &mut Map<String, Value>) {
+    let Some(id) = object.get("id").and_then(Value::as_str) else {
+        return;
+    };
+    let normalized = crate::tool_identity::retyped_responses_tool_call_item_id(id, "function_call");
+    if normalized != id {
+        object.insert("id".to_string(), Value::String(normalized));
+    }
 }
 
 fn rewrite_tool_choice(object: &mut Map<String, Value>, mapping: &XaiClientToolMapping) -> bool {
@@ -452,6 +466,13 @@ fn restore_call_object(object: &mut Map<String, Value>, mapping: &XaiClientToolM
     if mapping.custom_tools.contains(&name) {
         let input = custom_input(object.get("arguments"));
         object.insert("type".to_string(), json!("custom_tool_call"));
+        if let Some(id) = object.get("id").and_then(Value::as_str) {
+            let normalized =
+                crate::tool_identity::retyped_responses_tool_call_item_id(id, "custom_tool_call");
+            if normalized != id {
+                object.insert("id".to_string(), Value::String(normalized));
+            }
+        }
         object.insert("input".to_string(), Value::String(input));
         object.remove("arguments");
         object.remove("namespace");
@@ -460,6 +481,13 @@ fn restore_call_object(object: &mut Map<String, Value>, mapping: &XaiClientToolM
     if mapping.tool_search && name == TOOL_SEARCH_PROXY_NAME {
         let arguments = parsed_arguments(object.get("arguments"));
         object.insert("type".to_string(), json!("tool_search_call"));
+        if let Some(id) = object.get("id").and_then(Value::as_str) {
+            let normalized =
+                crate::tool_identity::retyped_responses_tool_call_item_id(id, "tool_search_call");
+            if normalized != id {
+                object.insert("id".to_string(), Value::String(normalized));
+            }
+        }
         object.insert("execution".to_string(), json!("client"));
         object.insert("arguments".to_string(), arguments);
         object.remove("name");
@@ -499,7 +527,7 @@ fn parsed_arguments(arguments: Option<&Value>) -> Value {
 struct StreamCall {
     kind: StreamCallKind,
     name: String,
-    item_id: String,
+    client_item_id: String,
     call_id: String,
     output_index: u64,
     arguments: String,
@@ -750,10 +778,18 @@ impl XaiClientToolStreamRestorer {
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();
+        let client_item_id = crate::tool_identity::retyped_responses_tool_call_item_id(
+            &item_id,
+            if kind == StreamCallKind::Custom {
+                "custom_tool_call"
+            } else {
+                "tool_search_call"
+            },
+        );
         self.calls.entry(key.clone()).or_insert(StreamCall {
             kind,
             name,
-            item_id,
+            client_item_id,
             call_id: call_id.clone(),
             output_index,
             arguments,
@@ -807,15 +843,15 @@ impl XaiClientToolStreamRestorer {
             events.push(json!({
                 "type": "response.custom_tool_call_input.delta",
                 "output_index": call.output_index,
-                "item_id": call.item_id,
+                "item_id": call.client_item_id,
                 "delta": input
             }));
         }
         events.push(json!({
-            "type": "response.custom_tool_call_input.done",
-            "output_index": call.output_index,
-            "item_id": call.item_id,
-            "call_id": call.call_id,
+                "type": "response.custom_tool_call_input.done",
+                "output_index": call.output_index,
+                "item_id": call.client_item_id,
+                "call_id": call.call_id,
             "name": call.name,
             "input": input
         }));
@@ -863,6 +899,11 @@ impl XaiClientToolStreamRestorer {
                 StreamCallKind::ToolSearch => "tool_search_call",
             }),
         );
+        if let Some(client_id) = self.calls.get(key).map(|call| call.client_item_id.clone()) {
+            if !client_id.is_empty() {
+                item.insert("id".to_string(), Value::String(client_id));
+            }
+        }
         item.remove("namespace");
         if call.kind == StreamCallKind::Custom {
             item.remove("arguments");
@@ -931,6 +972,67 @@ mod tests {
     }
 
     #[test]
+    fn restores_typed_ids_for_client_tools_without_changing_call_ids() {
+        let payload = br#"{"output":[{"id":"fc_custom","type":"function_call","call_id":"call_custom","name":"exec","arguments":"{\"input\":\"pwd\"}"},{"id":"ctc_search","type":"function_call","call_id":"call_search","name":"tool_search","arguments":"{\"query\":\"rust\"}"},{"id":"opaque_id","type":"function_call","call_id":"call_opaque","name":"exec","arguments":"{\"input\":\"ls\"}"}]}"#;
+        let (restored, changed) = restore_json_payload(payload, &mapping()).expect("restore");
+        let value: Value = serde_json::from_slice(&restored).expect("json");
+
+        assert!(changed);
+        assert_eq!(value["output"][0]["id"], "ctc_custom");
+        assert_eq!(value["output"][0]["call_id"], "call_custom");
+        assert_eq!(value["output"][1]["id"], "tsc_search");
+        assert_eq!(value["output"][1]["call_id"], "call_search");
+        assert_eq!(value["output"][2]["id"], "opaque_id");
+        assert_eq!(value["output"][2]["call_id"], "call_opaque");
+    }
+
+    #[test]
+    fn lowers_typed_client_tool_history_to_function_ids() {
+        let mut request = json!({
+            "tools": [
+                { "type": "custom", "name": "exec" },
+                { "type": "tool_search" }
+            ],
+            "input": [
+                {
+                    "id": "ctc_custom",
+                    "type": "custom_tool_call",
+                    "call_id": "call_custom",
+                    "name": "exec",
+                    "input": "pwd"
+                },
+                {
+                    "id": "tsc_search",
+                    "type": "tool_search_call",
+                    "call_id": "call_search",
+                    "arguments": { "query": "rust" }
+                },
+                {
+                    "id": "opaque_id",
+                    "type": "custom_tool_call",
+                    "call_id": "call_opaque",
+                    "name": "exec",
+                    "input": "ls"
+                }
+            ]
+        });
+
+        let object = request.as_object_mut().expect("request object");
+        let (_, changed) = adapt_request(object).expect("adapt request");
+        let input = object["input"].as_array().expect("input");
+
+        assert!(changed);
+        assert_eq!(input[0]["type"], "function_call");
+        assert_eq!(input[0]["id"], "fc_custom");
+        assert_eq!(input[0]["call_id"], "call_custom");
+        assert_eq!(input[1]["type"], "function_call");
+        assert_eq!(input[1]["id"], "fc_search");
+        assert_eq!(input[1]["call_id"], "call_search");
+        assert_eq!(input[2]["id"], "opaque_id");
+        assert_eq!(input[2]["call_id"], "call_opaque");
+    }
+
+    #[test]
     fn filters_internal_x_search_calls_but_keeps_declared_same_name_function() {
         let mut request = json!({
             "tools": [
@@ -976,28 +1078,55 @@ mod tests {
     fn stream_restorer_buffers_custom_arguments_and_resequences() {
         let mut restorer = XaiClientToolStreamRestorer::new(mapping());
         let added = restorer
-            .restore_event(r#"{"type":"response.output_item.added","sequence_number":7,"output_index":0,"item":{"type":"function_call","id":"i1","call_id":"c1","name":"exec","arguments":""},"upstream_extension":{"keep":true}}"#)
+            .restore_event(r#"{"type":"response.output_item.added","sequence_number":7,"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"c1","name":"exec","arguments":""},"upstream_extension":{"keep":true}}"#)
             .expect("added");
         assert_eq!(added.len(), 1);
         let added: Value = serde_json::from_str(&added[0]).expect("json");
         assert_eq!(added["sequence_number"], 7);
         assert_eq!(added["item"]["type"], "custom_tool_call");
+        assert_eq!(added["item"]["id"], "ctc_1");
+        assert_eq!(added["item"]["call_id"], "c1");
         assert_eq!(added["upstream_extension"]["keep"], true);
 
         assert!(restorer
-            .restore_event(r#"{"type":"response.function_call_arguments.delta","sequence_number":8,"output_index":0,"item_id":"i1","delta":"{\"input\":\"pw"}"#)
+            .restore_event(r#"{"type":"response.function_call_arguments.delta","sequence_number":8,"output_index":0,"item_id":"fc_1","delta":"{\"input\":\"pw"}"#)
             .expect("delta")
             .is_empty());
         let done = restorer
-            .restore_event(r#"{"type":"response.function_call_arguments.done","sequence_number":9,"output_index":0,"item_id":"i1","call_id":"c1","name":"exec","arguments":"{\"input\":\"pwd\"}"}"#)
+            .restore_event(r#"{"type":"response.function_call_arguments.done","sequence_number":9,"output_index":0,"item_id":"fc_1","call_id":"c1","name":"exec","arguments":"{\"input\":\"pwd\"}"}"#)
             .expect("done");
         assert_eq!(done.len(), 2);
         let first: Value = serde_json::from_str(&done[0]).expect("json");
         let second: Value = serde_json::from_str(&done[1]).expect("json");
         assert_eq!(first["sequence_number"], 8);
+        assert_eq!(first["item_id"], "ctc_1");
         assert_eq!(first["delta"], "pwd");
         assert_eq!(second["sequence_number"], 9);
+        assert_eq!(second["item_id"], "ctc_1");
+        assert_eq!(second["call_id"], "c1");
         assert_eq!(second["input"], "pwd");
+
+        let item_done = restorer
+            .restore_event(r#"{"type":"response.output_item.done","sequence_number":10,"output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"c1","name":"exec","arguments":"{\"input\":\"pwd\"}"}}"#)
+            .expect("item done");
+        let item_done: Value = serde_json::from_str(&item_done[0]).expect("json");
+        assert_eq!(item_done["item"]["id"], "ctc_1");
+        assert_eq!(item_done["item"]["call_id"], "c1");
+    }
+
+    #[test]
+    fn stream_restorer_retypes_completed_output_snapshot() {
+        let mut restorer = XaiClientToolStreamRestorer::new(mapping());
+        let completed = restorer
+            .restore_event(r#"{"type":"response.completed","sequence_number":7,"response":{"output":[{"type":"function_call","id":"fc_custom","call_id":"call_custom","name":"exec","arguments":"{\"input\":\"pwd\"}"},{"type":"function_call","id":"ctc_search","call_id":"call_search","name":"tool_search","arguments":"{\"query\":\"rust\"}"}]}}"#)
+            .expect("completed");
+        let completed: Value = serde_json::from_str(&completed[0]).expect("json");
+        let output = completed["response"]["output"].as_array().expect("output");
+
+        assert_eq!(output[0]["id"], "ctc_custom");
+        assert_eq!(output[0]["call_id"], "call_custom");
+        assert_eq!(output[1]["id"], "tsc_search");
+        assert_eq!(output[1]["call_id"], "call_search");
     }
 
     #[test]

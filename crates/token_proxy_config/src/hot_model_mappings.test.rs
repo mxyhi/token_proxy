@@ -5,6 +5,10 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
     let mappings = default_hot_model_mappings();
 
     assert_eq!(
+        mappings.get("openai/gpt-6-astra"),
+        Some(&"gpt-6-astra".to_string())
+    );
+    assert_eq!(
         mappings.get("openai/gpt-5.6-sol"),
         Some(&"gpt-5.6-sol".to_string())
     );
@@ -43,6 +47,14 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
     assert_eq!(
         mappings.get("anthropic/claude-sonnet-5"),
         Some(&"claude-sonnet-5".to_string())
+    );
+    assert_eq!(
+        mappings.get("anthropic/claude-fable-5-1"),
+        Some(&"claude-fable-5-1".to_string())
+    );
+    assert_eq!(
+        mappings.get("anthropic/claude-fable-5.1"),
+        Some(&"claude-fable-5-1".to_string())
     );
     assert_eq!(
         mappings.get("anthropic/claude-fable-5"),

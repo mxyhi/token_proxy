@@ -1073,7 +1073,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20260901"
+            "catalog.69854741.b88b66df+curated.20260904"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1132,6 +1132,17 @@ mod tests {
                 "https://ai.google.dev/gemini-api/docs/pricing",
                 "2026-09-01"
             ))
+        );
+        assert_eq!(
+            sources.get("claude-fable-5-1"),
+            Some(&(
+                "https://platform.claude.com/docs/en/about-claude/pricing",
+                "2026-09-04"
+            ))
+        );
+        assert_eq!(
+            sources.get("gpt-6-astra"),
+            Some(&("https://platform.openai.com/docs/pricing", "2026-09-04"))
         );
     }
 
@@ -1200,7 +1211,89 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260901"));
+        assert!(settings.version.contains("+curated.20260904"));
+    }
+
+    #[test]
+    fn claude_fable_5_1_aliases_apply_official_cache_read_discount() {
+        let settings = default_model_pricing_settings();
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            cache_write_5m_tokens: 1,
+            cache_write_1h_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        // Official Fable 5.1: $10 / $0.25 cache read / $12.50 5m / $20 1h / $50 per 1M.
+        for model in [
+            "claude-fable-5-1",
+            "anthropic/claude-fable-5-1",
+            "claude-fable-5.1",
+            "anthropic/claude-fable-5.1",
+        ] {
+            let cost = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                .expect("Fable 5.1 official price");
+            assert_eq!(cost.pricing_model, "claude-fable-5-1", "{model}");
+            assert_eq!(cost.cost_nano_usd, 92_750, "{model}");
+            assert_eq!(cost.breakdown.cache_read_nano_usd, 250, "{model}");
+            assert_eq!(cost.context_tier, PricingContextTier::Standard, "{model}");
+        }
+
+        let fable_5 = calculate_request_cost(&settings, Some("claude-fable-5"), None, None, &usage)
+            .expect("Fable 5 baseline price");
+        assert_eq!(fable_5.pricing_model, "claude-fable-5");
+        assert_eq!(fable_5.breakdown.cache_read_nano_usd, 1_000);
+        assert_ne!(fable_5.cost_nano_usd, 92_750);
+    }
+
+    #[test]
+    fn gpt_6_astra_aliases_apply_official_tiers_and_long_context() {
+        let settings = default_model_pricing_settings();
+        let short_usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            cache_write_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+        let long_usage = BillableUsage {
+            uncached_input_tokens: 272_001,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        // Official GPT-6 Astra: $10 / $1 cache / $12.50 write / $50; 272k+ bills 2x input and 1.5x output.
+        for model in ["gpt-6-astra", "openai/gpt-6-astra"] {
+            let standard = calculate_request_cost(&settings, Some(model), None, None, &short_usage)
+                .expect("GPT-6 Astra standard price");
+            let priority = calculate_request_cost(
+                &settings,
+                Some(model),
+                None,
+                Some("priority"),
+                &short_usage,
+            )
+            .expect("GPT-6 Astra priority price");
+            let fast =
+                calculate_request_cost(&settings, Some(model), None, Some("fast"), &short_usage)
+                    .expect("GPT-6 Astra fast price");
+            let flex =
+                calculate_request_cost(&settings, Some(model), None, Some("flex"), &short_usage)
+                    .expect("GPT-6 Astra flex price");
+            let long = calculate_request_cost(&settings, Some(model), None, None, &long_usage)
+                .expect("GPT-6 Astra long-context price");
+
+            assert_eq!(standard.pricing_model, "gpt-6-astra", "{model}");
+            assert_eq!(standard.cost_nano_usd, 73_500, "{model}");
+            assert_eq!(priority.cost_nano_usd, 147_000, "{model}");
+            assert_eq!(fast.cost_nano_usd, 147_000, "{model}");
+            assert_eq!(flex.cost_nano_usd, 36_750, "{model}");
+            assert_eq!(long.cost_nano_usd, 5_440_095_000, "{model}");
+            assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
+        }
+        assert!(settings.version.contains("+curated.20260904"));
     }
 
     #[test]
@@ -1522,7 +1615,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20260901");
+        assert_eq!(settings.version, "remote.test+curated.20260904");
     }
 
     #[test]

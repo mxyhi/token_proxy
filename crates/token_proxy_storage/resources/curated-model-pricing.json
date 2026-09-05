@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "curated.20260901",
+  "version": "curated.20260904",
   "models": [
     {
       "source": {
@@ -263,6 +263,76 @@
         "serviceTierProfiles": {},
         "longContext": {
           "threshold": 200000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-09-04"
+      },
+      "model": {
+        "modelId": "claude-fable-5-1",
+        "aliases": [
+          "anthropic/claude-fable-5-1",
+          "claude-fable-5.1",
+          "anthropic/claude-fable-5.1"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 10000,
+          "outputNanoUsdPerToken": 50000,
+          "cacheReadNanoUsdPerToken": 250,
+          "cacheWriteNanoUsdPerToken": 12500,
+          "cacheWrite5mNanoUsdPerToken": 12500,
+          "cacheWrite1hNanoUsdPerToken": 20000
+        },
+        "serviceTierProfiles": {},
+        "longContext": null
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://platform.openai.com/docs/pricing",
+        "verifiedAt": "2026-09-04"
+      },
+      "model": {
+        "modelId": "gpt-6-astra",
+        "aliases": [
+          "openai/gpt-6-astra"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 10000,
+          "outputNanoUsdPerToken": 50000,
+          "cacheReadNanoUsdPerToken": 1000,
+          "cacheWriteNanoUsdPerToken": 12500,
+          "cacheWrite5mNanoUsdPerToken": 12500
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 20000,
+            "outputNanoUsdPerToken": 100000,
+            "cacheReadNanoUsdPerToken": 2000,
+            "cacheWriteNanoUsdPerToken": 25000
+          },
+          "fast": {
+            "inputNanoUsdPerToken": 20000,
+            "outputNanoUsdPerToken": 100000,
+            "cacheReadNanoUsdPerToken": 2000,
+            "cacheWriteNanoUsdPerToken": 25000
+          },
+          "flex": {
+            "inputNanoUsdPerToken": 5000,
+            "outputNanoUsdPerToken": 25000,
+            "cacheReadNanoUsdPerToken": 500,
+            "cacheWriteNanoUsdPerToken": 6250
+          }
+        },
+        "longContext": {
+          "threshold": 272000,
           "inputMultiplierScaled": 2000000000000,
           "outputMultiplierScaled": 1500000000000
         }

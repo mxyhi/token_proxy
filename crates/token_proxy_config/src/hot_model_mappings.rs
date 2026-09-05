@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
     ("openai/codex-auto-review", "codex-auto-review"),
+    // GPT-6 Astra 官方 ID 只有 gpt-6-astra；命名空间前缀改写成上游 ID。
+    ("openai/gpt-6-astra", "gpt-6-astra"),
     ("openai/gpt-5.6-sol", "gpt-5.6-sol"),
     ("openai/gpt-5.6-terra", "gpt-5.6-terra"),
     ("openai/gpt-5.6-luna", "gpt-5.6-luna"),
@@ -34,6 +36,9 @@ const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
     ("anthropic/claude-opus-4.6", "claude-opus-4.6"),
     ("anthropic/claude-opus-4.6-fast", "claude-opus-4.6-fast"),
     ("anthropic/claude-sonnet-5", "claude-sonnet-5"),
+    // Fable 5.1 官方 ID 是 claude-fable-5-1；点号写法对齐 opus-4.7 别名。
+    ("anthropic/claude-fable-5-1", "claude-fable-5-1"),
+    ("anthropic/claude-fable-5.1", "claude-fable-5-1"),
     ("anthropic/claude-fable-5", "claude-fable-5"),
     ("anthropic/claude-sonnet-4.6", "claude-sonnet-4.6"),
     ("anthropic/claude-sonnet-4.5", "claude-sonnet-4.5"),

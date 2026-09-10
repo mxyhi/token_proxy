@@ -68,6 +68,72 @@ async fn transformed_xai_body(path: &str, body: &'static [u8], model: &str) -> V
     serde_json::from_slice(&bytes).expect("transformed JSON")
 }
 
+async fn transformed_openai_response_body(provider: &str, body: &[u8]) -> Option<Value> {
+    let upstream = test_upstream(false, false, false);
+    let body = ReplayableBody::from_bytes(Bytes::copy_from_slice(body));
+    let rewritten = match build_json_transformed_body(
+        provider,
+        &upstream,
+        "/v1/responses",
+        &body,
+        &xai_meta("gpt-4o", true),
+        None,
+    )
+    .await
+    {
+        Ok(value) => value,
+        Err(_) => panic!("transform should succeed"),
+    };
+    let Some(rewritten) = rewritten else {
+        return None;
+    };
+    let bytes = rewritten
+        .read_bytes_if_small(4096)
+        .await
+        .expect("read transformed body")
+        .expect("transformed bytes");
+    Some(serde_json::from_slice(&bytes).expect("transformed JSON"))
+}
+
+#[tokio::test]
+async fn openai_response_promotes_additional_tools_into_root_tools() {
+    let value = transformed_openai_response_body(
+        "openai-response",
+        br#"{"model":"qwen","input":[{"type":"message","role":"user","content":"hi"},{"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec"}]}]}]}"#,
+    )
+    .await
+    .expect("body should change");
+
+    assert_eq!(value["input"].as_array().map(Vec::len), Some(1));
+    assert_eq!(value["input"][0]["type"], "message");
+    assert_eq!(value["tools"][0]["type"], "namespace");
+    assert_eq!(value["tools"][0]["name"], "functions");
+}
+
+#[tokio::test]
+async fn openai_response_promotion_skips_duplicate_tool_names() {
+    let value = transformed_openai_response_body(
+        "openai-response",
+        br#"{"model":"qwen","tools":[{"type":"custom","name":"exec"}],"input":[{"type":"additional_tools","tools":[{"type":"custom","name":"exec"},{"type":"function","name":"Bash"}]}]}"#,
+    )
+    .await
+    .expect("body should change");
+
+    assert_eq!(value["tools"].as_array().map(Vec::len), Some(2));
+    assert_eq!(value["tools"][1]["name"], "Bash");
+}
+
+#[tokio::test]
+async fn native_openai_keeps_additional_tools_input_items() {
+    let value = transformed_openai_response_body(
+        "openai",
+        br#"{"model":"gpt-5","input":[{"type":"additional_tools","tools":[{"type":"custom","name":"exec"}]}]}"#,
+    )
+    .await;
+
+    assert!(value.is_none(), "native OpenAI input should pass through");
+}
+
 async fn transformed_body_with_x_search(
     provider: &str,
     path: &str,

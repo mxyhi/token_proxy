@@ -83,7 +83,7 @@ pub(super) async fn xai_client_tool_mapping(
     let Some(object) = value.as_object_mut() else {
         return Ok(None);
     };
-    promote_xai_additional_tools(object);
+    promote_additional_tools(object);
     let (mut mapping, _) =
         token_proxy_protocol::xai_client_tools::adapt_request(object).map_err(|message| {
             AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
@@ -209,6 +209,13 @@ async fn build_json_transformed_body_with_headers(
         body_len,
         filter_limit_bytes,
     );
+    changed |= promote_openai_response_additional_tools(
+        provider,
+        upstream_path,
+        object,
+        body_len,
+        filter_limit_bytes,
+    );
     changed |= filter_xai_responses_request(
         provider,
         upstream_path,
@@ -278,6 +285,7 @@ fn json_transform_read_limit(
     if should_apply_reasoning_effort(provider, upstream_path, meta)
         || should_filter_openai_responses_fields(provider, upstream, upstream_path)
         || should_sanitize_native_openai_responses_input(provider, upstream_path)
+        || should_promote_openai_response_additional_tools(provider, upstream_path)
         || should_filter_xai_responses_request(provider, upstream_path)
         || should_normalize_xai_image_refs(provider)
         || should_strip_openai_responses_sampling_params(provider, upstream_path, meta)
@@ -304,6 +312,7 @@ fn needs_json_transform(
         || should_apply_reasoning_effort(provider, upstream_path, meta)
         || should_filter_openai_responses_fields(provider, upstream, upstream_path)
         || should_sanitize_native_openai_responses_input(provider, upstream_path)
+        || should_promote_openai_response_additional_tools(provider, upstream_path)
         || should_filter_xai_responses_request(provider, upstream_path)
         || should_normalize_xai_image_refs(provider)
         || should_strip_openai_responses_sampling_params(provider, upstream_path, meta)
@@ -549,6 +558,27 @@ fn should_sanitize_native_openai_responses_input(provider: &str, upstream_path: 
     matches!(provider, "openai" | "openai-response") && upstream_path == OPENAI_RESPONSES_PATH
 }
 
+// Third-party Responses upstreams (sglang、vLLM 等) 的 input 类型校验是严格白名单，
+// 会把 Codex 的 `additional_tools` input item 直接 400。声明改放根 tools 是等价写法。
+fn should_promote_openai_response_additional_tools(provider: &str, upstream_path: &str) -> bool {
+    provider == "openai-response" && upstream_path == OPENAI_RESPONSES_PATH
+}
+
+fn promote_openai_response_additional_tools(
+    provider: &str,
+    upstream_path: &str,
+    object: &mut Map<String, Value>,
+    body_len: usize,
+    filter_limit_bytes: usize,
+) -> bool {
+    if body_len > filter_limit_bytes
+        || !should_promote_openai_response_additional_tools(provider, upstream_path)
+    {
+        return false;
+    }
+    promote_additional_tools(object)
+}
+
 /// 删除上游不接受的客户端历史元数据；只处理 direct input item，不触碰 tools 或嵌套 content。
 fn sanitize_native_openai_responses_input(
     provider: &str,
@@ -661,7 +691,7 @@ fn filter_xai_responses_request(
         );
     }
 
-    changed |= promote_xai_additional_tools(object);
+    changed |= promote_additional_tools(object);
     let (_, client_tools_changed) = token_proxy_protocol::xai_client_tools::adapt_request(object)
         .map_err(|message| {
         AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
@@ -736,9 +766,10 @@ fn is_xai_native_x_search_tool(tool: &Value) -> bool {
         .is_some_and(|tool_type| tool_type.trim() == "x_search")
 }
 
-// Responses Lite encodes extra declarations as input items, while xAI accepts
-// declarations only in the root tools array. Preserve root order, then append extras.
-fn promote_xai_additional_tools(object: &mut Map<String, Value>) -> bool {
+// Responses Lite encodes extra declarations as input items, while upstreams such as
+// xAI and sglang accept declarations only in the root tools array. Preserve root
+// order, then append extras, skipping tools that already share the same name.
+fn promote_additional_tools(object: &mut Map<String, Value>) -> bool {
     let Some(input) = object.get_mut("input").and_then(Value::as_array_mut) else {
         return false;
     };
@@ -760,13 +791,26 @@ fn promote_xai_additional_tools(object: &mut Map<String, Value>) -> bool {
 
     if !promoted.is_empty() {
         match object.get_mut("tools") {
-            Some(Value::Array(tools)) => tools.extend(promoted),
+            Some(Value::Array(tools)) => {
+                for tool in promoted {
+                    let name = tool.get("name").and_then(Value::as_str).map(str::trim);
+                    let duplicate = name.is_some_and(|name| {
+                        tools.iter().any(|existing| {
+                            existing.get("name").and_then(Value::as_str).map(str::trim)
+                                == Some(name)
+                        })
+                    });
+                    if !duplicate {
+                        tools.push(tool);
+                    }
+                }
+            }
             _ => {
                 object.insert("tools".to_string(), Value::Array(promoted));
             }
         }
     }
-    tracing::debug!("promoted xAI additional_tools into root tools");
+    tracing::debug!("promoted additional_tools input items into root tools");
     true
 }
 

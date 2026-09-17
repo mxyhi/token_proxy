@@ -122,6 +122,7 @@ pnpm exec tsc --noEmit
 | `enabled` | `true` | 上游级开关（不是账户字段） |
 | `available_models` | `[]` | 入站模型白名单；空表示不限制 |
 | `model_mappings` | `{}` | 精确 / `前缀*` / `*`；优先级：精确 > 最长前缀 > 通配；响应回写原始模型别名 |
+| `overrides.model_capabilities` | `{}` | 可选的按模型三态能力声明，例如 `{ "gpt-5": { "image_input": false, "native_web_search": true } }`；未填写的能力保持未知 |
 | `convert_from_map` | `{}` | 显式声明允许从哪些入站格式转换后使用该 provider。例：`{ "openai-response": ["openai_chat", "anthropic_messages"] }` |
 | `overrides.header` | `{}` | 设置/删除 header（null 表示删除）；hop-by-hop/Host/Content-Length 永远忽略 |
 

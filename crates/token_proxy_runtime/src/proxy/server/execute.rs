@@ -29,11 +29,31 @@ pub(super) async fn prepare_dispatch_request(
     request_start: Instant,
     plan: &DispatchPlan,
 ) -> Result<OutboundRequest, Response> {
+    prepare_dispatch_request_for_model(state, uri, headers, prepared, request_start, plan, false)
+        .await
+}
+
+/// 能力作为请求旁带上下文，不注入上游 JSON；每种转换配方独立缓存。
+pub(super) async fn prepare_dispatch_request_for_model(
+    state: &ProxyState,
+    uri: &Uri,
+    headers: &HeaderMap,
+    prepared: &PreparedRequest,
+    request_start: Instant,
+    plan: &DispatchPlan,
+    text_only: bool,
+) -> Result<OutboundRequest, Response> {
     let outbound_path =
         resolve_outbound_path(&prepared.path, plan, &prepared.meta).map_err(|message| {
             tracing::warn!(provider = plan.provider, "rejected unsafe outbound path");
             http::error_response(axum::http::StatusCode::BAD_REQUEST, message)
         })?;
+    let source_body = if text_only {
+        crate::proxy::model_capabilities::text_only_tool_results(&prepared.source_body)
+            .map_err(|message| http::error_response(axum::http::StatusCode::BAD_REQUEST, message))?
+    } else {
+        prepared.source_body.clone()
+    };
     let body = build_outbound_body_or_respond(
         &state.http_clients,
         &state.log,
@@ -43,7 +63,7 @@ pub(super) async fn prepare_dispatch_request(
         plan,
         &prepared.meta,
         headers,
-        prepared.source_body.clone(),
+        source_body,
         request_start,
         state.config.max_request_body_bytes,
     )

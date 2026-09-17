@@ -15,6 +15,7 @@ mod inbound;
 mod kiro;
 mod log;
 mod model;
+mod model_capabilities;
 pub(crate) mod model_discovery;
 mod openai;
 mod openai_compat;

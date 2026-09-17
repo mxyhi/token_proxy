@@ -21,6 +21,7 @@ fn runtime(id: &str, available_models: &[&str]) -> UpstreamRuntime {
             .map(|model| (*model).to_string())
             .collect(),
         advertised_model_ids: Vec::new(),
+        model_capabilities: Default::default(),
         model_mappings: None,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),

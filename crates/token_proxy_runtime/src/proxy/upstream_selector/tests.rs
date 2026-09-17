@@ -19,6 +19,7 @@ fn runtime(id: &str, selector_key: &str) -> UpstreamRuntime {
         priority: 0,
         available_models: Vec::new(),
         advertised_model_ids: Vec::new(),
+        model_capabilities: Default::default(),
         model_mappings: None,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),

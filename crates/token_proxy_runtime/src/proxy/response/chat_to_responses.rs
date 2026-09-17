@@ -243,18 +243,20 @@ where
         {
             self.finish_reason = Some(finish_reason.to_string());
         }
-        let Some(delta) = choice.get("delta") else {
+        let Some(delta) = choice.get("delta").and_then(Value::as_object) else {
             return;
         };
 
-        if let Some(content) = delta.get("content").and_then(Value::as_str) {
-            self.handle_text_delta(content, token_texts);
-        }
-        if let Some(reasoning_content) = delta.get("reasoning_content").and_then(Value::as_str) {
-            self.handle_reasoning_delta(reasoning_content, token_texts);
+        // 同一事件先交付推理，避免正文块先于其推理块启动。
+        let reasoning = token_proxy_protocol::compat_reason::chat_reasoning_text(delta);
+        if !reasoning.is_empty() {
+            self.handle_reasoning_delta(&reasoning, token_texts);
         }
         if let Some(thinking_blocks) = delta.get("thinking_blocks").and_then(Value::as_array) {
             self.handle_thinking_blocks_delta(thinking_blocks, token_texts);
+        }
+        if let Some(content) = delta.get("content").and_then(Value::as_str) {
+            self.handle_text_delta(content, token_texts);
         }
         if let Some(audio) = delta.get("audio") {
             self.handle_audio_delta(audio);

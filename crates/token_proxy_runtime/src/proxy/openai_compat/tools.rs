@@ -198,3 +198,51 @@ fn copy_optional_tool_key(source: &Map<String, Value>, target: &mut Map<String, 
         target.insert(key.to_string(), value.clone());
     }
 }
+
+/// Chat 没有 allowed_tools 结构：收窄声明后保留 auto/required 选择意图。
+pub(super) fn restrict_allowed_tools_for_chat(
+    object: &mut Map<String, Value>,
+) -> Result<(), String> {
+    let Some(choice) = object
+        .get("tool_choice")
+        .filter(|choice| choice.get("type").and_then(Value::as_str) == Some("allowed_tools"))
+    else {
+        return Ok(());
+    };
+    let names: std::collections::HashSet<String> = choice
+        .get("tools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|tool| {
+            tool.get("name")
+                .or_else(|| tool.get("function")?.get("name"))?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .collect();
+    let mode = choice
+        .get("mode")
+        .and_then(Value::as_str)
+        .unwrap_or("auto")
+        .to_owned();
+    if !matches!(mode.as_str(), "auto" | "required") {
+        return Err("Unsupported allowed_tools mode.".to_string());
+    }
+    let Some(tools) = object.get_mut("tools").and_then(Value::as_array_mut) else {
+        return Err("allowed_tools requires tool declarations.".to_string());
+    };
+    tools.retain(|tool| {
+        tool.get("name")
+            .or_else(|| tool.get("function")?.get("name"))
+            .and_then(Value::as_str)
+            .is_some_and(|name| names.contains(name))
+    });
+    if tools.is_empty() {
+        return Err("allowed_tools does not match any declared tool.".to_string());
+    }
+    let count = tools.len();
+    object.insert("tool_choice".into(), json!(mode));
+    tracing::debug!(count, "restricted Chat tool declarations to allowed_tools");
+    Ok(())
+}

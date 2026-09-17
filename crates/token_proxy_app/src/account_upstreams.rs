@@ -425,6 +425,7 @@ mod tests {
         existing.filter_prompt_cache_retention = true;
         existing.rewrite_developer_role_to_system = true;
         existing.overrides = Some(UpstreamOverrides {
+            model_capabilities: Default::default(),
             header: HashMap::from([("X-Custom".to_string(), Some("v".to_string()))]),
         });
 

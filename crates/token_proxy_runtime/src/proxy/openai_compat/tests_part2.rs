@@ -705,22 +705,22 @@ fn responses_request_to_chat_accepts_additional_tool_output_item_types() {
 
     let messages = value["messages"].as_array().expect("messages array");
     assert_eq!(messages.len(), 3);
-    assert_eq!(messages[0]["role"], json!("tool"));
-    assert_eq!(messages[0]["tool_call_id"], json!("call_tool"));
+    assert_eq!(messages[0]["role"], json!("user"));
+    assert!(messages[0]["tool_call_id"].is_null());
     assert_eq!(messages[0]["content"], json!("tool ok"));
-    assert_eq!(messages[1]["tool_call_id"], json!("call_computer"));
-    assert_eq!(messages[2]["tool_call_id"], json!("call_search"));
+    assert!(messages[1]["tool_call_id"].is_null());
+    assert!(messages[2]["tool_call_id"].is_null());
 }
 
 #[test]
-fn responses_request_to_chat_skips_tool_output_without_call_id() {
+fn responses_request_to_chat_preserves_tool_output_without_call_id() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let value = transform_request_value(
         FormatTransform::ResponsesToChat,
         json!({
             "model": "gpt-5",
             "input": [
-                { "type": "function_call_output", "output": "ignored" },
+                { "type": "function_call_output", "output": "retained" },
                 { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] }
             ]
         }),
@@ -729,9 +729,10 @@ fn responses_request_to_chat_skips_tool_output_without_call_id() {
     );
 
     let messages = value["messages"].as_array().expect("messages array");
-    assert_eq!(messages.len(), 1);
+    assert_eq!(messages.len(), 2);
     assert_eq!(messages[0]["role"], json!("user"));
-    assert_eq!(messages[0]["content"], json!("hi"));
+    assert_eq!(messages[0]["content"], json!("retained"));
+    assert_eq!(messages[1]["content"], json!("hi"));
 }
 
 #[test]
@@ -755,8 +756,8 @@ fn responses_request_to_chat_normalizes_object_tool_output_to_string() {
 
     let messages = value["messages"].as_array().expect("messages array");
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0]["role"], json!("tool"));
-    assert_eq!(messages[0]["tool_call_id"], json!("call_123"));
+    assert_eq!(messages[0]["role"], json!("user"));
+    assert!(messages[0]["tool_call_id"].is_null());
     let content = messages[0]["content"].as_str().expect("string content");
     assert_eq!(
         serde_json::from_str::<Value>(content).expect("json string"),

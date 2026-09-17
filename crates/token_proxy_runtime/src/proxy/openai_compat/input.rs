@@ -16,7 +16,7 @@ pub(super) fn responses_input_to_chat_messages(items: &[Value]) -> Result<Vec<Va
             &mut pending_gemini_signature,
         )?;
     }
-    Ok(messages)
+    Ok(super::tool_results::repair_orphan_results(messages))
 }
 
 fn append_responses_input_item_to_chat_messages(
@@ -231,11 +231,13 @@ fn attach_pending_reasoning(message: &mut Map<String, Value>, pending_reasoning:
 }
 
 fn responses_tool_output_item_to_chat_message(item: &Map<String, Value>) -> Option<Value> {
-    let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
-    if call_id.is_empty() {
+    // 服务端搜索生命周期项本身没有工具结果内容，不能合成空 user 消息。
+    if item.get("type").and_then(Value::as_str) == Some("web_search_call")
+        && !item.contains_key("output")
+    {
         return None;
     }
-
+    let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
     Some(json!({
         "role": "tool",
         "tool_call_id": call_id,

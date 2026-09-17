@@ -122,6 +122,7 @@ Notes:
 | `enabled` | `true` | Per-upstream toggle (not an account field). Disabled upstreams are skipped. |
 | `available_models` | `[]` | Inbound model allowlist; empty = no restriction. |
 | `model_mappings` | `{}` | Exact / `prefix*` / `*`. Priority: exact > longest prefix > wildcard. Response echoes original alias. |
+| `overrides.model_capabilities` | `{}` | Optional per-model tri-state capabilities, e.g. `{ "gpt-5": { "image_input": false, "native_web_search": true } }`; omitted values stay unknown. |
 | `convert_from_map` | `{}` | Explicitly allow inbound format conversion per provider. Example: `{ "openai-response": ["openai_chat", "anthropic_messages"] }`. |
 | `overrides.header` | `{}` | Set/remove headers (null removes). Hop-by-hop/Host/Content-Length are always ignored. |
 

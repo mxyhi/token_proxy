@@ -394,7 +394,7 @@ function UpstreamHeaderOverrideFields({
       value: "",
       isNull: false,
     };
-    onChangeDraft({ overrides: { header: [...draft.overrides.header, next] } });
+    onChangeDraft({ overrides: { ...draft.overrides, header: [...draft.overrides.header, next] } });
   };
 
   return (
@@ -424,7 +424,7 @@ function UpstreamHeaderOverrideFields({
       {draft.overrides.header.length ? (
         <HeaderOverridesEditor
           overrides={draft.overrides.header}
-          onChange={(header) => onChangeDraft({ overrides: { header } })}
+          onChange={(header) => onChangeDraft({ overrides: { ...draft.overrides, header } })}
         />
       ) : null}
     </div>

@@ -186,7 +186,7 @@ describe("dashboard/RecentRequestsTable", () => {
       "Status",
       "Tokens",
       "Cost",
-      "Upstream response headers (ms)",
+      "Channel response headers (ms)",
     ]);
 
     const rows = table.querySelectorAll('[data-slot="recent-requests-table-row"]');
@@ -349,7 +349,7 @@ describe("dashboard/RecentRequestsTable", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByText("Upstream response headers (ms)")).toBeInTheDocument();
+    expect(screen.getByText("Channel response headers (ms)")).toBeInTheDocument();
     expect(screen.getByText("8")).toBeInTheDocument();
     expect(screen.queryByText("30")).toBeNull();
 

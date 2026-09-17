@@ -68,20 +68,20 @@ _Avoid_: 基础计价目录、sub2api 快照、用户自定义计价、模型映
 可重试失败后，在切换到其它上游之前，对同一上游额外再发的次数；由全局配置 `same_upstream_retry_count` 控制，默认 1，0 表示关闭。
 _Avoid_: 跨上游 failover、冷却
 
-**Upstream（上游）**:
-全局 routing/retry 策略作用的唯一候选/调度单元；单条 Upstream 自身承载 provider 能力、priority、proxy、enabled、模型限制/映射与 credential 等已实现字段（`same_upstream_retry_count` / `upstream_strategy` 为全局配置，非 per-upstream 字段）。
+**Channel / Upstream（渠道）**:
+面向用户统一称为“渠道 / Channel”。全局 routing/retry 策略作用的唯一候选/调度单元；单条 Upstream 自身承载 provider 能力、priority、proxy、enabled、模型限制/映射与 credential 等已实现字段（`same_upstream_retry_count` / `upstream_strategy` 为全局配置，非 per-upstream 字段）。
 _Avoid_: Provider 条目、独立账户路由项、Accounts 池中的可调度对象、per-upstream retry/dispatch/order
 
-**Upstream Priority（上游优先级）**:
-生成请求中，所有符合入站格式和模型约束的上游共享的优先顺序；不同 Provider 的上游按同一优先级比较，同优先级共享排序和派发策略。
+**Channel Priority（渠道优先级）**:
+生成请求中，所有符合入站格式和模型约束的渠道共享的优先顺序；不同 Provider 的渠道按同一优先级比较，同优先级共享排序和派发策略。
 _Avoid_: Provider 先耗尽、协议类型优先于已配置的上游优先级
 
 **Provider Account / 账户凭据身份**:
 持久化认证身份（OAuth token、Agent Identity 等），供 Account-backed Upstream 引用；不再独立承载 priority、proxy 或 enabled。
 _Avoid_: 可调度账户、账户优先级、账户代理、账户开关
 
-**Account-backed Upstream（账户型上游）**:
-绑定一个 Kiro / Codex / xAI Provider Account 的 Upstream；一个 account 对应一条稳定 Upstream，credential identity 与 routing fields 分离。
+**Account-backed Channel（账户型渠道）**:
+绑定一个 Kiro / Codex / xAI 账户凭据身份的渠道；一个账户对应一条稳定渠道，凭据身份与路由设置分离。
 _Avoid_: 前端构造的 default upstream、多 Upstream 共享同一 account、账户侧 priority/proxy/enabled
 
 **Request Repair Retry（请求修复重试）**:
@@ -264,3 +264,7 @@ _Avoid_: 按类型猜 ID、伪造 ID、覆盖已有 ID
 **SSE Done Boundary（SSE Done 边界）**:
 OpenAI-compatible SSE 中的 \`[DONE]\` 终止哨兵；它只输出一次，哨兵后的同批及后续 payload 不属于客户端响应。
 _Avoid_: 把 \`[DONE]\` 当 JSON 事件、继续转发终止后的 payload
+
+**Account Model Catalog（账户模型目录）**:
+由渠道绑定账户的服务方返回的实时候选模型；刷新候选不会改变用户已选的可用模型限制，目录获取失败不等于空目录。
+_Avoid_: 内置模型清单、所有账户模型并集、已保存的模型白名单

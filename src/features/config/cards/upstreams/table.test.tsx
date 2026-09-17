@@ -73,7 +73,7 @@ describe("upstreams/table", () => {
 
     const header = screen.getByRole("columnheader", { name: "Actions" });
     const actionButton = screen.getByRole("button", {
-      name: /edit upstream/i,
+      name: /edit channel/i,
     });
     const actionCell = actionButton.closest("td");
 
@@ -100,7 +100,7 @@ describe("upstreams/table", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: /delete upstream/i })
+      screen.getByRole("button", { name: /delete channel/i })
     ).toBeDisabled();
   });
 
@@ -122,7 +122,7 @@ describe("upstreams/table", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: /copy upstream/i })
+      screen.getByRole("button", { name: /copy channel/i })
     ).toBeDisabled();
   });
 });

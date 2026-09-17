@@ -7,10 +7,23 @@ const DEFAULT_ANTHROPIC_VERSION: &str = "2023-06-01";
 
 #[tauri::command]
 pub async fn fetch_upstream_models(
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
     provider: String,
     base_url: String,
     api_key: String,
+    account_id: Option<String>,
+    proxy_url: Option<String>,
 ) -> Result<Vec<String>, String> {
+    if matches!(provider.as_str(), "kiro" | "codex" | "xai") {
+        // 账户渠道走固定身份与官方目录，不能把 OAuth 凭据用于表单中的任意地址。
+        return token_proxy_app
+            .fetch_account_models(
+                &provider,
+                account_id.as_deref().unwrap_or(""),
+                proxy_url.as_deref(),
+            )
+            .await;
+    }
     let api_key = api_key.trim();
     let url = build_model_catalog_url(&provider, &base_url, api_key)?;
     tracing::debug!(provider = %provider, "fetching upstream model catalog");
@@ -25,23 +38,23 @@ pub async fn fetch_upstream_models(
             // Gemini key 位于 query 中；移除 URL，避免错误文本和日志泄漏凭证。
             let err = err.without_url();
             tracing::warn!(provider = %provider, error = %err, "failed to fetch upstream model catalog");
-            format!("请求上游模型列表失败: {err}")
+            format!("请求渠道模型列表失败: {err}")
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         tracing::warn!(provider = %provider, %status, "upstream model catalog returned an error");
-        return Err(format!("上游模型列表返回错误: {status}"));
+        return Err(format!("渠道模型列表返回错误: {status}"));
     }
 
     let body: Value = response
         .json()
         .await
-        .map_err(|err| format!("解析上游模型列表失败: {err}"))?;
+        .map_err(|err| format!("解析渠道模型列表失败: {err}"))?;
     let models = extract_upstream_model_ids(&body);
 
     if models.is_empty() {
-        return Err("上游未返回可用模型。".to_string());
+        return Err("渠道未返回可用模型。".to_string());
     }
 
     tracing::info!(provider = %provider, model_count = models.len(), "fetched upstream model catalog");

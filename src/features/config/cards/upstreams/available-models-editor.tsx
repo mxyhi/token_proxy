@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { isAccountProviderKind } from "@/features/config/cards/upstreams/upstream-editor-helpers";
 import type { UpstreamForm } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 import { invoke } from "@tauri-apps/api/core";
@@ -47,9 +48,11 @@ export function AvailableModelsEditor({
   const [fetching, setFetching] = useState(false);
   const [feedback, setFeedback] = useState("");
   const provider = draft.providers[0]?.trim() ?? "";
-  const canFetch =
-    ["openai", "openai-response", "anthropic", "gemini"].includes(provider) &&
-    !!draft.baseUrl.trim();
+  const isAccount = isAccountProviderKind(provider);
+  const canFetch = isAccount
+    ? !!draft.accountId.trim()
+    : ["openai", "openai-response", "anthropic", "gemini"].includes(provider) &&
+      !!draft.baseUrl.trim();
   const selectedModels = mergeModels(draft.availableModels);
   const selectedModelSet = new Set(selectedModels);
   const visibleOptions = mergeModels(options, selectedModels).filter((model) =>
@@ -106,8 +109,13 @@ export function AvailableModelsEditor({
   };
 
   const fetchModels = async () => {
-    if (!draft.baseUrl.trim()) {
-      setFeedback(m.available_models_base_url_required());
+    if (fetching) {
+      return;
+    }
+    if (!canFetch) {
+      setFeedback(
+        isAccount ? m.upstreams_account_missing() : m.available_models_base_url_required(),
+      );
       return;
     }
     setFetching(true);
@@ -117,6 +125,10 @@ export function AvailableModelsEditor({
         provider,
         baseUrl: draft.baseUrl.trim(),
         apiKey: firstApiKey(draft.apiKeys),
+        // 账户鉴权由后端解析固定身份；凭据不进入前端或自定义 Base URL。
+        ...(isAccount
+          ? { accountId: draft.accountId.trim(), proxyUrl: draft.proxyUrl.trim() }
+          : {}),
       });
       if (!models.length) {
         setFeedback(m.available_models_sync_empty());

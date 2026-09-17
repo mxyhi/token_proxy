@@ -72,6 +72,10 @@ _Avoid_: 跨上游 failover、冷却
 全局 routing/retry 策略作用的唯一候选/调度单元；单条 Upstream 自身承载 provider 能力、priority、proxy、enabled、模型限制/映射与 credential 等已实现字段（`same_upstream_retry_count` / `upstream_strategy` 为全局配置，非 per-upstream 字段）。
 _Avoid_: Provider 条目、独立账户路由项、Accounts 池中的可调度对象、per-upstream retry/dispatch/order
 
+**Upstream Priority（上游优先级）**:
+生成请求中，所有符合入站格式和模型约束的上游共享的优先顺序；不同 Provider 的上游按同一优先级比较，同优先级共享排序和派发策略。
+_Avoid_: Provider 先耗尽、协议类型优先于已配置的上游优先级
+
 **Provider Account / 账户凭据身份**:
 持久化认证身份（OAuth token、Agent Identity 等），供 Account-backed Upstream 引用；不再独立承载 priority、proxy 或 enabled。
 _Avoid_: 可调度账户、账户优先级、账户代理、账户开关

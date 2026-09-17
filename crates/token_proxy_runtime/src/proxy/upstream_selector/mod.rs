@@ -101,6 +101,16 @@ impl UpstreamSelectorRuntime {
         base_order: Vec<usize>,
         scope: &CooldownScope,
     ) -> Vec<usize> {
+        let candidates: Vec<_> = items.iter().map(|item| (provider, item, scope)).collect();
+        self.prioritize_candidates(&candidates, base_order)
+    }
+
+    /// 全局同级候选仍使用各自 Provider/会话的冷却域，不能把 Codex 冷却扩散给 API-key 上游。
+    pub(crate) fn prioritize_candidates(
+        &self,
+        candidates: &[(&str, &UpstreamRuntime, &CooldownScope)],
+        base_order: Vec<usize>,
+    ) -> Vec<usize> {
         let now = Instant::now();
         let mut ready = Vec::with_capacity(base_order.len());
         let mut cooled = Vec::new();
@@ -115,7 +125,8 @@ impl UpstreamSelectorRuntime {
         // 2. 再把仍在 cooldown 的 upstream 后置，避免每个请求都重复撞到刚失败的账号。
         // 如果整组都在 cooldown，则按最早恢复时间优先，保证请求仍有机会探测恢复。
         for (position, item_index) in base_order.into_iter().enumerate() {
-            let upstream_key = items[item_index].selector_key.as_str();
+            let (provider, upstream, scope) = candidates[item_index];
+            let upstream_key = upstream.selector_key.as_str();
             let key = CooldownKey::new(provider, upstream_key, scope);
             match cooldowns.get(&key).copied() {
                 Some(until) if until > now => cooled.push((position, item_index, until)),

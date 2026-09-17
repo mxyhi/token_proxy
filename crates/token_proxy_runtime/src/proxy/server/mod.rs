@@ -37,6 +37,8 @@ mod execute;
 mod fallback;
 mod inbound;
 mod prepared;
+mod priority;
+mod routes;
 #[cfg(test)]
 use super::openai_compat::{
     FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES, RESPONSES_PATH,

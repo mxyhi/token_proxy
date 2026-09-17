@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "global_priority.test.rs"]
+mod global_priority;
+
 use axum::{
     body::{to_bytes, Body, Bytes},
     extract::State,
@@ -1980,6 +1983,7 @@ async fn build_test_state_handle_with_paths(
 ) -> ProxyStateHandle {
     let app_proxy = token_proxy_account_store::app_proxy::new_state();
     let cursors = build_upstream_cursors(&config);
+    let global_upstreams = super::super::upstream::build_global_upstreams(&config);
     let kiro_accounts = Arc::new(
         token_proxy_account_kiro::KiroAccountStore::new(&paths, app_proxy.clone())
             .expect("kiro store"),
@@ -2065,6 +2069,7 @@ async fn build_test_state_handle_with_paths(
         http_clients: super::super::http_client::ProxyHttpClients::new().expect("http clients"),
         log: Arc::new(super::super::log::LogWriter::new(log_pool)),
         cursors,
+        global_upstreams,
         upstream_selector:
             super::super::upstream_selector::UpstreamSelectorRuntime::new_with_cooldown(
                 retryable_failure_cooldown,
@@ -9881,15 +9886,15 @@ fn retry_fallback_plan_keeps_messages_pairing() {
 }
 
 #[test]
-fn responses_same_protocol_preferred_over_priority() {
+fn responses_global_priority_precedes_same_protocol_preference() {
     let config = config_with_upstreams(&[
         (PROVIDER_RESPONSES, 0, "resp", FORMATS_RESPONSES),
         (PROVIDER_CHAT, 10, "chat", FORMATS_ALL),
     ]);
     let plan = resolve_dispatch_plan(&config, RESPONSES_PATH).expect("should dispatch");
-    assert_eq!(plan.provider, PROVIDER_RESPONSES);
-    assert_eq!(plan.request_transform, FormatTransform::None);
-    assert_eq!(plan.response_transform, FormatTransform::None);
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+    assert_eq!(plan.request_transform, FormatTransform::ResponsesToChat);
+    assert_eq!(plan.response_transform, FormatTransform::ChatToResponses);
 }
 
 #[test]
@@ -9984,16 +9989,22 @@ fn anthropic_beta_query_is_preserved_for_native_anthropic() {
 }
 
 #[test]
-fn anthropic_messages_prefers_kiro_without_conversion() {
+fn anthropic_messages_global_priority_precedes_native_kiro_preference() {
     let config = config_with_upstreams(&[
         (PROVIDER_RESPONSES, 10, "resp", FORMATS_ALL),
         (PROVIDER_KIRO, 0, "kiro", FORMATS_KIRO_NATIVE),
     ]);
     let plan = resolve_dispatch_plan(&config, "/v1/messages").expect("should fallback");
-    assert_eq!(plan.provider, PROVIDER_KIRO);
+    assert_eq!(plan.provider, PROVIDER_RESPONSES);
     assert_eq!(plan.outbound_path, Some(RESPONSES_PATH));
-    assert_eq!(plan.request_transform, FormatTransform::None);
-    assert_eq!(plan.response_transform, FormatTransform::KiroToAnthropic);
+    assert_eq!(
+        plan.request_transform,
+        FormatTransform::AnthropicToResponses
+    );
+    assert_eq!(
+        plan.response_transform,
+        FormatTransform::ResponsesToAnthropic
+    );
 }
 
 #[test]

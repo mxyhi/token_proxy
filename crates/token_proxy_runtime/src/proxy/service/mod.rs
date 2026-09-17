@@ -621,6 +621,7 @@ async fn build_proxy_state(
     let log = Arc::new(LogWriter::new(sqlite_pool));
     let http_clients = super::http_client::ProxyHttpClients::new()?;
     let cursors = server::build_upstream_cursors(&config);
+    let global_upstreams = super::upstream::build_global_upstreams(&config);
     let request_detail = ctx.request_detail.clone();
     let token_rate = ctx.token_rate.clone();
     let kiro_accounts = ctx.kiro_accounts.clone();
@@ -637,6 +638,7 @@ async fn build_proxy_state(
         http_clients,
         log,
         cursors,
+        global_upstreams,
         request_detail,
         token_rate,
         model_discovery: Arc::new(super::model_discovery::UpstreamModelDiscoveryCache::new()),

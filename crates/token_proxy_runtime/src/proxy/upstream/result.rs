@@ -337,7 +337,7 @@ pub(super) fn resolve_provider_upstreams<'a>(
     }
 }
 
-pub(super) fn finalize_forward_result(
+pub(crate) fn finalize_forward_result(
     state: &ProxyState,
     provider: &str,
     inbound_path: &str,
@@ -425,11 +425,16 @@ fn finalize_forward_response(
         return http::error_response(StatusCode::NOT_FOUND, message);
     }
     if let Some(response) = summary.last_retry_response {
+        let provider = summary.last_retry_provider.as_deref().unwrap_or(provider);
         // 固定账户：仅 distinct runtime Upstream > 1 时 mask 401/403→503。
         // should_fallback 已在 finalize_forward_result 按 last_retry_response 存在算 true，
         // 本转换不改 fallback 能力，跨 provider 仍可继续。
         // 勿用 summary.attempted：same-upstream retry / Agent Identity 内部恢复会放大它。
-        let distinct = summary.attempted_upstream_keys.len();
+        let distinct = summary
+            .attempted_upstream_keys
+            .iter()
+            .filter(|(attempt_provider, _)| attempt_provider == provider)
+            .count();
         if is_fixed_account_auth_status_to_mask(provider, response.status(), distinct) {
             let message =
                 format!("All {provider} fixed-account upstreams exhausted after auth failure");
@@ -481,7 +486,7 @@ fn finalize_forward_response(
             log,
             request_detail,
             meta,
-            provider,
+            &deferred.provider,
             upstream_id,
             deferred.account_id.as_deref(),
             inbound_path,

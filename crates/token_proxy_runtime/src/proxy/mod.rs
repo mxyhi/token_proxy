@@ -47,6 +47,7 @@ struct ProxyState {
     http_clients: http_client::ProxyHttpClients,
     log: Arc<log::LogWriter>,
     cursors: HashMap<String, Vec<AtomicUsize>>,
+    global_upstreams: Vec<upstream::GlobalUpstreamGroup>,
     upstream_selector: upstream_selector::UpstreamSelectorRuntime,
     account_selector: account_selector::AccountSelectorRuntime,
     request_detail: Arc<request_detail::RequestDetailCapture>,

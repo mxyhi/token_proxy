@@ -31,7 +31,6 @@ pub(crate) struct PreparedRequest {
     pub(crate) client_gemini_api_key: Option<String>,
     pub(crate) request_detail: Option<RequestDetailSnapshot>,
     pub(crate) source_body: ReplayableBody,
-    pub(crate) outbound_body: ReplayableBody,
     pub(crate) request_auth: http::RequestAuth,
 }
 
@@ -106,20 +105,6 @@ pub(super) async fn finalize_prepared_request(
     let client_gemini_api_key =
         http::resolve_client_gemini_api_key(&state.config, headers, &inbound.path, uri.query())
             .map_err(|message| http::error_response(StatusCode::UNAUTHORIZED, message))?;
-    let outbound_body = build_outbound_body_or_respond(
-        &state.http_clients,
-        &state.log,
-        inbound.request_detail.clone(),
-        inbound.client_ip.clone(),
-        &inbound.path,
-        &inbound.plan,
-        &inbound.meta,
-        headers,
-        inbound.body,
-        request_start,
-        state.config.max_request_body_bytes,
-    )
-    .await?;
     let request_auth = resolve_request_auth_or_respond(
         &state.config,
         headers,
@@ -139,7 +124,6 @@ pub(super) async fn finalize_prepared_request(
         client_gemini_api_key,
         request_detail: inbound.request_detail,
         source_body,
-        outbound_body,
         request_auth,
     })
 }

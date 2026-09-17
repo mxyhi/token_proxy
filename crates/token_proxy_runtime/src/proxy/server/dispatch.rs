@@ -5,14 +5,12 @@ use crate::proxy::server_helpers::is_anthropic_path;
 
 use super::{
     super::{
-        codex_compat, codex_models_manifest,
+        codex_models_manifest,
         config::{InboundApiFormat, ProxyConfig},
         gemini,
         inbound::detect_inbound_api_format,
         openai,
-        openai_compat::{
-            FormatTransform, CHAT_PATH, PROVIDER_CHAT, PROVIDER_RESPONSES, RESPONSES_PATH,
-        },
+        openai_compat::{FormatTransform, PROVIDER_CHAT, PROVIDER_RESPONSES},
         RequestMeta,
     },
     CODEX_RESPONSES_PATH, ERROR_NO_UPSTREAM, PROVIDER_ANTHROPIC, PROVIDER_CODEX, PROVIDER_GEMINI,
@@ -127,51 +125,6 @@ fn choose_provider_by_priority(
     selected.map(|(provider, _)| provider)
 }
 
-fn resolve_gemini_plan(config: &ProxyConfig, path: &str) -> Option<Result<DispatchPlan, String>> {
-    if !gemini::is_gemini_path(path) {
-        return None;
-    }
-    let inbound_format = Some(InboundApiFormat::Gemini);
-    if let Some(selected) = choose_provider_by_priority(config, inbound_format, &[PROVIDER_GEMINI])
-    {
-        return Some(Ok(base_plan(selected)));
-    }
-    let fallback = choose_provider_by_priority(
-        config,
-        inbound_format,
-        &[
-            PROVIDER_RESPONSES,
-            PROVIDER_XAI,
-            PROVIDER_CHAT,
-            PROVIDER_ANTHROPIC,
-        ],
-    );
-    let Some(fallback) = fallback else {
-        return Some(Err(ERROR_NO_UPSTREAM.to_string()));
-    };
-    Some(Ok(match fallback {
-        PROVIDER_RESPONSES | PROVIDER_XAI => DispatchPlan {
-            provider: fallback,
-            outbound_path: Some(RESPONSES_PATH),
-            request_transform: FormatTransform::GeminiToResponses,
-            response_transform: FormatTransform::ResponsesToGemini,
-        },
-        PROVIDER_CHAT => DispatchPlan {
-            provider: PROVIDER_CHAT,
-            outbound_path: Some(CHAT_PATH),
-            request_transform: FormatTransform::GeminiToChat,
-            response_transform: FormatTransform::ChatToGemini,
-        },
-        PROVIDER_ANTHROPIC => DispatchPlan {
-            provider: PROVIDER_ANTHROPIC,
-            outbound_path: Some("/v1/messages"),
-            request_transform: FormatTransform::GeminiToAnthropic,
-            response_transform: FormatTransform::AnthropicToGemini,
-        },
-        _ => base_plan(PROVIDER_RESPONSES),
-    }))
-}
-
 fn resolve_gemini_native_plan(
     config: &ProxyConfig,
     path: &str,
@@ -271,65 +224,6 @@ fn resolve_anthropic_plan(
         return None;
     }
     let inbound_format = Some(InboundApiFormat::AnthropicMessages);
-    if path == ANTHROPIC_MESSAGES_PATH {
-        if let Some(selected) = choose_provider_by_priority(
-            config,
-            inbound_format,
-            &[PROVIDER_ANTHROPIC, PROVIDER_KIRO],
-        ) {
-            return Some(Ok(match selected {
-                PROVIDER_ANTHROPIC => base_plan(PROVIDER_ANTHROPIC),
-                PROVIDER_KIRO => DispatchPlan {
-                    provider: PROVIDER_KIRO,
-                    outbound_path: Some(RESPONSES_PATH),
-                    request_transform: FormatTransform::None,
-                    response_transform: FormatTransform::KiroToAnthropic,
-                },
-                _ => base_plan(PROVIDER_ANTHROPIC),
-            }));
-        }
-        let fallback = choose_provider_by_priority(
-            config,
-            inbound_format,
-            &[
-                PROVIDER_RESPONSES,
-                PROVIDER_XAI,
-                PROVIDER_CODEX,
-                PROVIDER_CHAT,
-                PROVIDER_GEMINI,
-            ],
-        );
-        let Some(fallback) = fallback else {
-            return Some(Err(ERROR_NO_UPSTREAM.to_string()));
-        };
-        return Some(Ok(match fallback {
-            PROVIDER_RESPONSES | PROVIDER_XAI => DispatchPlan {
-                provider: fallback,
-                outbound_path: Some(RESPONSES_PATH),
-                request_transform: FormatTransform::AnthropicToResponses,
-                response_transform: FormatTransform::ResponsesToAnthropic,
-            },
-            PROVIDER_CODEX => DispatchPlan {
-                provider: PROVIDER_CODEX,
-                outbound_path: Some(CODEX_RESPONSES_PATH),
-                request_transform: FormatTransform::AnthropicToCodex,
-                response_transform: FormatTransform::CodexToAnthropic,
-            },
-            PROVIDER_CHAT => DispatchPlan {
-                provider: PROVIDER_CHAT,
-                outbound_path: Some(CHAT_PATH),
-                request_transform: FormatTransform::AnthropicToChat,
-                response_transform: FormatTransform::ChatToAnthropic,
-            },
-            PROVIDER_GEMINI => DispatchPlan {
-                provider: PROVIDER_GEMINI,
-                outbound_path: None,
-                request_transform: FormatTransform::AnthropicToGemini,
-                response_transform: FormatTransform::GeminiToAnthropic,
-            },
-            _ => base_plan(PROVIDER_RESPONSES),
-        }));
-    }
     if path == ANTHROPIC_COUNT_TOKENS_PATH {
         if provider_rank_for_inbound(config, PROVIDER_ANTHROPIC, inbound_format).is_some() {
             return Some(Ok(base_plan(PROVIDER_ANTHROPIC)));
@@ -469,8 +363,15 @@ pub(super) fn resolve_dispatch_plan_with_request(
     if let Some(plan) = resolve_openai_native_plan(config, path) {
         return plan;
     }
-    if let Some(plan) = resolve_gemini_plan(config, path) {
-        return plan;
+    if let Some(plans) = super::routes::compatible_plans(config, path, headers) {
+        let providers: Vec<_> = plans.iter().map(|plan| plan.provider).collect();
+        let provider =
+            choose_provider_by_priority(config, detect_inbound_api_format(path), &providers)
+                .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
+        return plans
+            .into_iter()
+            .find(|plan| plan.provider == provider)
+            .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
     }
     if let Some(plan) = resolve_gemini_native_plan(config, path) {
         return plan;
@@ -479,134 +380,7 @@ pub(super) fn resolve_dispatch_plan_with_request(
         return plan;
     }
 
-    let Some(format) = detect_inbound_api_format(path) else {
-        return resolve_formatless_plan(config);
-    };
-
-    match format {
-        InboundApiFormat::OpenaiChat => resolve_chat_plan(config),
-        InboundApiFormat::OpenaiResponses => resolve_responses_plan(config, headers),
-        _ => resolve_formatless_plan(config),
-    }
-}
-
-fn resolve_chat_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
-    let inbound_format = Some(InboundApiFormat::OpenaiChat);
-    if provider_rank_for_inbound(config, PROVIDER_CHAT, inbound_format).is_some() {
-        return Ok(base_plan(PROVIDER_CHAT));
-    }
-    let selected = choose_provider_by_priority(
-        config,
-        inbound_format,
-        &[
-            PROVIDER_RESPONSES,
-            PROVIDER_XAI,
-            PROVIDER_CODEX,
-            PROVIDER_ANTHROPIC,
-            PROVIDER_GEMINI,
-        ],
-    )
-    .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
-
-    Ok(match selected {
-        PROVIDER_RESPONSES | PROVIDER_XAI => DispatchPlan {
-            provider: selected,
-            outbound_path: Some(RESPONSES_PATH),
-            request_transform: FormatTransform::ChatToResponses,
-            response_transform: FormatTransform::ResponsesToChat,
-        },
-        PROVIDER_ANTHROPIC => DispatchPlan {
-            provider: PROVIDER_ANTHROPIC,
-            outbound_path: Some("/v1/messages"),
-            request_transform: FormatTransform::ChatToAnthropic,
-            response_transform: FormatTransform::AnthropicToChat,
-        },
-        PROVIDER_CODEX => DispatchPlan {
-            provider: PROVIDER_CODEX,
-            outbound_path: Some(CODEX_RESPONSES_PATH),
-            request_transform: FormatTransform::ChatToCodex,
-            response_transform: FormatTransform::CodexToChat,
-        },
-        PROVIDER_GEMINI => DispatchPlan {
-            provider: PROVIDER_GEMINI,
-            outbound_path: None,
-            request_transform: FormatTransform::ChatToGemini,
-            response_transform: FormatTransform::GeminiToChat,
-        },
-        _ => base_plan(PROVIDER_RESPONSES),
-    })
-}
-
-fn resolve_responses_plan(
-    config: &ProxyConfig,
-    headers: &HeaderMap,
-) -> Result<DispatchPlan, String> {
-    let inbound_format = Some(InboundApiFormat::OpenaiResponses);
-    if let Some(selected) = choose_provider_by_priority(
-        config,
-        inbound_format,
-        &[PROVIDER_RESPONSES, PROVIDER_XAI, PROVIDER_CODEX],
-    ) {
-        if matches!(selected, PROVIDER_RESPONSES | PROVIDER_XAI) {
-            return Ok(base_plan(selected));
-        }
-        if selected == PROVIDER_CODEX {
-            return Ok(DispatchPlan {
-                provider: PROVIDER_CODEX,
-                outbound_path: Some(CODEX_RESPONSES_PATH),
-                request_transform: codex_request_transform(
-                    headers,
-                    FormatTransform::ResponsesToCodex,
-                ),
-                response_transform: codex_response_transform(
-                    headers,
-                    FormatTransform::CodexToResponses,
-                ),
-            });
-        }
-    }
-
-    let selected = choose_provider_by_priority(
-        config,
-        inbound_format,
-        &[PROVIDER_CHAT, PROVIDER_ANTHROPIC, PROVIDER_GEMINI],
-    )
-    .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
-    Ok(match selected {
-        PROVIDER_CHAT => DispatchPlan {
-            provider: PROVIDER_CHAT,
-            outbound_path: Some(CHAT_PATH),
-            request_transform: FormatTransform::ResponsesToChat,
-            response_transform: FormatTransform::ChatToResponses,
-        },
-        PROVIDER_ANTHROPIC => DispatchPlan {
-            provider: PROVIDER_ANTHROPIC,
-            outbound_path: Some("/v1/messages"),
-            request_transform: FormatTransform::ResponsesToAnthropic,
-            response_transform: FormatTransform::AnthropicToResponses,
-        },
-        PROVIDER_GEMINI => DispatchPlan {
-            provider: PROVIDER_GEMINI,
-            outbound_path: None,
-            request_transform: FormatTransform::ResponsesToGemini,
-            response_transform: FormatTransform::GeminiToResponses,
-        },
-        _ => base_plan(PROVIDER_CHAT),
-    })
-}
-
-fn codex_request_transform(headers: &HeaderMap, transform: FormatTransform) -> FormatTransform {
-    if codex_compat::is_native_codex_request(headers) {
-        return FormatTransform::None;
-    }
-    transform
-}
-
-fn codex_response_transform(headers: &HeaderMap, transform: FormatTransform) -> FormatTransform {
-    if codex_compat::is_native_codex_request(headers) {
-        return FormatTransform::None;
-    }
-    transform
+    resolve_formatless_plan(config)
 }
 
 pub(super) fn resolve_outbound_path(
@@ -656,59 +430,11 @@ fn build_retry_fallback_plan(path: &str, provider: &'static str) -> Option<Dispa
         };
     }
 
-    if path == ANTHROPIC_MESSAGES_PATH {
-        return Some(match provider {
-            PROVIDER_ANTHROPIC => base_plan(PROVIDER_ANTHROPIC),
-            PROVIDER_KIRO => DispatchPlan {
-                provider: PROVIDER_KIRO,
-                outbound_path: Some(RESPONSES_PATH),
-                request_transform: FormatTransform::None,
-                response_transform: FormatTransform::KiroToAnthropic,
-            },
-            PROVIDER_RESPONSES | PROVIDER_XAI => DispatchPlan {
-                provider,
-                outbound_path: Some(RESPONSES_PATH),
-                request_transform: FormatTransform::AnthropicToResponses,
-                response_transform: FormatTransform::ResponsesToAnthropic,
-            },
-            PROVIDER_CODEX => DispatchPlan {
-                provider: PROVIDER_CODEX,
-                outbound_path: Some(CODEX_RESPONSES_PATH),
-                request_transform: FormatTransform::AnthropicToCodex,
-                response_transform: FormatTransform::CodexToAnthropic,
-            },
-            _ => return None,
-        });
-    }
-
-    match detect_inbound_api_format(path) {
-        Some(InboundApiFormat::OpenaiChat) => match provider {
-            PROVIDER_RESPONSES | PROVIDER_XAI => Some(DispatchPlan {
-                provider,
-                outbound_path: Some(RESPONSES_PATH),
-                request_transform: FormatTransform::ChatToResponses,
-                response_transform: FormatTransform::ResponsesToChat,
-            }),
-            PROVIDER_CODEX => Some(DispatchPlan {
-                provider: PROVIDER_CODEX,
-                outbound_path: Some(CODEX_RESPONSES_PATH),
-                request_transform: FormatTransform::ChatToCodex,
-                response_transform: FormatTransform::CodexToChat,
-            }),
-            _ => None,
-        },
-        Some(InboundApiFormat::OpenaiResponses) => match provider {
-            PROVIDER_RESPONSES | PROVIDER_XAI => Some(base_plan(provider)),
-            PROVIDER_CODEX => Some(DispatchPlan {
-                provider: PROVIDER_CODEX,
-                outbound_path: Some(CODEX_RESPONSES_PATH),
-                request_transform: FormatTransform::ResponsesToCodex,
-                response_transform: FormatTransform::CodexToResponses,
-            }),
-            _ => None,
-        },
-        _ => None,
-    }
+    super::routes::plan_for_format(
+        provider,
+        detect_inbound_api_format(path)?,
+        &HeaderMap::new(),
+    )
 }
 
 fn resolve_retry_fallback_provider(

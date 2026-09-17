@@ -20,19 +20,25 @@ mod request_body;
 mod request_repair;
 mod result;
 mod retry;
+mod routing;
+mod scheduler;
 mod transport;
 mod transport_error;
 mod utils;
 
 use dispatch::run_upstream_groups;
+pub(super) use dispatch::{attempt_with_retries, merge_group_result, ForwardAttemptState};
 #[cfg(test)]
 use prepare::normalize_mapped_model_reasoning_suffix;
 use prepare::{
     build_mapped_meta, prepare_upstream_request, prepare_upstream_request_with_body,
     requested_target_upstream_id,
 };
+pub(super) use result::finalize_forward_result;
+use result::resolve_provider_upstreams;
 pub(super) use result::ForwardUpstreamResult;
-use result::{finalize_forward_result, resolve_provider_upstreams};
+pub(super) use routing::{build_global_upstreams, GlobalUpstreamGroup};
+pub(super) use scheduler::dispatch_candidates;
 
 #[cfg(test)]
 use crate::proxy::redact::redact_query_param_value;

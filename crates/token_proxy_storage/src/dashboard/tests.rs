@@ -216,7 +216,7 @@ async fn insert_request_with_client_ip(pool: &SqlitePool, ts_ms: i64, client_ip:
 #[tokio::test]
 async fn median_latency_empty_table_returns_zero() {
     let pool = setup_test_db().await;
-    let result = query_median_latency(&pool, None, None, None, None, false, None)
+    let result = query_median_latency(&pool, None, None, None, None)
         .await
         .unwrap();
     assert_eq!(result, 0, "Empty table should return 0");
@@ -227,7 +227,7 @@ async fn median_latency_single_value() {
     let pool = setup_test_db().await;
     insert_latency(&pool, 100).await;
 
-    let result = query_median_latency(&pool, None, None, None, None, false, None)
+    let result = query_median_latency(&pool, None, None, None, None)
         .await
         .unwrap();
     assert_eq!(result, 100, "Single value should be the median");
@@ -241,7 +241,7 @@ async fn median_latency_odd_count() {
     insert_latency(&pool, 30).await;
     insert_latency(&pool, 20).await;
 
-    let result = query_median_latency(&pool, None, None, None, None, false, None)
+    let result = query_median_latency(&pool, None, None, None, None)
         .await
         .unwrap();
     assert_eq!(result, 20, "Odd count median should be middle value");
@@ -256,7 +256,7 @@ async fn median_latency_even_count() {
     insert_latency(&pool, 20).await;
     insert_latency(&pool, 30).await;
 
-    let result = query_median_latency(&pool, None, None, None, None, false, None)
+    let result = query_median_latency(&pool, None, None, None, None)
         .await
         .unwrap();
     assert_eq!(
@@ -272,7 +272,7 @@ async fn median_latency_even_count_rounds_down() {
     insert_latency(&pool, 10).await;
     insert_latency(&pool, 21).await;
 
-    let result = query_median_latency(&pool, None, None, None, None, false, None)
+    let result = query_median_latency(&pool, None, None, None, None)
         .await
         .unwrap();
     assert_eq!(result, 15, "Median should use integer division");
@@ -305,20 +305,20 @@ async fn median_latency_with_time_range_filter() {
     .unwrap();
 
     // 只查询 ts_ms 在 150-250 范围内的数据，应该只有 latency_ms=100 的记录
-    let result = query_median_latency(&pool, Some(150), Some(250), None, None, false, None)
+    let result = query_median_latency(&pool, Some(150), Some(250), None, None)
         .await
         .unwrap();
     assert_eq!(result, 100, "Should filter by time range");
 
     // 查询所有数据，中位数应为 100
-    let result_all = query_median_latency(&pool, None, None, None, None, false, None)
+    let result_all = query_median_latency(&pool, None, None, None, None)
         .await
         .unwrap();
     assert_eq!(result_all, 100, "All data median should be 100");
 }
 
 #[tokio::test]
-async fn read_snapshot_filters_by_upstream_and_keeps_merged_upstream_and_account_options() {
+async fn read_snapshot_filters_by_channel_and_preserves_account_identity() {
     let pool = setup_test_db().await;
     insert_request(
         &pool,
@@ -372,8 +372,6 @@ async fn read_snapshot_filters_by_upstream_and_keeps_merged_upstream_and_account
         Some(0),
         Some(String::from("alpha")),
         None,
-        false,
-        None,
     )
     .await
     .unwrap();
@@ -419,16 +417,71 @@ async fn read_snapshot_filters_by_upstream_and_keeps_merged_upstream_and_account
         .upstreams
         .iter()
         .any(|item| item.upstream_id == "beta" && item.requests == 1));
+}
 
-    assert_eq!(snapshot.accounts.len(), 2);
-    assert!(snapshot.accounts.iter().any(|item| {
-        item.upstream_id == "alpha"
-            && item.account_id.as_deref() == Some("codex-a.json")
-            && item.requests == 1
-    }));
-    assert!(snapshot.accounts.iter().any(|item| {
-        item.upstream_id == "alpha" && item.account_id.is_none() && item.requests == 1
-    }));
+#[tokio::test]
+async fn channel_snapshot_combines_time_model_and_pagination_across_account_identities() {
+    let pool = setup_test_db().await;
+    // 同渠道历史账户和无账户请求都计入统计；分页只限制 recent，不截断聚合。
+    sqlx::query(
+        r#"
+        INSERT INTO request_logs (
+          ts_ms, path, provider, upstream_id, account_id, model, stream, status,
+          input_tokens, output_tokens, total_tokens, latency_ms
+        ) VALUES
+          (100, '/test', 'openai', 'alpha', 'old-account', 'gpt-5.4', 0, 200, 7, 3, 10, 10),
+          (110, '/test', 'openai', 'alpha', 'current-account', 'gpt-5.4', 0, 200, 7, 3, 10, 20),
+          (120, '/test', 'openai', 'alpha', NULL, 'gpt-5.4', 0, 200, 7, 3, 10, 30),
+          (130, '/test', 'openai', 'beta', NULL, 'gpt-5.4', 0, 200, 70, 30, 100, 90),
+          (140, '/test', 'openai', 'alpha', NULL, 'other-model', 0, 200, 70, 30, 100, 90),
+          (99, '/test', 'openai', 'alpha', NULL, 'outside-before', 0, 200, 70, 30, 100, 90),
+          (201, '/test', 'openai', 'alpha', NULL, 'outside-after', 0, 200, 70, 30, 100, 90)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("insert channel filter regression rows");
+
+    let snapshot = read_snapshot(
+        &pool,
+        DashboardRange {
+            from_ts_ms: Some(100),
+            to_ts_ms: Some(200),
+        },
+        Some(1),
+        Some(String::from("alpha")),
+        Some(String::from("gpt-5.4")),
+    )
+    .await
+    .expect("read channel snapshot");
+
+    assert_eq!(snapshot.summary.total_requests, 3);
+    assert_eq!(snapshot.summary.total_tokens, 30);
+    assert_eq!(snapshot.summary.avg_latency_ms, 20);
+    assert_eq!(snapshot.summary.median_latency_ms, 20);
+    assert_eq!(snapshot.providers.len(), 1);
+    assert_eq!(snapshot.providers[0].requests, 3);
+    assert_eq!(snapshot.models.len(), 1);
+    assert_eq!(snapshot.models[0].requests, 3);
+    assert_eq!(
+        snapshot
+            .series
+            .iter()
+            .map(|point| point.total_requests)
+            .sum::<u64>(),
+        3
+    );
+    assert_eq!(snapshot.model_options, ["other-model", "gpt-5.4"]);
+    assert_eq!(snapshot.recent.len(), 2);
+    assert_eq!(snapshot.recent[0].ts_ms, 110);
+    assert_eq!(
+        snapshot.recent[0].account_id.as_deref(),
+        Some("current-account")
+    );
+    assert_eq!(
+        snapshot.recent[1].account_id.as_deref(),
+        Some("old-account")
+    );
 }
 
 #[tokio::test]
@@ -473,8 +526,6 @@ async fn read_snapshot_sums_logged_costs_and_returns_recent_pricing_fields() {
         },
         Some(0),
         Some(String::from("alpha")),
-        None,
-        false,
         None,
     )
     .await
@@ -540,8 +591,6 @@ INSERT INTO request_logs (
         Some(0),
         None,
         None,
-        false,
-        None,
     )
     .await
     .expect("read billable snapshot");
@@ -597,8 +646,6 @@ async fn read_snapshot_groups_models_with_fallback_and_filters() {
         Some(0),
         None,
         None,
-        false,
-        None,
     )
     .await
     .unwrap();
@@ -625,8 +672,6 @@ async fn read_snapshot_groups_models_with_fallback_and_filters() {
         },
         Some(0),
         Some(String::from("alpha")),
-        None,
-        false,
         None,
     )
     .await
@@ -673,8 +718,6 @@ async fn read_snapshot_filters_by_model_key_and_keeps_model_options() {
         },
         Some(0),
         None,
-        None,
-        false,
         Some(String::from("gpt-5.4")),
     )
     .await
@@ -703,8 +746,6 @@ async fn read_snapshot_filters_by_model_key_and_keeps_model_options() {
         },
         Some(0),
         None,
-        None,
-        false,
         Some(String::from("fallback-model")),
     )
     .await
@@ -721,8 +762,6 @@ async fn read_snapshot_filters_by_model_key_and_keeps_model_options() {
         },
         Some(0),
         None,
-        None,
-        false,
         Some(String::from("(unknown)")),
     )
     .await
@@ -739,8 +778,6 @@ async fn read_snapshot_filters_by_model_key_and_keeps_model_options() {
         },
         Some(0),
         None,
-        None,
-        false,
         Some(String::from("   ")),
     )
     .await
@@ -783,8 +820,6 @@ async fn read_snapshot_round_trips_precise_usage_components() {
         Some(0),
         None,
         None,
-        false,
-        None,
     )
     .await
     .expect("read dashboard snapshot");
@@ -824,8 +859,6 @@ async fn read_snapshot_returns_recent_client_ip() {
         Some(0),
         None,
         None,
-        false,
-        None,
     )
     .await
     .unwrap();
@@ -833,92 +866,4 @@ async fn read_snapshot_returns_recent_client_ip() {
     assert_eq!(snapshot.recent.len(), 1);
     assert_eq!(snapshot.recent[0].client_ip.as_deref(), Some("203.0.113.5"));
     assert_eq!(snapshot.recent[0].cached_tokens, None);
-}
-
-#[tokio::test]
-async fn read_snapshot_filters_by_account_and_public_requests() {
-    let pool = setup_test_db().await;
-    insert_request(
-        &pool,
-        100,
-        "openai",
-        "alpha",
-        Some("codex-a.json"),
-        200,
-        Some(10),
-        Some(20),
-        None,
-        Some(5),
-        30,
-    )
-    .await;
-    insert_request(
-        &pool,
-        150,
-        "openai-response",
-        "alpha",
-        None,
-        200,
-        Some(2),
-        Some(3),
-        None,
-        Some(1),
-        40,
-    )
-    .await;
-    insert_request(
-        &pool,
-        200,
-        "anthropic",
-        "beta",
-        Some("claude-a.json"),
-        200,
-        Some(3),
-        Some(4),
-        None,
-        Some(1),
-        90,
-    )
-    .await;
-
-    let account_snapshot = read_snapshot(
-        &pool,
-        DashboardRange {
-            from_ts_ms: None,
-            to_ts_ms: None,
-        },
-        Some(0),
-        Some(String::from("alpha")),
-        Some(String::from("codex-a.json")),
-        false,
-        None,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(account_snapshot.summary.total_requests, 1);
-    assert_eq!(account_snapshot.recent.len(), 1);
-    assert_eq!(
-        account_snapshot.recent[0].account_id.as_deref(),
-        Some("codex-a.json")
-    );
-
-    let public_snapshot = read_snapshot(
-        &pool,
-        DashboardRange {
-            from_ts_ms: None,
-            to_ts_ms: None,
-        },
-        Some(0),
-        Some(String::from("alpha")),
-        None,
-        true,
-        None,
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(public_snapshot.summary.total_requests, 1);
-    assert_eq!(public_snapshot.recent.len(), 1);
-    assert_eq!(public_snapshot.recent[0].account_id, None);
 }

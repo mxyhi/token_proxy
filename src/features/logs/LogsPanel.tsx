@@ -435,18 +435,14 @@ export function LogsPanel() {
     rangePreset,
     customRange,
     selectedUpstreamId,
-    selectedAccountId,
-    selectedPublicOnly,
     selectedModel,
     upstreamOptions,
-    accountOptions,
     modelOptions,
     pagination,
     refresh,
     onRangeChange,
     onCustomRangeChange,
     onUpstreamChange,
-    onAccountChange,
     onModelChange,
     onPrevPage,
     onNextPage,
@@ -620,16 +616,12 @@ export function LogsPanel() {
         customRange={customRange}
         upstreamId={selectedUpstreamId}
         upstreamOptions={upstreamOptions}
-        accountId={selectedAccountId}
-        publicOnly={selectedPublicOnly}
-        accountOptions={accountOptions}
         model={selectedModel}
         modelOptions={modelOptions}
         loading={isLoading}
         onRangeChange={onRangeChange}
         onCustomRangeChange={onCustomRangeChange}
         onUpstreamChange={onUpstreamChange}
-        onAccountChange={onAccountChange}
         onModelChange={onModelChange}
         onRefresh={refresh}
         capture={{

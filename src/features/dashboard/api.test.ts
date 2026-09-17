@@ -26,7 +26,6 @@ describe("dashboard/api", () => {
       models: [],
       modelOptions: [],
       upstreams: [],
-      accounts: [],
       series: [],
       recent: [],
       modelProbes: [],
@@ -38,8 +37,6 @@ describe("dashboard/api", () => {
       range,
       offset: 10,
       upstreamId: "alpha",
-      accountId: "codex-a.json",
-      publicOnly: false,
       model: null,
     });
 
@@ -47,8 +44,6 @@ describe("dashboard/api", () => {
       range,
       offset: 10,
       upstreamId: "alpha",
-      accountId: "codex-a.json",
-      publicOnly: false,
       model: null,
     });
   });

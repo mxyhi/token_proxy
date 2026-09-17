@@ -127,7 +127,7 @@ describe("logs/LogsPanel", () => {
     });
     readRequestLogDetailMock.mockResolvedValue(createRequestLogDetail());
     readDashboardSnapshotMock.mockImplementation(
-      async ({ upstreamId, accountId, publicOnly }: DashboardSnapshotQuery) => {
+      async ({ upstreamId }: DashboardSnapshotQuery) => {
         const base = {
           providers: [
             {
@@ -163,109 +163,12 @@ describe("logs/LogsPanel", () => {
               cachedTokens: 1,
             },
           ],
-          accounts: [
-            {
-              upstreamId: "alpha",
-              accountId: "codex-a.json",
-              requests: 1,
-              totalTokens: 30,
-              cachedTokens: 5,
-            },
-            {
-              upstreamId: "alpha",
-              accountId: null,
-              requests: 1,
-              totalTokens: 5,
-              cachedTokens: 1,
-            },
-            {
-              upstreamId: "beta",
-              accountId: null,
-              requests: 1,
-              totalTokens: 7,
-              cachedTokens: 1,
-            },
-          ],
           series: [],
           models: [],
           modelOptions: [],
           modelProbes: [],
           truncated: false,
         };
-
-        if (upstreamId === "alpha" && accountId === "codex-a.json") {
-          return {
-            ...base,
-            summary: {
-              totalRequests: 1,
-              successRequests: 1,
-              errorRequests: 0,
-              costNanoUsd: 0,
-              totalTokens: 30,
-              inputTokens: 10,
-              outputTokens: 20,
-              cachedTokens: 5,
-              avgLatencyMs: 30,
-              medianLatencyMs: 30,
-            },
-            recent: [
-              {
-                id: 1,
-                tsMs: 100,
-                clientIp: null,
-                path: "/v1/chat/completions",
-                provider: "openai",
-                upstreamId: "alpha",
-                accountId: "codex-a.json",
-                model: "gpt-5",
-                mappedModel: null,
-                stream: false,
-                status: 200,
-                totalTokens: 30,
-                cachedTokens: 5,
-                latencyMs: 30,
-                upstreamRequestId: null,
-              },
-            ],
-          };
-        }
-
-        if (upstreamId === "alpha" && publicOnly) {
-          return {
-            ...base,
-            summary: {
-              totalRequests: 1,
-              successRequests: 1,
-              errorRequests: 0,
-              costNanoUsd: 0,
-              totalTokens: 5,
-              inputTokens: 2,
-              outputTokens: 3,
-              cachedTokens: 1,
-              avgLatencyMs: 40,
-              medianLatencyMs: 40,
-            },
-            recent: [
-              {
-                id: 3,
-                tsMs: 110,
-                clientIp: null,
-                path: "/v1/responses",
-                provider: "openai-response",
-                upstreamId: "alpha",
-                accountId: null,
-                model: "gpt-5",
-                mappedModel: null,
-                stream: false,
-                status: 200,
-                totalTokens: 5,
-                cachedTokens: 1,
-                latencyMs: 40,
-                upstreamRequestId: null,
-              },
-            ],
-          };
-        }
 
         if (upstreamId === "alpha") {
           return {
@@ -412,15 +315,16 @@ describe("logs/LogsPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("logs-items")).toHaveTextContent("alpha");
+      expect(screen.getByTestId("logs-items")).toHaveTextContent("alpha · openai · codex-a.json");
+      expect(screen.getByTestId("logs-items")).toHaveTextContent("alpha · openai-response");
+      expect(screen.getByTestId("logs-items")).not.toHaveTextContent("beta");
     });
+    expect(screen.getAllByRole("combobox")).toHaveLength(3);
     expect(readDashboardSnapshotMock).toHaveBeenLastCalledWith(
       {
         range: { fromTsMs: expect.any(Number), toTsMs: expect.any(Number) },
         offset: 0,
         upstreamId: "alpha",
-        accountId: null,
-        publicOnly: false,
         model: null,
       }
     );
@@ -476,42 +380,6 @@ describe("logs/LogsPanel", () => {
       expect(setRequestDetailCaptureMock).toHaveBeenCalledWith(true);
     });
     expect(setRequestDetailCaptureMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("narrows logs again after selecting account under chosen upstream", async () => {
-    const user = userEvent.setup();
-
-    renderPanel();
-
-    await waitFor(() => {
-      expect(screen.getByTestId("logs-items")).toHaveTextContent("alpha · openai · codex-a.json");
-    });
-
-    await user.click(
-      screen.getByRole("combobox", { name: m.dashboard_upstream_label() })
-    );
-    await user.click(
-      await screen.findByRole("option", { name: "alpha" })
-    );
-
-    await user.click(
-      screen.getByRole("combobox", { name: m.dashboard_account_label() })
-    );
-    await user.click(
-      await screen.findByRole("option", { name: "codex-a.json" })
-    );
-
-    await waitFor(() => {
-      expect(readDashboardSnapshotMock).toHaveBeenLastCalledWith({
-        range: { fromTsMs: expect.any(Number), toTsMs: expect.any(Number) },
-        offset: 0,
-        upstreamId: "alpha",
-        accountId: "codex-a.json",
-        publicOnly: false,
-        model: null,
-      });
-    });
-    expect(screen.getByTestId("logs-items")).not.toHaveTextContent("openai-response");
   });
 
   it("shows account id in the provider field inside request detail", async () => {

@@ -71,199 +71,7 @@ describe("dashboard/DashboardPanel", () => {
     refreshDashboardModelDiscoveryMock.mockReset();
     refreshDashboardModelDiscoveryMock.mockResolvedValue(undefined);
     readDashboardSnapshotMock.mockImplementation(
-      async ({ upstreamId, accountId, publicOnly }: DashboardSnapshotQuery) => {
-        if (upstreamId === "alpha" && accountId === "codex-a.json") {
-          return {
-            summary: {
-              totalRequests: 1,
-              successRequests: 1,
-              errorRequests: 0,
-              costNanoUsd: 0,
-              totalTokens: 30,
-              inputTokens: 10,
-              outputTokens: 20,
-              cachedTokens: 5,
-              avgLatencyMs: 30,
-              medianLatencyMs: 30,
-            },
-            providers: [
-              {
-                provider: "openai",
-                requests: 1,
-                totalTokens: 30,
-                cachedTokens: 5,
-              },
-            ],
-            models: [],
-            modelOptions: [],
-            upstreams: [
-              {
-                upstreamId: "alpha",
-                requests: 2,
-                totalTokens: 35,
-                cachedTokens: 6,
-              },
-              {
-                upstreamId: "beta",
-                requests: 1,
-                totalTokens: 7,
-                cachedTokens: 1,
-              },
-            ],
-            accounts: [
-              {
-                upstreamId: "alpha",
-                accountId: "codex-a.json",
-                requests: 1,
-                totalTokens: 30,
-                cachedTokens: 5,
-              },
-              {
-                upstreamId: "alpha",
-                accountId: null,
-                requests: 1,
-                totalTokens: 5,
-                cachedTokens: 1,
-              },
-              {
-                upstreamId: "beta",
-                accountId: null,
-                requests: 1,
-                totalTokens: 7,
-                cachedTokens: 1,
-              },
-            ],
-            series: [
-              {
-                tsMs: 100,
-                totalRequests: 1,
-                errorRequests: 0,
-                inputTokens: 10,
-                outputTokens: 20,
-                cachedTokens: 5,
-                totalTokens: 30,
-              },
-            ],
-            recent: [
-              {
-                id: 1,
-                tsMs: 100,
-                clientIp: null,
-                path: "/v1/chat/completions",
-                provider: "openai",
-                upstreamId: "alpha",
-                accountId: "codex-a.json",
-                model: "gpt-5",
-                mappedModel: null,
-                stream: false,
-                status: 200,
-                totalTokens: 30,
-                cachedTokens: 5,
-                latencyMs: 30,
-                upstreamRequestId: null,
-              },
-            ],
-            modelProbes: [],
-            truncated: false,
-          };
-        }
-
-        if (upstreamId === "alpha" && publicOnly) {
-          return {
-            summary: {
-              totalRequests: 1,
-              successRequests: 1,
-              errorRequests: 0,
-              costNanoUsd: 0,
-              totalTokens: 30,
-              inputTokens: 10,
-              outputTokens: 20,
-              cachedTokens: 5,
-              avgLatencyMs: 30,
-              medianLatencyMs: 30,
-            },
-            providers: [
-              {
-                provider: "openai",
-                requests: 1,
-                totalTokens: 30,
-                cachedTokens: 5,
-              },
-            ],
-            models: [],
-            modelOptions: [],
-            upstreams: [
-              {
-                upstreamId: "alpha",
-                requests: 2,
-                totalTokens: 35,
-                cachedTokens: 6,
-              },
-              {
-                upstreamId: "beta",
-                requests: 1,
-                totalTokens: 7,
-                cachedTokens: 1,
-              },
-            ],
-            accounts: [
-              {
-                upstreamId: "alpha",
-                accountId: "codex-a.json",
-                requests: 1,
-                totalTokens: 30,
-                cachedTokens: 5,
-              },
-              {
-                upstreamId: "alpha",
-                accountId: null,
-                requests: 1,
-                totalTokens: 5,
-                cachedTokens: 1,
-              },
-              {
-                upstreamId: "beta",
-                accountId: null,
-                requests: 1,
-                totalTokens: 7,
-                cachedTokens: 1,
-              },
-            ],
-            series: [
-              {
-                tsMs: 100,
-                totalRequests: 1,
-                errorRequests: 0,
-                inputTokens: 10,
-                outputTokens: 20,
-                cachedTokens: 5,
-                totalTokens: 30,
-              },
-            ],
-            recent: [
-              {
-                id: 1,
-                tsMs: 100,
-                clientIp: null,
-                path: "/v1/chat/completions",
-                provider: "openai-response",
-                upstreamId: "alpha",
-                accountId: null,
-                model: "gpt-5",
-                mappedModel: null,
-                stream: false,
-                status: 200,
-                totalTokens: 5,
-                cachedTokens: 1,
-                latencyMs: 40,
-                upstreamRequestId: null,
-              },
-            ],
-            modelProbes: [],
-            truncated: false,
-          };
-        }
-
+      async ({ upstreamId }: DashboardSnapshotQuery) => {
         if (upstreamId === "alpha") {
           return {
             summary: {
@@ -303,29 +111,6 @@ describe("dashboard/DashboardPanel", () => {
               },
               {
                 upstreamId: "beta",
-                requests: 1,
-                totalTokens: 7,
-                cachedTokens: 1,
-              },
-            ],
-            accounts: [
-              {
-                upstreamId: "alpha",
-                accountId: "codex-a.json",
-                requests: 1,
-                totalTokens: 30,
-                cachedTokens: 5,
-              },
-              {
-                upstreamId: "alpha",
-                accountId: null,
-                requests: 1,
-                totalTokens: 5,
-                cachedTokens: 1,
-              },
-              {
-                upstreamId: "beta",
-                accountId: null,
                 requests: 1,
                 totalTokens: 7,
                 cachedTokens: 1,
@@ -451,29 +236,6 @@ describe("dashboard/DashboardPanel", () => {
               cachedTokens: 1,
             },
           ],
-          accounts: [
-            {
-              upstreamId: "alpha",
-              accountId: "codex-a.json",
-              requests: 1,
-              totalTokens: 30,
-              cachedTokens: 5,
-            },
-            {
-              upstreamId: "alpha",
-              accountId: null,
-              requests: 1,
-              totalTokens: 5,
-              cachedTokens: 1,
-            },
-            {
-              upstreamId: "beta",
-              accountId: null,
-              requests: 1,
-              totalTokens: 7,
-              cachedTokens: 1,
-            },
-          ],
           series: [
             {
               tsMs: 100,
@@ -512,7 +274,7 @@ describe("dashboard/DashboardPanel", () => {
     );
   });
 
-  it("defaults to all upstream data and refetches when an upstream and account are selected", async () => {
+  it("defaults to all channel data and refetches when a channel is selected", async () => {
     const user = userEvent.setup();
 
     renderPanel();
@@ -543,8 +305,6 @@ describe("dashboard/DashboardPanel", () => {
         range: { fromTsMs: expect.any(Number), toTsMs: expect.any(Number) },
         offset: 0,
         upstreamId: null,
-        accountId: null,
-        publicOnly: false,
         model: null,
       }
     );
@@ -567,35 +327,13 @@ describe("dashboard/DashboardPanel", () => {
         range: { fromTsMs: expect.any(Number), toTsMs: expect.any(Number) },
         offset: 0,
         upstreamId: "alpha",
-        accountId: null,
-        publicOnly: false,
         model: null,
       }
     );
 
-    await user.click(
-      screen.getByRole("combobox", { name: m.dashboard_account_label() })
-    );
-    await user.click(
-      await screen.findByRole("option", { name: "codex-a.json" })
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId("dashboard-summary-total")).toHaveTextContent(
-        "1"
-      );
-    });
-    expect(screen.getByTestId("dashboard-chart-total")).toHaveTextContent("30");
-    expect(readDashboardSnapshotMock).toHaveBeenLastCalledWith(
-      {
-        range: { fromTsMs: expect.any(Number), toTsMs: expect.any(Number) },
-        offset: 0,
-        upstreamId: "alpha",
-        accountId: "codex-a.json",
-        publicOnly: false,
-        model: null,
-      }
-    );
+    // 筛选栏只保留时间、渠道和模型，账户身份仍可展示在日志/探测结果中。
+    expect(screen.getAllByRole("combobox")).toHaveLength(3);
+    expect(screen.getByRole("combobox", { name: m.dashboard_model_label() })).toBeInTheDocument();
   });
 
   it("refreshes upstream model discovery before reloading the dashboard", async () => {

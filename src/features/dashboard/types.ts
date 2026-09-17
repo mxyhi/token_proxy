@@ -70,21 +70,6 @@ export type DashboardUpstreamOption = {
   imageOutputTokens?: number;
 };
 
-export type DashboardAccountOption = {
-  upstreamId: string;
-  accountId: string | null;
-  requests: number;
-  totalTokens: number;
-  cachedTokens: number;
-  uncachedInputTokens?: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
-  cacheWrite5mTokens?: number;
-  cacheWrite1hTokens?: number;
-  imageInputTokens?: number;
-  imageOutputTokens?: number;
-};
-
 export type DashboardUpstreamModelProbeStatus =
   | "pending"
   | "ok"
@@ -159,10 +144,9 @@ export type DashboardSnapshot = {
   summary: DashboardSummary;
   providers: DashboardProviderStat[];
   models: DashboardModelStat[];
-  /** 模型筛选选项（时间/上游/账户收窄，不受当前 model 筛选影响）。 */
+  /** 模型筛选选项（时间/渠道收窄，不受当前 model 筛选影响）。 */
   modelOptions: string[];
   upstreams: DashboardUpstreamOption[];
-  accounts: DashboardAccountOption[];
   series: DashboardSeriesPoint[];
   recent: DashboardRequestItem[];
   modelProbes: DashboardUpstreamModelProbe[];
@@ -173,8 +157,6 @@ export type DashboardSnapshotQuery = {
   range: DashboardRange;
   offset?: number;
   upstreamId?: string | null;
-  accountId?: string | null;
-  publicOnly?: boolean;
   /** 客户端请求模型 key（空 model 回退 mapped_model，再 (unknown)）。 */
   model?: string | null;
 };

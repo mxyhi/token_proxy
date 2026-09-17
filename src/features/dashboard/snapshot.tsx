@@ -29,7 +29,6 @@ import {
   tsMsToDatetimeLocalValue,
 } from "@/features/dashboard/range"
 import type {
-  DashboardAccountOption,
   DashboardRange,
   DashboardSnapshot,
   DashboardUpstreamOption,
@@ -39,8 +38,6 @@ import { m } from "@/paraglide/messages.js"
 
 export const RECENT_PAGE_SIZE = 50
 const ALL_UPSTREAMS_VALUE = "__all_upstreams__"
-const ALL_ACCOUNTS_VALUE = "__all_accounts__"
-const PUBLIC_ACCOUNT_VALUE = "__public_account__"
 const ALL_MODELS_VALUE = "__all_models__"
 
 type DashboardStatus = "idle" | "loading" | "error"
@@ -54,20 +51,6 @@ function hasUpstreamOption(
   upstreamId: string
 ) {
   return upstreams.some((item) => item.upstreamId === upstreamId)
-}
-
-function hasAccountOption(
-  accounts: DashboardAccountOption[],
-  accountId: string | null,
-  publicOnly: boolean
-) {
-  if (publicOnly) {
-    return accounts.some((item) => item.accountId === null)
-  }
-  if (accountId === null) {
-    return true
-  }
-  return accounts.some((item) => item.accountId === accountId)
 }
 
 function hasModelOption(modelOptions: string[], model: string) {
@@ -110,8 +93,6 @@ export function useDashboardSnapshot({
   )
   const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null)
   const [selectedUpstreamId, setSelectedUpstreamId] = useState<string | null>(null)
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null)
-  const [selectedPublicOnly, setSelectedPublicOnly] = useState(false)
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
   const [activeRange, setActiveRange] = useState<DashboardRange>(() =>
     resolveDashboardRange("today")
@@ -134,8 +115,6 @@ export function useDashboardSnapshot({
         range,
         offset,
         upstreamId: selectedUpstreamId,
-        accountId: selectedAccountId,
-        publicOnly: selectedPublicOnly,
         model: selectedModel,
       })
       if (requestSeq.current !== requestId) {
@@ -148,17 +127,6 @@ export function useDashboardSnapshot({
         !hasUpstreamOption(data.upstreams, selectedUpstreamId)
       ) {
         setSelectedUpstreamId(null)
-        setStatus("loading")
-        return
-      }
-      const visibleAccountOptions =
-        selectedUpstreamId === null ? [] : data.accounts
-      if (
-        selectedUpstreamId !== null &&
-        !hasAccountOption(visibleAccountOptions, selectedAccountId, selectedPublicOnly)
-      ) {
-        setSelectedAccountId(null)
-        setSelectedPublicOnly(false)
         setStatus("loading")
         return
       }
@@ -185,9 +153,7 @@ export function useDashboardSnapshot({
     customRange,
     page,
     rangePreset,
-    selectedAccountId,
     selectedModel,
-    selectedPublicOnly,
     selectedUpstreamId,
   ])
 
@@ -234,17 +200,7 @@ export function useDashboardSnapshot({
   const handleUpstreamChange = useCallback((nextUpstreamId: string | null) => {
     markLoading()
     setSelectedUpstreamId(nextUpstreamId)
-    setSelectedAccountId(null)
-    setSelectedPublicOnly(false)
     // 上游切换后模型集合会变，先清模型避免短暂请求到无效组合。
-    setSelectedModel(null)
-    resetPage()
-  }, [markLoading, resetPage])
-
-  const handleAccountChange = useCallback((nextAccountId: string | null, nextPublicOnly: boolean) => {
-    markLoading()
-    setSelectedAccountId(nextAccountId)
-    setSelectedPublicOnly(nextPublicOnly)
     setSelectedModel(null)
     resetPage()
   }, [markLoading, resetPage])
@@ -289,18 +245,14 @@ export function useDashboardSnapshot({
     rangePreset,
     customRange,
     selectedUpstreamId,
-    selectedAccountId,
-    selectedPublicOnly,
     selectedModel,
     upstreamOptions: snapshot?.upstreams ?? [],
-    accountOptions: selectedUpstreamId === null ? [] : (snapshot?.accounts ?? []),
     modelOptions: snapshot?.modelOptions ?? [],
     pagination: { page, totalPages, totalRequests },
     refresh,
     onRangeChange: handleRangeChange,
     onCustomRangeChange: handleCustomRangeChange,
     onUpstreamChange: handleUpstreamChange,
-    onAccountChange: handleAccountChange,
     onModelChange: handleModelChange,
     onPrevPage: handlePrevPage,
     onNextPage: handleNextPage,
@@ -313,26 +265,6 @@ function resolveUpstreamSelectValue(upstreamId: string | null) {
 
 function toUpstreamFilterValue(value: string) {
   return value === ALL_UPSTREAMS_VALUE ? null : value
-}
-
-function resolveAccountSelectValue(accountId: string | null, publicOnly: boolean) {
-  if (publicOnly) {
-    return PUBLIC_ACCOUNT_VALUE
-  }
-  if (accountId === null) {
-    return ALL_ACCOUNTS_VALUE
-  }
-  return `account:${accountId}`
-}
-
-function toAccountFilterValue(value: string) {
-  if (value === ALL_ACCOUNTS_VALUE) {
-    return { accountId: null, publicOnly: false }
-  }
-  if (value === PUBLIC_ACCOUNT_VALUE) {
-    return { accountId: null, publicOnly: true }
-  }
-  return { accountId: value.replace(/^account:/, ""), publicOnly: false }
 }
 
 function resolveModelSelectValue(model: string | null) {
@@ -348,16 +280,12 @@ type DashboardFiltersProps = {
   customRange: DashboardRange
   upstreamId: string | null
   upstreamOptions: DashboardUpstreamOption[]
-  accountId: string | null
-  publicOnly: boolean
-  accountOptions: DashboardAccountOption[]
   model: string | null
   modelOptions: string[]
   loading: boolean
   onRangeChange: (range: DashboardTimeRange) => void
   onCustomRangeChange: (range: DashboardRange) => void
   onUpstreamChange: (upstreamId: string | null) => void
-  onAccountChange: (accountId: string | null, publicOnly: boolean) => void
   onModelChange: (model: string | null) => void
   onRefresh: () => void
   /** 请求详情捕获相关，仅 LogsPanel 使用 */
@@ -381,16 +309,12 @@ export function DashboardFilters({
   customRange,
   upstreamId,
   upstreamOptions,
-  accountId,
-  publicOnly,
-  accountOptions,
   model,
   modelOptions,
   loading,
   onRangeChange,
   onCustomRangeChange,
   onUpstreamChange,
-  onAccountChange,
   onModelChange,
   onRefresh,
   capture,
@@ -500,40 +424,6 @@ export function DashboardFilters({
                     {option.upstreamId}
                   </SelectItem>
                 ))}
-              </SelectContent>
-            </Select>
-
-            <Label htmlFor="dashboard-account" className="text-xs text-muted-foreground">
-              {m.dashboard_account_label()}
-            </Label>
-            <Select
-              value={resolveAccountSelectValue(accountId, publicOnly)}
-              disabled={upstreamId === null}
-              onValueChange={(value) => {
-                const next = toAccountFilterValue(value)
-                onAccountChange(next.accountId, next.publicOnly)
-              }}
-            >
-              <SelectTrigger id="dashboard-account" className="h-9 w-[99px]">
-                <SelectValue placeholder={m.dashboard_account_placeholder()} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_ACCOUNTS_VALUE}>
-                  {m.dashboard_account_all()}
-                </SelectItem>
-                <SelectItem value={PUBLIC_ACCOUNT_VALUE}>
-                  {m.dashboard_account_public()}
-                </SelectItem>
-                {accountOptions
-                  .filter((option) => option.accountId !== null)
-                  .map((option) => (
-                    <SelectItem
-                      key={`${option.upstreamId}:${option.accountId}`}
-                      value={`account:${option.accountId}`}
-                    >
-                      {option.accountId}
-                    </SelectItem>
-                  ))}
               </SelectContent>
             </Select>
 

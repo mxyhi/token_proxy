@@ -6,26 +6,15 @@ pub async fn read_dashboard_snapshot(
     range: DashboardRange,
     offset: Option<u32>,
     upstream_id: Option<String>,
-    account_id: Option<String>,
-    public_only: Option<bool>,
     model: Option<String>,
 ) -> Result<DashboardSnapshot, String> {
     tracing::debug!(
         upstream_id = upstream_id.as_deref(),
-        account_id = account_id.as_deref(),
-        public_only = public_only.unwrap_or(false),
         model = model.as_deref(),
         "read_dashboard_snapshot invoked"
     );
     token_proxy_app
-        .read_dashboard_snapshot(
-            range,
-            offset,
-            upstream_id,
-            account_id,
-            public_only.unwrap_or(false),
-            model,
-        )
+        .read_dashboard_snapshot(range, offset, upstream_id, model)
         .await
 }
 

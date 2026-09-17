@@ -144,17 +144,6 @@ pub struct DashboardUpstreamStat {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DashboardAccountStat {
-    pub upstream_id: String,
-    pub account_id: Option<String>,
-    pub requests: u64,
-    pub total_tokens: u64,
-    #[serde(flatten)]
-    pub usage: DashboardUsageBreakdown,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub struct DashboardSeriesPoint {
     pub ts_ms: u64,
     pub total_requests: u64,
@@ -212,10 +201,9 @@ pub struct DashboardSnapshot {
     pub providers: Vec<DashboardProviderStat>,
     /// 模型用量 Top N（按 total_tokens 降序）。
     pub models: Vec<DashboardModelStat>,
-    /// 模型筛选选项（时间/上游/账户收窄，不受当前 model 筛选影响）。
+    /// 模型筛选选项（时间/渠道收窄，不受当前 model 筛选影响）。
     pub model_options: Vec<String>,
     pub upstreams: Vec<DashboardUpstreamStat>,
-    pub accounts: Vec<DashboardAccountStat>,
     pub series: Vec<DashboardSeriesPoint>,
     pub recent: Vec<DashboardRequestItem>,
     pub model_probes: Vec<UpstreamModelProbe>,
@@ -228,8 +216,6 @@ pub async fn read_snapshot(
     range: DashboardRange,
     offset: Option<u32>,
     upstream_id: Option<String>,
-    account_id: Option<String>,
-    public_only: bool,
     model: Option<String>,
 ) -> Result<DashboardSnapshot, String> {
     let offset = offset.unwrap_or(0);
@@ -237,92 +223,26 @@ pub async fn read_snapshot(
     let from_ts_ms = range.from_ts_ms.map(|value| value as i64);
     let to_ts_ms = range.to_ts_ms.map(|value| value as i64);
     let upstream_id = upstream_id.as_deref();
-    let account_id = account_id.as_deref();
     // 空串视为未筛选，避免前端误传 "" 时匹配不到任何行。
     let model = model
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let bucket_ms = resolve_bucket_ms(
-        pool,
-        from_ts_ms,
-        to_ts_ms,
-        upstream_id,
-        account_id,
-        public_only,
-        model,
-    )
-    .await?;
+    let bucket_ms = resolve_bucket_ms(pool, from_ts_ms, to_ts_ms, upstream_id, model).await?;
 
-    let summary = query_summary(
-        pool,
-        from_ts_ms,
-        to_ts_ms,
-        upstream_id,
-        account_id,
-        public_only,
-        model,
-    )
-    .await?;
-    let providers = query_providers(
-        pool,
-        from_ts_ms,
-        to_ts_ms,
-        upstream_id,
-        account_id,
-        public_only,
-        model,
-    )
-    .await?;
-    let models = query_models(
-        pool,
-        from_ts_ms,
-        to_ts_ms,
-        upstream_id,
-        account_id,
-        public_only,
-        model,
-    )
-    .await?;
-    // 模型选项受时间/上游/账户限制，不受当前 model 筛选影响，便于切换其它模型。
-    let model_options = query_model_options(
-        pool,
-        from_ts_ms,
-        to_ts_ms,
-        upstream_id,
-        account_id,
-        public_only,
-    )
-    .await?;
+    let summary = query_summary(pool, from_ts_ms, to_ts_ms, upstream_id, model).await?;
+    let providers = query_providers(pool, from_ts_ms, to_ts_ms, upstream_id, model).await?;
+    let models = query_models(pool, from_ts_ms, to_ts_ms, upstream_id, model).await?;
+    // 模型选项受时间/渠道限制，不受当前 model 筛选影响，便于切换其它模型。
+    let model_options = query_model_options(pool, from_ts_ms, to_ts_ms, upstream_id).await?;
     // 选项列表只受时间范围限制，切换筛选时仍可看到同一范围内的其它上游。
     let upstreams = query_upstreams(pool, from_ts_ms, to_ts_ms).await?;
-    // 账户选项跟随上游收窄，但不受当前账户筛选影响。
-    let accounts = query_accounts(pool, from_ts_ms, to_ts_ms, upstream_id).await?;
-    let series = query_series(
-        pool,
-        from_ts_ms,
-        to_ts_ms,
-        bucket_ms,
-        upstream_id,
-        account_id,
-        public_only,
-        model,
-    )
-    .await?;
+    let series = query_series(pool, from_ts_ms, to_ts_ms, bucket_ms, upstream_id, model).await?;
     let series = fill_series_buckets(series, from_ts_ms, to_ts_ms, bucket_ms);
-    let recent = query_recent(
-        pool,
-        from_ts_ms,
-        to_ts_ms,
-        offset,
-        upstream_id,
-        account_id,
-        public_only,
-        model,
-    )
-    .await?;
+    let recent = query_recent(pool, from_ts_ms, to_ts_ms, offset, upstream_id, model).await?;
 
     tracing::debug!(
+        upstream_id = upstream_id,
         model = model,
         model_option_count = model_options.len(),
         "dashboard snapshot filters applied"
@@ -334,7 +254,6 @@ pub async fn read_snapshot(
         models,
         model_options,
         upstreams,
-        accounts,
         series,
         recent,
         model_probes: Vec::new(),
@@ -347,8 +266,6 @@ async fn query_summary(
     from_ts_ms: Option<i64>,
     to_ts_ms: Option<i64>,
     upstream_id: Option<&str>,
-    account_id: Option<&str>,
-    public_only: bool,
     model: Option<&str>,
 ) -> Result<DashboardSummary, String> {
     let row = sqlx::query(
@@ -377,19 +294,15 @@ FROM billable_request_logs
 WHERE (?1 IS NULL OR ts_ms >= ?1)
   AND (?2 IS NULL OR ts_ms <= ?2)
   AND (?3 IS NULL OR upstream_id = ?3)
-  AND (?4 IS NULL OR account_id = ?4)
-  AND (?5 = 0 OR account_id IS NULL)
   AND (
-    ?6 IS NULL
-    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?6
+    ?4 IS NULL
+    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?4
   );
 "#,
     )
     .bind(from_ts_ms)
     .bind(to_ts_ms)
     .bind(upstream_id)
-    .bind(account_id)
-    .bind(public_only)
     .bind(model)
     .fetch_one(pool)
     .await
@@ -408,16 +321,8 @@ WHERE (?1 IS NULL OR ts_ms >= ?1)
     let avg_latency_ms = latency_sum_ms.checked_div(total_requests).unwrap_or(0);
 
     // 中位数查询：使用 LIMIT/OFFSET 取中间值
-    let median_latency_ms = query_median_latency(
-        pool,
-        from_ts_ms,
-        to_ts_ms,
-        upstream_id,
-        account_id,
-        public_only,
-        model,
-    )
-    .await?;
+    let median_latency_ms =
+        query_median_latency(pool, from_ts_ms, to_ts_ms, upstream_id, model).await?;
 
     Ok(DashboardSummary {
         total_requests,
@@ -439,8 +344,6 @@ async fn query_median_latency(
     from_ts_ms: Option<i64>,
     to_ts_ms: Option<i64>,
     upstream_id: Option<&str>,
-    account_id: Option<&str>,
-    public_only: bool,
     model: Option<&str>,
 ) -> Result<u64, String> {
     // 单条 SQL 完成中位数计算：
@@ -454,11 +357,9 @@ WITH filtered AS (
     WHERE (?1 IS NULL OR ts_ms >= ?1)
       AND (?2 IS NULL OR ts_ms <= ?2)
       AND (?3 IS NULL OR upstream_id = ?3)
-      AND (?4 IS NULL OR account_id = ?4)
-      AND (?5 = 0 OR account_id IS NULL)
       AND (
-        ?6 IS NULL
-        OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?6
+        ?4 IS NULL
+        OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?4
       )
 ),
 cnt AS (
@@ -485,8 +386,6 @@ SELECT COALESCE(
     .bind(from_ts_ms)
     .bind(to_ts_ms)
     .bind(upstream_id)
-    .bind(account_id)
-    .bind(public_only)
     .bind(model)
     .fetch_one(pool)
     .await
@@ -501,8 +400,6 @@ async fn query_providers(
     from_ts_ms: Option<i64>,
     to_ts_ms: Option<i64>,
     upstream_id: Option<&str>,
-    account_id: Option<&str>,
-    public_only: bool,
     model: Option<&str>,
 ) -> Result<Vec<DashboardProviderStat>, String> {
     let providers = sqlx::query(
@@ -527,11 +424,9 @@ FROM billable_request_logs
 WHERE (?1 IS NULL OR ts_ms >= ?1)
   AND (?2 IS NULL OR ts_ms <= ?2)
   AND (?3 IS NULL OR upstream_id = ?3)
-  AND (?4 IS NULL OR account_id = ?4)
-  AND (?5 = 0 OR account_id IS NULL)
   AND (
-    ?6 IS NULL
-    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?6
+    ?4 IS NULL
+    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?4
   )
 GROUP BY provider
 ORDER BY total_tokens DESC, requests DESC, provider ASC;
@@ -540,8 +435,6 @@ ORDER BY total_tokens DESC, requests DESC, provider ASC;
     .bind(from_ts_ms)
     .bind(to_ts_ms)
     .bind(upstream_id)
-    .bind(account_id)
-    .bind(public_only)
     .bind(model)
     .fetch_all(pool)
     .await
@@ -572,8 +465,6 @@ async fn query_models(
     from_ts_ms: Option<i64>,
     to_ts_ms: Option<i64>,
     upstream_id: Option<&str>,
-    account_id: Option<&str>,
-    public_only: bool,
     model: Option<&str>,
 ) -> Result<Vec<DashboardModelStat>, String> {
     let models = sqlx::query(
@@ -604,22 +495,18 @@ FROM billable_request_logs
 WHERE (?1 IS NULL OR ts_ms >= ?1)
   AND (?2 IS NULL OR ts_ms <= ?2)
   AND (?3 IS NULL OR upstream_id = ?3)
-  AND (?4 IS NULL OR account_id = ?4)
-  AND (?5 = 0 OR account_id IS NULL)
   AND (
-    ?6 IS NULL
-    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?6
+    ?4 IS NULL
+    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?4
   )
 GROUP BY model_key
 ORDER BY total_tokens DESC, requests DESC, model_key ASC
-LIMIT ?7;
+LIMIT ?5;
 "#,
     )
     .bind(from_ts_ms)
     .bind(to_ts_ms)
     .bind(upstream_id)
-    .bind(account_id)
-    .bind(public_only)
     .bind(model)
     .bind(i64::from(MODEL_USAGE_TOP_LIMIT))
     .fetch_all(pool)
@@ -662,8 +549,6 @@ async fn query_model_options(
     from_ts_ms: Option<i64>,
     to_ts_ms: Option<i64>,
     upstream_id: Option<&str>,
-    account_id: Option<&str>,
-    public_only: bool,
 ) -> Result<Vec<String>, String> {
     let options = sqlx::query(
         r#"
@@ -683,18 +568,14 @@ FROM billable_request_logs
 WHERE (?1 IS NULL OR ts_ms >= ?1)
   AND (?2 IS NULL OR ts_ms <= ?2)
   AND (?3 IS NULL OR upstream_id = ?3)
-  AND (?4 IS NULL OR account_id = ?4)
-  AND (?5 = 0 OR account_id IS NULL)
 GROUP BY model_key
 ORDER BY total_tokens DESC, requests DESC, model_key ASC
-LIMIT ?6;
+LIMIT ?4;
 "#,
     )
     .bind(from_ts_ms)
     .bind(to_ts_ms)
     .bind(upstream_id)
-    .bind(account_id)
-    .bind(public_only)
     .bind(i64::from(MODEL_OPTIONS_LIMIT))
     .fetch_all(pool)
     .await
@@ -765,73 +646,12 @@ ORDER BY total_tokens DESC, requests DESC, upstream_id ASC;
     Ok(upstreams)
 }
 
-async fn query_accounts(
-    pool: &sqlx::SqlitePool,
-    from_ts_ms: Option<i64>,
-    to_ts_ms: Option<i64>,
-    upstream_id: Option<&str>,
-) -> Result<Vec<DashboardAccountStat>, String> {
-    let accounts = sqlx::query(
-        r#"
-SELECT
-  upstream_id,
-  account_id,
-  COUNT(*) AS requests,
-  COALESCE(SUM(CASE
-    WHEN total_tokens IS NOT NULL THEN total_tokens
-    WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
-    ELSE 0
-  END), 0) AS total_tokens,
-  COALESCE(SUM(COALESCE(uncached_input_tokens, 0)), 0) AS uncached_input_tokens,
-  COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0) AS cache_read_tokens,
-  COALESCE(SUM(COALESCE(cache_write_tokens, 0)), 0) AS cache_write_tokens,
-  COALESCE(SUM(COALESCE(cache_write_5m_tokens, 0)), 0) AS cache_write_5m_tokens,
-  COALESCE(SUM(COALESCE(cache_write_1h_tokens, 0)), 0) AS cache_write_1h_tokens,
-  COALESCE(SUM(COALESCE(image_input_tokens, 0)), 0) AS image_input_tokens,
-  COALESCE(SUM(COALESCE(image_output_tokens, 0)), 0) AS image_output_tokens
-FROM billable_request_logs
-WHERE (?1 IS NULL OR ts_ms >= ?1)
-  AND (?2 IS NULL OR ts_ms <= ?2)
-  AND (?3 IS NULL OR upstream_id = ?3)
-GROUP BY upstream_id, account_id
-ORDER BY upstream_id ASC, account_id IS NULL DESC, requests DESC, account_id ASC;
-"#,
-    )
-    .bind(from_ts_ms)
-    .bind(to_ts_ms)
-    .bind(upstream_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|err| format!("Failed to query dashboard accounts: {err}"))?
-    .into_iter()
-    .filter_map(|row| {
-        let upstream_id: String = row.try_get("upstream_id").ok()?;
-        let account_id: Option<String> = row.try_get("account_id").ok()?;
-        let requests: i64 = row.try_get("requests").ok()?;
-        let total_tokens: i64 = row.try_get("total_tokens").ok()?;
-        let usage = usage_breakdown_from_row(&row);
-        Some(DashboardAccountStat {
-            upstream_id,
-            account_id,
-            requests: i64_to_u64(requests),
-            total_tokens: i64_to_u64(total_tokens),
-            usage,
-        })
-    })
-    .collect::<Vec<_>>();
-
-    Ok(accounts)
-}
-
-#[allow(clippy::too_many_arguments)]
 async fn query_series(
     pool: &sqlx::SqlitePool,
     from_ts_ms: Option<i64>,
     to_ts_ms: Option<i64>,
     bucket_ms: u64,
     upstream_id: Option<&str>,
-    account_id: Option<&str>,
-    public_only: bool,
     model: Option<&str>,
 ) -> Result<Vec<DashboardSeriesPoint>, String> {
     let series = sqlx::query(
@@ -859,11 +679,9 @@ FROM billable_request_logs
 WHERE (?1 IS NULL OR ts_ms >= ?1)
   AND (?2 IS NULL OR ts_ms <= ?2)
   AND (?4 IS NULL OR upstream_id = ?4)
-  AND (?5 IS NULL OR account_id = ?5)
-  AND (?6 = 0 OR account_id IS NULL)
   AND (
-    ?7 IS NULL
-    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?7
+    ?5 IS NULL
+    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?5
   )
 GROUP BY bucket_ts_ms
 ORDER BY bucket_ts_ms ASC;
@@ -873,8 +691,6 @@ ORDER BY bucket_ts_ms ASC;
     .bind(to_ts_ms)
     .bind(i64::try_from(bucket_ms).unwrap_or(i64::MAX))
     .bind(upstream_id)
-    .bind(account_id)
-    .bind(public_only)
     .bind(model)
     .fetch_all(pool)
     .await
@@ -990,8 +806,6 @@ async fn query_recent(
     to_ts_ms: Option<i64>,
     offset: u32,
     upstream_id: Option<&str>,
-    account_id: Option<&str>,
-    public_only: bool,
     model: Option<&str>,
 ) -> Result<Vec<DashboardRequestItem>, String> {
     let recent = sqlx::query(
@@ -1044,11 +858,9 @@ FROM billable_request_logs
 WHERE (?1 IS NULL OR ts_ms >= ?1)
   AND (?2 IS NULL OR ts_ms <= ?2)
   AND (?5 IS NULL OR upstream_id = ?5)
-  AND (?6 IS NULL OR account_id = ?6)
-  AND (?7 = 0 OR account_id IS NULL)
   AND (
-    ?8 IS NULL
-    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?8
+    ?6 IS NULL
+    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?6
   )
 ORDER BY ts_ms DESC
 LIMIT ?3 OFFSET ?4;
@@ -1059,8 +871,6 @@ LIMIT ?3 OFFSET ?4;
     .bind(i64::from(RECENT_PAGE_SIZE))
     .bind(i64::from(offset))
     .bind(upstream_id)
-    .bind(account_id)
-    .bind(public_only)
     .bind(model)
     .fetch_all(pool)
     .await
@@ -1148,8 +958,6 @@ async fn resolve_bucket_ms(
     from_ts_ms: Option<i64>,
     to_ts_ms: Option<i64>,
     upstream_id: Option<&str>,
-    account_id: Option<&str>,
-    public_only: bool,
     model: Option<&str>,
 ) -> Result<u64, String> {
     if let (Some(from), Some(to)) = (from_ts_ms, to_ts_ms) {
@@ -1166,19 +974,15 @@ FROM billable_request_logs
 WHERE (?1 IS NULL OR ts_ms >= ?1)
   AND (?2 IS NULL OR ts_ms <= ?2)
   AND (?3 IS NULL OR upstream_id = ?3)
-  AND (?4 IS NULL OR account_id = ?4)
-  AND (?5 = 0 OR account_id IS NULL)
   AND (
-    ?6 IS NULL
-    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?6
+    ?4 IS NULL
+    OR COALESCE(NULLIF(TRIM(model), ''), NULLIF(TRIM(mapped_model), ''), '(unknown)') = ?4
   );
 "#,
     )
     .bind(from_ts_ms)
     .bind(to_ts_ms)
     .bind(upstream_id)
-    .bind(account_id)
-    .bind(public_only)
     .bind(model)
     .fetch_one(pool)
     .await

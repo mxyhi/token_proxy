@@ -200,22 +200,13 @@ impl TokenProxyApp {
         range: DashboardRange,
         offset: Option<u32>,
         upstream_id: Option<String>,
-        account_id: Option<String>,
-        public_only: bool,
         model: Option<String>,
     ) -> Result<DashboardSnapshot, String> {
         let pool =
             token_proxy_storage::sqlite::open_read_pool(&self.paths.sqlite_db_path()).await?;
-        let mut snapshot = token_proxy_storage::dashboard::read_snapshot(
-            &pool,
-            range,
-            offset,
-            upstream_id,
-            account_id,
-            public_only,
-            model,
-        )
-        .await?;
+        let mut snapshot =
+            token_proxy_storage::dashboard::read_snapshot(&pool, range, offset, upstream_id, model)
+                .await?;
         snapshot.model_probes = self.proxy.model_discovery_snapshot().await;
         Ok(snapshot)
     }

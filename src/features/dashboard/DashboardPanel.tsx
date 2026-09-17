@@ -52,17 +52,13 @@ export function DashboardPanel() {
     rangePreset,
     customRange,
     selectedUpstreamId,
-    selectedAccountId,
-    selectedPublicOnly,
     selectedModel,
     upstreamOptions,
-    accountOptions,
     modelOptions,
     refresh,
     onRangeChange,
     onCustomRangeChange,
     onUpstreamChange,
-    onAccountChange,
     onModelChange,
   } = useDashboardSnapshot({ refreshModelDiscoveryOnRefresh: true })
 
@@ -85,16 +81,12 @@ export function DashboardPanel() {
         customRange={customRange}
         upstreamId={selectedUpstreamId}
         upstreamOptions={upstreamOptions}
-        accountId={selectedAccountId}
-        publicOnly={selectedPublicOnly}
-        accountOptions={accountOptions}
         model={selectedModel}
         modelOptions={modelOptions}
         loading={isLoading}
         onRangeChange={onRangeChange}
         onCustomRangeChange={onCustomRangeChange}
         onUpstreamChange={onUpstreamChange}
-        onAccountChange={onAccountChange}
         onModelChange={onModelChange}
         onRefresh={refresh}
       />

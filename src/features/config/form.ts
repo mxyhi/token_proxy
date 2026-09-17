@@ -544,7 +544,10 @@ function normalizeOverrides(
       isNull: value === null,
     }),
   );
-  return { header };
+  return {
+    header,
+    ...(overrides?.model_capabilities ? { modelCapabilities: structuredClone(overrides.model_capabilities) } : {}),
+  };
 }
 
 function toModelMappingPayload(mappings: ModelMappingForm[]) {
@@ -560,11 +563,12 @@ function toOverridesPayload(
   const headerEntries = overrides.header
     .map(({ name, value, isNull }) => [name.trim(), isNull ? null : value.trim()] as const)
     .filter(([name]) => name);
-  if (!headerEntries.length) {
+  if (!headerEntries.length && !Object.keys(overrides.modelCapabilities ?? {}).length) {
     return undefined;
   }
   return {
     header: Object.fromEntries(headerEntries),
+    ...(overrides.modelCapabilities ? { model_capabilities: structuredClone(overrides.modelCapabilities) } : {}),
   };
 }
 

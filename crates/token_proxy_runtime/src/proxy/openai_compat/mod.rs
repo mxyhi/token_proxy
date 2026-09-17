@@ -11,6 +11,7 @@ mod extract;
 pub(crate) mod images;
 mod input;
 mod message;
+mod tool_results;
 mod tools;
 mod usage {
     pub(crate) use token_proxy_protocol::openai_usage::*;
@@ -175,7 +176,10 @@ pub(crate) fn transform_response_body_with_request_body(
 ) -> Result<Bytes, String> {
     match transform {
         FormatTransform::None => Ok(bytes.clone()),
-        FormatTransform::ChatToResponses => chat_response_to_responses(bytes),
+        FormatTransform::ChatToResponses => {
+            let output = chat_response_to_responses(bytes)?;
+            restore_response_tool_names(output, request_body)
+        }
         FormatTransform::ResponsesToChat => responses_response_to_chat(bytes, model_hint),
         FormatTransform::ResponsesToAnthropic => {
             anthropic_compat::responses_response_to_anthropic(bytes, model_hint)
@@ -434,7 +438,8 @@ fn responses_request_to_chat(body: &Bytes) -> Result<Bytes, String> {
     let Some(object) = value.as_object_mut() else {
         return Err("Request body must be a JSON object.".to_string());
     };
-    token_proxy_protocol::tool_identity::flatten_responses_namespaces(object, &[])?;
+    token_proxy_protocol::tool_identity::normalize_responses_tool_names(object, &[])?;
+    tools::restrict_allowed_tools_for_chat(object)?;
 
     let mut messages = match object.get("input") {
         Some(Value::String(text)) => vec![json!({ "role": "user", "content": text })],
@@ -532,20 +537,22 @@ fn gemini_response_to_responses(
     request_body: Option<&str>,
 ) -> Result<Bytes, String> {
     let intermediate = gemini_compat::gemini_response_to_chat(bytes, model_hint)?;
-    let mut output = chat_response_to_responses(&intermediate)?;
-    if let Some(request_body) = request_body {
-        let request = serde_json::from_str::<Value>(request_body)
-            .map_err(|_| "Original Responses request must be JSON.".to_string())?;
-        let mut value: Value = serde_json::from_slice(&output)
-            .map_err(|_| "Converted Responses response must be JSON.".to_string())?;
-        token_proxy_protocol::tool_identity::restore_responses_tool_identities(
-            &mut value, &request,
-        );
-        output = serde_json::to_vec(&value)
-            .map(Bytes::from)
-            .map_err(|err| format!("Failed to serialize restored Responses response: {err}"))?;
-    }
-    Ok(output)
+    let output = chat_response_to_responses(&intermediate)?;
+    restore_response_tool_names(output, request_body)
+}
+
+fn restore_response_tool_names(output: Bytes, request_body: Option<&str>) -> Result<Bytes, String> {
+    let Some(request_body) = request_body else {
+        return Ok(output);
+    };
+    let request = serde_json::from_str::<Value>(request_body)
+        .map_err(|_| "Original Responses request must be JSON.".to_string())?;
+    let mut value: Value = serde_json::from_slice(&output)
+        .map_err(|_| "Converted Responses response must be JSON.".to_string())?;
+    token_proxy_protocol::tool_identity::restore_responses_tool_identities(&mut value, &request);
+    serde_json::to_vec(&value)
+        .map(Bytes::from)
+        .map_err(|err| format!("Failed to serialize restored Responses response: {err}"))
 }
 
 async fn gemini_request_to_anthropic(
@@ -1114,13 +1121,7 @@ fn chat_response_message_to_reasoning_item(
     }
 
     if summary_text.trim().is_empty() {
-        if let Some(reasoning_content) = message
-            .get("reasoning_content")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-        {
-            summary_text = reasoning_content.to_string();
-        }
+        summary_text = token_proxy_protocol::compat_reason::chat_reasoning_text(message);
     }
 
     if let Some(signature) = message

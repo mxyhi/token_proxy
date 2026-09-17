@@ -71,6 +71,7 @@ fn hot_model_test_upstream(model_mappings: Option<ModelMappingRules>) -> Upstrea
         priority: 0,
         available_models: Vec::new(),
         advertised_model_ids: Vec::new(),
+        model_capabilities: Default::default(),
         model_mappings,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),
@@ -159,6 +160,7 @@ fn test_upstream_url() {
         priority: 0,
         available_models: Vec::new(),
         advertised_model_ids: Vec::new(),
+        model_capabilities: Default::default(),
         model_mappings: None,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),
@@ -186,6 +188,7 @@ fn test_upstream_url() {
         priority: 0,
         available_models: Vec::new(),
         advertised_model_ids: Vec::new(),
+        model_capabilities: Default::default(),
         model_mappings: None,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),
@@ -212,6 +215,7 @@ fn test_upstream_url() {
         priority: 0,
         available_models: Vec::new(),
         advertised_model_ids: Vec::new(),
+        model_capabilities: Default::default(),
         model_mappings: None,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),
@@ -239,6 +243,7 @@ fn test_upstream_url() {
         priority: 0,
         available_models: Vec::new(),
         advertised_model_ids: Vec::new(),
+        model_capabilities: Default::default(),
         model_mappings: None,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),
@@ -270,6 +275,7 @@ fn test_upstream_url() {
         priority: 0,
         available_models: Vec::new(),
         advertised_model_ids: Vec::new(),
+        model_capabilities: Default::default(),
         model_mappings: None,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),
@@ -402,5 +408,50 @@ fn upstream_config_serialize_only_emits_credential_union() {
     assert_eq!(
         value["credential"]["api_keys"],
         serde_json::json!(["secret"])
+    );
+}
+
+#[test]
+fn selected_upstream_model_capabilities_prefer_mapped_identity() {
+    let mut upstream = hot_model_test_upstream(
+        super::super::model_mapping::compile_model_mappings(
+            "test",
+            &std::collections::HashMap::from([("alias".to_string(), "real".to_string())]),
+        )
+        .unwrap(),
+    );
+    upstream.model_capabilities.insert(
+        "alias".to_string(),
+        ModelCapabilities {
+            image_input: Some(true),
+            native_web_search: Some(true),
+        },
+    );
+    upstream.model_capabilities.insert(
+        "real".to_string(),
+        ModelCapabilities {
+            image_input: Some(false),
+            native_web_search: None,
+        },
+    );
+    assert_eq!(
+        upstream.capabilities_for_model(Some("alias")).image_input,
+        Some(false)
+    );
+    assert_eq!(
+        upstream
+            .capabilities_for_model(Some(&format!("{}/alias", upstream.id)))
+            .image_input,
+        Some(false)
+    );
+    assert_eq!(
+        upstream.capabilities_for_model(Some("other")),
+        ModelCapabilities::default()
+    );
+    assert_eq!(
+        upstream
+            .capabilities_for_model(Some("alias"))
+            .native_web_search,
+        None
     );
 }

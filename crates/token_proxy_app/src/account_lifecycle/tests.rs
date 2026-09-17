@@ -200,6 +200,7 @@ async fn repeated_ensure_preserves_routing_and_skips_apply() {
         .model_mappings
         .insert("alias".to_string(), "gpt-5".to_string());
     custom.overrides = Some(UpstreamOverrides {
+        model_capabilities: Default::default(),
         header: HashMap::from([("X-Test".to_string(), Some("1".to_string()))]),
     });
     config.upstreams.push(custom);

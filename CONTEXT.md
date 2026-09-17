@@ -200,6 +200,14 @@ _Avoid_: call_id、function-call item ID、随机 ID
 携带自由格式 `input` 的 Responses 工具调用项；它与输出项通过 `call_id` 配对，在仅接受对象参数的 Provider 协议中仍保留同一调用身份。
 _Avoid_: Function Arguments Object、孤立 tool result
 
+**Orphan Tool Result（孤立工具结果）**:
+没有匹配当前 assistant 工具调用的 function/custom tool output；转换到不支持 Responses 工具生命周期的协议时按普通 user 内容保留，不能伪造 tool_call_id 或静默丢弃。
+_Avoid_: 无 call_id 直接丢弃、未知 call_id 生成 tool 消息
+
+**Model Capability Override（模型能力覆盖）**:
+绑定在单个 Upstream 上的模型能力声明；缺省表示未知，只有显式 `image_input=false` 或 `native_web_search=false` 才限制对应请求能力。
+_Avoid_: 依据模型名称猜测能力、跨 Upstream 共享能力
+
 **Explicit Null Tool Schema Type（显式空工具 Schema 类型）**:
 工具参数 schema 中明确声明的 `type: null`，它不是缺失类型，属于无效 schema；缺失 `type` 表示不约束类型，语义不同。
 _Avoid_: 缺失 type、空 parameters、schema type array

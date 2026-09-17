@@ -110,6 +110,7 @@ export type UpstreamConfig = {
    */
   convert_from_map?: Record<string, InboundApiFormat[]>;
   overrides?: {
+    model_capabilities?: Record<string, ModelCapabilities>;
     header?: Record<string, string | null>;
   };
 };
@@ -181,6 +182,12 @@ export type AgentNodeServiceStatus = {
 
 export type AgentNodeRequestState = "idle" | "working" | "error";
 
+/** 所选上游的显式模型能力；缺省保持未知。 */
+export type ModelCapabilities = {
+  image_input?: boolean | null;
+  native_web_search?: boolean | null;
+};
+
 export type UpstreamForm = {
   id: string;
   providers: string[];
@@ -204,6 +211,7 @@ export type UpstreamForm = {
   modelMappings: ModelMappingForm[];
   convertFromMap: Record<string, InboundApiFormat[]>;
   overrides: {
+    modelCapabilities?: Record<string, ModelCapabilities>;
     header: HeaderOverrideForm[];
   };
 };

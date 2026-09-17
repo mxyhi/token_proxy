@@ -193,6 +193,11 @@ fn normalize_single_upstream(
                 priority: upstream.priority.unwrap_or(0),
                 available_models: available_models.clone(),
                 advertised_model_ids: advertised_model_ids.clone(),
+                model_capabilities: upstream
+                    .overrides
+                    .as_ref()
+                    .map(|value| value.model_capabilities.clone())
+                    .unwrap_or_default(),
                 model_mappings: model_mappings.clone(),
                 header_overrides: header_overrides.clone(),
                 allowed_inbound_formats,

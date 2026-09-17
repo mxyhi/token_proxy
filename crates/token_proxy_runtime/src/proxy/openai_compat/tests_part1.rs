@@ -348,7 +348,7 @@ fn responses_namespace_custom_tool_maps_to_gemini_and_restores_output_identity()
 }
 
 #[test]
-fn responses_namespace_flattening_rejects_ambiguous_names() {
+fn responses_namespace_flattening_disambiguates_colliding_names() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = bytes_from_json(json!({
         "model": "model",
@@ -361,7 +361,7 @@ fn responses_namespace_flattening_rejects_ambiguous_names() {
         ]
     }));
 
-    let error = run_async(async {
+    let output = run_async(async {
         transform_request_body(
             FormatTransform::ResponsesToChat,
             &input,
@@ -369,9 +369,17 @@ fn responses_namespace_flattening_rejects_ambiguous_names() {
             None,
         )
         .await
-        .expect_err("ambiguous identity must fail")
+        .expect("collision must receive a unique name")
     });
-    assert!(error.contains("conflict"), "error={error}");
+    let output = json_from_bytes(output);
+    assert_eq!(
+        output["tools"][0]["function"]["name"],
+        "mcp__github__get_me"
+    );
+    assert_eq!(
+        output["tools"][1]["function"]["name"],
+        "mcp__github__get_me_1"
+    );
 }
 
 #[test]
@@ -1097,7 +1105,7 @@ fn chat_response_to_responses_maps_finish_reason_to_incomplete_details() {
 }
 
 #[test]
-fn responses_request_to_chat_converts_function_call_output_to_tool_message() {
+fn responses_request_to_chat_preserves_orphan_function_output_as_user() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = bytes_from_json(json!({
         "model": "gpt-4.1",
@@ -1121,13 +1129,13 @@ fn responses_request_to_chat_converts_function_call_output_to_tool_message() {
     let messages = value["messages"].as_array().expect("messages array");
 
     assert_eq!(messages.len(), 1);
-    assert_eq!(messages[0]["role"], json!("tool"));
-    assert_eq!(messages[0]["tool_call_id"], json!("call_123"));
+    assert_eq!(messages[0]["role"], json!("user"));
+    assert!(messages[0]["tool_call_id"].is_null());
     assert_eq!(messages[0]["content"], json!("ok"));
 }
 
 #[test]
-fn responses_request_to_chat_converts_new_tool_output_types_to_tool_messages() {
+fn responses_request_to_chat_preserves_orphan_extended_outputs_as_user() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
     let input = bytes_from_json(json!({
         "model": "gpt-4.1",
@@ -1153,12 +1161,12 @@ fn responses_request_to_chat_converts_new_tool_output_types_to_tool_messages() {
     let messages = value["messages"].as_array().expect("messages array");
 
     assert_eq!(messages.len(), 3);
-    assert_eq!(messages[0]["role"], json!("tool"));
-    assert_eq!(messages[0]["tool_call_id"], json!("call_search"));
+    assert_eq!(messages[0]["role"], json!("user"));
+    assert!(messages[0]["tool_call_id"].is_null());
     assert_eq!(messages[0]["content"], json!("search ok"));
-    assert_eq!(messages[1]["tool_call_id"], json!("call_custom"));
+    assert!(messages[1]["tool_call_id"].is_null());
     assert_eq!(messages[1]["content"], json!("custom ok"));
-    assert_eq!(messages[2]["tool_call_id"], json!("call_mcp"));
+    assert!(messages[2]["tool_call_id"].is_null());
     assert_eq!(messages[2]["content"], json!("mcp ok"));
 }
 

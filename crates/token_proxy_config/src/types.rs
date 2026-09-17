@@ -296,8 +296,21 @@ pub struct UpstreamConfig {
     pub overrides: Option<UpstreamOverrides>,
 }
 
+/// 未指定表示未知，不可据此丢弃媒体或推断原生搜索能力。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModelCapabilities {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_input: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_web_search: Option<bool>,
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct UpstreamOverrides {
+    /// 仅信任所选上游的显式能力；键为真实模型名或配置中的入站别名。
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub model_capabilities: HashMap<String, ModelCapabilities>,
     #[serde(default)]
     pub header: HashMap<String, Option<String>>,
 }
@@ -510,6 +523,7 @@ pub struct UpstreamRuntime {
     pub priority: i32,
     pub available_models: Vec<String>,
     pub advertised_model_ids: Vec<String>,
+    pub model_capabilities: HashMap<String, ModelCapabilities>,
     pub model_mappings: Option<ModelMappingRules>,
     pub header_overrides: Option<Vec<HeaderOverride>>,
     pub allowed_inbound_formats: InboundApiFormatMask,
@@ -535,6 +549,23 @@ impl UpstreamRuntime {
         let normalized_path = normalize_openai_compatible_path_for_base_url(base, path);
         let effective_path = strip_overlapping_prefix(base, normalized_path);
         format!("{base}{effective_path}")
+    }
+
+    /// 映射后的真实模型优先；能力来自当前 Upstream，绝不跨上游共享。
+    pub fn capabilities_for_model(&self, requested: Option<&str>) -> ModelCapabilities {
+        let Some(requested) = requested else {
+            return ModelCapabilities::default();
+        };
+        let requested = requested
+            .strip_prefix(&format!("{}/", self.id))
+            .unwrap_or(requested);
+        let mapped = self.map_model(requested);
+        mapped
+            .as_deref()
+            .and_then(|name| self.model_capabilities.get(name))
+            .or_else(|| self.model_capabilities.get(requested))
+            .copied()
+            .unwrap_or_default()
     }
 
     pub fn map_model(&self, model: &str) -> Option<String> {

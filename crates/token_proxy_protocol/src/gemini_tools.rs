@@ -5,6 +5,11 @@ use serde_json::{json, Map, Value};
 const GEMINI_UNSUPPORTED_SCHEMA_KEYS: &[&str] = &[
     "$schema",
     "$id",
+    "id",
+    "$anchor",
+    "$vocabulary",
+    "$dynamicRef",
+    "$dynamicAnchor",
     "$ref",
     "$defs",
     "definitions",
@@ -141,9 +146,31 @@ fn clean_tool_schema_object(object: &Map<String, Value>) -> Value {
                 })
                 .unwrap_or_default();
             cleaned.insert(key.clone(), Value::Object(definitions));
-        } else {
+        } else if matches!(
+            key.as_str(),
+            "items"
+                | "prefixItems"
+                | "anyOf"
+                | "oneOf"
+                | "not"
+                | "additionalItems"
+                | "propertyNames"
+                | "unevaluatedItems"
+                | "unevaluatedProperties"
+                | "contentSchema"
+        ) {
             cleaned.insert(key.clone(), clean_tool_schema(value));
+        } else {
+            // default/enum/const 是用户数据，不递归执行 Schema 关键字删除。
+            cleaned.insert(key.clone(), value.clone());
         }
+    }
+    let removed = source
+        .keys()
+        .filter(|key| GEMINI_UNSUPPORTED_SCHEMA_KEYS.contains(&key.as_str()))
+        .count();
+    if removed > 0 {
+        tracing::debug!(removed, "removed unsupported Gemini schema keywords");
     }
     normalize_gemini_enum(&mut cleaned);
     normalize_gemini_schema_type(&mut cleaned);
@@ -239,9 +266,10 @@ fn normalize_malformed_schema_object(object: &Map<String, Value>) -> Map<String,
     let mut normalized = object.clone();
     let is_bare_property_map = !object.is_empty()
         && !object.contains_key("type")
-        && !object
-            .keys()
-            .any(|key| SCHEMA_CONTAINER_KEYS.contains(&key.as_str()))
+        && !object.keys().any(|key| {
+            SCHEMA_CONTAINER_KEYS.contains(&key.as_str())
+                || GEMINI_UNSUPPORTED_SCHEMA_KEYS.contains(&key.as_str())
+        })
         && object.values().all(Value::is_object);
     if is_bare_property_map {
         let (properties, required) = normalize_properties(object);
@@ -773,5 +801,33 @@ mod tests {
         assert!(cleaned["description"]
             .as_str()
             .is_some_and(|description| description.contains("contains:")));
+    }
+}
+
+#[cfg(test)]
+mod identifier_tests {
+    use super::*;
+
+    #[test]
+    fn identifiers_are_removed_only_from_schema_nodes() {
+        let data: Value = serde_json::from_str(
+            r#"{"id":"user-id","$anchor":"keep","nested":{"id":"keep"},"n":9007199254740993}"#,
+        )
+        .unwrap();
+        let schema = json!({"type":"object","id":"root","$anchor":"root","$vocabulary":{"v":true},"properties":{
+            "id":{"type":"string","id":"schema","default":"user"},
+            "$anchor":{"type":"object","$dynamicRef":"#x","$dynamicAnchor":"x","default":data,"const":data},
+            "items":{"type":"array","items":{"type":"string","id":"item"}}
+        }});
+        let clean = clean_tool_schema(&schema);
+        assert!(clean.get("id").is_none());
+        assert!(clean.get("$anchor").is_none());
+        assert!(clean.get("$vocabulary").is_none());
+        assert!(clean["properties"]["id"].get("id").is_none());
+        assert_eq!(clean["properties"]["id"]["type"], "STRING");
+        assert!(clean["properties"]["$anchor"].get("$dynamicRef").is_none());
+        assert_eq!(clean["properties"]["$anchor"]["default"], data);
+        assert_eq!(clean["properties"]["$anchor"]["const"], data);
+        assert!(clean["properties"]["items"]["items"].get("id").is_none());
     }
 }

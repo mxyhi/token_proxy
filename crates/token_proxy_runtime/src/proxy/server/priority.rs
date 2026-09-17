@@ -5,7 +5,7 @@ use tokio::sync::OnceCell;
 
 use super::{
     dispatch::DispatchPlan,
-    execute::{prepare_dispatch_request, OutboundRequest},
+    execute::{prepare_dispatch_request_for_model, OutboundRequest},
     prepared::PreparedRequest,
 };
 use crate::proxy::{
@@ -22,7 +22,7 @@ use crate::proxy::{
 struct Route {
     plan: DispatchPlan,
     cooldown: CooldownScope,
-    outbound: OnceCell<OutboundRequest>,
+    outbound: [OnceCell<OutboundRequest>; 2],
 }
 
 struct Candidate<'a> {
@@ -47,7 +47,7 @@ pub(super) async fn forward_by_priority(
         .map(|plan| Route {
             cooldown: codex_scope.for_provider(plan.provider, inbound_format),
             plan,
-            outbound: OnceCell::new(),
+            outbound: [OnceCell::new(), OnceCell::new()],
         })
         .collect();
     // 显式 upstream/model 前缀在所有 Provider 中解析一次，避免跨 Provider 后丢失定向约束。
@@ -67,6 +67,8 @@ pub(super) async fn forward_by_priority(
                 .flat_map(|group| &group.items)
                 .any(|upstream| upstream.id == *prefix)
         });
+    let requires_search =
+        crate::proxy::model_capabilities::requires_native_search(&prepared.source_body);
     let mut summary = ForwardAttemptState::new();
     let mut repaired_bodies = HashMap::new();
     let mut has_route_candidate = false;
@@ -91,6 +93,15 @@ pub(super) async fn forward_by_priority(
             if !upstream.supports_model(prepared.meta.original_model.as_deref()) {
                 tracing::debug!(provider = route.plan.provider, upstream = %upstream.id,
                     exclusion_reason = "model_not_supported", "skipped global routing candidate");
+                continue;
+            }
+            if requires_search
+                && upstream
+                    .capabilities_for_model(prepared.meta.original_model.as_deref())
+                    .native_web_search
+                    == Some(false)
+            {
+                tracing::debug!(upstream = %upstream.id, "skipped model explicitly lacking native web search");
                 continue;
             }
             has_model_candidate = true;
@@ -139,17 +150,20 @@ pub(super) async fn forward_by_priority(
                 let candidate = candidates[index];
                 Box::pin(async move {
                     // OnceCell 合并同 Provider 的并发转换；没有执行到的 Provider 不读取/转换请求体。
-                    let outbound = candidate
-                        .route
-                        .outbound
+                    let capabilities = candidate
+                        .upstream
+                        .capabilities_for_model(prepared.meta.original_model.as_deref());
+                    let text_only = capabilities.image_input == Some(false);
+                    let outbound = candidate.route.outbound[usize::from(text_only)]
                         .get_or_try_init(|| {
-                            prepare_dispatch_request(
+                            prepare_dispatch_request_for_model(
                                 state,
                                 uri,
                                 headers,
                                 prepared,
                                 request_start,
                                 &candidate.route.plan,
+                                text_only,
                             )
                         })
                         .await;

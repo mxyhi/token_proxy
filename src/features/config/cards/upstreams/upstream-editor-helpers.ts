@@ -186,6 +186,7 @@ export function cloneUpstreamDraft(upstream: UpstreamForm) {
     availableModels: [...upstream.availableModels],
     modelMappings: upstream.modelMappings.map((mapping) => ({ ...mapping })),
     overrides: {
+      ...structuredClone(upstream.overrides),
       header: upstream.overrides.header.map((entry) => ({ ...entry })),
     },
   };

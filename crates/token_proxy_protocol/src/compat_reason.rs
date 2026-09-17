@@ -195,3 +195,77 @@ mod tests {
         );
     }
 }
+
+/// 读取上游明确提供的推理文本；别名择一，绝不把签名或加密数据作为正文。
+pub fn chat_reasoning_text(message: &serde_json::Map<String, Value>) -> String {
+    for key in ["reasoning_content", "reasoning", "reasoning_details"] {
+        if let Some(value) = message.get(key) {
+            let mut text = String::new();
+            append_reasoning_text(value, &mut text);
+            if !text.is_empty() {
+                if key != "reasoning_content" {
+                    tracing::trace!(field = key, "read alternate Chat reasoning text carrier");
+                }
+                return text;
+            }
+        }
+    }
+    String::new()
+}
+
+fn append_reasoning_text(value: &Value, text: &mut String) {
+    match value {
+        Value::String(value) => text.push_str(value),
+        Value::Array(values) => {
+            for value in values {
+                append_reasoning_text(value, text);
+            }
+        }
+        Value::Object(object)
+            if matches!(
+                object.get("type").and_then(Value::as_str),
+                None | Some("text" | "reasoning.text" | "reasoning_text" | "summary_text")
+            ) =>
+        {
+            if let Some(value) = object.get("text").and_then(Value::as_str) {
+                text.push_str(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod chat_reasoning_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn text_carriers_fall_back_without_duplication_or_signature_leaks() {
+        assert_eq!(
+            chat_reasoning_text(
+                json!({"reasoning_content":"primary","reasoning":"duplicate"})
+                    .as_object()
+                    .unwrap()
+            ),
+            "primary"
+        );
+        assert_eq!(
+            chat_reasoning_text(
+                json!({"reasoning_content":null,"reasoning":"fallback"})
+                    .as_object()
+                    .unwrap()
+            ),
+            "fallback"
+        );
+        assert_eq!(chat_reasoning_text(json!({"reasoning_content":"","reasoning_details":[{"type":"reasoning.text","text":"a"},{"type":"reasoning.encrypted","text":"secret","data":"secret"},{"type":"text","text":"b"}]}).as_object().unwrap()), "ab");
+        assert_eq!(
+            chat_reasoning_text(
+                json!({"reasoning_details":[{"type":"signature","text":"secret"}]})
+                    .as_object()
+                    .unwrap()
+            ),
+            ""
+        );
+    }
+}

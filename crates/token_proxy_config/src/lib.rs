@@ -23,10 +23,10 @@ pub use model_mapping::ModelMappingRules;
 pub use types::StaticApiKeyHeaders;
 pub use types::{
     AccountProvider, ConfigResponse, HeaderOverride, InboundApiFormat, InboundApiFormatMask,
-    KiroPreferredEndpoint, ProviderUpstreams, ProxyConfig, ProxyConfigFile, TrayTokenRateConfig,
-    TrayTokenRateFormat, UpstreamConfig, UpstreamCredential, UpstreamDispatchRuntime,
-    UpstreamDispatchStrategy, UpstreamGroup, UpstreamOrderStrategy, UpstreamOverrides,
-    UpstreamRuntime, UpstreamStrategy, UpstreamStrategyRuntime,
+    KiroPreferredEndpoint, ModelCapabilities, ProviderUpstreams, ProxyConfig, ProxyConfigFile,
+    TrayTokenRateConfig, TrayTokenRateFormat, UpstreamConfig, UpstreamCredential,
+    UpstreamDispatchRuntime, UpstreamDispatchStrategy, UpstreamGroup, UpstreamOrderStrategy,
+    UpstreamOverrides, UpstreamRuntime, UpstreamStrategy, UpstreamStrategyRuntime,
 };
 
 /// Global tracing level persisted in the application config.

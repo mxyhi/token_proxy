@@ -603,3 +603,12 @@ describe("config/form", () => {
     expect(payload.upstreams[0]?.rewrite_developer_role_to_system).toBe(true);
   });
 });
+
+
+it("preserves model capabilities through form editing without header overrides", () => {
+  const config = toPayload({ ...EMPTY_FORM, upstreams: [createEmptyUpstream()] });
+  config.upstreams[0].overrides = { model_capabilities: { actual: { image_input: false, native_web_search: true }, unknown: {} } };
+  const form = toForm(config);
+  form.upstreams[0].priority = "5";
+  expect(toPayload(form).upstreams[0].overrides?.model_capabilities).toEqual(config.upstreams[0].overrides.model_capabilities);
+});

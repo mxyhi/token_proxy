@@ -6,6 +6,8 @@ use time::OffsetDateTime;
 pub struct CodexQuotaItem {
     pub name: String,
     pub percentage: f64,
+    #[serde(default)]
+    pub used_percentage: Option<f64>,
     pub used: Option<f64>,
     pub limit: Option<f64>,
     pub reset_at: Option<String>,
@@ -86,6 +88,8 @@ pub struct CodexTokenRecord {
     pub email: Option<String>,
     #[serde(default)]
     pub quota: CodexQuotaCache,
+    #[serde(default)]
+    pub quota_threshold_percent: Option<f64>,
 }
 
 impl CodexTokenRecord {
@@ -212,6 +216,65 @@ impl CodexTokenRecord {
     pub fn is_usable(&self) -> bool {
         matches!(self.effective_status(), CodexAccountStatus::Active)
     }
+
+    pub fn quota_threshold_reached(&self) -> bool {
+        let Some(threshold) = self.quota_threshold_percent else {
+            return false;
+        };
+        if threshold <= 0.0 {
+            return true;
+        }
+        self.quota
+            .quotas
+            .iter()
+            .filter_map(|item| item.used_percentage)
+            .any(|used| used >= threshold)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CodexQuotaCache, CodexQuotaItem, CodexTokenRecord};
+
+    fn record(threshold: Option<f64>, used: &[f64]) -> CodexTokenRecord {
+        CodexTokenRecord {
+            credential: super::CodexCredential::AgentIdentity {
+                agent_runtime_id: "runtime".to_string(),
+                agent_private_key: "private-key".to_string(),
+                task_id: Some("task".to_string()),
+                plan_type: None,
+                chatgpt_account_is_fedramp: false,
+            },
+            status: super::CodexAccountStatus::Active,
+            account_id: Some("account".to_string()),
+            user_id: None,
+            email: None,
+            quota: CodexQuotaCache {
+                quotas: used
+                    .iter()
+                    .enumerate()
+                    .map(|(index, value)| CodexQuotaItem {
+                        name: format!("window-{index}"),
+                        percentage: 100.0 - value,
+                        used_percentage: Some(*value),
+                        used: None,
+                        limit: None,
+                        reset_at: None,
+                    })
+                    .collect(),
+                ..Default::default()
+            },
+            quota_threshold_percent: threshold,
+        }
+    }
+
+    #[test]
+    fn quota_threshold_uses_the_highest_known_window() {
+        assert!(record(Some(90.0), &[20.0, 90.0]).quota_threshold_reached());
+        assert!(!record(Some(90.0), &[20.0, 89.9]).quota_threshold_reached());
+        assert!(record(Some(0.0), &[]).quota_threshold_reached());
+        assert!(!record(None, &[100.0]).quota_threshold_reached());
+    }
 }
 
 pub struct CodexOAuthCredentialRef<'a> {
@@ -253,6 +316,7 @@ pub struct CodexAccountSummary {
     pub status: CodexAccountStatus,
     pub auth_method: CodexAuthMethod,
     pub auto_refresh_enabled: Option<bool>,
+    pub quota_threshold_percent: Option<f64>,
 }
 
 fn default_auto_refresh_enabled() -> bool {
@@ -293,4 +357,5 @@ pub struct CodexQuotaSummary {
     pub plan_type: Option<String>,
     pub quotas: Vec<CodexQuotaItem>,
     pub error: Option<String>,
+    pub checked_at: Option<String>,
 }

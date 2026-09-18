@@ -2026,6 +2026,7 @@ async fn build_test_state_handle_with_paths(
                                 user_id: None,
                                 email: Some("codex@example.com".to_string()),
                                 quota: token_proxy_account_codex::CodexQuotaCache::default(),
+                                quota_threshold_percent: None,
                             },
                         )
                         .await
@@ -2185,6 +2186,7 @@ async fn seed_codex_account_with_options(
                 user_id: None,
                 email: Some(format!("{storage_account_id}@example.com")),
                 quota: token_proxy_account_codex::CodexQuotaCache::default(),
+                quota_threshold_percent: None,
             },
         )
         .await
@@ -2220,6 +2222,7 @@ async fn seed_agent_identity_account(state: &ProxyStateHandle, storage_account_i
                 user_id: Some("user-agent".to_string()),
                 email: Some("agent@example.com".to_string()),
                 quota: token_proxy_account_codex::CodexQuotaCache::default(),
+                quota_threshold_percent: None,
             },
         )
         .await

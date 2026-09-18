@@ -8,6 +8,7 @@ export type CodexAccountSummary = {
   status: CodexAccountStatus;
   auth_method?: CodexAuthMethod;
   auto_refresh_enabled?: boolean;
+  quota_threshold_percent?: number | null;
   proxy_url?: string | null;
   priority: number;
 };
@@ -31,6 +32,7 @@ export type CodexLoginPollResponse = {
 export type CodexQuotaItem = {
   name: string;
   percentage: number;
+  used_percentage?: number | null;
   used: number | null;
   limit: number | null;
   reset_at: string | null;
@@ -41,4 +43,5 @@ export type CodexQuotaSummary = {
   plan_type: string | null;
   quotas: CodexQuotaItem[];
   error: string | null;
+  checked_at: string | null;
 };

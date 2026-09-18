@@ -58,6 +58,7 @@ pub struct ProviderAccountListItem {
     pub provider_name: Option<String>,
     pub auto_refresh_enabled: Option<bool>,
     pub quota: ProviderAccountQuotaSnapshot,
+    pub quota_threshold_percent: Option<f64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -72,6 +73,7 @@ pub struct ProviderAccountQuotaSnapshot {
 pub struct ProviderAccountQuotaItem {
     pub name: String,
     pub percentage: f64,
+    pub used_percentage: Option<f64>,
     pub used: Option<f64>,
     pub limit: Option<f64>,
     pub reset_at: Option<String>,
@@ -190,6 +192,7 @@ fn build_kiro_list_item(
         provider_name,
         auto_refresh_enabled: None,
         quota: provider_quota_snapshot_from_kiro(&record.quota),
+        quota_threshold_percent: None,
     })
 }
 
@@ -212,6 +215,7 @@ fn build_codex_list_item(
         provider_name,
         auto_refresh_enabled: record.auto_refresh_enabled(),
         quota: provider_quota_snapshot_from_codex(&record.quota),
+        quota_threshold_percent: record.quota_threshold_percent,
     })
 }
 
@@ -234,6 +238,7 @@ fn build_xai_list_item(
         provider_name,
         auto_refresh_enabled: Some(record.auto_refresh_enabled),
         quota: provider_quota_snapshot_from_xai(&record.quota),
+        quota_threshold_percent: None,
     })
 }
 
@@ -303,6 +308,7 @@ fn provider_quota_item_from_kiro(item: &KiroQuotaItem) -> ProviderAccountQuotaIt
     ProviderAccountQuotaItem {
         name: item.name.clone(),
         percentage: item.percentage,
+        used_percentage: None,
         used: item.used,
         limit: item.limit,
         reset_at: item.reset_at.clone(),
@@ -314,6 +320,7 @@ fn provider_quota_item_from_codex(item: &CodexQuotaItem) -> ProviderAccountQuota
     ProviderAccountQuotaItem {
         name: item.name.clone(),
         percentage: item.percentage,
+        used_percentage: item.used_percentage,
         used: item.used,
         limit: item.limit,
         reset_at: item.reset_at.clone(),
@@ -325,6 +332,7 @@ fn provider_quota_item_from_xai(item: &XaiQuotaItem) -> ProviderAccountQuotaItem
     ProviderAccountQuotaItem {
         name: item.name.clone(),
         percentage: item.percentage,
+        used_percentage: None,
         used: item.used,
         limit: item.limit,
         reset_at: item.reset_at.clone(),
@@ -352,6 +360,7 @@ mod tests {
             auth_method: None,
             provider_name: None,
             auto_refresh_enabled: Some(true),
+            quota_threshold_percent: None,
             quota: ProviderAccountQuotaSnapshot::default(),
         }
     }
@@ -409,6 +418,7 @@ mod tests {
                 user_id: None,
                 email: Some(email.to_string()),
                 quota: CodexQuotaCache::default(),
+                quota_threshold_percent: None,
             };
             records::upsert_record(
                 &paths,

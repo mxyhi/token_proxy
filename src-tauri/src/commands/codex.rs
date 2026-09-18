@@ -88,6 +88,17 @@ pub async fn codex_set_auto_refresh(
     codex_store.set_auto_refresh(&account_id, enabled).await
 }
 
+#[tauri::command]
+pub async fn codex_set_quota_threshold(
+    codex_store: tauri::State<'_, Arc<codex::CodexAccountStore>>,
+    account_id: String,
+    threshold_percent: Option<f64>,
+) -> Result<codex::CodexAccountSummary, String> {
+    codex_store
+        .set_quota_threshold(&account_id, threshold_percent)
+        .await
+}
+
 // Phase B: 账户级 priority / proxy_url / 人工 Disabled 已删除；只保留 auto_refresh。
 
 #[tauri::command]

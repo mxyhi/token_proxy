@@ -345,6 +345,7 @@ async fn run_auth_code_login(
         user_id: None,
         email: None,
         quota: CodexQuotaCache::default(),
+        quota_threshold_percent: None,
     };
     // 不在 OAuth 任务内落库；交给 poll 路径的编排小事务提交。
     manager.prepare_session(&state, record).await;

@@ -8,6 +8,7 @@ import {
   refreshCodexQuotaCache,
   refreshCodexQuotaNow,
   setCodexAutoRefresh,
+  setCodexQuotaThreshold,
   refreshCodexAccount,
 } from "@/features/codex/api";
 import type { CodexAccountSummary } from "@/features/codex/types";
@@ -67,6 +68,27 @@ export function useCodexAccounts(options?: UseCodexAccountsOptions) {
       setLoading(false);
     }
   }, []);
+
+  const setQuotaThreshold = useCallback(
+    async (accountId: string, thresholdPercent: number | null) => {
+      setLoading(true);
+      try {
+        const updated = await setCodexQuotaThreshold(accountId, thresholdPercent);
+        setAccounts((prev) =>
+          prev.map((item) => (item.account_id === accountId ? { ...item, ...updated } : item)),
+        );
+        setError("");
+        return updated;
+      } catch (err) {
+        const message = parseError(err);
+        setError(message);
+        throw err;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
 
   const importFile = useCallback(async (path: string) => {
     setLoading(true);
@@ -138,6 +160,7 @@ export function useCodexAccounts(options?: UseCodexAccountsOptions) {
     refresh,
     refreshAccount,
     setAutoRefresh,
+    setQuotaThreshold,
     importFile,
     importText,
     importRefreshTokens,

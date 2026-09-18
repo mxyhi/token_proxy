@@ -61,3 +61,10 @@ export async function setCodexAutoRefresh(accountId: string, enabled: boolean) {
     enabled,
   });
 }
+
+export async function setCodexQuotaThreshold(accountId: string, thresholdPercent: number | null) {
+  return await invoke<CodexAccountSummary>("codex_set_quota_threshold", {
+    accountId,
+    thresholdPercent,
+  });
+}

@@ -28,6 +28,7 @@ pub async fn fetch_quotas(store: &CodexAccountStore) -> Result<Vec<CodexQuotaSum
                     plan_type: None,
                     quotas: Vec::new(),
                     error: Some(err),
+                    checked_at: None,
                 }),
             },
             Err(err) => results.push(CodexQuotaSummary {
@@ -35,6 +36,7 @@ pub async fn fetch_quotas(store: &CodexAccountStore) -> Result<Vec<CodexQuotaSum
                 plan_type: None,
                 quotas: Vec::new(),
                 error: Some(err),
+                checked_at: None,
             }),
         }
     }
@@ -82,6 +84,7 @@ async fn refresh_quota_cache_with_endpoint(
         status: record.effective_status(),
         auth_method: record.auth_method(),
         auto_refresh_enabled: record.auto_refresh_enabled(),
+        quota_threshold_percent: record.quota_threshold_percent,
     };
     let resolved = match store.get_account_record(account_id).await {
         Ok(record) => record,
@@ -267,16 +270,19 @@ fn map_usage_response(
         plan_type: response.plan_type,
         quotas,
         error: None,
+        checked_at: Some(token_proxy_account_store::oauth_util::now_rfc3339()),
     }
 }
 
 fn build_window_quota(name: &str, window: Option<CodexRateWindow>) -> Option<CodexQuotaItem> {
     let window = window?;
     let used_percent = window.used_percent?;
-    let percentage = (100.0 - used_percent).clamp(0.0, 100.0);
+    let used_percentage = used_percent.clamp(0.0, 100.0);
+    let percentage = 100.0 - used_percentage;
     Some(CodexQuotaItem {
         name: name.to_string(),
         percentage,
+        used_percentage: Some(used_percentage),
         used: None,
         limit: None,
         reset_at: window.reset_at.and_then(reset_at_from_seconds),

@@ -16,7 +16,7 @@ pub use agent_node::{
 pub use codex::{
     codex_fetch_quotas, codex_import_file, codex_import_refresh_tokens, codex_import_text,
     codex_list_accounts, codex_poll_login, codex_refresh_account, codex_refresh_quota_cache,
-    codex_refresh_quota_now, codex_set_auto_refresh, codex_start_login,
+    codex_refresh_quota_now, codex_set_auto_refresh, codex_set_quota_threshold, codex_start_login,
 };
 pub use config::{
     preview_client_setup, read_data_storage_usage, read_default_hot_model_mappings,

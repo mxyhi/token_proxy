@@ -66,6 +66,16 @@ function buildApiKeyUpstream(): UpstreamForm {
   return upstream;
 }
 
+function buildCodexAccountUpstream(): UpstreamForm {
+  const upstream = createEmptyUpstream();
+  upstream.id = "codex-acc-1";
+  upstream.providers = ["codex"];
+  upstream.accountId = "codex-primary";
+  upstream.enabled = true;
+  upstream.baseUrl = "";
+  return upstream;
+}
+
 function renderUpstreamsCard(
   props: Partial<ComponentProps<typeof UpstreamsCard>> = {},
 ) {
@@ -309,5 +319,83 @@ describe("upstreams account UI (Phase D)", () => {
         accountId: "kiro-primary.json",
       });
     });
+  });
+
+  it("configures the Codex usage threshold and shows used percentage", async () => {
+    const user = userEvent.setup();
+    invokeMock.mockImplementation(async (command) => {
+      if (command === "codex_list_accounts") {
+        return [
+          {
+            account_id: "codex-primary",
+            email: "codex@example.com",
+            expires_at: "2027-01-01T00:00:00Z",
+            status: "active",
+            auth_method: "oauth",
+            auto_refresh_enabled: true,
+            quota_threshold_percent: null,
+          },
+        ];
+      }
+      if (command === "codex_fetch_quotas") {
+        return [
+          {
+            account_id: "codex-primary",
+            plan_type: "pro",
+            checked_at: "2026-09-18T02:00:00Z",
+            quotas: [
+              {
+                name: "codex-session",
+                percentage: 9,
+                used_percentage: 91,
+                used: null,
+                limit: null,
+                reset_at: null,
+              },
+            ],
+            error: null,
+          },
+        ];
+      }
+      if (command === "codex_set_quota_threshold") {
+        return {
+          account_id: "codex-primary",
+          email: "codex@example.com",
+          expires_at: "2027-01-01T00:00:00Z",
+          status: "active",
+          auth_method: "oauth",
+          auto_refresh_enabled: true,
+          quota_threshold_percent: 90,
+        };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    render(
+      <UpstreamEditorFields
+        draft={buildCodexAccountUpstream()}
+        providerOptions={["codex"]}
+        appProxyUrl=""
+        showApiKeys={false}
+        onToggleApiKeys={() => undefined}
+        onChangeDraft={() => undefined}
+      />,
+    );
+
+    const usedLabel = m.codex_quota_used({ percent: "91" });
+    expect(await screen.findByText(new RegExp(usedLabel))).toBeInTheDocument();
+    const threshold = screen.getByRole("spinbutton", {
+      name: m.codex_quota_threshold_label(),
+    });
+    await user.type(threshold, "90");
+    await user.click(screen.getByRole("button", { name: m.codex_quota_threshold_save() }));
+
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("codex_set_quota_threshold", {
+        accountId: "codex-primary",
+        thresholdPercent: 90,
+      });
+    });
+    expect(await screen.findByText(m.codex_quota_threshold_reached())).toBeInTheDocument();
   });
 });

@@ -152,6 +152,14 @@ _Avoid_: 含糊的 Policy Violation
 持久化 access/refresh token、到期时间和自动刷新设置的 Codex 身份；上游使用 Bearer 鉴权，401 可触发一次 OAuth token refresh。
 _Avoid_: Agent Identity、Codex API Key
 
+**Codex Usage Window（Codex 用量窗口）**:
+Codex 账户在某个服务周期内的用量快照，至少区分 session 与 weekly 窗口；展示同时包含已用百分比、剩余百分比、重置时间和最近检查时间。
+_Avoid_: 仅显示剩余百分比、把不同窗口合并为单一余额
+
+**Codex Usage Threshold（Codex 用量阈值）**:
+账户级路由保护线；任一用量窗口的已用百分比达到或超过该值时，后续请求跳过该账户并沿用既有渠道 fallback。未设置表示不限制，0% 表示始终跳过。
+_Avoid_: 渠道全局阈值、按剩余百分比判断、达到阈值后继续消耗
+
 **Codex Agent Identity Account（Codex Agent Identity 账户）**:
 从官方 Codex `auth.json` 导入的独立凭据类型，持久化 runtime ID、PKCS#8 Ed25519 私钥与 task binding，不持久化或伪造 OAuth token，也没有 token 到期/自动刷新语义。
 _Avoid_: OAuth 登录开关、access token 别名、应用内生成身份

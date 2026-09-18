@@ -547,6 +547,7 @@ fn start_spawns_codex_keepalive_without_codex_upstream() {
                     user_id: None,
                     email: Some("service@example.com".to_string()),
                     quota: token_proxy_account_codex::CodexQuotaCache::default(),
+                    quota_threshold_percent: None,
                 },
             )
             .await

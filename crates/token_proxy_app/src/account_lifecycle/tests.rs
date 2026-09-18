@@ -70,6 +70,7 @@ fn codex_record(email: &str, access: &str) -> CodexTokenRecord {
         user_id: Some(format!("user-{email}")),
         email: Some(email.to_string()),
         quota: Default::default(),
+        quota_threshold_percent: None,
     }
 }
 

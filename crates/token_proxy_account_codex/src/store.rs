@@ -414,6 +414,26 @@ impl CodexAccountStore {
         self.save_record(account_id.to_string(), record).await
     }
 
+    pub async fn set_quota_threshold(
+        &self,
+        account_id: &str,
+        threshold_percent: Option<f64>,
+    ) -> Result<CodexAccountSummary, String> {
+        if let Some(value) = threshold_percent {
+            if !value.is_finite() || !(0.0..=100.0).contains(&value) {
+                return Err("Codex usage threshold must be between 0 and 100.".to_string());
+            }
+        }
+        let mut record = self.load_account(account_id).await?;
+        record.quota_threshold_percent = threshold_percent;
+        tracing::info!(
+            account_id,
+            threshold_percent = ?threshold_percent,
+            "codex usage threshold updated"
+        );
+        self.save_record(account_id.to_string(), record).await
+    }
+
     pub(crate) async fn mark_invalid(
         &self,
         account_id: &str,
@@ -492,6 +512,7 @@ impl CodexAccountStore {
             // Re-importing the same real Codex account should refresh credentials in place
             // instead of creating duplicate local entries. Keep app-local settings.
             record.status = existing_record.status;
+            record.quota_threshold_percent = existing_record.quota_threshold_percent;
             if let (Some(imported), Some(existing)) = (record.oauth_mut(), existing_record.oauth())
             {
                 *imported.auto_refresh_enabled = existing.auto_refresh_enabled;
@@ -573,6 +594,7 @@ impl CodexAccountStore {
             user_id: None,
             email: None,
             quota: super::types::CodexQuotaCache::default(),
+            quota_threshold_percent: None,
         };
         fill_record_from_jwt(&mut record);
         self.save_new_account_unlocked(record).await
@@ -849,6 +871,7 @@ impl CodexAccountStore {
             user_id: record.user_id.clone(),
             email: record.email.clone(),
             quota: record.quota.clone(),
+            quota_threshold_percent: record.quota_threshold_percent,
         };
         fill_record_from_jwt(&mut refreshed);
         let summary = self
@@ -930,6 +953,19 @@ impl CodexAccountStore {
                     CodexAccountStatus::Expired => "expired",
                     CodexAccountStatus::Invalid => "invalid",
                 }
+            ));
+        }
+        if record.quota_threshold_reached() {
+            let threshold = record
+                .quota_threshold_percent
+                .expect("quota threshold exists after reached check");
+            tracing::warn!(
+                account_id,
+                threshold_percent = threshold,
+                "pinned codex account reached usage threshold"
+            );
+            return Err(format!(
+                "Codex account usage reached configured threshold ({threshold:.0}%): {account_id}"
             ));
         }
         tracing::debug!(account_id, "resolved pinned codex account credential");
@@ -1276,6 +1312,7 @@ fn account_summary(account_id: String, record: &CodexTokenRecord) -> CodexAccoun
         status: record.effective_status(),
         auth_method: record.auth_method(),
         auto_refresh_enabled: record.auto_refresh_enabled(),
+        quota_threshold_percent: record.quota_threshold_percent,
     }
 }
 
@@ -1531,6 +1568,7 @@ impl RawAgentIdentity {
                 plan_type,
                 ..Default::default()
             },
+            quota_threshold_percent: None,
         };
         super::agent_identity::validate_identity(
             record
@@ -1760,6 +1798,7 @@ fn raw_access_token_record(
         user_id: None,
         email: None,
         quota: super::types::CodexQuotaCache::default(),
+        quota_threshold_percent: None,
     };
     fill_record_from_jwt(&mut record);
     Ok(record)
@@ -1965,6 +2004,7 @@ fn parse_import_record(value: &Value) -> Option<CodexTokenRecord> {
         user_id,
         email,
         quota: super::types::CodexQuotaCache::default(),
+        quota_threshold_percent: None,
     })
 }
 
@@ -2472,6 +2512,7 @@ mod tests {
                 error: None,
                 checked_at: Some(now_rfc3339()),
             },
+            quota_threshold_percent: None,
         }
     }
 
@@ -2508,6 +2549,7 @@ mod tests {
             user_id: None,
             email: Some(email.to_string()),
             quota: CodexQuotaCache::default(),
+            quota_threshold_percent: None,
         }
     }
 
@@ -3994,6 +4036,7 @@ mod tests {
                         user_id: Some("user-agent-quota".to_string()),
                         email: Some("agent-quota@example.com".to_string()),
                         quota: CodexQuotaCache::default(),
+                        quota_threshold_percent: None,
                     },
                 )
                 .await

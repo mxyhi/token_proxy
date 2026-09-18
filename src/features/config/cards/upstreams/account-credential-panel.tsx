@@ -4,10 +4,11 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { formatDateLabel } from "@/features/config/cards/upstreams/account-date";
@@ -32,6 +33,7 @@ type AccountSummaryView = {
   status: string;
   expiresAt: string;
   autoRefreshEnabled: boolean | null;
+  quotaThresholdPercent: number | null;
 };
 
 type QuotaItemView = {
@@ -40,6 +42,7 @@ type QuotaItemView = {
   used: number | null;
   limit: number | null;
   resetAt: string | null;
+  usedPercentage: number | null;
 };
 
 function resolveAccountProvider(providers: readonly string[]): AccountProviderKind | null {
@@ -74,10 +77,14 @@ function QuotaList({
   items,
   loading,
   error,
+  checkedAt,
+  threshold,
 }: {
   items: QuotaItemView[];
   loading: boolean;
   error: string;
+  checkedAt: string | null;
+  threshold: number | null;
 }) {
   if (loading && !items.length) {
     return <p className="text-xs text-muted-foreground">{m.providers_quota_loading()}</p>;
@@ -89,28 +96,67 @@ function QuotaList({
     return <p className="text-xs text-muted-foreground">{m.providers_quota_empty()}</p>;
   }
   return (
-    <ul className="space-y-1.5">
-      {items.map((item) => {
-        const resetLabel = item.resetAt ? formatDateLabel(item.resetAt) : "";
-        return (
-          <li
-            key={item.name}
-            className="flex flex-wrap items-baseline justify-between gap-2 text-xs"
-          >
-            <span className="font-medium text-foreground">{item.name}</span>
-            <span className="font-mono text-muted-foreground">
-              {item.used !== null && item.limit !== null
-                ? m.providers_quota_usage({
-                    used: String(item.used),
-                    limit: String(item.limit),
-                  })
-                : `${item.percentage}%`}
-              {resetLabel ? ` · ${m.providers_quota_resets({ date: resetLabel })}` : ""}
-            </span>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="space-y-2">
+      <ul className="space-y-2">
+        {items.map((item) => {
+          const resetLabel = item.resetAt ? formatDateLabel(item.resetAt) : "";
+          const usedPercentage = item.usedPercentage ?? Math.max(0, 100 - item.percentage);
+          const reached = threshold !== null && usedPercentage >= threshold;
+          return (
+            <li
+              key={item.name}
+              className="space-y-1.5 rounded-md border border-border/50 bg-background/70 px-2.5 py-2 text-xs"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-foreground">{item.name}</span>
+                <span
+                  className={[
+                    "font-mono tabular-nums",
+                    reached ? "text-destructive" : "text-muted-foreground",
+                  ].join(" ")}
+                >
+                  {m.codex_quota_used({ percent: String(Math.round(usedPercentage)) })}
+                  {` · ${m.codex_quota_remaining({ percent: String(Math.round(item.percentage)) })}`}
+                </span>
+              </div>
+              <div className="h-1 overflow-hidden rounded-full bg-muted" aria-hidden="true">
+                <div
+                  className={[
+                    "h-full rounded-full transition-[width]",
+                    reached
+                      ? "bg-destructive"
+                      : usedPercentage >= 70
+                        ? "bg-amber-500"
+                        : "bg-primary",
+                  ].join(" ")}
+                  style={{ width: `${Math.min(100, Math.max(0, usedPercentage))}%` }}
+                />
+              </div>
+              <div className="flex flex-wrap justify-between gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                <span>
+                  {resetLabel
+                    ? m.providers_quota_resets({ date: resetLabel })
+                    : m.codex_quota_no_reset()}
+                </span>
+                {item.used !== null && item.limit !== null ? (
+                  <span className="font-mono">
+                    {m.providers_quota_usage({
+                      used: String(item.used),
+                      limit: String(item.limit),
+                    })}
+                  </span>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="text-[11px] text-muted-foreground">
+        {checkedAt
+          ? m.codex_quota_checked_at({ date: formatDateLabel(checkedAt) })
+          : m.codex_quota_never_checked()}
+      </p>
+    </div>
   );
 }
 
@@ -131,6 +177,8 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
 
   const [quotaBusy, setQuotaBusy] = useState(false);
   const [tokenBusy, setTokenBusy] = useState(false);
+  const [thresholdBusy, setThresholdBusy] = useState(false);
+  const [thresholdDraft, setThresholdDraft] = useState("");
 
   // xAI quota hook 无 autoLoad；账户型编辑打开时事件式拉取。
   useEffect(() => {
@@ -156,6 +204,7 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
         status: account.status,
         expiresAt: account.expires_at ?? "",
         autoRefreshEnabled: null,
+        quotaThresholdPercent: null,
       };
     }
     if (isCodex) {
@@ -169,6 +218,7 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
         status: account.status,
         expiresAt: account.expires_at ?? "",
         autoRefreshEnabled: account.auto_refresh_enabled ?? null,
+        quotaThresholdPercent: account.quota_threshold_percent ?? null,
       };
     }
     if (isXai) {
@@ -182,6 +232,7 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
         status: account.status,
         expiresAt: account.expires_at ?? "",
         autoRefreshEnabled: account.auto_refresh_enabled,
+        quotaThresholdPercent: null,
       };
     }
     return null;
@@ -196,6 +247,14 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
     xaiAccounts.accounts,
   ]);
 
+  useEffect(() => {
+    if (isCodex && summary) {
+      setThresholdDraft(
+        summary.quotaThresholdPercent === null ? "" : String(summary.quotaThresholdPercent),
+      );
+    }
+  }, [isCodex, summary]);
+
   const quotaItems = useMemo((): QuotaItemView[] => {
     if (!accountId) {
       return [];
@@ -208,6 +267,7 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
         used: item.used,
         limit: item.limit,
         resetAt: item.reset_at,
+        usedPercentage: null,
       }));
     }
     if (isCodex) {
@@ -218,6 +278,7 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
         used: item.used,
         limit: item.limit,
         resetAt: item.reset_at,
+        usedPercentage: item.used_percentage ?? null,
       }));
     }
     if (isXai) {
@@ -228,6 +289,7 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
         used: item.used,
         limit: item.limit,
         resetAt: item.reset_at,
+        usedPercentage: null,
       }));
     }
     return [];
@@ -240,6 +302,44 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
     kiroQuotas.quotas,
     xaiQuotas.quotas,
   ]);
+
+  const codexQuotaCheckedAt = isCodex
+    ? codexQuotas.quotas.find((item) => item.account_id === accountId)?.checked_at ?? null
+    : null;
+  const codexThresholdReached =
+    isCodex &&
+    summary?.quotaThresholdPercent !== null &&
+    summary?.quotaThresholdPercent !== undefined &&
+    (summary.quotaThresholdPercent === 0 ||
+      quotaItems.some(
+        (item) =>
+          item.usedPercentage !== null && item.usedPercentage >= summary.quotaThresholdPercent!,
+      ));
+
+  const saveThreshold = useCallback(async () => {
+    if (!isCodex || !accountId) {
+      return;
+    }
+    const trimmed = thresholdDraft.trim();
+    const value = trimmed === "" ? null : Number(trimmed);
+    if (value !== null && (!Number.isInteger(value) || value < 0 || value > 100)) {
+      toast.error(m.codex_quota_threshold_invalid());
+      return;
+    }
+    setThresholdBusy(true);
+    try {
+      console.debug("[upstream-account] set codex quota threshold", {
+        accountId,
+        thresholdPercent: value,
+      });
+      await codexAccounts.setQuotaThreshold(accountId, value);
+      toast.success(m.codex_quota_threshold_saved());
+    } catch (error) {
+      toast.error(parseError(error));
+    } finally {
+      setThresholdBusy(false);
+    }
+  }, [accountId, codexAccounts, isCodex, thresholdDraft]);
 
   const accountsLoading =
     (isKiro && kiroAccounts.loading) ||
@@ -424,8 +524,70 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
             />
           </Button>
         </div>
-        <QuotaList items={quotaItems} loading={quotaLoading} error={quotaError} />
+        <QuotaList
+          items={quotaItems}
+          loading={quotaLoading}
+          error={quotaError}
+          checkedAt={codexQuotaCheckedAt}
+          threshold={isCodex ? summary.quotaThresholdPercent : null}
+        />
       </div>
+
+      {isCodex ? (
+        <div className="space-y-2 border-t border-border/50 pt-2">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <Label htmlFor="codex-quota-threshold" className="text-xs font-medium">
+                {m.codex_quota_threshold_label()}
+              </Label>
+              <p className="text-[11px] text-muted-foreground">
+                {m.codex_quota_threshold_help()}
+              </p>
+            </div>
+            {codexThresholdReached ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-destructive">
+                <AlertTriangle className="size-3.5" aria-hidden="true" />
+                {m.codex_quota_threshold_reached()}
+              </span>
+            ) : summary.quotaThresholdPercent !== null ? (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="size-3.5" aria-hidden="true" />
+                {m.codex_quota_threshold_active()}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              id="codex-quota-threshold"
+              type="number"
+              min={0}
+              max={100}
+              step={1}
+              inputMode="numeric"
+              value={thresholdDraft}
+              onChange={(event) => setThresholdDraft(event.target.value)}
+              placeholder={m.codex_quota_threshold_unset()}
+              aria-describedby="codex-quota-threshold-help"
+              className="h-8 w-24 font-mono tabular-nums"
+            />
+            <span className="text-xs text-muted-foreground">%</span>
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={thresholdBusy}
+              onClick={() => {
+                void saveThreshold();
+              }}
+            >
+              {thresholdBusy ? m.codex_quota_threshold_saving() : m.codex_quota_threshold_save()}
+            </Button>
+          </div>
+          <p id="codex-quota-threshold-help" className="text-[11px] text-muted-foreground">
+            {m.codex_quota_threshold_hint()}
+          </p>
+        </div>
+      ) : null}
 
       {isCodex || isXai ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border/50 pt-2">

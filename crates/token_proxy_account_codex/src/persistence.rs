@@ -150,6 +150,7 @@ impl LegacyCodexTokenRecord {
             user_id: self.user_id,
             email: self.email,
             quota: self.quota,
+            quota_threshold_percent: None,
         }
     }
 }

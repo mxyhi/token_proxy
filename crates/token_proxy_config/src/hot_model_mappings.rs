@@ -43,6 +43,8 @@ const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
     ("anthropic/claude-sonnet-4.6", "claude-sonnet-4.6"),
     ("anthropic/claude-sonnet-4.5", "claude-sonnet-4.5"),
     ("anthropic/claude-haiku-4.5", "claude-haiku-4.5"),
+    // Claude Code 发送的无日期 Haiku 别名必须落到当前可用的正式模型 ID。
+    ("claude-haiku-4-5", "claude-haiku-4-5-20251001"),
     ("models/gemini-3.1-pro", "gemini-3.1-pro"),
     ("google/gemini-3.1-pro", "gemini-3.1-pro"),
     ("models/gemini-3.1-pro-preview", "gemini-3.1-pro-preview"),

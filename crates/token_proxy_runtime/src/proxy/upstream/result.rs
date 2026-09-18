@@ -10,7 +10,9 @@ use crate::proxy::account_selector::AccountSelectorRuntime;
 use crate::proxy::codex_turn_state::CodexResponseIdentity;
 use crate::proxy::cooldown_scope::CooldownScope;
 use crate::proxy::http;
-use crate::proxy::log::{build_log_entry, LogContext, LogWriter, RequestTimings, UsageSnapshot};
+use crate::proxy::log::{
+    build_log_entry, ClientRequestBilling, LogContext, LogWriter, RequestTimings, UsageSnapshot,
+};
 use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::request_detail::RequestDetailSnapshot;
 use crate::proxy::response::{
@@ -616,12 +618,24 @@ pub(super) fn log_upstream_error_if_needed(
         request_headers,
         request_body,
         ttfb_ms: None,
-        timings: RequestTimings::with_billing(meta.billing.clone()),
+        // local 404/502 是代理在选上游前生成的诊断，不代表一次可计费上游尝试。
+        timings: request_timings_for_upstream(upstream_id, &meta.billing),
         start: start_time,
     };
     let usage = UsageSnapshot::default();
     let entry = build_log_entry(&context, usage, Some(response_error));
     log.clone().write_detached(entry);
+}
+
+fn request_timings_for_upstream(
+    upstream_id: &str,
+    billing: &ClientRequestBilling,
+) -> RequestTimings {
+    if upstream_id == LOCAL_UPSTREAM_ID {
+        RequestTimings::default()
+    } else {
+        RequestTimings::with_billing(billing.clone())
+    }
 }
 
 #[cfg(test)]

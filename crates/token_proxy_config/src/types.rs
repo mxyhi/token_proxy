@@ -592,9 +592,18 @@ impl UpstreamRuntime {
             .split_once('/')
             .filter(|(prefix, rest)| *prefix == self.id && !rest.trim().is_empty())
             .map_or(original_model, |(_, rest)| rest);
-        self.available_models
+        if self
+            .available_models
             .binary_search_by(|candidate| candidate.as_str().cmp(model))
             .is_ok()
+        {
+            return true;
+        }
+        self.map_model(model).is_some_and(|mapped| {
+            self.available_models
+                .binary_search_by(|candidate| candidate.as_str().cmp(mapped.as_str()))
+                .is_ok()
+        })
     }
 
     pub fn restrict_model_catalog(&self, models: &mut Vec<String>) {

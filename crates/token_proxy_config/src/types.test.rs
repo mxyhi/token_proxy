@@ -107,6 +107,22 @@ fn hot_model_aliases_normalize_popular_provider_namespaces() {
         upstream.map_model("qwen/qwen3.6-plus").as_deref(),
         Some("qwen3.6-plus")
     );
+    assert_eq!(
+        upstream.map_model("claude-haiku-4-5").as_deref(),
+        Some("claude-haiku-4-5-20251001")
+    );
+}
+
+#[test]
+fn mapped_model_alias_is_eligible_when_target_is_allowlisted() {
+    let mappings = super::super::hot_model_mappings::default_hot_model_mappings();
+    let rules = super::super::model_mapping::compile_model_mappings("test", &mappings)
+        .expect("hot model mappings compile");
+    let mut upstream = hot_model_test_upstream(rules);
+    upstream.available_models = vec!["claude-haiku-4-5-20251001".to_string()];
+
+    assert!(upstream.supports_model(Some("claude-haiku-4-5")));
+    assert!(!upstream.supports_model(Some("claude-opus-5")));
 }
 
 #[test]

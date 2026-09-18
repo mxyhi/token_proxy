@@ -31,8 +31,9 @@ fn default_log_level() -> LogLevel {
     LogLevel::Silent
 }
 
+/// 可重试失败后的跨请求冷却秒数；0 表示关闭冷却。
 fn default_retryable_failure_cooldown_secs() -> u64 {
-    15
+    0
 }
 
 fn default_same_upstream_retry_count() -> u64 {
@@ -342,6 +343,7 @@ pub struct ProxyConfigFile {
     pub log_level: LogLevel,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_request_body_bytes: Option<u64>,
+    /// 可重试失败后跨请求冷却秒数；0 关闭，默认 0。
     #[serde(
         default = "default_retryable_failure_cooldown_secs",
         skip_serializing_if = "is_default_retryable_failure_cooldown_secs"

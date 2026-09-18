@@ -29,6 +29,8 @@ const DEFAULT_TRAY_TOKEN_RATE: TrayTokenRateConfig = {
 const MIN_TIMEOUT_SECS = 1;
 const DEFAULT_STREAM_FIRST_OUTPUT_TIMEOUT_SECS = 60;
 const DEFAULT_SYNC_RESPONSE_TIMEOUT_SECS = 300;
+/** 可重试失败冷却默认秒数；0 关闭跨请求冷却。 */
+const DEFAULT_RETRYABLE_FAILURE_COOLDOWN_SECS = 0;
 const DEFAULT_HEDGE_DELAY_MS = 2000;
 const DEFAULT_MAX_PARALLEL = 2;
 const MIN_PARALLEL_ATTEMPTS = 2;
@@ -136,7 +138,7 @@ export const EMPTY_FORM: ConfigForm = {
   kiroPreferredEndpoint: "ide",
   logLevel: "silent",
   maxRequestBodyMib: "100",
-  retryableFailureCooldownSecs: "15",
+  retryableFailureCooldownSecs: String(DEFAULT_RETRYABLE_FAILURE_COOLDOWN_SECS),
   sameUpstreamRetryCount: "1",
   codexSessionScopedCooldownEnabled: false,
   xaiInjectXSearch: false,
@@ -256,7 +258,9 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     kiroPreferredEndpoint: config.kiro_preferred_endpoint ?? "ide",
     logLevel: config.log_level ?? "silent",
     maxRequestBodyMib: bytesToMibString(config.max_request_body_bytes),
-    retryableFailureCooldownSecs: String(config.retryable_failure_cooldown_secs ?? 15),
+    retryableFailureCooldownSecs: String(
+      config.retryable_failure_cooldown_secs ?? DEFAULT_RETRYABLE_FAILURE_COOLDOWN_SECS,
+    ),
     sameUpstreamRetryCount: String(config.same_upstream_retry_count ?? 1),
     codexSessionScopedCooldownEnabled:
       config.codex_session_scoped_cooldown_enabled ?? false,
@@ -837,10 +841,10 @@ function parseMaxRequestBodyBytes(value: string) {
 function parseRetryableFailureCooldownSecs(value: string) {
   const trimmed = value.trim();
   if (!NON_NEGATIVE_INTEGER_PATTERN.test(trimmed)) {
-    return 15;
+    return DEFAULT_RETRYABLE_FAILURE_COOLDOWN_SECS;
   }
   const number = Number.parseInt(trimmed, 10);
-  return Number.isFinite(number) ? number : 15;
+  return Number.isFinite(number) ? number : DEFAULT_RETRYABLE_FAILURE_COOLDOWN_SECS;
 }
 
 const DEFAULT_SAME_UPSTREAM_RETRY_COUNT = 1;

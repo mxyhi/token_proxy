@@ -190,7 +190,7 @@ function ProxyCoreFields({
           onChange={(event) =>
             onChange({ retryableFailureCooldownSecs: event.target.value })
           }
-          placeholder="15"
+          placeholder="0"
           inputMode="numeric"
         />
         <p className="text-xs text-muted-foreground">

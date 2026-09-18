@@ -11,6 +11,36 @@ describe("ProxyCoreCard", () => {
     cleanup();
   });
 
+  it("renders retryable failure cooldown as 0 by default", () => {
+    render(
+      <ProxyCoreCard
+        form={EMPTY_FORM}
+        showLocalKey={false}
+        onToggleLocalKey={vi.fn()}
+        onChange={vi.fn()}
+        onResetHotModelMappings={vi.fn()}
+        proxyService={{
+          status: null,
+          requestState: "idle",
+          message: "",
+          isDirty: false,
+          onRefresh: vi.fn(),
+          onStart: vi.fn(),
+          onStop: vi.fn(),
+          onRestart: vi.fn(),
+          onReload: vi.fn(),
+        }}
+      />
+    );
+
+    expect(
+      screen.getByLabelText(m.proxy_core_retryable_failure_cooldown_secs_label()),
+    ).toHaveValue("0");
+    expect(
+      screen.getByText(m.proxy_core_retryable_failure_cooldown_secs_help()),
+    ).toBeInTheDocument();
+  });
+
   it("renders the disabled xAI X Search switch and emits a direct form patch", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();

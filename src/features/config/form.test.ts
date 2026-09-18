@@ -37,6 +37,14 @@ describe("config/form", () => {
     expect(validate({ ...EMPTY_FORM, retryableFailureCooldownSecs: "15" }).valid).toBe(true);
   });
 
+  it("defaults missing retryable failure cooldown to 0", () => {
+    expect(EMPTY_FORM.retryableFailureCooldownSecs).toBe("0");
+
+    const source = { ...toPayload(EMPTY_FORM) };
+    delete source.retryable_failure_cooldown_secs;
+    expect(toForm(source).retryableFailureCooldownSecs).toBe("0");
+  });
+
   it("validates same-upstream retry count as integer 0..5", () => {
     expect(validate({ ...EMPTY_FORM, sameUpstreamRetryCount: "-1" }).valid).toBe(false);
     expect(validate({ ...EMPTY_FORM, sameUpstreamRetryCount: "" }).valid).toBe(false);
@@ -174,7 +182,7 @@ describe("config/form", () => {
     expect(payload.local_api_key).toBeNull();
     expect(payload.cors_enabled).toBe(true);
     expect(payload.model_list_prefix).toBe(true);
-    expect(payload.retryable_failure_cooldown_secs).toBe(15);
+    expect(payload.retryable_failure_cooldown_secs).toBe(0);
     expect(payload.same_upstream_retry_count).toBe(1);
     expect(payload.codex_session_scoped_cooldown_enabled).toBe(false);
     expect(payload.xai_inject_x_search).toBe(false);

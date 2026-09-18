@@ -16,6 +16,7 @@ const DEFAULT_CONFIG_HEADER: &str = concat!(
     "// log_level (optional): silent|error|warn|info|debug|trace. Default: silent.\n",
     "// stream_first_output_timeout_secs (optional): stream first client-visible output timeout in seconds. Minimum: 1. Default: 60.\n",
     "// sync_response_timeout_secs (optional): non-stream full response timeout in seconds. Minimum: 1. Default: 300.\n",
+    "// retryable_failure_cooldown_secs (optional): cooldown after 401/403/408/429/5xx. Default: 0 (disabled).\n",
     "// codex_session_scoped_cooldown_enabled (optional): isolate Codex OpenAI Responses cooldown by session_id. Default: false.\n",
     "// xai_inject_x_search (optional): inject xAI native x_search into /v1/responses. Default: false.\n",
     "// upstream_strategy (optional): { order: \"fill_first\"|\"round_robin\", dispatch: { type: \"serial\"|\"hedged\"|\"race\", ... } }.\n",

@@ -102,7 +102,7 @@ Notes:
 | `app_proxy_url` | `null` | Proxy for app updater & as placeholder for upstreams (`"$app_proxy_url"`). Supports `http/https/socks5/socks5h`. |
 | `log_level` | `silent` | `silent|error|warn|info|debug|trace`; debug/trace log request headers (auth redacted) and small bodies (≤64KiB). Release builds force `silent`. |
 | `max_request_body_bytes` | `104857600` (100 MiB) | 0 = fallback to default. Shared inbound, JSON filter, and format-conversion ceiling. |
-| `retryable_failure_cooldown_secs` | `15` | Cooldown window after retryable failures that should temporarily sideline an upstream. `0` disables cooldown. Reloading or restarting the running proxy resets current cooldown state. |
+| `retryable_failure_cooldown_secs` | `0` | Cooldown window after retryable failures that should temporarily sideline an upstream. `0` disables cooldown. Reloading or restarting the running proxy resets current cooldown state. |
 | `same_upstream_retry_count` | `1` | Extra same-upstream retries after a retryable failure (excluding the first attempt). `0` disables same-upstream retry; max `5`. |
 | `codex_session_scoped_cooldown_enabled` | `false` | Only applies to Codex account-backed OpenAI Responses requests. When enabled, cooldown is isolated by `session_id`; final success clears that session, and requests without `session_id` do not share cooldown. |
 | `tray_token_rate.enabled` | `true` | macOS tray live rate; harmless elsewhere. |
@@ -178,7 +178,7 @@ Legacy flat fields (`api_key`, `api_keys`, `kiro_account_id`, `codex_account_id`
 - Retryable conditions: network timeout/connect errors, or status 400/401/403/404/408/413/422/429/307/5xx (including 504/524). Non-context-window 413 responses skip same-upstream retry and fail over directly; context-window errors remain terminal.
 - Explicit Responses field rejections and xAI invalid encrypted reasoning use bounded same-identity request repair before ordinary retry/failover. Repair retries do not consume `same_upstream_retry_count`, and the repaired body is retained for later attempts.
 - Same-upstream retry: on a retryable failure, retry the **same upstream** up to `same_upstream_retry_count` extra times (default `1`, excluding the first attempt) before failing over. After the first client-visible stream output, the proxy does not replay the same attempt.
-- Cooldown conditions: `401/403/408/429/5xx` will temporarily move the failed upstream behind ready peers for `retryable_failure_cooldown_secs` (default `15`); `400/404/422/307` stay retryable but do not trigger cross-request cooldown. With `codex_session_scoped_cooldown_enabled=true`, Codex account-backed OpenAI Responses cooldown is isolated by `session_id`; final successful requests do not keep same-session cooldown, and requests without `session_id` do not share cooldown.
+- Cooldown conditions: `401/403/408/429/5xx` will temporarily move the failed upstream behind ready peers for `retryable_failure_cooldown_secs` (default `0`, disabled); `400/404/422/307` stay retryable but do not trigger cross-request cooldown. With `codex_session_scoped_cooldown_enabled=true`, Codex account-backed OpenAI Responses cooldown is isolated by `session_id`; final successful requests do not keep same-session cooldown, and requests without `session_id` do not share cooldown.
 - `/v1/messages` only: after the chosen native provider is exhausted (retryable errors), the proxy can fall back to the other native provider (`anthropic` ↔ `kiro`) if it is configured.
 
 ## Observability

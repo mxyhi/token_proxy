@@ -298,10 +298,10 @@ fn test_upstream_url() {
 }
 
 #[test]
-fn proxy_config_file_defaults_retryable_failure_cooldown_to_15_seconds() {
+fn proxy_config_file_defaults_retryable_failure_cooldown_to_zero() {
     let config = ProxyConfigFile::default();
 
-    assert_eq!(config.retryable_failure_cooldown_secs, 15);
+    assert_eq!(config.retryable_failure_cooldown_secs, 0);
 }
 
 #[test]

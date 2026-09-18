@@ -481,6 +481,7 @@ fn build_runtime_config_maps_split_timeout_defaults() {
 
     assert_eq!(runtime.stream_first_output_timeout, Duration::from_secs(60));
     assert_eq!(runtime.sync_response_timeout, Duration::from_secs(300));
+    assert_eq!(runtime.retryable_failure_cooldown, Duration::ZERO);
 }
 
 #[test]

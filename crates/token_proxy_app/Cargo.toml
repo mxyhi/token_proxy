@@ -10,12 +10,16 @@ token_proxy_account_store = { path = "../token_proxy_account_store" }
 token_proxy_account_xai = { path = "../token_proxy_account_xai" }
 token_proxy_config = { path = "../token_proxy_config" }
 token_proxy_runtime = { path = "../token_proxy_runtime" }
+# ══════════ MY-STATS-API PATCH 4 (deps) START ══════════
+axum = "0.8.9"
+sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
+# ══════════ MY-STATS-API PATCH 4 (deps) END ══════════
 token_proxy_storage = { path = "../token_proxy_storage" }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "socks", "http2", "json", "query"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11"
-tokio = { version = "1.53", features = ["rt", "sync", "time"] }
+tokio = { version = "1.53", features = ["rt", "sync", "time", "net"] }
 tracing = { version = "0.1.44", features = ["release_max_level_off"] }
 
 [dev-dependencies]

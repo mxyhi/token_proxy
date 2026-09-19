@@ -9,6 +9,9 @@ pub mod account_lifecycle;
 mod account_models;
 pub mod account_upstreams;
 pub mod app;
+// ══════════ MY-STATS-API PATCH 3 (mod) START ══════════
+mod my_stats_api;
+// ══════════ MY-STATS-API PATCH 3 (mod) END ══════════
 mod pricing_refresh;
 pub mod storage_usage;
 

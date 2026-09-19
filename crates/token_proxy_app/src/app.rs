@@ -91,6 +91,9 @@ impl TokenProxyApp {
             xai_accounts: xai_accounts.clone(),
         };
         tracing::debug!(data_dir = %paths.data_dir().display(), "token proxy app composed");
+        // ══════════ MY-STATS-API PATCH 3 (spawn) START ══════════
+        crate::my_stats_api::spawn(paths.clone());
+        // ══════════ MY-STATS-API PATCH 3 (spawn) END ══════════
         Ok(Self {
             paths,
             logging,

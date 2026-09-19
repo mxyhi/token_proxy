@@ -386,6 +386,11 @@ pub struct ProxyConfigFile {
     pub hot_model_mappings: HashMap<String, String>,
     #[serde(default)]
     pub upstreams: Vec<UpstreamConfig>,
+    // ══════════ MY-STATS-API PATCH 2 (field) START ══════════
+    /// 本地增强：只读行级统计 HTTP API（my_stats_api 模块）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub my_stats_api: Option<crate::my_stats_api::MyStatsApiSection>,
+    // ══════════ MY-STATS-API PATCH 2 (field) END ══════════
 }
 
 impl Default for ProxyConfigFile {
@@ -412,6 +417,9 @@ impl Default for ProxyConfigFile {
             upstream_strategy: UpstreamStrategy::default(),
             hot_model_mappings: default_hot_model_mappings(),
             upstreams: Vec::new(),
+            // ══════════ MY-STATS-API PATCH 2 (default) START ══════════
+            my_stats_api: None,
+            // ══════════ MY-STATS-API PATCH 2 (default) END ══════════
         }
     }
 }

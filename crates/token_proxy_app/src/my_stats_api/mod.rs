@@ -121,6 +121,7 @@ fn query_token(req: &Request) -> Option<String> {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct RowsQuery {
     after_id: Option<i64>,
     limit: Option<i64>,

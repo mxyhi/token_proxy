@@ -384,11 +384,12 @@ describe("upstreams account UI (Phase D)", () => {
 
     const usedLabel = m.codex_quota_used({ percent: "91" });
     expect(await screen.findByText(new RegExp(usedLabel))).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: m.common_save() })).not.toBeInTheDocument();
     const threshold = screen.getByRole("spinbutton", {
       name: m.codex_quota_threshold_label(),
     });
     await user.type(threshold, "90");
-    await user.click(screen.getByRole("button", { name: m.codex_quota_threshold_save() }));
+    await user.tab();
 
     await waitFor(() => {
       expect(invokeMock).toHaveBeenCalledWith("codex_set_quota_threshold", {

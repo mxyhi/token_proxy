@@ -2,7 +2,7 @@
  * 账户型 Upstream 编辑器：展示只读 credential 身份、额度与 token 刷新操作。
  * account_id 缺失或 summary 找不到时提示需 reconcile，不静默创建。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
@@ -177,8 +177,8 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
 
   const [quotaBusy, setQuotaBusy] = useState(false);
   const [tokenBusy, setTokenBusy] = useState(false);
-  const [thresholdBusy, setThresholdBusy] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState("");
+  const thresholdCommitRef = useRef(false);
 
   // xAI quota hook 无 autoLoad；账户型编辑打开时事件式拉取。
   useEffect(() => {
@@ -316,30 +316,40 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
           item.usedPercentage !== null && item.usedPercentage >= summary.quotaThresholdPercent!,
       ));
 
-  const saveThreshold = useCallback(async () => {
-    if (!isCodex || !accountId) {
+  // 阈值写在账户记录上，不走配置 JSONC 自动保存；失焦/回车即提交。
+  const savedThresholdPercent = summary?.quotaThresholdPercent ?? null;
+  const commitThreshold = useCallback(async () => {
+    if (!isCodex || !accountId || thresholdCommitRef.current) {
       return;
     }
     const trimmed = thresholdDraft.trim();
     const value = trimmed === "" ? null : Number(trimmed);
+    const savedLabel = savedThresholdPercent === null ? "" : String(savedThresholdPercent);
     if (value !== null && (!Number.isInteger(value) || value < 0 || value > 100)) {
       toast.error(m.codex_quota_threshold_invalid());
+      setThresholdDraft(savedLabel);
       return;
     }
-    setThresholdBusy(true);
+    if (value === savedThresholdPercent) {
+      if (thresholdDraft !== savedLabel) {
+        setThresholdDraft(savedLabel);
+      }
+      return;
+    }
+    thresholdCommitRef.current = true;
     try {
       console.debug("[upstream-account] set codex quota threshold", {
         accountId,
         thresholdPercent: value,
       });
       await codexAccounts.setQuotaThreshold(accountId, value);
-      toast.success(m.codex_quota_threshold_saved());
     } catch (error) {
       toast.error(parseError(error));
+      setThresholdDraft(savedLabel);
     } finally {
-      setThresholdBusy(false);
+      thresholdCommitRef.current = false;
     }
-  }, [accountId, codexAccounts, isCodex, thresholdDraft]);
+  }, [accountId, codexAccounts, isCodex, savedThresholdPercent, thresholdDraft]);
 
   const accountsLoading =
     (isKiro && kiroAccounts.loading) ||
@@ -566,22 +576,21 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
               inputMode="numeric"
               value={thresholdDraft}
               onChange={(event) => setThresholdDraft(event.target.value)}
+              onBlur={() => {
+                void commitThreshold();
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") {
+                  return;
+                }
+                event.preventDefault();
+                event.currentTarget.blur();
+              }}
               placeholder={m.codex_quota_threshold_unset()}
               aria-describedby="codex-quota-threshold-help"
               className="h-8 w-24 font-mono tabular-nums"
             />
             <span className="text-xs text-muted-foreground">%</span>
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={thresholdBusy}
-              onClick={() => {
-                void saveThreshold();
-              }}
-            >
-              {thresholdBusy ? m.codex_quota_threshold_saving() : m.codex_quota_threshold_save()}
-            </Button>
           </div>
           <p id="codex-quota-threshold-help" className="text-[11px] text-muted-foreground">
             {m.codex_quota_threshold_hint()}

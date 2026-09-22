@@ -1,7 +1,9 @@
 # MY-STATS-API-PATCHES —— 上游更新后恢复只读统计 HTTP API
 
-对齐 `my_conf_openai/MY-CONF-OPENAI-PATCHES.md` 的恢复惯例。官方 main 不含本模块；
+对齐 `my_url_compose/MY-URL-COMPOSE-PATCHES.md` 的恢复惯例。官方 main 不含本模块；
 每次 `git pull` 官方后需：检出 `my_stats_api/` 两个目录 → 重新注入 4 处 PATCH → 验证。
+（2026-09-22 锚点适配：原 `MY-CONF-OPENAI` 锚点所在方案已由 `my-url-compose` 替代，
+本指南锚点全部更新为当前分支真实代码位置。）
 
 ## 文件清单（纯新增，零上游冲突）
 
@@ -12,7 +14,7 @@
 
 ## PATCH 1 —— `crates/token_proxy_config/src/lib.rs`
 
-**锚点**：搜 `MY-CONF-OPENAI PATCH 1 END`（其下、`mod normalize;` 之上）。
+**锚点**：搜 `MY-URL-COMPOSE PATCH C0 END`（其下、`mod normalize;` 之上）。
 
 ```rust
 // ══════════ MY-STATS-API PATCH 1 (mod) START ══════════
@@ -20,19 +22,21 @@ pub mod my_stats_api;
 // ══════════ MY-STATS-API PATCH 1 (mod) END ══════════
 ```
 
-**锚点**：搜 `MY-CONF-OPENAI PATCH 1 (sync) END`（其下）。
+**锚点**：函数 `fn build_runtime_config(config: ProxyConfigFile)` **函数体首行**（注释块之前）。
 
 ```rust
-// ══════════ MY-STATS-API PATCH 1 (sync) START ══════════
-let _ = my_stats_api::sync_settings(&config);
-// ══════════ MY-STATS-API PATCH 1 (sync) END ══════════
+fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> {
+    // ══════════ MY-STATS-API PATCH 1 (sync) START ══════════
+    let _ = my_stats_api::sync_settings(&config);
+    // ══════════ MY-STATS-API PATCH 1 (sync) END ══════════
+    let log_level = config.log_level;
 ```
 
-**替代锚点**：函数 `fn build_runtime_config(config: ProxyConfigFile)`（函数体首行）；mod 区搜 `mod normalize;`。
+**替代锚点**：mod 区搜 `mod normalize;`。
 
 ## PATCH 2 —— `crates/token_proxy_config/src/types.rs`（⚠ 两处锚点，缺一编译失败）
 
-**锚点 2a（字段）**：搜 `MY-CONF-OPENAI PATCH 3 END`（其下、`ProxyConfigFile` 结构体结束 `}` 之前）。
+**锚点 2a（字段）**：`ProxyConfigFile` 结构体内 `pub upstreams: Vec<UpstreamConfig>,`（其下、结构体结束 `}` 之前）。
 
 ```rust
 // ══════════ MY-STATS-API PATCH 2 (field) START ══════════
@@ -42,7 +46,7 @@ pub my_stats_api: Option<crate::my_stats_api::MyStatsApiSection>,
 // ══════════ MY-STATS-API PATCH 2 (field) END ══════════
 ```
 
-**锚点 2b（Default impl）**：搜 `MY-CONF-OPENAI PATCH 3 (default) END`（其下）。
+**锚点 2b（Default impl）**：`impl Default for ProxyConfigFile` 内 `upstreams: Vec::new(),`（其下）。
 
 ```rust
 // ══════════ MY-STATS-API PATCH 2 (default) START ══════════

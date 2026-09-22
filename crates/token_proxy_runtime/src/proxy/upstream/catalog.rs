@@ -312,6 +312,13 @@ fn collect_model_discovery_jobs(state: &ProxyState) -> Vec<ModelDiscoveryJob> {
     for (provider, provider_upstreams) in &state.config.upstreams {
         for group in &provider_upstreams.groups {
             for upstream in &group.items {
+                // ══════════ MY-URL-COMPOSE PATCH R1 START ══════════
+                // 仅账户型（OAuth）上游参与自发探测；api_keys / passthrough
+                // 手动渠道不再被探测（客户端 /v1/models 转发不受影响）。
+                if !super::my_probe_gate::should_probe_upstream(upstream) {
+                    continue;
+                }
+                // ══════════ MY-URL-COMPOSE PATCH R1 END ══════════
                 jobs.push(ModelDiscoveryJob {
                     provider: provider.clone(),
                     upstream: upstream.clone(),

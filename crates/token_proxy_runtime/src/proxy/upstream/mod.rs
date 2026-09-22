@@ -14,6 +14,9 @@ mod kiro_headers;
 mod kiro_http;
 mod kiro_prepare;
 mod kiro_result;
+// ══════════ MY-URL-COMPOSE PATCH R1 START ══════════
+mod my_probe_gate;
+// ══════════ MY-URL-COMPOSE PATCH R1 END ══════════
 mod prepare;
 mod request;
 mod request_body;

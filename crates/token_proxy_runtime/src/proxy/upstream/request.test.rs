@@ -24,6 +24,7 @@ fn gemini_upstream() -> UpstreamRuntime {
         model_mappings: None,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),
+        url_compose: Default::default(),
     }
 }
 

@@ -4,6 +4,9 @@ use std::collections::HashMap;
 
 use super::hot_model_mappings::default_hot_model_mappings;
 use super::model_mapping::ModelMappingRules;
+// ══════════ MY-URL-COMPOSE PATCH C1/C2/C3 START ══════════
+use crate::my_url_compose;
+// ══════════ MY-URL-COMPOSE PATCH C1/C2/C3 END ══════════
 use crate::LogLevel;
 
 fn default_enabled() -> bool {
@@ -295,6 +298,11 @@ pub struct UpstreamConfig {
     pub convert_from_map: HashMap<String, Vec<InboundApiFormat>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub overrides: Option<UpstreamOverrides>,
+    // ══════════ MY-URL-COMPOSE PATCH C1 START ══════════
+    /// 渠道级出站地址组合（prefix + suffix，suffix 第一段为版本段）；缺省恒等回退。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url_compose: Option<my_url_compose::UrlComposeConfig>,
+    // ══════════ MY-URL-COMPOSE PATCH C1 END ══════════
 }
 
 /// 未指定表示未知，不可据此丢弃媒体或推断原生搜索能力。
@@ -529,6 +537,10 @@ pub struct UpstreamRuntime {
     pub model_mappings: Option<ModelMappingRules>,
     pub header_overrides: Option<Vec<HeaderOverride>>,
     pub allowed_inbound_formats: InboundApiFormatMask,
+    // ══════════ MY-URL-COMPOSE PATCH C2 START ══════════
+    /// 出站地址组合（加载期已规范化；缺省全 None = 恒等回退）。
+    pub url_compose: my_url_compose::UrlComposeConfig,
+    // ══════════ MY-URL-COMPOSE PATCH C2 END ══════════
 }
 
 #[derive(Clone)]
@@ -543,15 +555,14 @@ impl UpstreamRuntime {
         self.allowed_inbound_formats.extend(formats);
     }
 
-    /// 构建上游请求 URL，智能处理 base_url 与 path 的路径重叠
-    /// 例如：base_url = "https://example.com/openai/v1", path = "/v1/chat/completions"
-    /// 结果：https://example.com/openai/v1/chat/completions（去掉重复的 /v1）
-    pub fn upstream_url(&self, path: &str) -> String {
-        let base = self.base_url.trim_end_matches('/');
-        let normalized_path = normalize_openai_compatible_path_for_base_url(base, path);
-        let effective_path = strip_overlapping_prefix(base, normalized_path);
-        format!("{base}{effective_path}")
+    // ══════════ MY-URL-COMPOSE PATCH C3 START ══════════
+    /// 出站 URL：`基础地址 + prefix + 版本段替换后的客户端路径`（纯拼接，
+    /// 所见即所得）。语义详见 `my_url_compose` 模块文档；官方的
+    /// `strip_overlapping_prefix` 猜测式剥段逻辑已整体移除。
+    pub fn upstream_url(&self, provider: &str, path_with_query: &str) -> String {
+        my_url_compose::compose_outbound_url(self, provider, path_with_query)
     }
+    // ══════════ MY-URL-COMPOSE PATCH C3 END ══════════
 
     /// 映射后的真实模型优先；能力来自当前 Upstream，绝不跨上游共享。
     pub fn capabilities_for_model(&self, requested: Option<&str>) -> ModelCapabilities {
@@ -618,54 +629,16 @@ impl UpstreamRuntime {
     }
 }
 
-fn is_bigmodel_coding_plan_base_url(base_url: &str) -> bool {
-    let Ok(url) = url::Url::parse(base_url) else {
-        return false;
-    };
-    url.path()
-        .trim_end_matches('/')
-        .contains("/api/coding/paas/")
-}
-
-fn normalize_openai_compatible_path_for_base_url<'a>(base_url: &str, path: &'a str) -> &'a str {
-    if is_bigmodel_coding_plan_base_url(base_url) && path == "/v1/chat/completions" {
-        return "/chat/completions";
-    }
-    path
-}
+// ══════════ MY-URL-COMPOSE PATCH C3 START ══════════
+// 官方“猜测式”拼接修正（strip_overlapping_prefix /
+// normalize_openai_compatible_path_for_base_url / is_bigmodel_coding_plan_base_url）
+// 已整体移除，由 my_url_compose 的显式纯拼接替代。
+// ══════════ MY-URL-COMPOSE PATCH C3 END ══════════
 
 #[derive(Serialize)]
 pub struct ConfigResponse {
     pub path: String,
     pub config: ProxyConfigFile,
-}
-
-/// 去掉 path 开头与 base_url 路径部分重叠的前缀
-/// base_url: "https://example.com/openai/v1" -> base_path: "/openai/v1"
-/// 如果 path 以 base_path 的某个后缀开头（如 "/v1"），则去掉该重叠部分
-pub(crate) fn strip_overlapping_prefix<'a>(base_url: &str, path: &'a str) -> &'a str {
-    let Some(base_path) = url::Url::parse(base_url)
-        .ok()
-        .map(|url| url.path().to_string())
-    else {
-        return path;
-    };
-    // 检查 base_path 的每个后缀是否与 path 的前缀重叠
-    // 例如 base_path = "/openai/v1"，依次检查 "/openai/v1", "/v1"
-    let base_path = base_path.trim_end_matches('/');
-    for (idx, ch) in base_path.char_indices() {
-        if ch == '/' {
-            let suffix = &base_path[idx..];
-            if let Some(stripped) = path.strip_prefix(suffix) {
-                return stripped;
-            }
-        }
-    }
-    // 完整匹配检查（base_path 本身）
-    if let Some(stripped) = path.strip_prefix(base_path) {
-        return stripped;
-    }
-    path
 }
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。

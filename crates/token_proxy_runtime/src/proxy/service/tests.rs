@@ -251,6 +251,7 @@ fn upstream_config(id: &str, provider: &str, base_url: &str) -> UpstreamConfig {
         model_mappings: HashMap::new(),
         convert_from_map: HashMap::new(),
         overrides: None,
+        url_compose: None,
     }
 }
 

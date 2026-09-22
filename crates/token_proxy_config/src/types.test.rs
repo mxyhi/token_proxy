@@ -1,58 +1,5 @@
 use super::*;
 
-#[test]
-fn test_strip_overlapping_prefix() {
-    // 标准 OpenAI 兼容格式：base_url 包含 /v1
-    assert_eq!(
-        strip_overlapping_prefix("https://api.example.com/openai/v1", "/v1/chat/completions"),
-        "/chat/completions"
-    );
-    assert_eq!(
-        strip_overlapping_prefix("https://api.example.com/v1", "/v1/chat/completions"),
-        "/chat/completions"
-    );
-
-    // 无重叠情况：base_url 不包含路径
-    assert_eq!(
-        strip_overlapping_prefix("https://api.openai.com", "/v1/chat/completions"),
-        "/v1/chat/completions"
-    );
-
-    // 无重叠情况：base_url 路径与请求路径无公共后缀
-    assert_eq!(
-        strip_overlapping_prefix("https://api.example.com/openai/", "/v1/chat/completions"),
-        "/v1/chat/completions"
-    );
-    assert_eq!(
-        strip_overlapping_prefix("https://api.example.com/openai", "/v1/chat/completions"),
-        "/v1/chat/completions"
-    );
-
-    // 多层路径重叠
-    assert_eq!(
-        strip_overlapping_prefix("https://example.com/api/openai/v1", "/v1/models"),
-        "/models"
-    );
-
-    // 完整路径重叠
-    assert_eq!(
-        strip_overlapping_prefix("https://example.com/openai/v1", "/openai/v1/completions"),
-        "/completions"
-    );
-
-    // 带尾斜杠的 base_url
-    assert_eq!(
-        strip_overlapping_prefix("https://example.com/v1/", "/v1/chat/completions"),
-        "/chat/completions"
-    );
-
-    // 无效 URL 回退
-    assert_eq!(
-        strip_overlapping_prefix("not-a-valid-url", "/v1/chat/completions"),
-        "/v1/chat/completions"
-    );
-}
-
 fn hot_model_test_upstream(model_mappings: Option<ModelMappingRules>) -> UpstreamRuntime {
     UpstreamRuntime {
         id: "test".to_string(),
@@ -75,6 +22,7 @@ fn hot_model_test_upstream(model_mappings: Option<ModelMappingRules>) -> Upstrea
         model_mappings,
         header_overrides: None,
         allowed_inbound_formats: Default::default(),
+        url_compose: Default::default(),
     }
 }
 
@@ -158,158 +106,128 @@ fn proxy_config_file_defaults_include_hot_model_mappings() {
 
 #[test]
 fn test_upstream_url() {
-    // openai provider: /v1/chat/completions
-    let upstream = UpstreamRuntime {
-        id: "test".to_string(),
-        selector_key: "test".to_string(),
-        base_url: "https://api.example.com/openai/v1".to_string(),
-        api_key: None,
-        api_key_headers: None,
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        kiro_preferred_endpoint: None,
-        proxy_url: None,
-        priority: 0,
-        available_models: Vec::new(),
-        advertised_model_ids: Vec::new(),
-        model_capabilities: Default::default(),
-        model_mappings: None,
-        header_overrides: None,
-        allowed_inbound_formats: Default::default(),
-    };
+    use crate::my_url_compose::{EndpointCompose, UrlComposeConfig};
+
+    fn runtime(base_url: &str, url_compose: UrlComposeConfig) -> UpstreamRuntime {
+        UpstreamRuntime {
+            id: "test".to_string(),
+            selector_key: "test".to_string(),
+            base_url: base_url.to_string(),
+            api_key: None,
+            api_key_headers: None,
+            filter_prompt_cache_retention: false,
+            filter_safety_identifier: false,
+            rewrite_developer_role_to_system: false,
+            kiro_account_id: None,
+            codex_account_id: None,
+            xai_account_id: None,
+            kiro_preferred_endpoint: None,
+            proxy_url: None,
+            priority: 0,
+            available_models: Vec::new(),
+            advertised_model_ids: Vec::new(),
+            model_capabilities: Default::default(),
+            model_mappings: None,
+            header_overrides: None,
+            allowed_inbound_formats: Default::default(),
+            url_compose,
+        }
+    }
+
+    fn openai_compose(prefix: &str, suffix: &str) -> UrlComposeConfig {
+        UrlComposeConfig {
+            openai: Some(EndpointCompose {
+                prefix: prefix.to_string(),
+                suffix: suffix.to_string(),
+            }),
+            ..Default::default()
+        }
+    }
+
+    // 未配置 url_compose：恒等回退（纯拼接，不去重）。
+    let plain = runtime("https://api.example.com", UrlComposeConfig::default());
     assert_eq!(
-        upstream.upstream_url("/v1/chat/completions"),
+        plain.upstream_url("openai", "/v1/chat/completions"),
+        "https://api.example.com/v1/chat/completions"
+    );
+
+    // base 填到版本段：纯拼接会重复版本段（与官方剥段行为不同，需显式配置）。
+    let versioned = runtime(
+        "https://api.example.com/openai/v1",
+        UrlComposeConfig::default(),
+    );
+    assert_eq!(
+        versioned.upstream_url("openai", "/v1/chat/completions"),
+        "https://api.example.com/openai/v1/v1/chat/completions"
+    );
+
+    // 显式组合：prefix=/openai + suffix=/v1/chat/completions，
+    // 出站结果与官方剥段时代逐字节一致，且子路径自动跟随版本段。
+    let explicit = runtime(
+        "https://api.example.com",
+        openai_compose("/openai", "/v1/chat/completions"),
+    );
+    assert_eq!(
+        explicit.upstream_url("openai", "/v1/chat/completions"),
         "https://api.example.com/openai/v1/chat/completions"
     );
-
-    // openai-response provider: /v1/responses
-    let upstream_responses = UpstreamRuntime {
-        id: "test".to_string(),
-        selector_key: "test".to_string(),
-        base_url: "https://api.example.com/openai/v1".to_string(),
-        api_key: None,
-        api_key_headers: None,
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        kiro_preferred_endpoint: None,
-        proxy_url: None,
-        priority: 0,
-        available_models: Vec::new(),
-        advertised_model_ids: Vec::new(),
-        model_capabilities: Default::default(),
-        model_mappings: None,
-        header_overrides: None,
-        allowed_inbound_formats: Default::default(),
-    };
     assert_eq!(
-        upstream_responses.upstream_url("/v1/responses"),
-        "https://api.example.com/openai/v1/responses"
+        explicit.upstream_url("openai", "/v1/models/gpt-5"),
+        "https://api.example.com/openai/v1/models/gpt-5"
     );
 
-    let coding_plan = UpstreamRuntime {
-        id: "coding-plan".to_string(),
-        selector_key: "coding-plan".to_string(),
-        base_url: "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
-        api_key: None,
-        api_key_headers: None,
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        kiro_preferred_endpoint: None,
-        proxy_url: None,
-        priority: 0,
-        available_models: Vec::new(),
-        advertised_model_ids: Vec::new(),
-        model_capabilities: Default::default(),
-        model_mappings: None,
-        header_overrides: None,
-        allowed_inbound_formats: Default::default(),
-    };
+    // v3 提供商：一条配置覆盖主端点与子路径。
+    let v3 = runtime(
+        "https://ark.example.com/api/plan",
+        openai_compose("", "/v3/chat/completions"),
+    );
     assert_eq!(
-        coding_plan.upstream_url("/v1/chat/completions"),
+        v3.upstream_url("openai", "/v1/chat/completions"),
+        "https://ark.example.com/api/plan/v3/chat/completions"
+    );
+    assert_eq!(
+        v3.upstream_url("openai", "/v1/models"),
+        "https://ark.example.com/api/plan/v3/models"
+    );
+
+    // bigmodel 特例（官方已删）的等价显式写法：suffix=/chat/completions。
+    let coding_plan = runtime(
+        "https://open.bigmodel.cn/api/coding/paas",
+        openai_compose("", "/v4/chat/completions"),
+    );
+    assert_eq!(
+        coding_plan.upstream_url("openai", "/v1/chat/completions"),
         "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"
     );
 
-    // 无路径前缀的 base_url
-    let upstream_no_path = UpstreamRuntime {
-        id: "test".to_string(),
-        selector_key: "test".to_string(),
-        base_url: "https://api.openai.com".to_string(),
-        api_key: None,
-        api_key_headers: None,
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        kiro_preferred_endpoint: None,
-        proxy_url: None,
-        priority: 0,
-        available_models: Vec::new(),
-        advertised_model_ids: Vec::new(),
-        model_capabilities: Default::default(),
-        model_mappings: None,
-        header_overrides: None,
-        allowed_inbound_formats: Default::default(),
-    };
-    assert_eq!(
-        upstream_no_path.upstream_url("/v1/chat/completions"),
-        "https://api.openai.com/v1/chat/completions"
+    // 带尾斜杠的 base_url：先修剪再纯拼接。
+    let trailing = runtime(
+        "https://api.example.com/openai/",
+        openai_compose("", "/v1/chat/completions"),
     );
     assert_eq!(
-        upstream_no_path.upstream_url("/v1/responses"),
-        "https://api.openai.com/v1/responses"
-    );
-
-    // 带尾斜杠的 base_url
-    let upstream_trailing_slash = UpstreamRuntime {
-        id: "test".to_string(),
-        selector_key: "test".to_string(),
-        base_url: "https://api.example.com/openai/v1/".to_string(),
-        api_key: None,
-        api_key_headers: None,
-        filter_prompt_cache_retention: false,
-        filter_safety_identifier: false,
-        rewrite_developer_role_to_system: false,
-        kiro_account_id: None,
-        codex_account_id: None,
-        xai_account_id: None,
-        kiro_preferred_endpoint: None,
-        proxy_url: None,
-        priority: 0,
-        available_models: Vec::new(),
-        advertised_model_ids: Vec::new(),
-        model_capabilities: Default::default(),
-        model_mappings: None,
-        header_overrides: None,
-        allowed_inbound_formats: Default::default(),
-    };
-    // openai: /v1/chat/completions
-    assert_eq!(
-        upstream_trailing_slash.upstream_url("/v1/chat/completions"),
+        trailing.upstream_url("openai", "/v1/chat/completions"),
         "https://api.example.com/openai/v1/chat/completions"
     );
-    // openai-response: /v1/responses
-    assert_eq!(
-        upstream_trailing_slash.upstream_url("/v1/responses"),
-        "https://api.example.com/openai/v1/responses"
+
+    // anthropic 家族：prefix + 版本段替换，count_tokens 自动跟随。
+    let anthropic = runtime(
+        "https://x.com",
+        UrlComposeConfig {
+            anthropic: Some(EndpointCompose {
+                prefix: "/anthropic".to_string(),
+                suffix: "/v1/messages".to_string(),
+            }),
+            ..Default::default()
+        },
     );
-    // anthropic: /v1/messages
     assert_eq!(
-        upstream_trailing_slash.upstream_url("/v1/messages"),
-        "https://api.example.com/openai/v1/messages"
+        anthropic.upstream_url("anthropic", "/v1/messages"),
+        "https://x.com/anthropic/v1/messages"
+    );
+    assert_eq!(
+        anthropic.upstream_url("anthropic", "/v1/messages/count_tokens"),
+        "https://x.com/anthropic/v1/messages/count_tokens"
     );
 }
 
@@ -411,6 +329,7 @@ fn upstream_config_serialize_only_emits_credential_union() {
         model_mappings: Default::default(),
         convert_from_map: Default::default(),
         overrides: None,
+        url_compose: None,
     };
     let value = serde_json::to_value(&upstream).expect("serialize");
     let obj = value.as_object().expect("object");

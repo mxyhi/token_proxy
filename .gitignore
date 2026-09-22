@@ -40,3 +40,14 @@ target/
 findings.md
 progress.md
 task_plan.md
+
+# 本地工具与工作区目录（不入库）
+.agents/skills/my-token-proxy-patch-restore/
+.claude/
+.dsh/
+.kimi-code/
+.zcode/
+openspec/
+
+# 本地设计文档（不上游化）
+docs/superpowers/

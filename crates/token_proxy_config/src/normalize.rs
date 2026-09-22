@@ -155,6 +155,18 @@ fn normalize_single_upstream(
         merge_hot_model_mappings(hot_model_mappings, &upstream.model_mappings);
     let model_mappings = compile_model_mappings(&upstream.id, &merged_model_mappings)?;
     let header_overrides = normalize_header_overrides(upstream.overrides.as_ref())?;
+    // ══════════ MY-URL-COMPOSE PATCH C2 START ══════════
+    let url_compose = upstream
+        .url_compose
+        .as_ref()
+        .map(|value| value.normalized())
+        .unwrap_or_default();
+    crate::my_url_compose::warn_legacy_versioned_base_url(
+        &upstream.id,
+        &upstream.base_url,
+        upstream.url_compose.as_ref(),
+    );
+    // ══════════ MY-URL-COMPOSE PATCH C2 END ══════════
 
     let mut output = Vec::with_capacity(runtime_providers.len() * api_keys.len().max(1));
     for (provider, runtime_provider) in runtime_providers {
@@ -201,6 +213,9 @@ fn normalize_single_upstream(
                 model_mappings: model_mappings.clone(),
                 header_overrides: header_overrides.clone(),
                 allowed_inbound_formats,
+                // ══════════ MY-URL-COMPOSE PATCH C2 START ══════════
+                url_compose: url_compose.clone(),
+                // ══════════ MY-URL-COMPOSE PATCH C2 END ══════════
             };
             output.push(NormalizedUpstream {
                 provider: runtime_provider.clone(),

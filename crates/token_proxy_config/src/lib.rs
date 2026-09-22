@@ -5,6 +5,9 @@ mod io;
 mod jsonc;
 mod migrate;
 mod model_mapping;
+// ══════════ MY-URL-COMPOSE PATCH C0 START ══════════
+pub mod my_url_compose;
+// ══════════ MY-URL-COMPOSE PATCH C0 END ══════════
 mod normalize;
 mod types;
 

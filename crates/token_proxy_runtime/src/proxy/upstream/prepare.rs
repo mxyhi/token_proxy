@@ -64,7 +64,9 @@ pub(super) async fn prepare_upstream_request_with_body(
                 tracing::warn!(provider, "rejected unsafe mapped upstream path");
                 AttemptOutcome::Fatal(http::error_response(StatusCode::BAD_REQUEST, message))
             })?;
-    let upstream_url = upstream.upstream_url(&upstream_path_with_query);
+    // ══════════ MY-URL-COMPOSE PATCH C3 START ══════════
+    let upstream_url = upstream.upstream_url(provider, &upstream_path_with_query);
+    // ══════════ MY-URL-COMPOSE PATCH C3 END ══════════
     let resolved = resolve_upstream_auth(
         state,
         provider,

@@ -111,6 +111,7 @@ fn config_with_runtime_upstreams(
             model_mappings: None,
             header_overrides: None,
             allowed_inbound_formats: Default::default(),
+            url_compose: Default::default(),
         };
         runtime.allow_inbound_formats(inbound_formats.iter().copied());
         let entry = provider_map
@@ -7354,7 +7355,9 @@ fn responses_request_uses_chat_compat_for_coding_plan_runtime_upstream() {
             Some("from coding plan")
         );
         assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].path, "/api/coding/paas/v4/chat/completions");
+        // MY-URL-COMPOSE PATCH C3：官方 bigmodel /api/coding/paas/ 特例已移除，
+        // 出站为纯拼接；原剥段行为改由 url_compose 显式配置表达（见迁移表）。
+        assert_eq!(requests[0].path, "/api/coding/paas/v4/v1/chat/completions");
         assert_eq!(
             requests[0].body["messages"][0]["role"].as_str(),
             Some("user")

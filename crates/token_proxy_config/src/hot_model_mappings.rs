@@ -85,6 +85,15 @@ const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
     ("qwen/qwen3.5-plus", "qwen3.5-plus"),
     ("qwenlm/qwen3.6-plus", "qwen3.6-plus"),
     ("qwenlm/qwen3.5-plus", "qwen3.5-plus"),
+    // grok-4.7-high / xhigh 与官方 grok-4.7 同价，前缀名改写成上游 ID。
+    ("x-ai/grok-4.7", "grok-4.7"),
+    ("xai/grok-4.7", "grok-4.7"),
+    ("x-ai/grok-4.7-high", "grok-4.7"),
+    ("xai/grok-4.7-high", "grok-4.7"),
+    ("x-ai/grok-4.7-xhigh", "grok-4.7"),
+    ("xai/grok-4.7-xhigh", "grok-4.7"),
+    ("x-ai/grok-4.7xhigh", "grok-4.7"),
+    ("xai/grok-4.7xhigh", "grok-4.7"),
     // grok-4.6-high / xhigh 与官方 grok-4.6 同价，前缀名改写成上游 ID。
     ("x-ai/grok-4.6", "grok-4.6"),
     ("xai/grok-4.6", "grok-4.6"),
@@ -123,6 +132,9 @@ const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
     ("composer-2.5", "grok-composer-2.5-fast"),
     ("x-ai/grok-composer-2.5-fast", "grok-composer-2.5-fast"),
     ("xai/grok-composer-2.5-fast", "grok-composer-2.5-fast"),
+    // xiaomi/ 前缀改写成小米官方模型 ID。
+    ("xiaomi/mimo-v2.6-pro", "mimo-v2.6-pro"),
+    ("xiaomi/mimo-v2.6-flash", "mimo-v2.6-flash"),
     ("moonshotai/kimi-k2.6", "kimi-k2.6"),
     ("moonshotai/kimi-k3", "kimi-k3"),
     ("moonshotai/kimi-k2.5", "kimi-k2.5"),

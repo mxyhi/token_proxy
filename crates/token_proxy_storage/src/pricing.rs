@@ -1073,7 +1073,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20260904"
+            "catalog.69854741.b88b66df+curated.20260922"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1108,6 +1108,24 @@ mod tests {
             })
             .collect::<HashMap<_, _>>();
 
+        assert_eq!(
+            sources.get("grok-4.7"),
+            Some(&("https://docs.x.ai/developers/pricing", "2026-09-22"))
+        );
+        assert_eq!(
+            sources.get("mimo-v2.6-pro"),
+            Some(&(
+                "https://mimo.mi.com/docs/en-US/price/pay-as-you-go",
+                "2026-09-22"
+            ))
+        );
+        assert_eq!(
+            sources.get("mimo-v2.6-flash"),
+            Some(&(
+                "https://mimo.mi.com/docs/en-US/price/pay-as-you-go",
+                "2026-09-22"
+            ))
+        );
         assert_eq!(
             sources.get("grok-4.6"),
             Some(&("https://docs.x.ai/developers/pricing", "2026-08-13"))
@@ -1174,6 +1192,86 @@ mod tests {
     }
 
     #[test]
+    fn grok_4_7_aliases_apply_official_short_and_long_context_prices() {
+        let settings = default_model_pricing_settings();
+        let short_usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+        let long_usage = BillableUsage {
+            uncached_input_tokens: 200_001,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        // Official xAI grok-4.7: $2 / $0.50 / $6 per 1M; 200k+ prompts bill 2x.
+        // https://docs.x.ai/developers/pricing verified 2026-09-22.
+        for model in [
+            "grok-4.7",
+            "grok-4.7-high",
+            "grok-4.7-xhigh",
+            "grok-4.7xhigh",
+            "grok4.7xhigh",
+            "x-ai/grok-4.7",
+            "xai/grok-4.7-high",
+            "x-ai/grok-4.7-xhigh",
+        ] {
+            let short = calculate_request_cost(&settings, Some(model), None, None, &short_usage)
+                .expect("Grok 4.7 short-context price");
+            let long = calculate_request_cost(&settings, Some(model), None, None, &long_usage)
+                .expect("Grok 4.7 long-context price");
+
+            assert_eq!(short.pricing_model, "grok-4.7");
+            assert_eq!(short.cost_nano_usd, 8_500);
+            assert_eq!(short.context_tier, PricingContextTier::Standard);
+            assert_eq!(long.pricing_model, "grok-4.7");
+            assert_eq!(long.cost_nano_usd, 800_016_000);
+            assert_eq!(long.context_tier, PricingContextTier::Long);
+        }
+        assert!(settings.version.contains("+curated.20260922"));
+    }
+
+    #[test]
+    fn mimo_v2_6_aliases_apply_official_realtime_prices() {
+        let settings = default_model_pricing_settings();
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            cache_write_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        // Overseas realtime USD, https://mimo.mi.com/docs/en-US/price/pay-as-you-go (2026-09-22).
+        // Cache write is free. Cache hit $0.0036 / $0.0028 per 1M is 3.6 / 2.8 nano-USD
+        // per token; the catalog unit is integer nano-USD, so those rates round to 4 and 3.
+        for model in ["mimo-v2.6-pro", "xiaomi/mimo-v2.6-pro"] {
+            let cost = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                .expect("MiMo V2.6 Pro price");
+            assert_eq!(cost.pricing_model, "mimo-v2.6-pro");
+            assert_eq!(cost.breakdown.uncached_input_nano_usd, 435);
+            assert_eq!(cost.breakdown.cache_read_nano_usd, 4);
+            assert_eq!(cost.breakdown.cache_write_nano_usd, 0);
+            assert_eq!(cost.breakdown.output_nano_usd, 870);
+            assert_eq!(cost.cost_nano_usd, 1_309);
+            assert_eq!(cost.context_tier, PricingContextTier::Standard);
+        }
+
+        for model in ["mimo-v2.6-flash", "xiaomi/mimo-v2.6-flash"] {
+            let cost = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                .expect("MiMo V2.6 Flash price");
+            assert_eq!(cost.pricing_model, "mimo-v2.6-flash");
+            assert_eq!(cost.breakdown.uncached_input_nano_usd, 140);
+            assert_eq!(cost.breakdown.cache_read_nano_usd, 3);
+            assert_eq!(cost.breakdown.cache_write_nano_usd, 0);
+            assert_eq!(cost.breakdown.output_nano_usd, 280);
+            assert_eq!(cost.cost_nano_usd, 423);
+        }
+    }
+
+    #[test]
     fn grok_4_6_aliases_apply_official_short_and_long_context_prices() {
         let settings = default_model_pricing_settings();
         let short_usage = BillableUsage {
@@ -1211,7 +1309,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260904"));
+        assert!(settings.version.contains("+curated.20260922"));
     }
 
     #[test]
@@ -1293,7 +1391,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 5_440_095_000, "{model}");
             assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
         }
-        assert!(settings.version.contains("+curated.20260904"));
+        assert!(settings.version.contains("+curated.20260922"));
     }
 
     #[test]
@@ -1615,7 +1713,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20260904");
+        assert_eq!(settings.version, "remote.test+curated.20260922");
     }
 
     #[test]

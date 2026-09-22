@@ -116,6 +116,19 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
         mappings.get("x-ai/grok-4.20-0309-non-reasoning"),
         Some(&"grok-4.20".to_string())
     );
+    assert_eq!(mappings.get("x-ai/grok-4.7"), Some(&"grok-4.7".to_string()));
+    assert_eq!(
+        mappings.get("x-ai/grok-4.7-high"),
+        Some(&"grok-4.7".to_string())
+    );
+    assert_eq!(
+        mappings.get("x-ai/grok-4.7-xhigh"),
+        Some(&"grok-4.7".to_string())
+    );
+    assert_eq!(
+        mappings.get("xai/grok-4.7xhigh"),
+        Some(&"grok-4.7".to_string())
+    );
     assert_eq!(mappings.get("x-ai/grok-4.6"), Some(&"grok-4.6".to_string()));
     assert_eq!(
         mappings.get("x-ai/grok-4.6-high"),
@@ -152,6 +165,14 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
         Some(&"grok-composer-2.5-fast".to_string())
     );
     assert!(!mappings.contains_key("x-ai/grok-3"));
+    assert_eq!(
+        mappings.get("xiaomi/mimo-v2.6-pro"),
+        Some(&"mimo-v2.6-pro".to_string())
+    );
+    assert_eq!(
+        mappings.get("xiaomi/mimo-v2.6-flash"),
+        Some(&"mimo-v2.6-flash".to_string())
+    );
     assert_eq!(
         mappings.get("moonshotai/kimi-k2.6"),
         Some(&"kimi-k2.6".to_string())

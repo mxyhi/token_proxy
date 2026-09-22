@@ -122,6 +122,7 @@ fn sample_upstream(id: &str, providers: &[&str], credential: UpstreamCredential)
         model_mappings: HashMap::new(),
         convert_from_map: HashMap::new(),
         overrides: None,
+        url_compose: None,
     }
 }
 

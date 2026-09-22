@@ -52,7 +52,8 @@ function buildDownloadProgressLabel(downloaded: number, total: number) {
 export function UpdateNotifier() {
   const navigate = useNavigate();
   const { state, actions } = useUpdater();
-  const { checkForUpdate, downloadAndInstall, relaunchApp } = actions;
+  // MY-URL-COMPOSE PATCH G5：checkForUpdate 不再被自动路径调用（手动入口在 update-card.tsx）。
+  const { downloadAndInstall, relaunchApp } = actions;
   const [dismissedRestartPromptKey, setDismissedRestartPromptKey] = useState<string | null>(null);
   const [windowVisible, setWindowVisible] = useState(false);
   const availableToastVersionRef = useRef<string | null>(null);
@@ -82,10 +83,13 @@ export function UpdateNotifier() {
 
   const runAutoCheck = useCallback(
     (reason: string) => {
-      console.info("[updater] checking for updates", { reason });
-      void checkForUpdate({ source: "auto" });
+      // ══════════ MY-URL-COMPOSE PATCH G5 START ══════════
+      // 关闭自动更新检测：启动 / 主窗口可见等自动触发全部短路。
+      // 手动「检查更新」在 update-card.tsx 走 checkForUpdate({ source: "manual" })，不受影响。
+      console.info("[updater] automatic update check disabled", { reason });
+      // ══════════ MY-URL-COMPOSE PATCH G5 END ══════════
     },
-    [checkForUpdate]
+    []
   );
 
   useLayoutEffect(() => {

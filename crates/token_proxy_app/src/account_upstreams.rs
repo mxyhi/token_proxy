@@ -256,6 +256,7 @@ fn default_account_upstream(
         model_mappings: HashMap::new(),
         convert_from_map: HashMap::new(),
         overrides: None,
+        url_compose: None,
     }
 }
 
@@ -293,6 +294,7 @@ mod tests {
             model_mappings: HashMap::new(),
             convert_from_map: HashMap::new(),
             overrides: None,
+            url_compose: None,
         }
     }
 

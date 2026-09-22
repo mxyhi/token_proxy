@@ -4,6 +4,13 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use token_proxy_account_store::paths::TokenProxyPaths;
 
+// ══════════ MY-URL-COMPOSE PATCH T1 START ══════════
+// `set_fail_rename_after_temp_write` 是进程级全局 seam：注入测试置 true 的窗口里，
+// 并行执行的「load 即迁移重写」测试会误吃注入失败。用共享互斥锁串行化双方，
+// 消除测试调度的偶发竞态（纯测试侧修改，不影响产品代码）。
+static GLOBAL_SEAM_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+// ══════════ MY-URL-COMPOSE PATCH T1 END ══════════
+
 #[test]
 fn parse_config_file_migrates_legacy_upstream_strategy_string() {
     let parsed = parse_config_file(
@@ -41,6 +48,9 @@ fn test_data_dir(label: &str) -> std::path::PathBuf {
 
 #[tokio::test]
 async fn load_config_file_migrates_legacy_flat_credential_and_writes_byte_identical_backup() {
+    // ══════════ MY-URL-COMPOSE PATCH T1 START ══════════
+    let _seam_guard = GLOBAL_SEAM_GUARD.lock().await;
+    // ══════════ MY-URL-COMPOSE PATCH T1 END ══════════
     let data_dir = test_data_dir("migrate-ok");
     tokio::fs::create_dir_all(&data_dir)
         .await
@@ -195,7 +205,10 @@ async fn atomic_write_rename_failure_preserves_existing_config_bytes() {
         .await
         .expect("seed original");
 
+    // ══════════ MY-URL-COMPOSE PATCH T1 START ══════════
+    let _seam_guard = GLOBAL_SEAM_GUARD.lock().await;
     set_fail_rename_after_temp_write(true);
+    // ══════════ MY-URL-COMPOSE PATCH T1 END ══════════
     let mut next = ProxyConfigFile::default();
     next.port = 9333;
     let err = save_config_file(&paths, &next)

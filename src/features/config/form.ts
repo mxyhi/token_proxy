@@ -10,6 +10,8 @@ import {
   type UpstreamDispatchStrategy,
   type UpstreamForm,
   type UpstreamStrategy,
+  type UrlComposeConfig,
+  type UrlComposeFamily,
   TRAY_TOKEN_RATE_FORMATS,
 } from "@/features/config/types";
 import {
@@ -25,6 +27,58 @@ const DEFAULT_TRAY_TOKEN_RATE: TrayTokenRateConfig = {
   enabled: true,
   format: "split",
 };
+
+// ══════════ MY-URL-COMPOSE PATCH G2 START ══════════
+const URL_COMPOSE_FAMILIES: readonly UrlComposeFamily[] = [
+  "openai",
+  "openai-response",
+  "anthropic",
+];
+
+/** 段规范化：trim、去结尾 `/`、非空补开头 `/`（与后端 my_url_compose 一致）。 */
+function normalizeUrlComposeSegment(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function toUrlComposeForm(
+  value: UrlComposeConfig | undefined,
+): UrlComposeConfig {
+  const result: UrlComposeConfig = {};
+  for (const family of URL_COMPOSE_FAMILIES) {
+    const endpoint = value?.[family];
+    if (!endpoint) {
+      continue;
+    }
+    result[family] = {
+      prefix: normalizeUrlComposeSegment(endpoint.prefix ?? ""),
+      suffix: normalizeUrlComposeSegment(endpoint.suffix ?? ""),
+    };
+  }
+  return result;
+}
+
+function toUrlComposePayload(value: UrlComposeConfig): UrlComposeConfig | undefined {
+  const result: UrlComposeConfig = {};
+  for (const family of URL_COMPOSE_FAMILIES) {
+    const endpoint = value[family];
+    if (!endpoint) {
+      continue;
+    }
+    const prefix = normalizeUrlComposeSegment(endpoint.prefix);
+    const suffix = normalizeUrlComposeSegment(endpoint.suffix);
+    // 前缀与后缀全空视为未配置该家族，保持落盘配置精简。
+    if (!prefix && !suffix) {
+      continue;
+    }
+    result[family] = { prefix, suffix };
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+// ══════════ MY-URL-COMPOSE PATCH G2 END ══════════
 
 const MIN_TIMEOUT_SECS = 1;
 const DEFAULT_STREAM_FIRST_OUTPUT_TIMEOUT_SECS = 60;
@@ -176,6 +230,9 @@ export function createEmptyUpstream(): UpstreamForm {
     modelMappings: [],
     convertFromMap: {},
     overrides: { header: [] },
+    // ══════════ MY-URL-COMPOSE PATCH G2 START ══════════
+    urlCompose: {},
+    // ══════════ MY-URL-COMPOSE PATCH G2 END ══════════
   };
 }
 
@@ -300,6 +357,9 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
         modelMappings: toModelMappingForm(upstream.model_mappings),
         convertFromMap: upstream.convert_from_map ?? {},
         overrides: normalizeOverrides(upstream.overrides),
+        // ══════════ MY-URL-COMPOSE PATCH G2 START ══════════
+        urlCompose: toUrlComposeForm(upstream.url_compose),
+        // ══════════ MY-URL-COMPOSE PATCH G2 END ══════════
       };
     }),
   };
@@ -359,6 +419,9 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
         model_mappings: toModelMappingPayload(upstream.modelMappings),
         convert_from_map: normalizeConvertFromMap(upstream.convertFromMap, providers),
         overrides: toOverridesPayload(upstream.overrides),
+        // ══════════ MY-URL-COMPOSE PATCH G2 START ══════════
+        url_compose: toUrlComposePayload(upstream.urlCompose),
+        // ══════════ MY-URL-COMPOSE PATCH G2 END ══════════
       };
     }),
   };

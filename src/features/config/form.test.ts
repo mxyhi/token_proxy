@@ -10,6 +10,37 @@ import {
   validate,
 } from "@/features/config/form";
 
+describe("config/form url_compose", () => {
+  it("round-trips url_compose through form and payload", () => {
+    const upstream = createEmptyUpstream();
+    upstream.urlCompose = {
+      anthropic: { prefix: "anthropic/", suffix: " /v1/messages " },
+      openai: { prefix: "", suffix: "/v3/chat/completions" },
+    };
+
+    const payload = toPayload({ ...EMPTY_FORM, upstreams: [upstream] });
+    expect(payload.upstreams[0]?.url_compose).toEqual({
+      anthropic: { prefix: "/anthropic", suffix: "/v1/messages" },
+      openai: { prefix: "", suffix: "/v3/chat/completions" },
+    });
+
+    const restored = toForm(payload);
+    expect(restored.upstreams[0].urlCompose).toEqual({
+      anthropic: { prefix: "/anthropic", suffix: "/v1/messages" },
+      openai: { prefix: "", suffix: "/v3/chat/completions" },
+    });
+  });
+
+  it("omits empty url_compose entries and the whole domain when untouched", () => {
+    const untouched = createEmptyUpstream();
+    expect(toPayload({ ...EMPTY_FORM, upstreams: [untouched] }).upstreams[0]?.url_compose).toBeUndefined();
+
+    const blank = createEmptyUpstream();
+    blank.urlCompose = { anthropic: { prefix: "/", suffix: "//" } };
+    expect(toPayload({ ...EMPTY_FORM, upstreams: [blank] }).upstreams[0]?.url_compose).toBeUndefined();
+  });
+});
+
 describe("config/form", () => {
   it("validates required host", () => {
     expect(validate({ ...EMPTY_FORM, host: "   " }).valid).toBe(false);

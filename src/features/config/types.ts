@@ -113,7 +113,23 @@ export type UpstreamConfig = {
     model_capabilities?: Record<string, ModelCapabilities>;
     header?: Record<string, string | null>;
   };
+  // ══════════ MY-URL-COMPOSE PATCH G1 START ══════════
+  /** 渠道级出站地址组合；缺省 = 恒等回退（base + 原路径）。 */
+  url_compose?: UrlComposeConfig;
+  // ══════════ MY-URL-COMPOSE PATCH G1 END ══════════
 };
+
+/** ═══ MY-URL-COMPOSE PATCH G1 START：接口地址组合（与后端 UrlComposeConfig 对齐） ═══ */
+export type UrlComposeEndpoint = { prefix: string; suffix: string };
+
+export type UrlComposeConfig = {
+  openai?: UrlComposeEndpoint;
+  "openai-response"?: UrlComposeEndpoint;
+  anthropic?: UrlComposeEndpoint;
+};
+
+export type UrlComposeFamily = keyof UrlComposeConfig;
+/** ═══ MY-URL-COMPOSE PATCH G1 END ═══ */
 
 export type ProxyConfigFileBase = {
   host: string;
@@ -214,6 +230,10 @@ export type UpstreamForm = {
     modelCapabilities?: Record<string, ModelCapabilities>;
     header: HeaderOverrideForm[];
   };
+  // ══════════ MY-URL-COMPOSE PATCH G1 START ══════════
+  /** 表单态出站地址组合（未配置的家族不出现在对象中）。 */
+  urlCompose: UrlComposeConfig;
+  // ══════════ MY-URL-COMPOSE PATCH G1 END ══════════
 };
 
 export type HeaderOverrideForm = {

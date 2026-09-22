@@ -32,6 +32,7 @@ function buildUpstream(): UpstreamForm {
     modelMappings: [],
     convertFromMap: {},
     overrides: { header: [] },
+    urlCompose: {},
   };
 }
 

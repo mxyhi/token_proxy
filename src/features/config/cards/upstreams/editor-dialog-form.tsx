@@ -23,6 +23,9 @@ import {
   ModelMappingsEditor,
 } from "@/features/config/cards/upstreams/editor-fields";
 import { ProviderMultiSelect } from "@/features/config/cards/upstreams/provider-multi-select";
+// ══════════ MY-URL-COMPOSE PATCH G3 START ══════════
+import { UrlComposeEditor } from "@/features/config/cards/upstreams/url-compose-editor";
+// ══════════ MY-URL-COMPOSE PATCH G3 END ══════════
 import {
   isAccountBackedProviderSet,
   isAccountIdentityLocked,
@@ -180,6 +183,19 @@ function UpstreamConnectionFields({
                 placeholder="https://api.openai.com"
               />
             </EditorField>
+            {/* ══════════ MY-URL-COMPOSE PATCH G3 START ══════════ */}
+            <EditorField
+              label={m.url_compose_title()}
+              tooltip={m.url_compose_description()}
+            >
+              <UrlComposeEditor
+                providers={draft.providers}
+                baseUrl={draft.baseUrl}
+                value={draft.urlCompose}
+                onChange={(urlCompose) => onChangeDraft({ urlCompose })}
+              />
+            </EditorField>
+            {/* ══════════ MY-URL-COMPOSE PATCH G3 END ══════════ */}
             <EditorField
               label={m.field_api_key()}
               tooltip={m.field_api_key_tip()}

@@ -16,6 +16,7 @@ pub struct RequestLogDetail {
     pub account_id: Option<String>,
     pub model: Option<String>,
     pub mapped_model: Option<String>,
+    pub upstream_response_model: Option<String>,
     pub stream: bool,
     pub status: i32,
     pub input_tokens: Option<i64>,
@@ -69,6 +70,7 @@ SELECT
   account_id,
   model,
   mapped_model,
+  upstream_response_model,
   stream,
   status,
   input_tokens,
@@ -171,6 +173,10 @@ LIMIT 1;
         model: row.try_get::<Option<String>, _>("model").ok().flatten(),
         mapped_model: row
             .try_get::<Option<String>, _>("mapped_model")
+            .ok()
+            .flatten(),
+        upstream_response_model: row
+            .try_get::<Option<String>, _>("upstream_response_model")
             .ok()
             .flatten(),
         stream: row.try_get::<i32, _>("stream").unwrap_or_default() != 0,

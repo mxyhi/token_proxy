@@ -24,6 +24,7 @@ import {
   formatNanoUsdCost,
 } from "@/features/dashboard/format";
 import type { DashboardRequestItem } from "@/features/dashboard/types";
+import { UpstreamResponseModelLine, describeUpstreamResponseModel } from "@/features/logs/UpstreamResponseModelLine";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { m } from "@/paraglide/messages.js";
@@ -33,8 +34,9 @@ const HEADER_HEIGHT_PX = 34;
 const OVERSCAN = 6;
 
 // 固定列宽避免虚拟列表行在状态、费用、延迟文本变化时抖动。
-const GRID_COLS = "grid-cols-[85px_79px_140px_99px_104px_64px_82px_60px_104px]";
-const TABLE_MIN_WIDTH_PX = 817;
+// 模型列要放下「↳ 上游响应: <model>」和不一致标记，比单行模型名更宽。
+const GRID_COLS = "grid-cols-[85px_79px_140px_99px_236px_64px_82px_60px_104px]";
+const TABLE_MIN_WIDTH_PX = 949;
 const CELL_PLACEHOLDER = "—";
 const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
@@ -146,17 +148,28 @@ function modelColumn(): ColumnDef<DashboardRequestItem> {
     cell: ({ row }) => {
       const primary = row.original.model?.trim() ? row.original.model : CELL_PLACEHOLDER;
       const mapped = row.original.mappedModel?.trim() ? row.original.mappedModel : null;
-      const tooltipText = mapped ? `${primary}\n${mapped}` : primary;
+      // 行高只够两行。上游响应和映射同时存在时，表格展示上游响应，映射留在 tooltip。
+      const responseLine = describeUpstreamResponseModel(
+        row.original.model,
+        row.original.mappedModel,
+        row.original.upstreamResponseModel,
+      );
+      const tooltipText = [primary, mapped, responseLine].filter((line) => line).join("\n");
 
       return (
-        <CellTooltip content={tooltipText} disabled={primary === CELL_PLACEHOLDER && !mapped}>
+        <CellTooltip content={tooltipText} disabled={primary === CELL_PLACEHOLDER && !mapped && !responseLine}>
           <div className="flex min-w-0 flex-col items-start gap-0.5">
             <span className="block w-full truncate font-medium text-foreground">{primary}</span>
-            {mapped ? (
+            {mapped && !responseLine ? (
               <span className="block w-full truncate text-xs font-normal text-muted-foreground">
                 {mapped}
               </span>
             ) : null}
+            <UpstreamResponseModelLine
+              model={row.original.model}
+              mappedModel={row.original.mappedModel}
+              upstreamResponseModel={row.original.upstreamResponseModel}
+            />
           </div>
         </CellTooltip>
       );

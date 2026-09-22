@@ -123,3 +123,41 @@ fn sse_collector_uses_latest_anthropic_usage_event() {
     assert_eq!(snapshot.billable_usage.output_tokens, 2);
     assert_eq!(snapshot.usage.expect("usage").total_tokens, Some(21));
 }
+
+#[test]
+fn response_model_comes_from_chat_responses_and_gemini_envelopes() {
+    let chat = extract_usage_from_response(&Bytes::from_static(
+        br#"{"model":"gpt-5.6-luna","usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+    ));
+    assert_eq!(chat.response_model.as_deref(), Some("gpt-5.6-luna"));
+
+    let responses = extract_usage_from_response(&Bytes::from_static(
+        br#"{"model":"gpt-6-astra","response":{"model":"gpt-5.6-luna","usage":{"input_tokens":1,"output_tokens":1}}}"#,
+    ));
+    // 嵌套 response.model 才是上游实际模型，外层可能是请求回显。
+    assert_eq!(responses.response_model.as_deref(), Some("gpt-5.6-luna"));
+
+    let gemini = extract_usage_from_response(&Bytes::from_static(
+        br#"{"modelVersion":"gemini-2.5-pro","usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}"#,
+    ));
+    assert_eq!(gemini.response_model.as_deref(), Some("gemini-2.5-pro"));
+}
+
+#[test]
+fn sse_response_model_keeps_the_latest_event_and_does_not_drop_usage() {
+    let mut collector = SseUsageCollector::new();
+    collector.push_chunk(
+        b"data: {\"type\":\"response.created\",\"response\":{\"model\":\"gpt-6-astra\"}}\n\n",
+    );
+    collector.push_chunk(
+        b"data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.6-luna\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}}\n\n",
+    );
+    let snapshot = collector.finish();
+
+    assert_eq!(snapshot.response_model.as_deref(), Some("gpt-5.6-luna"));
+    assert_eq!(snapshot.billable_usage.output_tokens, 4);
+    assert_eq!(
+        snapshot.usage.as_ref().and_then(|usage| usage.input_tokens),
+        Some(3)
+    );
+}

@@ -15,6 +15,7 @@ export type RequestLogDetail = {
   accountId?: string | null;
   model: string | null;
   mappedModel: string | null;
+  upstreamResponseModel?: string | null;
   stream: boolean;
   status: number;
   inputTokens: number | null;

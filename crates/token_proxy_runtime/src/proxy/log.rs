@@ -191,6 +191,11 @@ pub(crate) fn build_log_entry(
         &usage.billable_usage,
     );
     let billing_attempt = context.timings.billing_attempt();
+    log_upstream_response_model_mismatch(
+        context.model.as_deref(),
+        context.mapped_model.as_deref(),
+        usage.response_model.as_deref(),
+    );
     LogEntry {
         ts_ms: now_ms(),
         client_ip: context.client_ip.clone(),
@@ -200,6 +205,7 @@ pub(crate) fn build_log_entry(
         account_id: context.account_id.clone(),
         model: context.model.clone(),
         mapped_model: context.mapped_model.clone(),
+        upstream_response_model: usage.response_model.clone(),
         stream: context.stream,
         status: context.status,
         usage: usage.usage,
@@ -226,6 +232,34 @@ pub(crate) fn build_log_entry(
         client_request_id: billing_attempt.map(|attempt| attempt.request_id.clone()),
         attempt_index: billing_attempt.map(|attempt| attempt.index),
     }
+}
+
+fn log_upstream_response_model_mismatch(
+    requested: Option<&str>,
+    mapped: Option<&str>,
+    response_model: Option<&str>,
+) {
+    let Some(response_model) = response_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    else {
+        return;
+    };
+    let sent = mapped
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .or_else(|| requested.map(str::trim).filter(|model| !model.is_empty()))
+        .unwrap_or("");
+    if sent.eq_ignore_ascii_case(response_model) {
+        return;
+    }
+    // 上游把请求模型换成了另一个 id。表格会标「模型不一致」，这里留一条可检索日志。
+    tracing::info!(
+        requested = requested.unwrap_or(""),
+        mapped = mapped.unwrap_or(""),
+        upstream_response_model = response_model,
+        "upstream response model differs from the model sent upstream"
+    );
 }
 
 fn service_tier_from_request_body(request_body: Option<&str>) -> Option<String> {
@@ -321,6 +355,7 @@ mod tests {
             },
             service_tier: None,
             usage_json: None,
+            response_model: None,
         };
 
         let entry = build_log_entry(&context(RequestTimings::default()), usage, None);

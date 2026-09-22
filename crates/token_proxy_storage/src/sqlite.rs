@@ -189,6 +189,7 @@ CREATE TABLE IF NOT EXISTS request_logs (
   account_id TEXT,
   model TEXT,
   mapped_model TEXT,
+  upstream_response_model TEXT,
   stream INTEGER NOT NULL,
   status INTEGER NOT NULL,
   input_tokens INTEGER,
@@ -229,8 +230,13 @@ CREATE TABLE IF NOT EXISTS request_logs (
     .map_err(|err| format!("Failed to create request_logs table: {err}"))?;
 
     ensure_request_logs_columns(pool).await?;
+    // SELECT * 视图在创建时冻结列。加列后必须重建，否则最近请求读不到 upstream_response_model。
+    sqlx::query("DROP VIEW IF EXISTS billable_request_logs;")
+        .execute(pool)
+        .await
+        .map_err(|err| format!("Failed to drop billable_request_logs view: {err}"))?;
     sqlx::query(
-        "CREATE VIEW IF NOT EXISTS billable_request_logs AS SELECT * FROM request_logs WHERE is_billable = 1;",
+        "CREATE VIEW billable_request_logs AS SELECT * FROM request_logs WHERE is_billable = 1;",
     )
     .execute(pool)
     .await
@@ -482,6 +488,13 @@ async fn ensure_request_logs_columns(pool: &SqlitePool) -> Result<(), String> {
             .map_err(|err| format!("Failed to add is_billable column: {err}"))?;
     }
 
+    if !columns.contains("upstream_response_model") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN upstream_response_model TEXT;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add upstream_response_model column: {err}"))?;
+    }
+
     Ok(())
 }
 
@@ -730,6 +743,7 @@ FROM request_logs WHERE id = ?;
         assert!(columns.contains("client_request_id"));
         assert!(columns.contains("attempt_index"));
         assert!(columns.contains("is_billable"));
+        assert!(columns.contains("upstream_response_model"));
 
         let billing_index = sqlx::query(
             "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_request_logs_client_attempt';",

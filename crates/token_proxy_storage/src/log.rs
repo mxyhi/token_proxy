@@ -30,6 +30,8 @@ pub struct UsageSnapshot {
     pub billable_usage: BillableUsage,
     pub service_tier: Option<String>,
     pub usage_json: Option<Value>,
+    /// 上游响应里声明的模型。只用于审计，不参与计价。
+    pub response_model: Option<String>,
 }
 
 impl UsageSnapshot {
@@ -47,6 +49,7 @@ impl UsageSnapshot {
             billable_usage,
             service_tier: None,
             usage_json,
+            response_model: None,
         }
     }
 
@@ -54,6 +57,7 @@ impl UsageSnapshot {
         self.usage.is_none()
             && self.billable_usage == BillableUsage::default()
             && self.usage_json.is_none()
+            && self.response_model.is_none()
     }
 }
 
@@ -67,6 +71,8 @@ pub struct LogEntry {
     pub account_id: Option<String>,
     pub model: Option<String>,
     pub mapped_model: Option<String>,
+    /// 上游响应体里的 model。空表示这次响应没解析到模型。
+    pub upstream_response_model: Option<String>,
     pub stream: bool,
     pub status: u16,
     pub usage: Option<TokenUsage>,
@@ -173,6 +179,7 @@ INSERT INTO request_logs (
   account_id,
   model,
   mapped_model,
+  upstream_response_model,
   stream,
   status,
   input_tokens,
@@ -205,7 +212,7 @@ INSERT INTO request_logs (
   client_request_id,
   attempt_index,
   is_billable
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
 "#,
     )
     .bind(to_i64_u128(entry.ts_ms))
@@ -216,6 +223,7 @@ INSERT INTO request_logs (
     .bind(entry.account_id.as_deref())
     .bind(entry.model.as_deref())
     .bind(entry.mapped_model.as_deref())
+    .bind(entry.upstream_response_model.as_deref())
     .bind(entry.stream)
     .bind(i64::from(entry.status))
     .bind(input_tokens)
@@ -309,6 +317,7 @@ mod tests {
             account_id: None,
             model: Some("gpt-5".to_string()),
             mapped_model: None,
+            upstream_response_model: None,
             stream: false,
             status,
             usage: Some(TokenUsage {
@@ -379,5 +388,33 @@ mod tests {
         attach_response_body(&mut captured, "captured");
         assert_eq!(captured.response_body.as_deref(), Some("captured"));
         assert_eq!(PRICE_MULTIPLIER_SCALE, 1_000_000_000_000);
+    }
+
+    #[tokio::test]
+    async fn write_persists_upstream_response_model() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite");
+        sqlite::init_schema(&pool).await.expect("init schema");
+        let writer = LogWriter::new(Some(pool.clone()));
+        let mut entry = sample_entry(200, 1, 0);
+        entry.model = Some("gpt-6-astra".to_string());
+        entry.upstream_response_model = Some("gpt-5.6-luna".to_string());
+
+        writer.write(&entry).await;
+
+        let row = sqlx::query("SELECT upstream_response_model FROM request_logs LIMIT 1;")
+            .fetch_one(&pool)
+            .await
+            .expect("query response model");
+        assert_eq!(
+            row.try_get::<Option<String>, _>("upstream_response_model")
+                .ok()
+                .flatten()
+                .as_deref(),
+            Some("gpt-5.6-luna")
+        );
     }
 }

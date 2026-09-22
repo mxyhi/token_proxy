@@ -287,7 +287,7 @@ describe("dashboard/RecentRequestsTable", () => {
     const widthTrack = table.querySelector(
       '[data-slot="recent-requests-table-width-track"]',
     ) as HTMLElement | null;
-    expect(widthTrack?.style.minWidth).toBe("817px");
+    expect(widthTrack?.style.minWidth).toBe("949px");
     expect(widthTrack?.parentElement).toBe(scrollArea);
 
     const header = table.querySelector('[data-slot="recent-requests-table-header"]');
@@ -453,6 +453,88 @@ describe("dashboard/RecentRequestsTable", () => {
     expect(tooltip).toHaveTextContent(
       `${m.logs_detail_pricing_version()}: 2026-05-02.openai-openrouter-v1`,
     );
+  });
+
+  it("shows the upstream response model when it differs from the model that was sent", () => {
+    setLocale("zh", { reload: false });
+
+    render(
+      <I18nProvider>
+        <RecentRequestsTable
+          scrollKey="test"
+          items={[
+            {
+              id: 1,
+              tsMs: 100,
+              clientIp: null,
+              path: "/v1/responses",
+              provider: "codex",
+              upstreamId: "alpha",
+              accountId: null,
+              model: "gpt-6-astra",
+              mappedModel: null,
+              upstreamResponseModel: "gpt-5.6-luna",
+              stream: true,
+              status: 200,
+              totalTokens: 30,
+              outputTokens: 20,
+              cachedTokens: 0,
+              costNanoUsd: null,
+              pricingVersion: null,
+              pricingModel: null,
+              pricingContextTier: null,
+              latencyMs: 30,
+              upstreamRequestId: null,
+            },
+          ]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText("gpt-6-astra")).toBeInTheDocument();
+    const line = screen.getByTestId("upstream-response-model");
+    expect(line).toHaveTextContent("上游响应");
+    expect(line).toHaveTextContent("gpt-5.6-luna");
+    expect(line).toHaveTextContent("模型不一致");
+  });
+
+  it("keeps the mapped model line when the upstream response matches what was sent", () => {
+    render(
+      <I18nProvider>
+        <RecentRequestsTable
+          scrollKey="test"
+          items={[
+            {
+              id: 1,
+              tsMs: 100,
+              clientIp: null,
+              path: "/v1/responses",
+              provider: "codex",
+              upstreamId: "alpha",
+              accountId: null,
+              model: "alias",
+              mappedModel: "gpt-5.6-luna",
+              upstreamResponseModel: "gpt-5.6-luna",
+              stream: false,
+              status: 200,
+              totalTokens: 30,
+              outputTokens: 20,
+              cachedTokens: 0,
+              costNanoUsd: null,
+              pricingVersion: null,
+              pricingModel: null,
+              pricingContextTier: null,
+              latencyMs: 30,
+              upstreamRequestId: null,
+            },
+          ]}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByText("alias")).toBeInTheDocument();
+    expect(screen.getByText("gpt-5.6-luna")).toBeInTheDocument();
+    expect(screen.queryByTestId("upstream-response-model")).toBeNull();
   });
 
   it("shows local proxy label for proxy local auth failures", async () => {

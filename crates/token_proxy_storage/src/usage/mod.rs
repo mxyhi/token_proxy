@@ -41,7 +41,10 @@ pub fn extract_usage_from_response(bytes: &Bytes) -> UsageSnapshot {
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
         return UsageSnapshot::default();
     };
-    snapshot_from_envelope(&value).unwrap_or_default()
+    let mut snapshot = snapshot_from_envelope(&value).unwrap_or_default();
+    // 没有 usage 的错误体也要留下响应模型，后面才能标「模型不一致」。
+    snapshot.response_model = response_model_from_envelope(&value);
+    snapshot
 }
 
 pub fn extract_usage_from_stored_json(raw: &str) -> Option<UsageSnapshot> {
@@ -242,6 +245,7 @@ fn snapshot_from_usage_value(value: &Value) -> UsageSnapshot {
             .and_then(Value::as_str)
             .map(str::to_ascii_lowercase),
         usage_json: Some(value.clone()),
+        response_model: None,
     }
 }
 
@@ -277,7 +281,30 @@ fn snapshot_from_usage_metadata_value(value: &Value) -> UsageSnapshot {
         billable_usage,
         service_tier: None,
         usage_json: Some(value.clone()),
+        response_model: None,
     }
+}
+
+/// 各协议响应信封上的模型字段。优先嵌套的 response/message，避免把外层回显当成上游实际模型。
+fn response_model_from_envelope(value: &Value) -> Option<String> {
+    value
+        .get("response")
+        .and_then(|response| model_string(response.get("model")))
+        .or_else(|| {
+            value
+                .get("message")
+                .and_then(|message| model_string(message.get("model")))
+        })
+        .or_else(|| model_string(value.get("modelVersion")))
+        .or_else(|| model_string(value.get("model")))
+}
+
+fn model_string(value: Option<&Value>) -> Option<String> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .map(str::to_string)
 }
 
 fn cache_read_tokens_from_usage_value(value: &Value) -> u64 {
@@ -334,9 +361,14 @@ fn update_usage(snapshot: &mut UsageSnapshot, data: &str) {
     let Ok(value) = serde_json::from_str::<Value>(data) else {
         return;
     };
-    let Some(updated) = extract_usage_from_event(&value) else {
+    // 后到的事件覆盖先到的。response.completed 一般在流末尾，带最终模型。
+    if let Some(model) = response_model_from_envelope(&value) {
+        snapshot.response_model = Some(model);
+    }
+    let Some(mut updated) = extract_usage_from_event(&value) else {
         return;
     };
+    updated.response_model = snapshot.response_model.clone();
     if updated.usage_json.is_some() {
         *snapshot = updated;
     }

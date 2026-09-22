@@ -114,6 +114,8 @@ export type DashboardRequestItem = {
   accountId?: string | null;
   model: string | null;
   mappedModel: string | null;
+  /** 上游响应体里的 model。和实际发出的模型不同才在表格里标出来。 */
+  upstreamResponseModel?: string | null;
   stream: boolean;
   status: number;
   totalTokens: number | null;

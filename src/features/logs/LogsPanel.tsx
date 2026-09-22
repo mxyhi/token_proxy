@@ -34,6 +34,10 @@ import {
   readRequestLogDetail,
   setRequestDetailCapture,
 } from "@/features/logs/api";
+import {
+  UpstreamResponseModelLine,
+  describeUpstreamResponseModel,
+} from "@/features/logs/UpstreamResponseModelLine";
 import type {
   RequestDetailCaptureState,
   RequestLogDetail,
@@ -152,6 +156,11 @@ function BasicInfoSection({ detail, formatter }: BasicInfoSectionProps) {
                 {detail.mappedModel}
               </span>
             ) : null}
+            <UpstreamResponseModelLine
+              model={detail.model}
+              mappedModel={detail.mappedModel}
+              upstreamResponseModel={detail.upstreamResponseModel}
+            />
           </div>
         </div>
         <div className={DETAIL_FIELD_ROW_CLASS}>
@@ -249,6 +258,14 @@ function formatDetailAsText(detail: RequestLogDetail, formatter: Intl.DateTimeFo
   lines.push(`${m.dashboard_table_model()}: ${detail.model?.trim() || DETAIL_PLACEHOLDER}`);
   if (hasMappedModel) {
     lines.push(`${m.logs_detail_model_mapped()}: ${detail.mappedModel}`);
+  }
+  const upstreamResponseLine = describeUpstreamResponseModel(
+    detail.model,
+    detail.mappedModel,
+    detail.upstreamResponseModel,
+  );
+  if (upstreamResponseLine) {
+    lines.push(upstreamResponseLine);
   }
   lines.push(`${m.dashboard_table_status()}: ${detail.status}`);
   lines.push(`${m.logs_detail_stream()}: ${detail.stream ? m.logs_detail_stream_yes() : m.logs_detail_stream_no()}`);

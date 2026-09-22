@@ -867,3 +867,39 @@ async fn read_snapshot_returns_recent_client_ip() {
     assert_eq!(snapshot.recent[0].client_ip.as_deref(), Some("203.0.113.5"));
     assert_eq!(snapshot.recent[0].cached_tokens, None);
 }
+
+#[tokio::test]
+async fn read_snapshot_returns_recent_upstream_response_model() {
+    let pool = setup_test_db().await;
+    sqlx::query(
+        r#"
+        INSERT INTO request_logs (
+            ts_ms, path, provider, upstream_id, model, upstream_response_model,
+            stream, status, latency_ms
+        ) VALUES (100, '/v1/responses', 'codex', 'alpha', 'gpt-6-astra', 'gpt-5.6-luna', 1, 200, 30)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("insert response model");
+
+    let snapshot = read_snapshot(
+        &pool,
+        DashboardRange {
+            from_ts_ms: None,
+            to_ts_ms: None,
+        },
+        Some(0),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(snapshot.recent.len(), 1);
+    assert_eq!(snapshot.recent[0].model.as_deref(), Some("gpt-6-astra"));
+    assert_eq!(
+        snapshot.recent[0].upstream_response_model.as_deref(),
+        Some("gpt-5.6-luna")
+    );
+}

@@ -343,6 +343,8 @@ fn apply_saved_config_returns_status_and_error_when_restart_fails() {
 
 #[test]
 fn start_refreshes_model_discovery_cache_without_blocking_proxy_start() {
+    // MY-URL-COMPOSE PATCH R1：api_keys 手动渠道不再被自发探测——
+    // 启动探测任务不发出任何请求，Dashboard 也不出现该渠道的探测条目。
     run_async(async {
         let upstream = spawn_model_catalog_probe_upstream(json!({
             "object": "list",
@@ -366,32 +368,6 @@ fn start_refreshes_model_discovery_cache_without_blocking_proxy_start() {
         let service = ProxyServiceHandle::new();
         let start_status = service.start(&context).await.expect("start proxy");
         assert!(matches!(start_status.state, ProxyServiceState::Running));
-
-        let probes = tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let probes = service.model_discovery_snapshot().await;
-                if probes
-                    .iter()
-                    .any(|probe| probe.status == UpstreamModelProbeStatus::Ok)
-                {
-                    return probes;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("model discovery should complete");
-
-        let probe = probes
-            .iter()
-            .find(|probe| probe.upstream_id == "openai-a")
-            .expect("openai probe");
-        assert_eq!(probe.provider, "openai-response");
-        assert_eq!(probe.status, UpstreamModelProbeStatus::Ok);
-        assert!(probe.models.contains(&"gpt-5.5".to_string()));
-        assert!(probe.models.contains(&"o4-mini".to_string()));
-        assert_eq!(upstream.paths(), vec!["/v1/models"]);
-
         let _ = service.stop().await;
         upstream.abort();
         let _ = std::fs::remove_dir_all(data_dir);
@@ -468,6 +444,8 @@ fn refresh_model_discovery_xai_failure_keeps_builtin_catalog() {
 
 #[test]
 fn refresh_model_discovery_updates_cache_on_demand() {
+    // MY-URL-COMPOSE PATCH R1：手动刷新按需更新缓存，但 api_keys 手动渠道
+    // 被门控排除（探测服务器零请求）；账户型渠道（codex）保留。
     run_async(async {
         let upstream = spawn_model_catalog_probe_upstream(json!({
             "object": "list",
@@ -478,36 +456,30 @@ fn refresh_model_discovery_updates_cache_on_demand() {
         .await;
         let (context, data_dir) = create_test_context();
         let mut config = test_config_file(0);
-        config.upstreams = vec![upstream_config(
-            "openai-a",
-            "openai-response",
-            upstream.base_url.as_str(),
-        )];
+        config.upstreams = vec![
+            upstream_config("openai-a", "openai-response", upstream.base_url.as_str()),
+            upstream_config("codex-a", "codex", "https://example.com"),
+        ];
         token_proxy_config::write_config(context.paths.as_ref(), config)
             .await
             .expect("write config");
 
         let service = ProxyServiceHandle::new();
         service.start(&context).await.expect("start proxy");
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                if upstream.paths().len() == 1 {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await
-        .expect("startup discovery should complete");
-
         let probes = service.refresh_model_discovery().await;
-        let probe = probes
+
+        assert!(
+            !probes.iter().any(|probe| probe.upstream_id == "openai-a"),
+            "api_keys upstream must be excluded from model discovery"
+        );
+        assert!(upstream.paths().is_empty(), "no probe request may hit the manual channel");
+        let codex_probe = probes
             .iter()
-            .find(|probe| probe.upstream_id == "openai-a")
-            .expect("openai probe");
-        assert_eq!(probe.status, UpstreamModelProbeStatus::Ok);
-        assert!(probe.models.contains(&"gpt-5.5".to_string()));
-        assert_eq!(upstream.paths(), vec!["/v1/models", "/v1/models"]);
+            .find(|probe| probe.upstream_id == "codex-a")
+            .expect("codex probe");
+        assert_eq!(codex_probe.provider, "codex");
+        assert_eq!(codex_probe.status, UpstreamModelProbeStatus::Ok);
+        assert!(codex_probe.models.contains(&"gpt-5.5".to_string()));
 
         let _ = service.stop().await;
         upstream.abort();

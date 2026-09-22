@@ -43,6 +43,7 @@ task_plan.md
 
 # 本地工具与工作区目录（不入库）
 .agents/skills/my-token-proxy-patch-restore/
+.agents/skills/my-token-proxy-main-sync
 .claude/
 .dsh/
 .kimi-code/

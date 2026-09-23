@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "curated.20260922",
+  "version": "curated.20260923",
   "models": [
     {
       "source": {
@@ -412,6 +412,121 @@
           "inputMultiplierScaled": 2000000000000,
           "outputMultiplierScaled": 1500000000000
         }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://developers.openai.com/api/docs/models/gpt-6-sol",
+        "verifiedAt": "2026-09-23"
+      },
+      "model": {
+        "modelId": "gpt-6-sol",
+        "aliases": [
+          "openai/gpt-6-sol"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 2000,
+          "outputNanoUsdPerToken": 10000,
+          "cacheReadNanoUsdPerToken": 200,
+          "cacheWriteNanoUsdPerToken": 2500,
+          "cacheWrite5mNanoUsdPerToken": 2500
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 4000,
+            "outputNanoUsdPerToken": 20000,
+            "cacheReadNanoUsdPerToken": 400,
+            "cacheWriteNanoUsdPerToken": 5000
+          },
+          "fast": {
+            "inputNanoUsdPerToken": 4000,
+            "outputNanoUsdPerToken": 20000,
+            "cacheReadNanoUsdPerToken": 400,
+            "cacheWriteNanoUsdPerToken": 5000
+          },
+          "flex": {
+            "inputNanoUsdPerToken": 1000,
+            "outputNanoUsdPerToken": 5000,
+            "cacheReadNanoUsdPerToken": 100,
+            "cacheWriteNanoUsdPerToken": 1250
+          }
+        },
+        "longContext": {
+          "threshold": 272000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+        "verifiedAt": "2026-09-23"
+      },
+      "model": {
+        "modelId": "gpt-6-luna",
+        "aliases": [
+          "openai/gpt-6-luna"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 100,
+          "outputNanoUsdPerToken": 500,
+          "cacheReadNanoUsdPerToken": 10,
+          "cacheWriteNanoUsdPerToken": 125,
+          "cacheWrite5mNanoUsdPerToken": 125
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 200,
+            "outputNanoUsdPerToken": 1000,
+            "cacheReadNanoUsdPerToken": 20,
+            "cacheWriteNanoUsdPerToken": 250
+          },
+          "fast": {
+            "inputNanoUsdPerToken": 200,
+            "outputNanoUsdPerToken": 1000,
+            "cacheReadNanoUsdPerToken": 20,
+            "cacheWriteNanoUsdPerToken": 250
+          },
+          "flex": {
+            "inputNanoUsdPerToken": 50,
+            "outputNanoUsdPerToken": 250,
+            "cacheReadNanoUsdPerToken": 5,
+            "cacheWriteNanoUsdPerToken": 63
+          }
+        },
+        "longContext": {
+          "threshold": 272000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-09-23"
+      },
+      "model": {
+        "modelId": "claude-opus-5-5",
+        "aliases": [
+          "anthropic/claude-opus-5-5",
+          "claude-opus-5.5",
+          "anthropic/claude-opus-5.5"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 4000,
+          "outputNanoUsdPerToken": 20000,
+          "cacheReadNanoUsdPerToken": 200,
+          "cacheWriteNanoUsdPerToken": 5000,
+          "cacheWrite5mNanoUsdPerToken": 5000,
+          "cacheWrite1hNanoUsdPerToken": 8000
+        },
+        "serviceTierProfiles": {},
+        "longContext": null
       }
     }
   ]

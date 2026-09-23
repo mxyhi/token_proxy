@@ -335,5 +335,9 @@ function canonicalModelLookupKey(value: string) {
   if (value === "claude-opus-4.8") {
     return "claude-opus-4-8";
   }
+  // 官方 ID 是连字符 claude-opus-5-5；点号写法对齐 opus-4.8。
+  if (value === "claude-opus-5.5") {
+    return "claude-opus-5-5";
+  }
   return value;
 }

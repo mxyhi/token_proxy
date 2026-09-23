@@ -9,6 +9,14 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
         Some(&"gpt-6-astra".to_string())
     );
     assert_eq!(
+        mappings.get("openai/gpt-6-sol"),
+        Some(&"gpt-6-sol".to_string())
+    );
+    assert_eq!(
+        mappings.get("openai/gpt-6-luna"),
+        Some(&"gpt-6-luna".to_string())
+    );
+    assert_eq!(
         mappings.get("openai/gpt-5.6-sol"),
         Some(&"gpt-5.6-sol".to_string())
     );
@@ -43,6 +51,14 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
     assert_eq!(
         mappings.get("anthropic/claude-opus-5"),
         Some(&"claude-opus-5".to_string())
+    );
+    assert_eq!(
+        mappings.get("anthropic/claude-opus-5-5"),
+        Some(&"claude-opus-5-5".to_string())
+    );
+    assert_eq!(
+        mappings.get("anthropic/claude-opus-5.5"),
+        Some(&"claude-opus-5-5".to_string())
     );
     assert_eq!(
         mappings.get("claude-haiku-4-5"),

@@ -323,6 +323,7 @@ describe("upstreams account UI (Phase D)", () => {
 
   it("configures the Codex usage threshold and shows used percentage", async () => {
     const user = userEvent.setup();
+    let savedThreshold = 90;
     invokeMock.mockImplementation(async (command) => {
       if (command === "codex_list_accounts") {
         return [
@@ -365,7 +366,7 @@ describe("upstreams account UI (Phase D)", () => {
           status: "active",
           auth_method: "oauth",
           auto_refresh_enabled: true,
-          quota_threshold_percent: 90,
+          quota_threshold_percent: savedThreshold,
         };
       }
       throw new Error(`unexpected command: ${command}`);
@@ -401,5 +402,21 @@ describe("upstreams account UI (Phase D)", () => {
       });
     });
     expect(await screen.findByText(m.codex_quota_threshold_reached())).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(usedLabel))).toHaveClass("text-destructive");
+
+    // 从正阈值清空时保存 0，并撤销跳过状态和用量警告。
+    savedThreshold = 0;
+    await user.clear(threshold);
+    await user.tab();
+    await waitFor(() => {
+      expect(invokeMock).toHaveBeenCalledWith("codex_set_quota_threshold", {
+        accountId: "codex-primary",
+        thresholdPercent: 0,
+      });
+    });
+    expect(await screen.findByText(m.codex_quota_threshold_disabled())).toBeInTheDocument();
+    expect(threshold).toHaveValue(0);
+    expect(screen.queryByText(m.codex_quota_threshold_reached())).not.toBeInTheDocument();
+    expect(screen.getByText(new RegExp(usedLabel))).not.toHaveClass("text-destructive");
   });
 });

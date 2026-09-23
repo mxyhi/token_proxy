@@ -101,7 +101,8 @@ function QuotaList({
         {items.map((item) => {
           const resetLabel = item.resetAt ? formatDateLabel(item.resetAt) : "";
           const usedPercentage = item.usedPercentage ?? Math.max(0, 100 - item.percentage);
-          const reached = threshold !== null && usedPercentage >= threshold;
+          // 0 关闭用量阈值，进度条也不能显示达到阈值的警告。
+          const reached = threshold !== null && threshold > 0 && usedPercentage >= threshold;
           return (
             <li
               key={item.name}

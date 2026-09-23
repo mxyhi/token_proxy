@@ -12,6 +12,7 @@
 | C2 | `crates/token_proxy_config/src/types.rs` + `normalize.rs` | `UpstreamRuntime` 新增字段 + 构造点填充 + 旧 base 迁移告警 |
 | C3 | `crates/token_proxy_config/src/types.rs` + `runtime/proxy/upstream/prepare.rs` | `upstream_url` 签名加 `provider` 参数、函数体替换为纯拼接；调用方传参 |
 | R1 | `crates/token_proxy_runtime/src/proxy/upstream/catalog.rs` + `my_probe_gate.rs` | 模型探测仅账户型上游 |
+| G3 | `src/features/config/cards/upstreams/editor-dialog-form.tsx` + `editor-dialog.tsx` | 挂载 `<UrlComposeEditor>`（含 `prefillSuffixDefaults` 透传链） |
 | G5 | `src/features/update/UpdateNotifier.tsx` | `runAutoCheck` 自动检查短路 |
 
 ## C0 lib.rs 模块声明
@@ -96,6 +97,34 @@ mod normalize;
 `collect_model_discovery_jobs` 收集循环内，对每条 `upstream` 先判
 `crate::proxy::upstream::my_probe_gate::should_probe(upstream)`，false 则 `continue`。
 （`my_probe_gate.rs` 为独立新文件，非注入。）
+
+## G3 editor-dialog-form.tsx 编辑器挂载 + editor-dialog.tsx 预填透传
+
+锚点一：`UpstreamConnectionFields` 内 base_url 的 `EditorField` 之后（`isAccountBacked ? null :` 分支内）：
+
+```tsx
+{/* ══════════ MY-URL-COMPOSE PATCH G3 START ══════════ */}
+<EditorField label={m.url_compose_title()} tooltip={m.url_compose_description()}>
+  <UrlComposeEditor
+    providers={draft.providers}
+    baseUrl={draft.baseUrl}
+    value={draft.urlCompose}
+    onChange={(urlCompose) => onChangeDraft({ urlCompose })}
+    prefillSuffixDefaults={prefillSuffixDefaults}
+  />
+</EditorField>
+{/* ══════════ MY-URL-COMPOSE PATCH G3 END ══════════ */}
+```
+
+锚点二：`editor-dialog.tsx` 的 `<UpstreamEditorFields>` 追加
+`prefillSuffixDefaults={editor.mode === "create"}`；`editor-dialog-form.tsx` 的
+`UpstreamEditorFieldsProps` / `UpstreamConnectionFieldsProps` 增加可选
+`prefillSuffixDefaults?: boolean` 并逐层下传（260923-01 修复新增，见
+`../docs/项目维护/260923-01-url-compose-ui细节修复/`）。
+
+独立文件（整文件搬运，无注入点）：`url-compose-editor.tsx` +
+`url-compose-editor.test.tsx`。镜像对齐 / 浮窗定位（`computeMapPopupPosition`）/
+新建预填逻辑均在其内，随文件搬运转移。
 
 ## G5 UpdateNotifier.tsx 自动检查短路
 

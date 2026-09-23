@@ -70,6 +70,7 @@ export function UpstreamEditorDialog({
               showApiKeys={showApiKeys}
               onToggleApiKeys={onToggleApiKeys}
               onChangeDraft={onChangeDraft}
+              prefillSuffixDefaults={editor.mode === "create"}
             />
           ) : null}
         </AlertDialogBody>

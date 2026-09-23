@@ -672,7 +672,7 @@
   "url_compose_summary_disabled": "not enabled",
   "url_compose_description": "Outbound URL = base URL + prefix + full suffix, WYSIWYG. One row per selected API family; leave a row empty to skip extra segments.",
   "url_compose_prefix_label": "Prefix (optional)",
-  "url_compose_prefix_placeholder": "e.g. /openai, empty to skip",
+  "url_compose_prefix_placeholder": "Default: empty (e.g. {example})",
   "url_compose_suffix_label": "Full suffix (first segment = version)",
   "url_compose_reset_title": "Reset to default: {default}",
   "url_compose_footnote": "The first segment of the full suffix (e.g. /v1, /v3, /abc — any value works) is the version segment: the first segment of client requests is replaced with it. E.g. suffix /abc/chat/completions maps client /v1/models to …/abc/models. Click the ! icon after each URL preview for mapping examples.",

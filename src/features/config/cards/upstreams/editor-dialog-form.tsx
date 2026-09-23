@@ -61,6 +61,8 @@ export type UpstreamEditorFieldsProps = {
   showApiKeys: boolean;
   onToggleApiKeys: () => void;
   onChangeDraft: (patch: Partial<UpstreamForm>) => void;
+  /** 新建渠道时为 true：url-compose 后缀按家族预填默认值。 */
+  prefillSuffixDefaults?: boolean;
 };
 
 type EditorSectionProps = {
@@ -88,6 +90,8 @@ type UpstreamConnectionFieldsProps = {
   showApiKeys: boolean;
   onToggleApiKeys: () => void;
   onChangeDraft: (patch: Partial<UpstreamForm>) => void;
+  /** 新建渠道时为 true：url-compose 后缀按家族预填默认值。 */
+  prefillSuffixDefaults?: boolean;
 };
 
 function UpstreamConnectionFields({
@@ -97,6 +101,7 @@ function UpstreamConnectionFields({
   showApiKeys,
   onToggleApiKeys,
   onChangeDraft,
+  prefillSuffixDefaults = false,
 }: UpstreamConnectionFieldsProps) {
   const providers = draft.providers.map((value) => value.trim()).filter(Boolean);
   const isAccountBacked = isAccountBackedProviderSet(providers);
@@ -193,6 +198,7 @@ function UpstreamConnectionFields({
                 baseUrl={draft.baseUrl}
                 value={draft.urlCompose}
                 onChange={(urlCompose) => onChangeDraft({ urlCompose })}
+                prefillSuffixDefaults={prefillSuffixDefaults}
               />
             </EditorField>
             {/* ══════════ MY-URL-COMPOSE PATCH G3 END ══════════ */}
@@ -487,6 +493,7 @@ export function UpstreamEditorFields({
   showApiKeys,
   onToggleApiKeys,
   onChangeDraft,
+  prefillSuffixDefaults = false,
 }: UpstreamEditorFieldsProps) {
   return (
     <div data-slot="upstream-editor-fields" className="space-y-5">
@@ -501,6 +508,7 @@ export function UpstreamEditorFields({
           showApiKeys={showApiKeys}
           onToggleApiKeys={onToggleApiKeys}
           onChangeDraft={onChangeDraft}
+          prefillSuffixDefaults={prefillSuffixDefaults}
         />
       </EditorSection>
 

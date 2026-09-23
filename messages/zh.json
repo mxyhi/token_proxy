@@ -672,7 +672,7 @@
   "url_compose_summary_disabled": "未启用",
   "url_compose_description": "出站 URL = 基础地址 + 特殊拼接 + 完整后缀，所见即所得。勾选几种接口格式就出现几行；某行留空则不对该接口做额外拼接。",
   "url_compose_prefix_label": "特殊拼接（可留空）",
-  "url_compose_prefix_placeholder": "例：/openai，留空则不拼接",
+  "url_compose_prefix_placeholder": "默认: 空 (例: {example})",
   "url_compose_suffix_label": "完整后缀（第一段 = 版本段）",
   "url_compose_reset_title": "重置为默认：{default}",
   "url_compose_footnote": "「完整后缀」的第一段（如 /v1、/v3、/abc，不要求是 vX 格式）是版本段：客户端请求的第一段会被替换成它再拼接。例如后缀为 /abc/chat/completions 时，客户端请求 /v1/models 将发往 …/abc/models。点击每行完整地址后的 ! 图标可查看该接口的子路径映射示例。",

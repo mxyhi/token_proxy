@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,6 +32,13 @@ const FAMILY_TAG: Record<UrlComposeFamily, string> = {
   openai: m.url_compose_family_openai_tag(),
   "openai-response": m.url_compose_family_openai_response_tag(),
   anthropic: m.url_compose_family_anthropic_tag(),
+};
+
+/** 前缀输入提示示例：openai 系展示 /openai，anthropic 展示 /anthropic。 */
+const PREFIX_EXAMPLE: Record<UrlComposeFamily, string> = {
+  openai: "/openai",
+  "openai-response": "/openai",
+  anthropic: "/anthropic",
 };
 
 const MAP_EXAMPLES: Record<UrlComposeFamily, string[]> = {
@@ -80,6 +87,38 @@ type ComposePreview = {
   full: string;
 };
 
+type PopupAnchorRect = { left: number; right: number; top: number; bottom: number };
+
+/**
+ * 子路径映射浮窗定位（纯函数，语义与 UI Demo 的 showMap 一致）：
+ * 水平右缘对齐感叹号、向左展开，越界时收敛进窗口（边距 8px，宽度上限 400 或视口-16）；
+ * 垂直默认向上（右下角贴近感叹号），上方放不下改向下，下方也放不下则收敛进窗口。
+ */
+export function computeMapPopupPosition(
+  anchor: PopupAnchorRect,
+  popupWidth: number,
+  popupHeight: number,
+  viewportWidth: number,
+  viewportHeight: number
+): { left: number; top: number } {
+  const width = Math.min(popupWidth, viewportWidth - 16);
+  let left = anchor.right - width;
+  if (left < 8) {
+    left = 8;
+  }
+  if (left + width > viewportWidth - 8) {
+    left = viewportWidth - width - 8;
+  }
+  let top = anchor.top - popupHeight - 8;
+  if (top < 8) {
+    top = anchor.bottom + 8;
+    if (top + popupHeight > viewportHeight - 8) {
+      top = Math.max(8, viewportHeight - popupHeight - 8);
+    }
+  }
+  return { left, top };
+}
+
 function composePreview(baseUrl: string, endpoint: UrlComposeEndpoint): ComposePreview {
   const base = baseUrl.trim().replace(/\/+$/, "");
   const prefix = normalizeSegment(endpoint.prefix);
@@ -100,18 +139,51 @@ type UrlComposeEditorProps = {
   baseUrl: string;
   value: UrlComposeConfig;
   onChange: (value: UrlComposeConfig) => void;
+  /** 新建渠道（含复制）时为 true：已勾选家族缺失时预填默认后缀；编辑既有渠道不传。 */
+  prefillSuffixDefaults?: boolean;
 };
 
-export function UrlComposeEditor({ providers, baseUrl, value, onChange }: UrlComposeEditorProps) {
+export function UrlComposeEditor({
+  providers,
+  baseUrl,
+  value,
+  onChange,
+  prefillSuffixDefaults = false,
+}: UrlComposeEditorProps) {
   const [expanded, setExpanded] = useState(false);
   const [mapFamily, setMapFamily] = useState<UrlComposeFamily | null>(null);
   const mapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mapPopupRef = useRef<HTMLDivElement | null>(null);
+  // 已预填默认后缀的家族：用户清空后不再回填；对话框关闭即卸载、自然重置。
+  const prefilledFamiliesRef = useRef<Set<UrlComposeFamily>>(new Set());
 
   const selected = useMemo(
     () => FAMILIES.filter((family) => providers.includes(family)),
     [providers]
   );
+
+  useEffect(() => {
+    if (!prefillSuffixDefaults) {
+      return;
+    }
+    const missing = selected.filter(
+      (family) => !value[family] && !prefilledFamiliesRef.current.has(family)
+    );
+    // 出现过的家族一律记入已见集合：无论默认值来自预填还是草稿自带（复制新建），
+    // 用户手动清空后都不再回填。
+    for (const family of selected) {
+      prefilledFamiliesRef.current.add(family);
+    }
+    if (!missing.length) {
+      return;
+    }
+    const next: UrlComposeConfig = { ...value };
+    for (const family of missing) {
+      next[family] = { prefix: "", suffix: DEFAULT_SUFFIX[family] };
+    }
+    onChange(next);
+    // value/onChange 每次渲染身份都会变化，重复执行由 missing 为空短路，不会造成循环或回填。
+  }, [onChange, prefillSuffixDefaults, selected, value]);
 
   const endpointOf = useCallback(
     (family: UrlComposeFamily): UrlComposeEndpoint => value[family] ?? { prefix: "", suffix: "" },
@@ -164,20 +236,19 @@ export function UrlComposeEditor({ providers, baseUrl, value, onChange }: UrlCom
     if (!popup) {
       return;
     }
-    const rect = anchor.getBoundingClientRect();
     const width = Math.min(400, window.innerWidth - 16);
+    // 先定宽再量高：浮窗文本随宽度换行，高度依赖最终宽度。
     popup.style.width = `${width}px`;
     const height = popup.offsetHeight;
-    const left = Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8));
-    let top = rect.top - height - 8;
-    if (top < 8) {
-      top = rect.bottom + 8;
-      if (top + height > window.innerHeight - 8) {
-        top = Math.max(8, window.innerHeight - height - 8);
-      }
-    }
-    popup.style.left = `${left}px`;
-    popup.style.top = `${top}px`;
+    const position = computeMapPopupPosition(
+      anchor.getBoundingClientRect(),
+      width,
+      height,
+      window.innerWidth,
+      window.innerHeight
+    );
+    popup.style.left = `${position.left}px`;
+    popup.style.top = `${position.top}px`;
   }, []);
 
   const openMapPopup = useCallback(
@@ -268,7 +339,7 @@ export function UrlComposeEditor({ providers, baseUrl, value, onChange }: UrlCom
                     <Input
                       className="font-mono text-xs"
                       value={endpoint.prefix}
-                      placeholder={m.url_compose_prefix_placeholder()}
+                      placeholder={m.url_compose_prefix_placeholder({ example: PREFIX_EXAMPLE[family] })}
                       onChange={(event) => update(family, { prefix: event.target.value })}
                       onBlur={(event) => {
                         const normalized = normalizeSegment(event.target.value);
@@ -285,25 +356,36 @@ export function UrlComposeEditor({ providers, baseUrl, value, onChange }: UrlCom
                     <div className="relative">
                       <div
                         aria-hidden
-                        className="pointer-events-none absolute inset-0 flex items-center overflow-hidden px-[13px] font-mono text-xs"
+                        className="pointer-events-none absolute inset-0 flex items-center overflow-hidden whitespace-pre px-[13px] font-mono text-xs"
                       >
                         {head || rest ? (
                           <>
-                            <span className="rounded bg-violet-500/15 px-0.5 font-bold text-violet-700 dark:text-violet-300">
+                            <span className="rounded bg-violet-500/15 font-bold text-violet-700 dark:text-violet-300">
                               {head}
                             </span>
                             <span>{rest}</span>
                           </>
                         ) : null}
                       </div>
+                      {/* 真实文本透明、由镜像层着色：两层字号/起点/空白必须完全一致，
+                          否则光标与所见彩色文本错位。md:text-xs 中和 shadcn 基类的
+                          md:text-sm（tailwind-merge 视为不同 variant 不会去重）；
+                          px-[13px] = 边框 1px + 输入内边距 12px。 */}
                       <Input
-                        className="relative font-mono text-xs text-transparent caret-foreground placeholder:text-muted-foreground"
+                        className="relative font-mono text-xs text-transparent caret-foreground selection:bg-primary/20 placeholder:text-muted-foreground md:text-xs"
                         value={endpoint.suffix}
                         onChange={(event) => update(family, { suffix: event.target.value })}
                         onBlur={(event) => {
                           const normalized = normalizeSegment(event.target.value);
                           if (normalized !== event.target.value) {
                             update(family, { suffix: normalized });
+                          }
+                        }}
+                        onScroll={(event) => {
+                          // 超长后缀横向滚动时镜像层同步跟随，保持逐字对齐。
+                          const mirror = event.currentTarget.previousElementSibling as HTMLDivElement | null;
+                          if (mirror) {
+                            mirror.scrollLeft = event.currentTarget.scrollLeft;
                           }
                         }}
                       />

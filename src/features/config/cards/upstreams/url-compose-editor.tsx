@@ -87,38 +87,6 @@ type ComposePreview = {
   full: string;
 };
 
-type PopupAnchorRect = { left: number; right: number; top: number; bottom: number };
-
-/**
- * 子路径映射浮窗定位（纯函数，语义与 UI Demo 的 showMap 一致）：
- * 水平右缘对齐感叹号、向左展开，越界时收敛进窗口（边距 8px，宽度上限 400 或视口-16）；
- * 垂直默认向上（右下角贴近感叹号），上方放不下改向下，下方也放不下则收敛进窗口。
- */
-export function computeMapPopupPosition(
-  anchor: PopupAnchorRect,
-  popupWidth: number,
-  popupHeight: number,
-  viewportWidth: number,
-  viewportHeight: number
-): { left: number; top: number } {
-  const width = Math.min(popupWidth, viewportWidth - 16);
-  let left = anchor.right - width;
-  if (left < 8) {
-    left = 8;
-  }
-  if (left + width > viewportWidth - 8) {
-    left = viewportWidth - width - 8;
-  }
-  let top = anchor.top - popupHeight - 8;
-  if (top < 8) {
-    top = anchor.bottom + 8;
-    if (top + popupHeight > viewportHeight - 8) {
-      top = Math.max(8, viewportHeight - popupHeight - 8);
-    }
-  }
-  return { left, top };
-}
-
 function composePreview(baseUrl: string, endpoint: UrlComposeEndpoint): ComposePreview {
   const base = baseUrl.trim().replace(/\/+$/, "");
   const prefix = normalizeSegment(endpoint.prefix);
@@ -152,8 +120,6 @@ export function UrlComposeEditor({
 }: UrlComposeEditorProps) {
   const [expanded, setExpanded] = useState(false);
   const [mapFamily, setMapFamily] = useState<UrlComposeFamily | null>(null);
-  const mapTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const mapPopupRef = useRef<HTMLDivElement | null>(null);
   // 已预填默认后缀的家族：用户清空后不再回填；对话框关闭即卸载、自然重置。
   const prefilledFamiliesRef = useRef<Set<UrlComposeFamily>>(new Set());
 
@@ -218,47 +184,21 @@ export function UrlComposeEditor({
       ? m.url_compose_summary_configured({ count: configuredCount })
       : m.url_compose_summary_default();
 
-  const armHideMapPopup = useCallback(() => {
-    if (mapTimer.current) {
-      clearTimeout(mapTimer.current);
-    }
-    mapTimer.current = setTimeout(() => setMapFamily(null), 250);
-  }, []);
-  const cancelHideMapPopup = useCallback(() => {
-    if (mapTimer.current) {
-      clearTimeout(mapTimer.current);
-      mapTimer.current = null;
-    }
-  }, []);
-
-  const positionMapPopup = useCallback((anchor: HTMLElement) => {
-    const popup = mapPopupRef.current;
-    if (!popup) {
+  // 子路径映射弹窗打开时：Escape 仅关闭弹窗（capture + stopPropagation，
+  // 避免冒泡到 Radix 连带关闭编辑渠道对话框）。
+  useEffect(() => {
+    if (!mapFamily) {
       return;
     }
-    const width = Math.min(400, window.innerWidth - 16);
-    // 先定宽再量高：浮窗文本随宽度换行，高度依赖最终宽度。
-    popup.style.width = `${width}px`;
-    const height = popup.offsetHeight;
-    const position = computeMapPopupPosition(
-      anchor.getBoundingClientRect(),
-      width,
-      height,
-      window.innerWidth,
-      window.innerHeight
-    );
-    popup.style.left = `${position.left}px`;
-    popup.style.top = `${position.top}px`;
-  }, []);
-
-  const openMapPopup = useCallback(
-    (family: UrlComposeFamily, anchor: HTMLElement) => {
-      cancelHideMapPopup();
-      setMapFamily(family);
-      requestAnimationFrame(() => positionMapPopup(anchor));
-    },
-    [cancelHideMapPopup, positionMapPopup]
-  );
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        setMapFamily(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [mapFamily]);
 
   const renderPreview = (family: UrlComposeFamily) => {
     const preview = composePreview(baseUrl, endpointOf(family));
@@ -422,13 +362,9 @@ export function UrlComposeEditor({
                   <button
                     type="button"
                     aria-label={m.url_compose_map_open()}
+                    aria-expanded={mapFamily === family}
                     className="flex h-[17px] w-[17px] flex-none items-center justify-center rounded-full border-[1.2px] border-muted-foreground text-[10px] font-bold text-muted-foreground hover:border-violet-500 hover:text-violet-600"
-                    onMouseEnter={(event) => openMapPopup(family, event.currentTarget)}
-                    onMouseLeave={armHideMapPopup}
-                    onClick={(event) => {
-                      // hover 已打开时避免 click 再关闭；重复打开为幂等操作
-                      openMapPopup(family, event.currentTarget);
-                    }}
+                    onClick={() => setMapFamily((current) => (current === family ? null : family))}
                   >
                     !
                   </button>
@@ -448,13 +384,15 @@ export function UrlComposeEditor({
       ) : null}
 
       {mapFamily ? (
-        <div
-          ref={mapPopupRef}
-          className="fixed z-50 rounded-lg border bg-card p-3 text-[11px] shadow-lg"
-          style={{ left: -9999, top: -9999 }}
-          onMouseEnter={cancelHideMapPopup}
-          onMouseLeave={armHideMapPopup}
-        >
+        // 全窗口遮罩：点击弹窗外任意区域关闭，并拦截穿透点击（下层元素收不到事件）
+        <div className="fixed inset-0 z-50 bg-black/30" onClick={() => setMapFamily(null)}>
+          <div
+            role="dialog"
+            aria-modal="false"
+            aria-label={m.url_compose_map_title({ name: FAMILY_LABEL[mapFamily] })}
+            className="fixed left-1/2 top-[40%] z-50 max-h-[80vh] w-[min(400px,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-lg border bg-card p-3 text-[11px] shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
           <div className="mb-1 text-xs font-semibold">
             {m.url_compose_map_title({ name: FAMILY_LABEL[mapFamily] })}
           </div>
@@ -492,6 +430,7 @@ export function UrlComposeEditor({
               </>
             );
           })()}
+          </div>
         </div>
       ) : null}
     </div>

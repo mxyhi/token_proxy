@@ -6,6 +6,9 @@ mod codex;
 mod commands;
 mod kiro;
 mod logging;
+// ══════════ MY-PROXY-ENDPOINT PATCH 3 (mod) START ══════════
+mod my_proxy_endpoint;
+// ══════════ MY-PROXY-ENDPOINT PATCH 3 (mod) END ══════════
 mod tray;
 mod window;
 mod xai;
@@ -257,6 +260,10 @@ pub fn run() {
             read_data_storage_usage,
             read_default_hot_model_mappings,
             preview_client_setup,
+            // ══════════ MY-PROXY-ENDPOINT PATCH 4 (handler) START ══════════
+            my_proxy_endpoint::my_proxy_endpoint_snapshot,
+            my_proxy_endpoint::my_proxy_endpoint_select,
+            // ══════════ MY-PROXY-ENDPOINT PATCH 4 (handler) END ══════════
             write_claude_code_settings,
             write_codex_config,
             save_proxy_config,

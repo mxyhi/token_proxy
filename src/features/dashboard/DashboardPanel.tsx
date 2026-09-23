@@ -8,6 +8,9 @@ import {
   useDashboardSnapshot,
 } from "@/features/dashboard/snapshot"
 import { m } from "@/paraglide/messages.js"
+// ══════════ MY-PROXY-ENDPOINT PATCH G0 (import) START ══════════
+import { MyProxyEndpointBar } from "@/features/my-proxy-endpoint/MyProxyEndpointBar"
+// ══════════ MY-PROXY-ENDPOINT PATCH G0 (import) END ══════════
 
 const ChartAreaInteractive = lazy(() =>
   import("@/features/dashboard/components/chart-area-interactive").then((module) => ({
@@ -66,6 +69,9 @@ export function DashboardPanel() {
 
   return (
     <div className="flex flex-col gap-4">
+      {/* ══════════ MY-PROXY-ENDPOINT PATCH G1 (mount) START ══════════ */}
+      <MyProxyEndpointBar />
+      {/* ══════════ MY-PROXY-ENDPOINT PATCH G1 (mount) END ══════════ */}
       {status === "error" ? (
         <Alert variant="destructive" className="mx-4 lg:mx-6">
           <AlertCircle className="size-4" aria-hidden="true" />

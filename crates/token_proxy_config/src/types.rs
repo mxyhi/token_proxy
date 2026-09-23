@@ -391,6 +391,15 @@ pub struct ProxyConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub my_stats_api: Option<crate::my_stats_api::MyStatsApiSection>,
     // ══════════ MY-STATS-API PATCH 2 (field) END ══════════
+    // ══════════ MY-PROXY-ENDPOINT PATCH 2 (field) START ══════════
+    /// 本地增强：仪表盘「代理接入地址」栏的持久化段（my_proxy_endpoint 模块）。
+    #[serde(
+        default,
+        deserialize_with = "crate::my_proxy_endpoint::de_lenient",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub my_proxy_endpoint: Option<crate::my_proxy_endpoint::MyProxyEndpointSection>,
+    // ══════════ MY-PROXY-ENDPOINT PATCH 2 (field) END ══════════
 }
 
 impl Default for ProxyConfigFile {
@@ -420,6 +429,9 @@ impl Default for ProxyConfigFile {
             // ══════════ MY-STATS-API PATCH 2 (default) START ══════════
             my_stats_api: None,
             // ══════════ MY-STATS-API PATCH 2 (default) END ══════════
+            // ══════════ MY-PROXY-ENDPOINT PATCH 2 (default) START ══════════
+            my_proxy_endpoint: None,
+            // ══════════ MY-PROXY-ENDPOINT PATCH 2 (default) END ══════════
         }
     }
 }

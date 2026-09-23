@@ -11,6 +11,9 @@ pub mod my_url_compose;
 // ══════════ MY-STATS-API PATCH 1 (mod) START ══════════
 pub mod my_stats_api;
 // ══════════ MY-STATS-API PATCH 1 (mod) END ══════════
+// ══════════ MY-PROXY-ENDPOINT PATCH 1 (mod) START ══════════
+pub mod my_proxy_endpoint;
+// ══════════ MY-PROXY-ENDPOINT PATCH 1 (mod) END ══════════
 mod normalize;
 mod types;
 

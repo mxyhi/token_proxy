@@ -963,6 +963,8 @@ fn push_model_lookup_key(keys: &mut Vec<String>, value: &str) {
     let key = match value {
         "claude-opus-4.8" => "claude-opus-4-8".to_string(),
         "claude-opus-4.7" => "claude-opus-4-7".to_string(),
+        // 官方 ID 是连字符 claude-opus-5-5；点号写法对齐 opus-4.8。
+        "claude-opus-5.5" => "claude-opus-5-5".to_string(),
         _ => value.to_string(),
     };
     if !key.is_empty() && !keys.contains(&key) {
@@ -1073,7 +1075,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20260922"
+            "catalog.69854741.b88b66df+curated.20260923"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1162,6 +1164,27 @@ mod tests {
             sources.get("gpt-6-astra"),
             Some(&("https://platform.openai.com/docs/pricing", "2026-09-04"))
         );
+        assert_eq!(
+            sources.get("gpt-6-sol"),
+            Some(&(
+                "https://developers.openai.com/api/docs/models/gpt-6-sol",
+                "2026-09-23"
+            ))
+        );
+        assert_eq!(
+            sources.get("gpt-6-luna"),
+            Some(&(
+                "https://developers.openai.com/api/docs/models/gpt-6-luna",
+                "2026-09-23"
+            ))
+        );
+        assert_eq!(
+            sources.get("claude-opus-5-5"),
+            Some(&(
+                "https://platform.claude.com/docs/en/about-claude/pricing",
+                "2026-09-23"
+            ))
+        );
     }
 
     #[test]
@@ -1230,7 +1253,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260922"));
+        assert!(settings.version.contains("+curated.20260923"));
     }
 
     #[test]
@@ -1309,7 +1332,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260922"));
+        assert!(settings.version.contains("+curated.20260923"));
     }
 
     #[test]
@@ -1391,7 +1414,92 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 5_440_095_000, "{model}");
             assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
         }
-        assert!(settings.version.contains("+curated.20260922"));
+        assert!(settings.version.contains("+curated.20260923"));
+    }
+
+    #[test]
+    fn gpt_6_sol_and_luna_apply_official_tiers_and_long_context() {
+        let settings = default_model_pricing_settings();
+        let short_usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            cache_write_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+        let long_usage = BillableUsage {
+            uncached_input_tokens: 272_001,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        // Official GPT-6 Sol: $2 / $0.20 cache / $2.50 write / $10; >272K is 2x input and cache, 1.5x output.
+        // https://developers.openai.com/api/docs/models/gpt-6-sol verified 2026-09-23.
+        for model in ["gpt-6-sol", "openai/gpt-6-sol"] {
+            let standard = calculate_request_cost(&settings, Some(model), None, None, &short_usage)
+                .expect("GPT-6 Sol standard price");
+            let fast =
+                calculate_request_cost(&settings, Some(model), None, Some("fast"), &short_usage)
+                    .expect("GPT-6 Sol fast price");
+            let flex =
+                calculate_request_cost(&settings, Some(model), None, Some("flex"), &short_usage)
+                    .expect("GPT-6 Sol flex price");
+            let long = calculate_request_cost(&settings, Some(model), None, None, &long_usage)
+                .expect("GPT-6 Sol long-context price");
+
+            assert_eq!(standard.pricing_model, "gpt-6-sol", "{model}");
+            assert_eq!(standard.cost_nano_usd, 14_700, "{model}");
+            assert_eq!(fast.cost_nano_usd, 29_400, "{model}");
+            assert_eq!(flex.cost_nano_usd, 7_350, "{model}");
+            assert_eq!(long.cost_nano_usd, 1_088_019_000, "{model}");
+            assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
+        }
+
+        // Official GPT-6 Luna: $0.10 / $0.01 / $0.125 / $0.50. Flex cache write is $0.0625/MTok
+        // = 62.5 nano-USD/token; the catalog unit is integer nano-USD, so that rate rounds to 63.
+        for model in ["gpt-6-luna", "openai/gpt-6-luna"] {
+            let standard = calculate_request_cost(&settings, Some(model), None, None, &short_usage)
+                .expect("GPT-6 Luna standard price");
+            let flex =
+                calculate_request_cost(&settings, Some(model), None, Some("flex"), &short_usage)
+                    .expect("GPT-6 Luna flex price");
+            let long = calculate_request_cost(&settings, Some(model), None, None, &long_usage)
+                .expect("GPT-6 Luna long-context price");
+
+            assert_eq!(standard.pricing_model, "gpt-6-luna", "{model}");
+            assert_eq!(standard.cost_nano_usd, 735, "{model}");
+            assert_eq!(flex.breakdown.cache_write_nano_usd, 63, "{model}");
+            assert_eq!(flex.cost_nano_usd, 368, "{model}");
+            assert_eq!(long.cost_nano_usd, 54_400_950, "{model}");
+        }
+    }
+
+    #[test]
+    fn claude_opus_5_5_aliases_apply_official_prices() {
+        let settings = default_model_pricing_settings();
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            cache_write_5m_tokens: 1,
+            cache_write_1h_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        // Official Opus 5.5: $4 / $0.20 cache read / $5 5m / $8 1h / $20 per 1M.
+        // https://platform.claude.com/docs/en/about-claude/pricing verified 2026-09-23.
+        for model in [
+            "claude-opus-5-5",
+            "anthropic/claude-opus-5-5",
+            "claude-opus-5.5",
+            "anthropic/claude-opus-5.5",
+        ] {
+            let cost = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                .expect("Opus 5.5 official price");
+            assert_eq!(cost.pricing_model, "claude-opus-5-5", "{model}");
+            assert_eq!(cost.breakdown.cache_read_nano_usd, 200, "{model}");
+            assert_eq!(cost.cost_nano_usd, 37_200, "{model}");
+        }
     }
 
     #[test]
@@ -1713,7 +1821,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20260922");
+        assert_eq!(settings.version, "remote.test+curated.20260923");
     }
 
     #[test]

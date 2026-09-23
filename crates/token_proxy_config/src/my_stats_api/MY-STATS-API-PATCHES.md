@@ -123,6 +123,6 @@ git checkout main; git pull origin main
 git checkout feat/my-stats-api -- crates/token_proxy_config/src/my_stats_api/ crates/token_proxy_app/src/my_stats_api/
 # 按 PATCH 1/2/3/4 重新注入官方文件（grep "MY-STATS-API PATCH" 检查是否残留）
 cargo test -p token_proxy_config
-pnpm install; pnpm tauri build     # 桌面安装包：src-tauri\target\release\bundle\nsis\*-setup.exe
+pnpm install; pnpm tauri build --bundles nsis   # 只出 exe：src-tauri\target\release\bundle\nsis\*-setup.exe（不加参数会连 MSI 一起打）
 cargo install --path crates/token_proxy_cli --locked --profile release   # CLI
 ```

@@ -388,6 +388,9 @@ describe("upstreams account UI (Phase D)", () => {
     const threshold = screen.getByRole("spinbutton", {
       name: m.codex_quota_threshold_label(),
     });
+    expect(threshold).toHaveValue(0);
+    expect(await screen.findByText(m.codex_quota_threshold_disabled())).toBeInTheDocument();
+    await user.clear(threshold);
     await user.type(threshold, "90");
     await user.tab();
 

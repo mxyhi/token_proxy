@@ -221,8 +221,9 @@ impl CodexTokenRecord {
         let Some(threshold) = self.quota_threshold_percent else {
             return false;
         };
+        // 0% is the default disabled threshold: keep routing this account.
         if threshold <= 0.0 {
-            return true;
+            return false;
         }
         self.quota
             .quotas
@@ -272,7 +273,7 @@ mod tests {
     fn quota_threshold_uses_the_highest_known_window() {
         assert!(record(Some(90.0), &[20.0, 90.0]).quota_threshold_reached());
         assert!(!record(Some(90.0), &[20.0, 89.9]).quota_threshold_reached());
-        assert!(record(Some(0.0), &[]).quota_threshold_reached());
+        assert!(!record(Some(0.0), &[100.0]).quota_threshold_reached());
         assert!(!record(None, &[100.0]).quota_threshold_reached());
     }
 }

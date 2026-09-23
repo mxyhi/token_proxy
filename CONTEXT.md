@@ -157,8 +157,8 @@ Codex 账户在某个服务周期内的用量快照，至少区分 session 与 w
 _Avoid_: 仅显示剩余百分比、把不同窗口合并为单一余额
 
 **Codex Usage Threshold（Codex 用量阈值）**:
-账户级路由保护线；任一用量窗口的已用百分比达到或超过该值时，后续请求跳过该账户并沿用既有渠道 fallback。未设置表示不限制，0% 表示始终跳过。
-_Avoid_: 渠道全局阈值、按剩余百分比判断、达到阈值后继续消耗
+账户级路由保护线；大于 0 时，任一用量窗口的已用百分比达到或超过该值，后续请求跳过该账户并沿用既有渠道 fallback。默认值为 0%，0% 表示始终不跳过账户。
+_Avoid_: 渠道全局阈值、按剩余百分比判断、0% 仍跳过账户
 
 **Codex Agent Identity Account（Codex Agent Identity 账户）**:
 从官方 Codex `auth.json` 导入的独立凭据类型，持久化 runtime ID、PKCS#8 Ed25519 私钥与 task binding，不持久化或伪造 OAuth token，也没有 token 到期/自动刷新语义。

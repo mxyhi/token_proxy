@@ -13,8 +13,8 @@ use super::{
         openai_compat::{FormatTransform, PROVIDER_CHAT, PROVIDER_RESPONSES},
         RequestMeta,
     },
-    CODEX_RESPONSES_PATH, ERROR_NO_UPSTREAM, PROVIDER_ANTHROPIC, PROVIDER_CODEX, PROVIDER_GEMINI,
-    PROVIDER_KIRO, PROVIDER_XAI,
+    CODEX_RESPONSES_PATH, ERROR_NO_UPSTREAM, PROVIDER_ANTHROPIC, PROVIDER_CODEX,
+    PROVIDER_DASHSCOPE, PROVIDER_GEMINI, PROVIDER_KIRO, PROVIDER_XAI,
 };
 
 #[derive(Clone, Copy)]
@@ -243,6 +243,31 @@ fn resolve_anthropic_plan(
     Some(Err(ERROR_NO_UPSTREAM.to_string()))
 }
 
+// ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 1 (dispatch) START ══════════
+const DASHSCOPE_SERVICES_ROOT: &str = "/v1/services";
+
+/// DashScope 原生协议透传：`/v1/services` 前缀精确命中（恰为根路径或其后随 `/`，
+/// 对齐 `is_anthropic_path` 惯例）且配置了 dashscope 上游才接管，否则返回 None
+/// 静默穿透，保持既有 formatless 兜底行为。
+fn resolve_dashscope_native_plan(
+    config: &ProxyConfig,
+    path: &str,
+) -> Option<Result<DispatchPlan, String>> {
+    let prefix_matched = path == DASHSCOPE_SERVICES_ROOT
+        || (path.starts_with(DASHSCOPE_SERVICES_ROOT)
+            && path.as_bytes()[DASHSCOPE_SERVICES_ROOT.len()] == b'/');
+    if !prefix_matched {
+        return None;
+    }
+    if config.provider_upstreams(PROVIDER_DASHSCOPE).is_none() {
+        return None;
+    }
+    let provider = choose_provider_by_priority(config, None, &[PROVIDER_DASHSCOPE])
+        .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+    Some(provider.map(base_plan))
+}
+// ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 1 (dispatch) END ══════════
+
 fn resolve_formatless_plan(config: &ProxyConfig) -> Result<DispatchPlan, String> {
     let provider = choose_provider_by_priority(
         config,
@@ -379,6 +404,11 @@ pub(super) fn resolve_dispatch_plan_with_request(
     if let Some(plan) = resolve_anthropic_plan(config, path) {
         return plan;
     }
+    // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 1 (dispatch-call) START ══════════
+    if let Some(plan) = resolve_dashscope_native_plan(config, path) {
+        return plan;
+    }
+    // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 1 (dispatch-call) END ══════════
 
     resolve_formatless_plan(config)
 }

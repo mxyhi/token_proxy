@@ -31,6 +31,35 @@ describe("config/form url_compose", () => {
     });
   });
 
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (test) START ══════════
+  it("round-trips dashscope family through form and payload", () => {
+    const upstream = createEmptyUpstream();
+    upstream.urlCompose = {
+      dashscope: { prefix: " api ", suffix: " /v1/services/aigc/text-generation/generation " },
+    };
+
+    const payload = toPayload({ ...EMPTY_FORM, upstreams: [upstream] });
+    expect(payload.upstreams[0]?.url_compose).toEqual({
+      dashscope: { prefix: "/api", suffix: "/v1/services/aigc/text-generation/generation" },
+    });
+
+    const restored = toForm(payload);
+    expect(restored.upstreams[0].urlCompose).toEqual({
+      dashscope: { prefix: "/api", suffix: "/v1/services/aigc/text-generation/generation" },
+    });
+  });
+
+  it("allows dashscope as a supported provider in enabled upstreams", () => {
+    const upstream = createEmptyUpstream();
+    upstream.id = "dashscope-1";
+    upstream.enabled = true;
+    upstream.providers = ["dashscope"];
+    upstream.baseUrl = "https://ws.cn-beijing.maas.aliyuncs.com";
+
+    expect(validate({ ...EMPTY_FORM, upstreams: [upstream] }).valid).toBe(true);
+  });
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (test) END ══════════
+
   it("omits empty url_compose entries and the whole domain when untouched", () => {
     const untouched = createEmptyUpstream();
     expect(toPayload({ ...EMPTY_FORM, upstreams: [untouched] }).upstreams[0]?.url_compose).toBeUndefined();

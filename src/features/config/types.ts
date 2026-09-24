@@ -126,6 +126,10 @@ export type UrlComposeConfig = {
   openai?: UrlComposeEndpoint;
   "openai-response"?: UrlComposeEndpoint;
   anthropic?: UrlComposeEndpoint;
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (types) START ══════════
+  /** DashScope 原生协议家族（/v1/services 前缀透传的出站组合）。 */
+  dashscope?: UrlComposeEndpoint;
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (types) END ══════════
 };
 
 export type UrlComposeFamily = keyof UrlComposeConfig;

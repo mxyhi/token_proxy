@@ -14,24 +14,40 @@ import { m } from "@/paraglide/messages.js";
 // 语义与后端 my_url_compose 模块一一对应：出站 URL = 基础地址 + 特殊拼接 +
 // 版本段替换后的客户端路径；后端为纯拼接，重复段仅在此处提示、不做修正。
 
-const FAMILIES: readonly UrlComposeFamily[] = ["openai", "openai-response", "anthropic"];
+const FAMILIES: readonly UrlComposeFamily[] = [
+  "openai",
+  "openai-response",
+  "anthropic",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) START ══════════
+  "dashscope",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) END ══════════
+];
 
 const DEFAULT_SUFFIX: Record<UrlComposeFamily, string> = {
   openai: "/v1/chat/completions",
   "openai-response": "/v1/responses",
   anthropic: "/v1/messages",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) START ══════════
+  dashscope: "/v1/services/aigc/text-generation/generation",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) END ══════════
 };
 
 const FAMILY_LABEL: Record<UrlComposeFamily, string> = {
   openai: m.url_compose_family_openai(),
   "openai-response": m.url_compose_family_openai_response(),
   anthropic: m.url_compose_family_anthropic(),
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) START ══════════
+  dashscope: m.url_compose_family_dashscope(),
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) END ══════════
 };
 
 const FAMILY_TAG: Record<UrlComposeFamily, string> = {
   openai: m.url_compose_family_openai_tag(),
   "openai-response": m.url_compose_family_openai_response_tag(),
   anthropic: m.url_compose_family_anthropic_tag(),
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) START ══════════
+  dashscope: m.url_compose_family_dashscope_tag(),
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) END ══════════
 };
 
 /** 前缀输入提示示例：openai 系展示 /openai，anthropic 展示 /anthropic。 */
@@ -39,12 +55,23 @@ const PREFIX_EXAMPLE: Record<UrlComposeFamily, string> = {
   openai: "/openai",
   "openai-response": "/openai",
   anthropic: "/anthropic",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) START ══════════
+  dashscope: "/api",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) END ══════════
 };
 
 const MAP_EXAMPLES: Record<UrlComposeFamily, string[]> = {
   openai: ["/v1/chat/completions", "/v1/models", "/v1/embeddings", "/v1/completions"],
   "openai-response": ["/v1/responses", "/v1/responses/resp_123", "/v1/responses/input_tokens", "/v1/models"],
   anthropic: ["/v1/messages", "/v1/messages/count_tokens", "/v1/models", "/v1/complete"],
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) START ══════════
+  dashscope: [
+    "/v1/services/aigc/text-generation/generation",
+    "/v1/services/aigc/multimodal-generation/generation",
+    "/v1/services/embeddings/text-embedding/text-embedding",
+    "/v1/services/rerank/text-rerank/text-rerank",
+  ],
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) END ══════════
 };
 
 function normalizeSegment(value: string): string {
@@ -277,7 +304,7 @@ export function UrlComposeEditor({
                       {m.url_compose_prefix_label()}
                     </label>
                     <Input
-                      className="font-mono text-xs"
+                      className="font-mono text-xs placeholder:text-[10px]"
                       value={endpoint.prefix}
                       placeholder={m.url_compose_prefix_placeholder({ example: PREFIX_EXAMPLE[family] })}
                       onChange={(event) => update(family, { prefix: event.target.value })}
@@ -312,7 +339,7 @@ export function UrlComposeEditor({
                           md:text-sm（tailwind-merge 视为不同 variant 不会去重）；
                           px-[13px] = 边框 1px + 输入内边距 12px。 */}
                       <Input
-                        className="relative font-mono text-xs text-transparent caret-foreground selection:bg-primary/20 placeholder:text-muted-foreground md:text-xs"
+                        className="relative font-mono text-xs text-transparent caret-foreground selection:bg-primary/20 placeholder:text-muted-foreground placeholder:text-[10px] md:text-xs"
                         value={endpoint.suffix}
                         onChange={(event) => update(family, { suffix: event.target.value })}
                         onBlur={(event) => {
@@ -377,6 +404,13 @@ export function UrlComposeEditor({
               {m.url_compose_gemini_hint()}
             </p>
           ) : null}
+          {/* ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) START ══════════ */}
+          {providers.includes("dashscope") ? (
+            <p className="mt-2.5 border-t border-dashed pt-2.5 text-xs text-muted-foreground">
+              {m.url_compose_dashscope_hint()}
+            </p>
+          ) : null}
+          {/* ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (editor) END ══════════ */}
           <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
             {m.url_compose_footnote()}
           </p>

@@ -442,6 +442,8 @@ fn is_supported_provider(provider: &str) -> bool {
     matches!(
         provider,
         "openai" | "openai-response" | "anthropic" | "gemini" | "kiro" | "codex" | "xai"
+        // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (normalize) START ══════════
+        | "dashscope" // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (normalize) END ══════════
     )
 }
 

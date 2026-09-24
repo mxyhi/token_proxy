@@ -210,6 +210,7 @@ POST {base}/api/v1/services/rerank/text-rerank/text-rerank
 2. **原生路径透传会落错 URL**：`/v1/services/...` 走 `resolve_formatless_plan` 兜底透传（`proxy/server/dispatch.rs:246`），出站 URL 为 `base_url + 原路径` 纯拼接（my_url_compose 移除了猜测式修正，见 `token_proxy_config/src/types.rs:652` 注释）。原生 chat 域名（`/api/v1/...`）与兼容域名（`/compatible-mode/v1/...`）前缀不同，**一个上游无法同时服务两种形态**，url_compose 的 prefix 是家族级一维的（`my_url_compose/compose.rs`）。
 3. **rerank 当前完全不支持**：无 `/rerank`、`/reranks` 路由；兼容端点在 `compatible-api` 家族，需扩展 url_compose 家族或新增路径识别。
 4. **若做原生协议 provider（方案 B）**：按 gemini 模板新增 FormatTransform 8 变体 + `dashscope_compat` 转换模块 + SSE 重排 + usage 键名映射（否则统计模块取不到 token 数），详见会话分析；`X-DashScope-SSE` 头注入参照 `upstream/prepare.rs` 的 xai 头处理模式。
+5. **已实现（2026-09-24）——最终采用"原生透传 provider"路线而非 §5.4 转换器**：`/v1/services` 前缀精确命中且存在 dashscope 上游即纯透传（不做格式转换/usage 解析），出站由 `url_compose.dashscope` 家族纯拼接；注入标记名 **MY-DASHSCOPE-PASSTHROUGH**，恢复手册见上层 `docs/项目维护/260924-01-dashscope原生透传/`；兼容模式（§0/§2.1）照旧零代码。
 
 ---
 

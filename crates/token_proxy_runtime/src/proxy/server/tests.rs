@@ -11115,3 +11115,135 @@ fn openai_files_route_falls_back_to_responses_provider_when_openai_missing() {
     let plan = resolve_dispatch_plan(&config, "/v1/files/file_123").expect("should dispatch");
     assert_eq!(plan.provider, PROVIDER_RESPONSES);
 }
+
+// ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 1 (test) START ══════════
+#[test]
+fn dashscope_services_prefix_routes_to_dashscope_passthrough_plan() {
+    let config = config_with_providers(&[(PROVIDER_DASHSCOPE, FORMATS_ALL)]);
+    let plan = resolve_dispatch_plan_with_request(
+        &config,
+        &Method::POST,
+        "/v1/services/aigc/multimodal-generation/generation",
+        &HeaderMap::new(),
+        None,
+    )
+    .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_DASHSCOPE);
+    assert_eq!(plan.outbound_path, None);
+    assert_eq!(plan.request_transform, FormatTransform::None);
+    assert_eq!(plan.response_transform, FormatTransform::None);
+}
+
+#[test]
+fn dashscope_root_path_exactly_matches() {
+    let config = config_with_providers(&[(PROVIDER_DASHSCOPE, FORMATS_ALL)]);
+    let plan = resolve_dispatch_plan_with_request(
+        &config,
+        &Method::POST,
+        "/v1/services",
+        &HeaderMap::new(),
+        None,
+    )
+    .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_DASHSCOPE);
+}
+
+#[test]
+fn dashscope_prefix_without_segment_boundary_does_not_match() {
+    // /v1/servicesX 非段边界：不命中 dashscope，走既有 formatless 兜底（chat）。
+    let config = config_with_upstreams(&[
+        (PROVIDER_DASHSCOPE, 0, "dashscope", FORMATS_ALL),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan_with_request(
+        &config,
+        &Method::POST,
+        "/v1/servicesX/aigc/generation",
+        &HeaderMap::new(),
+        None,
+    )
+    .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn dashscope_not_configured_falls_back_to_formatless() {
+    let config = config_with_providers(&[(PROVIDER_CHAT, FORMATS_CHAT)]);
+    let plan = resolve_dispatch_plan_with_request(
+        &config,
+        &Method::POST,
+        "/v1/services/aigc/text-generation/generation",
+        &HeaderMap::new(),
+        None,
+    )
+    .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn dashscope_multiple_upstreams_dispatch_by_priority() {
+    let config = config_with_upstreams(&[
+        (PROVIDER_DASHSCOPE, 10, "dashscope-low", FORMATS_ALL),
+        (PROVIDER_DASHSCOPE, 20, "dashscope-high", FORMATS_ALL),
+    ]);
+    let plan = resolve_dispatch_plan_with_request(
+        &config,
+        &Method::POST,
+        "/v1/services/embeddings/text-embedding/text-embedding",
+        &HeaderMap::new(),
+        None,
+    )
+    .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_DASHSCOPE);
+}
+
+#[test]
+fn dashscope_configured_does_not_change_existing_routes() {
+    let headers = HeaderMap::new();
+    let config = config_with_upstreams(&[
+        (PROVIDER_DASHSCOPE, 50, "dashscope", FORMATS_ALL),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+        (PROVIDER_ANTHROPIC, 0, "anthropic", FORMATS_MESSAGES),
+    ]);
+    let plan = resolve_dispatch_plan_with_request(
+        &config,
+        &Method::POST,
+        "/v1/chat/completions",
+        &headers,
+        None,
+    )
+    .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+    let plan =
+        resolve_dispatch_plan_with_request(&config, &Method::POST, "/v1/messages", &headers, None)
+            .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_ANTHROPIC);
+    let plan = resolve_dispatch_plan_with_request(
+        &config,
+        &Method::POST,
+        "/v1/embeddings",
+        &headers,
+        None,
+    )
+    .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+
+#[test]
+fn dashscope_unknown_path_stays_in_formatless_candidates() {
+    // dashscope 不进 formatless 候选池：未知路径永远不会选中它。
+    let config = config_with_upstreams(&[
+        (PROVIDER_DASHSCOPE, 50, "dashscope", FORMATS_ALL),
+        (PROVIDER_CHAT, 0, "chat", FORMATS_CHAT),
+    ]);
+    let plan = resolve_dispatch_plan_with_request(
+        &config,
+        &Method::POST,
+        "/v1/example-unknown",
+        &HeaderMap::new(),
+        None,
+    )
+    .expect("should dispatch");
+    assert_eq!(plan.provider, PROVIDER_CHAT);
+}
+// ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 1 (test) END ══════════

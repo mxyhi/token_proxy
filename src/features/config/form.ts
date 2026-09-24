@@ -33,6 +33,9 @@ const URL_COMPOSE_FAMILIES: readonly UrlComposeFamily[] = [
   "openai",
   "openai-response",
   "anthropic",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (form) START ══════════
+  "dashscope",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (form) END ══════════
 ];
 
 /** 段规范化：trim、去结尾 `/`、非空补开头 `/`（与后端 my_url_compose 一致）。 */
@@ -94,6 +97,9 @@ const SUPPORTED_PROVIDERS = new Set([
   "anthropic",
   "gemini",
   ...ACCOUNT_BACKED_PROVIDERS,
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (form) START ══════════
+  "dashscope",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (form) END ══════════
 ]);
 const DEFAULT_UPSTREAM_PROVIDERS = [
   "openai",

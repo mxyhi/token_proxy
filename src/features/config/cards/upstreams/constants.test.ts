@@ -25,6 +25,9 @@ describe("upstreams/constants", () => {
       "openai-response",
       "anthropic",
       "gemini",
+      // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (test) START ══════════
+      "dashscope",
+      // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (test) END ══════════
     ]);
   });
 
@@ -37,6 +40,9 @@ describe("upstreams/constants", () => {
       "openai-response",
       "anthropic",
       "gemini",
+      // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (test) START ══════════
+      "dashscope",
+      // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (test) END ══════════
       "antigravity",
       "legacy-provider",
     ]);

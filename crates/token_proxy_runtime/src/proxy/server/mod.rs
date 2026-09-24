@@ -25,6 +25,9 @@ const PROVIDER_KIRO: &str = "kiro";
 const PROVIDER_CODEX: &str = "codex";
 const PROVIDER_XAI: &str = "xai";
 const PROVIDER_PROXY: &str = "proxy";
+// ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 1 (const) START ══════════
+const PROVIDER_DASHSCOPE: &str = "dashscope";
+// ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 1 (const) END ══════════
 const LOCAL_UPSTREAM_ID: &str = "local";
 const LOCALHOST_CLIENT_IP: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 const CODEX_RESPONSES_PATH: &str = "/responses";

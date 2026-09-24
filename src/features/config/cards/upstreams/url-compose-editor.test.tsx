@@ -73,6 +73,35 @@ describe("config/url-compose-editor", () => {
     expect(screen.queryByText(m.url_compose_family_openai_response())).toBeNull();
   });
 
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (test) START ══════════
+  it("勾选 dashscope 出现家族行：/api 示例、默认后缀预填、说明行与空态提示字号", async () => {
+    const user = userEvent.setup();
+    setup({ providers: ["dashscope"], prefillSuffixDefaults: true });
+    await expand(user);
+
+    expect(screen.getByText(m.url_compose_family_dashscope())).toBeDefined();
+    expect(screen.getByText(m.url_compose_family_dashscope_tag())).toBeDefined();
+    expect(screen.getByText(m.url_compose_dashscope_hint())).toBeDefined();
+
+    const textboxes = screen.getAllByRole("textbox") as HTMLInputElement[];
+    expect(textboxes[0].placeholder).toBe(m.url_compose_prefix_placeholder({ example: "/api" }));
+    expect(textboxes[0].className).toContain("placeholder:text-[10px]");
+    expect(textboxes[1].className).toContain("placeholder:text-[10px]");
+    await waitFor(() => {
+      expect(textboxes[1].value).toBe("/v1/services/aigc/text-generation/generation");
+    });
+  });
+
+  it("未勾选 dashscope 不出现家族行与说明行", async () => {
+    const user = userEvent.setup();
+    setup({ providers: ["openai"] });
+    await expand(user);
+
+    expect(screen.queryByText(m.url_compose_family_dashscope())).toBeNull();
+    expect(screen.queryByText(m.url_compose_dashscope_hint())).toBeNull();
+  });
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (test) END ══════════
+
   it("摘要反映已配置数量", async () => {
     const user = userEvent.setup();
     setup({

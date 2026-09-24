@@ -57,6 +57,9 @@ const DEFAULT_PROVIDER_OPTIONS = [
   "openai-response",
   "anthropic",
   "gemini",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (options) START ══════════
+  "dashscope",
+  // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 3 (options) END ══════════
 ] as const;
 
 /**

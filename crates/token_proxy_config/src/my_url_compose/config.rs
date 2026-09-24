@@ -1,6 +1,9 @@
 //! `url_compose` 配置域：渠道级出站地址组合声明。
 //!
-//! 一条渠道可同时声明 openai / openai-response / anthropic 三个接口家族的
+//! 一条渠道可同时声明 openai / openai-response / anthropic /
+// ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (config) START ══════════
+//! dashscope 四个接口家族的
+// ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (config) END ══════════
 //! `prefix`（特殊拼接）与 `suffix`（完整后缀，第一段为"版本段"），
 //! 由 `compose.rs` 在出站时做纯拼接与版本段替换。
 
@@ -19,6 +22,11 @@ pub struct UrlComposeConfig {
     pub openai_response: Option<EndpointCompose>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub anthropic: Option<EndpointCompose>,
+    // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (config) START ══════════
+    /// DashScope 原生协议家族（`/v1/services` 前缀透传的出站组合）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dashscope: Option<EndpointCompose>,
+    // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (config) END ══════════
 }
 
 /// 单接口家族的出站地址组合：二者均可留空（等价不对该接口做额外拼接）。
@@ -47,12 +55,20 @@ impl UrlComposeConfig {
             openai: self.openai.as_ref().map(|value| value.normalized()),
             openai_response: self.openai_response.as_ref().map(|value| value.normalized()),
             anthropic: self.anthropic.as_ref().map(|value| value.normalized()),
+            // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (config) START ══════════
+            dashscope: self.dashscope.as_ref().map(|value| value.normalized()),
+            // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (config) END ══════════
         }
     }
 
     /// 是否完全没有配置任何家族（用于旧 base_url 迁移提示）。
     pub fn is_empty(&self) -> bool {
-        self.openai.is_none() && self.openai_response.is_none() && self.anthropic.is_none()
+        self.openai.is_none()
+            && self.openai_response.is_none()
+            && self.anthropic.is_none()
+        // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (config) START ══════════
+            && self.dashscope.is_none()
+        // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (config) END ══════════
     }
 }
 

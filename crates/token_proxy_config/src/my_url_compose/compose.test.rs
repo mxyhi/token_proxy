@@ -187,3 +187,71 @@ fn bigmodel_paas_base_via_compose() {
         "https://open.bigmodel.cn/api/coding/paas/v1/chat/completions"
     );
 }
+
+// ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (test) START ══════════
+// ── dashscope 家族（/v1/services 前缀透传的出站组合） ─────────────────
+
+#[test]
+fn dashscope_native_pure_concat() {
+    // 入站 /v1/services/*，suffix 版本段恰为 /v1：base + /api + 原样子路径。
+    assert_eq!(
+        compose(
+            "https://ws.cn-beijing.maas.aliyuncs.com",
+            "/api",
+            "/v1/services/aigc/text-generation/generation",
+            "/v1/services/aigc/multimodal-generation/generation"
+        ),
+        "https://ws.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+    );
+}
+
+#[test]
+fn dashscope_embedding_rerank_share_same_config() {
+    let base = "https://ws.cn-beijing.maas.aliyuncs.com";
+    assert_eq!(
+        compose(
+            base,
+            "/api",
+            "/v1/services/aigc/text-generation/generation",
+            "/v1/services/embeddings/text-embedding/text-embedding"
+        ),
+        "https://ws.cn-beijing.maas.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding"
+    );
+    assert_eq!(
+        compose(
+            base,
+            "/api",
+            "/v1/services/aigc/text-generation/generation",
+            "/v1/services/rerank/text-rerank/text-rerank"
+        ),
+        "https://ws.cn-beijing.maas.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+    );
+}
+
+#[test]
+fn dashscope_version_segment_replacement() {
+    // 非默认版本段同样生效：入站首段 /v1 替换为 suffix 第一段。
+    assert_eq!(
+        compose(
+            "https://x.com",
+            "/api",
+            "/v3/gen",
+            "/v1/services/aigc/x/generation"
+        ),
+        "https://x.com/api/v3/services/aigc/x/generation"
+    );
+}
+
+#[test]
+fn dashscope_empty_family_falls_back_to_identity() {
+    assert_eq!(
+        compose(
+            "https://ws.cn-beijing.maas.aliyuncs.com",
+            "",
+            "",
+            "/v1/services/aigc/x/generation"
+        ),
+        "https://ws.cn-beijing.maas.aliyuncs.com/v1/services/aigc/x/generation"
+    );
+}
+// ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (test) END ══════════

@@ -1,6 +1,6 @@
 # 设计：DashScope 原生协议透传 provider（/v1/services 前缀匹配）
 
-状态：待审核
+状态：已实现（2026-09-24，分支 `feat/my-proxy-endpoint`；注入标记名 `MY-DASHSCOPE-PASSTHROUGH`，见上层 `docs/项目维护/260924-01-dashscope原生透传/`；实机百炼 Key 端到端待验）
 日期：2026-09-24
 分支：`feat/my-proxy-endpoint`（随其他自有增强一并维护）
 关联研究笔记：`docs/aliyun-dashscope/dashscope-api-notes.md`（DashScope 三形态接口规范与官方来源）

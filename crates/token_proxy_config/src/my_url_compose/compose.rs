@@ -33,6 +33,9 @@ fn family_compose<'a>(
         "openai" => compose.openai.as_ref(),
         "openai-response" | "xai" => compose.openai_response.as_ref(),
         "anthropic" => compose.anthropic.as_ref(),
+        // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (compose) START ══════════
+        "dashscope" => compose.dashscope.as_ref(),
+        // ══════════ MY-DASHSCOPE-PASSTHROUGH PATCH 2 (compose) END ══════════
         _ => None,
     }
 }

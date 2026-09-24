@@ -682,6 +682,49 @@ impl CodexAccountStore {
         self.refresh_due_accounts_with_token_url(None).await
     }
 
+    /// Refreshes quota snapshots for accounts whose configured threshold can skip routing.
+    pub async fn refresh_due_quota_accounts(&self) -> Result<Vec<String>, String> {
+        self.refresh_cache().await?;
+        let candidates = {
+            let cache = self.cache.read().await;
+            sorted_account_ids(&cache)
+                .into_iter()
+                .filter(|account_id| {
+                    cache.get(account_id).is_some_and(|record| {
+                        record.is_usable()
+                            && record
+                                .quota_threshold_percent
+                                .is_some_and(|threshold| threshold > 0.0)
+                            && quota_refresh_is_due(record.quota.checked_at.as_deref())
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let mut refreshed = Vec::new();
+        let mut last_error = None;
+        for account_id in candidates {
+            match self.refresh_quota_if_stale(&account_id).await {
+                Ok(true) => refreshed.push(account_id),
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        account_id,
+                        error = %error,
+                        "codex due quota refresh failed"
+                    );
+                    last_error = Some(error);
+                }
+            }
+        }
+        if refreshed.is_empty() {
+            if let Some(error) = last_error {
+                return Err(error);
+            }
+        }
+        Ok(refreshed)
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub async fn set_test_token_url(&self, token_url: &str) {
         let mut guard = self.token_url_override.write().await;
@@ -1363,7 +1406,7 @@ fn sorted_account_ids(cache: &HashMap<String, CodexTokenRecord>) -> Vec<String> 
     account_ids
 }
 
-const QUOTA_REFRESH_INTERVAL_SECONDS: i64 = 30;
+const QUOTA_REFRESH_INTERVAL_SECONDS: i64 = 180;
 
 fn quota_refresh_is_due(checked_at: Option<&str>) -> bool {
     let Some(checked_at) = checked_at.map(str::trim).filter(|value| !value.is_empty()) else {
@@ -2103,6 +2146,7 @@ fn jwt_expires_at(token: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::CodexQuotaItem;
     use crate::CodexQuotaCache;
     use axum::response::IntoResponse;
     use base64::engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD};
@@ -2782,13 +2826,13 @@ mod tests {
     }
 
     #[test]
-    fn quota_refresh_waits_for_30_second_interval() {
-        let within_window = (OffsetDateTime::now_utc() - time::Duration::seconds(29))
+    fn quota_refresh_waits_for_three_minute_interval() {
+        let within_window = (OffsetDateTime::now_utc() - time::Duration::seconds(179))
             .format(&Rfc3339)
             .expect("format checked_at");
         assert!(!quota_refresh_is_due(Some(within_window.as_str())));
 
-        let outside_window = (OffsetDateTime::now_utc() - time::Duration::seconds(31))
+        let outside_window = (OffsetDateTime::now_utc() - time::Duration::seconds(181))
             .format(&Rfc3339)
             .expect("format checked_at");
         assert!(quota_refresh_is_due(Some(outside_window.as_str())));
@@ -4012,6 +4056,66 @@ mod tests {
                 "refreshed-access"
             );
             assert!(!record.is_expired());
+        });
+    }
+
+    #[test]
+    fn fetch_quotas_persists_recovered_snapshot_for_routing() {
+        run_async(async {
+            let (store, data_dir) = create_test_store();
+            let account_id = "codex-quota-recovery.json".to_string();
+            let mut record = oauth_test_record(
+                "access-old",
+                "refresh-token",
+                build_id_token("quota-recovery@example.com", "acct-quota-recovery"),
+                true,
+                CodexAccountStatus::Active,
+                "acct-quota-recovery",
+                "quota-recovery@example.com",
+                future_rfc3339(24),
+            );
+            record.quota = CodexQuotaCache {
+                plan_type: Some("pro".to_string()),
+                quotas: vec![CodexQuotaItem {
+                    name: "codex-session".to_string(),
+                    percentage: 5.0,
+                    used_percentage: Some(95.0),
+                    used: None,
+                    limit: None,
+                    reset_at: None,
+                }],
+                error: None,
+                checked_at: Some(
+                    (OffsetDateTime::now_utc() - time::Duration::hours(1))
+                        .format(&Rfc3339)
+                        .expect("format stale quota timestamp"),
+                ),
+            };
+            record.quota_threshold_percent = Some(82.0);
+            store
+                .save_record(account_id.clone(), record)
+                .await
+                .expect("seed quota-threshold account");
+
+            let (usage_url, _, usage_task) = spawn_usage_relogin_then_ok_endpoint().await;
+            let (token_url, token_task) = spawn_token_endpoint("access-new").await;
+            store.set_test_token_url(&token_url).await;
+
+            let summaries = crate::quota::fetch_quotas_with_usage_endpoint(&store, &usage_url)
+                .await
+                .expect("quota query should succeed");
+            let resolved = store
+                .resolve_pinned_account_record(&account_id)
+                .await
+                .expect("recovered account should be routable");
+
+            usage_task.abort();
+            token_task.abort();
+            let _ = std::fs::remove_dir_all(data_dir);
+
+            assert_eq!(summaries.len(), 1);
+            assert_eq!(summaries[0].quotas[0].used_percentage, Some(25.0));
+            assert_eq!(resolved.1.quota.quotas[0].used_percentage, Some(25.0));
         });
     }
 

@@ -18,6 +18,16 @@ use std::time::Duration;
 use token_proxy_account_store::app_proxy;
 use token_proxy_account_store::paths::TokenProxyPaths;
 use token_proxy_config::{AccountProvider, UpstreamConfig, UpstreamCredential};
+
+#[test]
+fn random_codex_quota_refresh_delay_stays_within_three_to_ten_minutes() {
+    for _ in 0..128 {
+        let delay = random_codex_quota_refresh_delay();
+        assert!((Duration::from_secs(CODEX_QUOTA_REFRESH_MIN_SECONDS)
+            ..=Duration::from_secs(CODEX_QUOTA_REFRESH_MAX_SECONDS))
+            .contains(&delay));
+    }
+}
 use tokio::task::{AbortHandle, JoinHandle};
 
 fn config_with_addr_and_body_limit(

@@ -17,20 +17,32 @@ use super::types::{
 const CODEX_USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
 
 pub async fn fetch_quotas(store: &CodexAccountStore) -> Result<Vec<CodexQuotaSummary>, String> {
+    fetch_quotas_with_endpoint(store, CODEX_USAGE_ENDPOINT).await
+}
+
+#[cfg(test)]
+pub(crate) async fn fetch_quotas_with_usage_endpoint(
+    store: &CodexAccountStore,
+    usage_endpoint: &str,
+) -> Result<Vec<CodexQuotaSummary>, String> {
+    fetch_quotas_with_endpoint(store, usage_endpoint).await
+}
+
+async fn fetch_quotas_with_endpoint(
+    store: &CodexAccountStore,
+    usage_endpoint: &str,
+) -> Result<Vec<CodexQuotaSummary>, String> {
     let accounts = store.list_accounts().await?;
     let mut results = Vec::with_capacity(accounts.len());
     for account in accounts {
-        match store.get_account_record(&account.account_id).await {
-            Ok(record) => match fetch_account_quota(store, &account, &record).await {
-                Ok(result) => results.push(result.summary),
-                Err(err) => results.push(CodexQuotaSummary {
-                    account_id: account.account_id.clone(),
-                    plan_type: None,
-                    quotas: Vec::new(),
-                    error: Some(err),
-                    checked_at: None,
-                }),
-            },
+        match refresh_quota_cache_with_endpoint(store, &account.account_id, usage_endpoint).await {
+            Ok(quota) => results.push(CodexQuotaSummary {
+                account_id: account.account_id.clone(),
+                plan_type: quota.plan_type,
+                quotas: quota.quotas,
+                error: quota.error,
+                checked_at: quota.checked_at,
+            }),
             Err(err) => results.push(CodexQuotaSummary {
                 account_id: account.account_id.clone(),
                 plan_type: None,
@@ -124,14 +136,6 @@ async fn refresh_quota_cache_with_endpoint(
                 .map(|summary| summary.quota)
         }
     }
-}
-
-async fn fetch_account_quota(
-    store: &CodexAccountStore,
-    account: &CodexAccountSummary,
-    record: &CodexTokenRecord,
-) -> Result<CodexQuotaFetchResult, String> {
-    fetch_account_quota_with_endpoint(store, account, record, CODEX_USAGE_ENDPOINT).await
 }
 
 async fn fetch_account_quota_with_endpoint(

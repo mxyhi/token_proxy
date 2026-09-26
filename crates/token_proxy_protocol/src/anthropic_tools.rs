@@ -50,12 +50,15 @@ fn map_responses_tool(value: &Value) -> Option<Value> {
             out.insert("description".to_string(), description.clone());
         }
         copy_tool_strict(tool, &mut out);
-        if let Some(parameters) = tool.get("parameters") {
-            out.insert(
-                "input_schema".to_string(),
-                normalize_claude_tool_input_schema(parameters),
-            );
-        }
+        let parameters = tool
+            .get("parameters")
+            .or_else(|| tool.get("parametersJsonSchema"));
+        out.insert(
+            "input_schema".to_string(),
+            parameters
+                .map(normalize_claude_tool_input_schema)
+                .unwrap_or_else(empty_claude_tool_input_schema),
+        );
         return Some(Value::Object(out));
     }
 
@@ -69,12 +72,15 @@ fn map_responses_tool(value: &Value) -> Option<Value> {
     // Chat 的嵌套 function 优先，显式 false 不得被外层 true 覆盖。
     copy_tool_strict(tool, &mut out);
     copy_tool_strict(function, &mut out);
-    if let Some(parameters) = function.get("parameters") {
-        out.insert(
-            "input_schema".to_string(),
-            normalize_claude_tool_input_schema(parameters),
-        );
-    }
+    let parameters = function
+        .get("parameters")
+        .or_else(|| function.get("parametersJsonSchema"));
+    out.insert(
+        "input_schema".to_string(),
+        parameters
+            .map(normalize_claude_tool_input_schema)
+            .unwrap_or_else(empty_claude_tool_input_schema),
+    );
     Some(Value::Object(out))
 }
 
@@ -479,6 +485,28 @@ mod tests {
                 "required": ["query"],
                 "additionalProperties": false
             })
+        );
+    }
+
+    #[test]
+    fn parameterless_tools_get_an_empty_object_schema() {
+        let mapped = map_responses_tools_to_anthropic(&json!([
+            {"type": "function", "name": "responses_tool"},
+            {"type": "function", "function": {"name": "chat_tool"}},
+            {"type": "function", "name": "json_schema_tool", "parametersJsonSchema": {"type": "object", "properties": {"value": {"type": "string"}}}}
+        ]));
+
+        assert_eq!(
+            mapped[0]["input_schema"],
+            json!({"type": "object", "properties": {}})
+        );
+        assert_eq!(
+            mapped[1]["input_schema"],
+            json!({"type": "object", "properties": {}})
+        );
+        assert_eq!(
+            mapped[2]["input_schema"]["properties"]["value"]["type"],
+            json!("string")
         );
     }
 }

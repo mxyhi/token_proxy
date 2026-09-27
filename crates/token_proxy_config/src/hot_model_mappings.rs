@@ -2,6 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
     ("openai/codex-auto-review", "codex-auto-review"),
+    // Codex 账户目录中的保留模型 ID 也支持 openai/ 命名空间写法。
+    ("openai/gpt-reserve", "gpt-reserve"),
     // GPT-6 官方 ID 不带 openai/ 前缀；命名空间前缀改写成上游 ID。
     ("openai/gpt-6-astra", "gpt-6-astra"),
     ("openai/gpt-6-sol", "gpt-6-sol"),

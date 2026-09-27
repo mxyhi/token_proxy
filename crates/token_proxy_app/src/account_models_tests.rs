@@ -166,6 +166,18 @@ async fn live_catalog_follows_kiro_pages_and_deduplicates() {
 }
 
 #[tokio::test]
+async fn codex_catalog_includes_current_flagship_models() {
+    let (url, server) = serve_catalog(vec![(200, r#"{"models":[{"slug":"gpt-5.6"}]}"#)]).await;
+    let models = fetch_model_pages("codex", Client::new().get(url))
+        .await
+        .unwrap();
+    assert!(models.contains(&"gpt-6-astra".to_string()));
+    assert!(models.contains(&"gpt-6-sol".to_string()));
+    assert!(models.contains(&"gpt-6-luna".to_string()));
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn failed_catalog_does_not_return_static_models_or_provider_body() {
     let (url, server) = serve_catalog(vec![(403, "private-provider-response")]).await;
     let error = fetch_model_pages("codex", Client::new().get(url))

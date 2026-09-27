@@ -5,6 +5,10 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
     let mappings = default_hot_model_mappings();
 
     assert_eq!(
+        mappings.get("openai/gpt-reserve"),
+        Some(&"gpt-reserve".to_string())
+    );
+    assert_eq!(
         mappings.get("openai/gpt-6-astra"),
         Some(&"gpt-6-astra".to_string())
     );

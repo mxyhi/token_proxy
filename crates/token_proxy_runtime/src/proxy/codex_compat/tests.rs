@@ -307,6 +307,7 @@ fn responses_request_to_codex_normalizes_dated_gpt_6_astra_variant() {
 fn supported_codex_models_include_current_codex_families() {
     let models = supported_codex_model_ids();
 
+    assert!(models.contains(&"gpt-reserve".to_string()));
     assert!(models.contains(&"gpt-5.6".to_string()));
     assert!(models.contains(&"gpt-5.6-max".to_string()));
     assert!(models.contains(&"gpt-5.6-sol".to_string()));

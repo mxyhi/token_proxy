@@ -1113,6 +1113,7 @@ fn input_contains_additional_image_generation_tool(input: Option<&Value>) -> boo
 }
 
 const CODEX_MODEL_ALIASES: &[(&str, &str)] = &[
+    ("gpt-reserve", "gpt-reserve"),
     ("gpt-6", "gpt-6-astra"),
     ("gpt-6-none", "gpt-6-astra"),
     ("gpt-6-low", "gpt-6-astra"),

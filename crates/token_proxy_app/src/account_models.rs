@@ -1,4 +1,4 @@
-//! 编辑器按渠道绑定的账户获取实时模型候选，不应用路由白名单或内置目录回退。
+//! 编辑器按渠道绑定的账户获取实时模型候选，并补充当前官方旗舰模型。
 
 use std::{collections::BTreeSet, time::Duration};
 
@@ -11,6 +11,9 @@ use token_proxy_account_store::oauth_util::{
 use token_proxy_account_xai as xai;
 
 use crate::app::TokenProxyApp;
+
+// Codex 账户目录偶尔只返回可用性变化中的模型；这些官方旗舰模型仍应作为候选项展示。
+const CODEX_CURRENT_MODEL_IDS: &[&str] = &["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"];
 
 impl TokenProxyApp {
     /// 获取一个绑定账户的完整目录；账户存储负责已有的 token 到期刷新。
@@ -186,6 +189,9 @@ async fn fetch_model_pages(provider: &str, request: RequestBuilder) -> Result<Ve
             None
         };
         let Some(token) = &next_token else {
+            if provider == "codex" {
+                models.extend(CODEX_CURRENT_MODEL_IDS.iter().copied().map(str::to_owned));
+            }
             return Ok(models.into_iter().collect());
         };
         if !seen_tokens.insert(token.clone()) {

@@ -400,7 +400,6 @@ fn ensure_account_not_cooling(
         response: Some(response),
         is_timeout: false,
         should_cooldown: false,
-        deferred_log: None,
     })
 }
 
@@ -423,7 +422,6 @@ pub(super) fn account_resolution_outcome(provider_label: &str, err: String) -> A
         response: Some(response),
         is_timeout: false,
         should_cooldown: false,
-        deferred_log: None,
     }
 }
 

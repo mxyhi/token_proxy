@@ -7,7 +7,7 @@ use tokio::time::timeout;
 use super::request_body;
 use super::result;
 use super::retry::mark_account_retryable_failure;
-use super::transport_error::{analyze_transport_error, TransportRecovery};
+use super::transport_error::{analyze_transport_error, TransportFailure, TransportRecovery};
 use super::AttemptOutcome;
 use crate::proxy::cooldown_scope::CooldownScope;
 use crate::proxy::http;
@@ -153,7 +153,6 @@ async fn send_upstream_request_once(
     .await;
     // 0: 共享 H2 池；1: rotate 后 H2（force fresh）；2: HTTP/1.1 降级。
     // 每步都重建 body，因为 reqwest::Body 只能消费一次。
-    let mut last_transport_error: Option<reqwest::Error> = None;
     for transport_step in 0u8..3 {
         let client = match resolve_upstream_client(state, provider, proxy_url, transport_step) {
             Ok(client) => client,
@@ -227,7 +226,18 @@ async fn send_upstream_request_once(
                     "upstream send failed before response headers"
                 );
                 if stale && transport_step < 2 {
-                    last_transport_error = Some(err);
+                    log_transport_error(
+                        state,
+                        provider,
+                        upstream,
+                        inbound_path,
+                        meta,
+                        selected_account_id,
+                        request_detail,
+                        err,
+                        start_time,
+                        TransportRecovery::SameUpstreamOnce,
+                    );
                     continue;
                 }
                 return Err(map_upstream_error(
@@ -246,20 +256,7 @@ async fn send_upstream_request_once(
             }
         }
     }
-    let err = last_transport_error.expect("stale transport loop always records an error");
-    Err(map_upstream_error(
-        state,
-        provider,
-        upstream,
-        inbound_path,
-        meta,
-        selected_account_id,
-        request_detail,
-        err,
-        start_time,
-        cooldown_scope,
-        TransportRecovery::SameUpstreamOnce,
-    ))
+    unreachable!("the last transport step always returns its result")
 }
 
 fn resolve_upstream_client(
@@ -349,8 +346,21 @@ async fn send_codex_with_fallback(
                         http1_only = attempt.http1_only,
                         "Codex request failed before headers; retrying with fallback transport"
                     );
+                    log_transport_error(
+                        state,
+                        provider,
+                        upstream,
+                        inbound_path,
+                        meta,
+                        selected_account_id,
+                        request_detail,
+                        err,
+                        start_time,
+                        TransportRecovery::NextUpstream,
+                    );
+                } else {
+                    last_error = Some(err);
                 }
-                last_error = Some(err);
             }
             Err(CodexAttemptError::Fatal(outcome)) => return Err(outcome),
         }
@@ -602,8 +612,8 @@ fn handle_upstream_timeout(
     inbound_path: &str,
     meta: &RequestMeta,
     selected_account_id: Option<&str>,
-    _request_detail: Option<&RequestDetailSnapshot>,
-    _start_time: Instant,
+    request_detail: Option<&RequestDetailSnapshot>,
+    start_time: Instant,
     response_header_timeout: Option<Duration>,
     cooldown_scope: &CooldownScope,
     request_recovery: TransportRecovery,
@@ -627,25 +637,24 @@ fn handle_upstream_timeout(
         Some(message.clone()),
         cooldown_scope,
     );
-    // 不立即写 SQLite：若 same-upstream / failover 恢复成功，不应出现中间 504 行。
-    let deferred_log = Some(format!(
-        "provider={provider}; class=timeout; recovery={}; status=504; message={message}",
-        request_recovery.as_str(),
-    ));
-    meta.billing.lifecycle.remember_transport_error(
+    // 每次真实上游失败都落库；错误请求由 SQLite retention 在 7 天后清理。
+    result::log_upstream_error_if_needed(
+        &state.log,
+        request_detail,
+        meta,
         provider,
         &upstream.id,
         selected_account_id,
-        504,
-        deferred_log.as_deref().unwrap_or(&message),
+        inbound_path,
+        StatusCode::GATEWAY_TIMEOUT,
+        message.clone(),
+        start_time,
     );
-    let _ = inbound_path;
     AttemptOutcome::Retryable {
         message,
         response: None,
         is_timeout: true,
         should_cooldown: true,
-        deferred_log,
     }
 }
 
@@ -662,6 +671,51 @@ fn map_upstream_error(
     cooldown_scope: &CooldownScope,
     request_recovery: TransportRecovery,
 ) -> AttemptOutcome {
+    let failure = log_transport_error(
+        state,
+        provider,
+        upstream,
+        inbound_path,
+        meta,
+        selected_account_id,
+        request_detail,
+        err,
+        start_time,
+        request_recovery,
+    );
+
+    if failure.recovery == TransportRecovery::Fatal {
+        let client_message = format!("Upstream request failed: {}", failure.client_message);
+        return AttemptOutcome::Fatal(http::error_response(failure.status, client_message));
+    }
+
+    mark_account_retryable_failure(
+        state,
+        provider,
+        selected_account_id,
+        Some(failure.client_message.clone()),
+        cooldown_scope,
+    );
+    AttemptOutcome::Retryable {
+        message: failure.client_message,
+        response: None,
+        is_timeout: failure.is_timeout,
+        should_cooldown: true,
+    }
+}
+
+fn log_transport_error(
+    state: &ProxyState,
+    provider: &str,
+    upstream: &UpstreamRuntime,
+    inbound_path: &str,
+    meta: &RequestMeta,
+    selected_account_id: Option<&str>,
+    request_detail: Option<&RequestDetailSnapshot>,
+    err: reqwest::Error,
+    start_time: Instant,
+    request_recovery: TransportRecovery,
+) -> TransportFailure {
     let failure = analyze_transport_error(provider, err, request_recovery);
     tracing::warn!(
         provider,
@@ -674,47 +728,20 @@ fn map_upstream_error(
         "upstream request failed before response headers"
     );
 
-    if failure.recovery == TransportRecovery::Fatal {
-        let client_message = format!("Upstream request failed: {}", failure.client_message);
-        let diagnostic_message = format!("Upstream request failed: {}", failure.diagnostic_message);
-        result::log_upstream_error_if_needed(
-            &state.log,
-            request_detail,
-            meta,
-            provider,
-            &upstream.id,
-            selected_account_id,
-            inbound_path,
-            failure.status,
-            diagnostic_message,
-            start_time,
-        );
-        return AttemptOutcome::Fatal(http::error_response(failure.status, client_message));
-    }
-
-    mark_account_retryable_failure(
-        state,
-        provider,
-        selected_account_id,
-        Some(failure.client_message.clone()),
-        cooldown_scope,
-    );
-    // Retryable 诊断延后到本请求终态失败再落库；恢复成功则不刷中间 502。
-    meta.billing.lifecycle.remember_transport_error(
+    // 每次真实上游失败都落库；错误请求由 SQLite retention 在 7 天后清理。
+    result::log_upstream_error_if_needed(
+        &state.log,
+        request_detail,
+        meta,
         provider,
         &upstream.id,
         selected_account_id,
-        failure.status.as_u16(),
-        &failure.diagnostic_message,
+        inbound_path,
+        failure.status,
+        failure.diagnostic_message.clone(),
+        start_time,
     );
-    let _ = (request_detail, start_time, inbound_path);
-    AttemptOutcome::Retryable {
-        message: failure.client_message,
-        response: None,
-        is_timeout: failure.is_timeout,
-        should_cooldown: true,
-        deferred_log: Some(failure.diagnostic_message),
-    }
+    failure
 }
 
 #[cfg(test)]

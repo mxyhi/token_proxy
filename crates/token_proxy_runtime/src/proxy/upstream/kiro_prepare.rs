@@ -87,7 +87,6 @@ pub(super) async fn prepare_kiro_context<'a>(
             response: Some(response),
             is_timeout: false,
             should_cooldown: false,
-            deferred_log: None,
         });
     }
     let (account_id, record) = state

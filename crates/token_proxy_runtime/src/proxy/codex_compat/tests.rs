@@ -2126,3 +2126,19 @@ fn codex_request_removes_only_item_internal_metadata() {
         "internal_chat_message_metadata_passthrough"
     );
 }
+
+#[test]
+fn codex_response_rejects_nested_errors_and_unsuccessful_statuses() {
+    for response in [
+        json!({"object":"response", "status":"failed", "error":null}),
+        json!({"object":"response", "status":"cancelled", "error":null}),
+        json!({"object":"response", "status":"completed", "error":{"message":"upstream failed"}}),
+    ] {
+        let bytes = Bytes::from(
+            json!({"type":"response.completed", "error":null, "response":response}).to_string(),
+        );
+        let message =
+            codex_response_to_responses(&bytes, None).expect_err("failure must not become success");
+        assert!(!message.ends_with("null"));
+    }
+}

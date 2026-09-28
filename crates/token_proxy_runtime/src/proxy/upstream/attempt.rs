@@ -213,6 +213,7 @@ async fn inspect_request_repair(
     let UpstreamAttempt {
         response,
         selected_account_id,
+        codex_access_token,
         meta,
         start_time,
         timings,
@@ -269,6 +270,7 @@ async fn inspect_request_repair(
         UpstreamAttempt {
             response: rebuilt,
             selected_account_id,
+            codex_access_token,
             meta,
             start_time,
             timings,
@@ -393,9 +395,20 @@ pub(super) async fn attempt_send(
             });
         }
     };
+    // 保留这次实际发送的 token；并发 401 只在凭证版本仍相同时兑换。
+    let codex_access_token = (provider == "codex")
+        .then(|| {
+            request_headers
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.strip_prefix("Bearer "))
+                .map(str::to_string)
+        })
+        .flatten();
     Ok(UpstreamAttempt {
         response,
         selected_account_id,
+        codex_access_token,
         meta,
         start_time,
         timings,

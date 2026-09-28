@@ -28,9 +28,9 @@ use super::super::super::{
     usage::extract_usage_from_response,
 };
 use super::super::{
-    kiro_to_anthropic, kiro_to_responses, responses_failure, token_count, upstream_read,
-    upstream_stream, AccountCooldownHint, NonRetryableSemanticResponse, RetryableStreamResponse,
-    PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
+    kiro_to_anthropic, kiro_to_responses, responses_error, responses_failure, token_count,
+    upstream_read, upstream_stream, AccountCooldownHint, NonRetryableSemanticResponse,
+    RetryableStreamResponse, PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
 };
 use token_proxy_protocol::xai_forbidden::{
     classify_http_forbidden, payload_error_code, XaiForbiddenScope,
@@ -84,7 +84,26 @@ pub(super) async fn build_buffered_response(
         );
     }
     let bytes = if status.is_success() {
-        match buffer_success_event_stream_response(&response_headers, &bytes, &context.path) {
+        let buffered = if matches!(
+            response_transform,
+            FormatTransform::CodexToChat
+                | FormatTransform::CodexToResponses
+                | FormatTransform::CodexToAnthropic
+                | FormatTransform::CodexToImagesGenerations
+        ) {
+            // Codex 强制上游流式；仅完整 JSON 走兼容路径，其余按 SSE 解析，不依赖响应头。
+            if serde_json::from_slice::<Value>(&bytes).is_ok() {
+                Ok(None)
+            } else {
+                match buffer_event_stream_response_impl(&bytes, true) {
+                    Ok(buffered) => Ok(Some(buffered)),
+                    Err(error) => return respond_codex_stream_error(&mut context, log, error),
+                }
+            }
+        } else {
+            buffer_success_event_stream_response(&response_headers, &bytes, &context.path)
+        };
+        match buffered {
             Ok(Some(buffered)) => {
                 if buffered.kind == BufferedEventStreamKind::Responses
                     && response_transform == FormatTransform::None
@@ -282,6 +301,23 @@ struct BufferedEventStreamBody {
 fn buffer_event_stream_response_with_kind(
     bytes: &Bytes,
 ) -> Result<BufferedEventStreamBody, String> {
+    buffer_event_stream_response_impl(bytes, false).map_err(|error| error.display_message())
+}
+
+fn codex_protocol_error(message: String) -> responses_error::ResponsesStreamError {
+    responses_error::ResponsesStreamError {
+        message,
+        error_type: "upstream_protocol_error".to_string(),
+        code: None,
+        status: StatusCode::BAD_GATEWAY,
+        retryable_before_output: true,
+    }
+}
+
+fn buffer_event_stream_response_impl(
+    bytes: &Bytes,
+    require_codex_terminal: bool,
+) -> Result<BufferedEventStreamBody, responses_error::ResponsesStreamError> {
     let mut parser = SseEventParser::new();
     let mut events = Vec::new();
     parser.push_chunk(bytes.as_ref(), |event| events.push(event));
@@ -290,16 +326,72 @@ fn buffer_event_stream_response_with_kind(
     let mut chat_buffer = ChatCompletionBuffer::default();
     let mut responses_buffer = ResponsesStreamBuffer::default();
     let mut terminal_response = None;
+    let mut saw_codex_output_delta = false;
     for event in events {
         if event == "[DONE]" {
             break;
         }
-        let value: Value = serde_json::from_str(&event)
-            .map_err(|err| format!("Invalid event-stream JSON payload: {err}"))?;
+        let value: Value = serde_json::from_str(&event).map_err(|err| {
+            codex_protocol_error(format!("Invalid event-stream JSON payload: {err}"))
+        })?;
+        if require_codex_terminal {
+            saw_codex_output_delta |= matches!(
+                value.get("type").and_then(Value::as_str),
+                Some(
+                    "response.output_text.delta"
+                        | "response.reasoning_text.delta"
+                        | "response.reasoning_summary_text.delta"
+                        | "response.function_call_arguments.delta"
+                )
+            ) && value
+                .get("delta")
+                .and_then(Value::as_str)
+                .is_some_and(|delta| !delta.trim().is_empty());
+            let error = value
+                .pointer("/response/error")
+                .filter(|error| !error.is_null())
+                .or_else(|| value.get("error").filter(|error| !error.is_null()));
+            let error_event = error.map(|error| {
+                json!({
+                    "type": "error", "error": error,
+                    "status": value.get("status").or_else(|| value.pointer("/response/status"))
+                })
+            });
+            if let Some(error) =
+                responses_error::responses_stream_error(error_event.as_ref().unwrap_or(&value))
+            {
+                return Err(error);
+            }
+            if matches!(
+                value.get("type").and_then(Value::as_str),
+                Some("response.cancelled" | "response.canceled")
+            ) {
+                return Err(codex_protocol_error(
+                    "Codex upstream response cancelled.".to_string(),
+                ));
+            }
+        }
         chat_buffer.push_event(&value);
         responses_buffer.push_event(&value);
-        if let Some(response) = completed_response_from_event(&value) {
+        if let Some(mut response) = completed_response_from_event(&value) {
+            if require_codex_terminal {
+                // 终态事件是完成依据；有些上游省略内部 status，不能沿用 created 的 in_progress。
+                if let Some(object) = response.as_object_mut() {
+                    object.entry("status").or_insert_with(|| {
+                        Value::String(
+                            value["type"]
+                                .as_str()
+                                .unwrap_or_default()
+                                .trim_start_matches("response.")
+                                .to_string(),
+                        )
+                    });
+                }
+            }
             terminal_response = Some(response);
+            if require_codex_terminal {
+                break;
+            }
         }
     }
 
@@ -319,18 +411,120 @@ fn buffer_event_stream_response_with_kind(
             response,
             responses_value.clone().or(responses_metadata),
         );
-        return serialize_buffered_event(response, BufferedEventStreamKind::Responses);
+        if require_codex_terminal {
+            if matches!(
+                response.get("status").and_then(Value::as_str),
+                Some("failed" | "cancelled" | "canceled")
+            ) {
+                return Err(codex_protocol_error(format!(
+                    "Codex upstream response {}.",
+                    response["status"]
+                )));
+            }
+            if response.get("status").and_then(Value::as_str) == Some("incomplete")
+                && response
+                    .pointer("/usage/output_tokens")
+                    .and_then(Value::as_u64)
+                    == Some(0)
+                && !saw_codex_output_delta
+                && !codex_response_has_output(&response)
+            {
+                return Err(codex_protocol_error(
+                    "Codex upstream returned empty incomplete response.".to_string(),
+                ));
+            }
+        }
+        return serialize_buffered_event(response, BufferedEventStreamKind::Responses)
+            .map_err(codex_protocol_error);
     }
 
+    // 普通兼容网关保留宽松补全；Codex 缺少终态意味着中断，不能伪造 completed。
+    if require_codex_terminal {
+        return Err(codex_protocol_error(
+            "Codex upstream stream closed before response.completed or response.incomplete."
+                .to_string(),
+        ));
+    }
     if let Some(value) = chat_buffer.into_value() {
-        return serialize_buffered_event(value, BufferedEventStreamKind::ChatCompletion);
+        return serialize_buffered_event(value, BufferedEventStreamKind::ChatCompletion)
+            .map_err(codex_protocol_error);
     }
 
     if let Some(value) = responses_value {
-        return serialize_buffered_event(value, BufferedEventStreamKind::Responses);
+        return serialize_buffered_event(value, BufferedEventStreamKind::Responses)
+            .map_err(codex_protocol_error);
     }
 
-    Err("No supported event-stream payload found".to_string())
+    Err(codex_protocol_error(
+        "No supported event-stream payload found".to_string(),
+    ))
+}
+
+fn codex_response_has_output(response: &Value) -> bool {
+    let Some(output) = response.get("output").and_then(Value::as_array) else {
+        return false;
+    };
+    output.iter().any(|item| {
+        if !matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("message" | "reasoning")
+        ) {
+            // 未知工具/媒体条目保守视作已有输出，不能当空响应重试。
+            return true;
+        }
+        if item
+            .get("encrypted_content")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty())
+        {
+            return true;
+        }
+        ["content", "summary"]
+            .iter()
+            .filter_map(|key| item.get(key).and_then(Value::as_array))
+            .flatten()
+            .any(|part| {
+                let key = match part.get("type").and_then(Value::as_str) {
+                    Some("output_text" | "summary_text" | "text" | "reasoning_text") => "text",
+                    Some("refusal") => "refusal",
+                    _ => return true,
+                };
+                part.get(key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.is_empty())
+            })
+    })
+}
+
+fn respond_codex_stream_error(
+    context: &mut LogContext,
+    log: Arc<LogWriter>,
+    error: responses_error::ResponsesStreamError,
+) -> Response {
+    context.status = error.status.as_u16();
+    let message = error.display_message();
+    tracing::warn!(provider = %context.provider, upstream_id = %context.upstream_id,
+        status = error.status.as_u16(), error_type = %error.error_type, error_code = ?error.code,
+        "Codex buffered upstream response failed");
+    log.write_detached(build_log_entry(
+        context,
+        UsageSnapshot::default(),
+        Some(message.clone()),
+    ));
+    let mut response = http::error_response(error.status, &message);
+    if error.retryable_before_output {
+        // 单次连接截断或容量错误不构成账户失效证据，避免跨请求冷却。
+        response.extensions_mut().insert(RetryableStreamResponse {
+            status: error.status,
+            message,
+            should_cooldown: false,
+        });
+    } else {
+        response
+            .extensions_mut()
+            .insert(NonRetryableSemanticResponse);
+    }
+    response
 }
 
 fn buffer_success_event_stream_response(

@@ -19,15 +19,6 @@ use token_proxy_account_store::app_proxy;
 use token_proxy_account_store::paths::TokenProxyPaths;
 use token_proxy_config::{AccountProvider, UpstreamConfig, UpstreamCredential};
 
-#[test]
-fn random_codex_quota_refresh_delay_stays_within_three_to_ten_minutes() {
-    for _ in 0..128 {
-        let delay = random_codex_quota_refresh_delay();
-        assert!((Duration::from_secs(CODEX_QUOTA_REFRESH_MIN_SECONDS)
-            ..=Duration::from_secs(CODEX_QUOTA_REFRESH_MAX_SECONDS))
-            .contains(&delay));
-    }
-}
 use tokio::task::{AbortHandle, JoinHandle};
 
 fn config_with_addr_and_body_limit(
@@ -525,7 +516,7 @@ fn refresh_model_discovery_updates_cache_on_demand() {
 }
 
 #[test]
-fn start_spawns_codex_keepalive_without_codex_upstream() {
+fn codex_keepalive_only_refreshes_accounts_referenced_by_enabled_upstreams() {
     run_async(async {
         let (context, data_dir) = create_test_context();
         let (token_url, token_task) = spawn_codex_token_endpoint("service-refreshed-access").await;
@@ -568,7 +559,41 @@ fn start_spawns_codex_keepalive_without_codex_upstream() {
 
         let service = ProxyServiceHandle::new();
         service.start(&context).await.expect("start proxy");
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let record = context
+            .codex_accounts
+            .load_account_for_test("codex-service.json")
+            .await
+            .expect("account");
+        assert_eq!(
+            record.oauth().unwrap().access_token,
+            "service-expired-access"
+        );
+
+        let mut config = test_config_file(0);
+        let mut codex = upstream_config(
+            "codex-service",
+            "codex",
+            "https://chatgpt.com/backend-api/codex",
+        );
+        codex.credential =
+            UpstreamCredential::account(AccountProvider::Codex, "codex-service.json");
+        codex.enabled = false;
+        config.upstreams = vec![codex.clone()];
+        token_proxy_config::write_config(context.paths.as_ref(), config.clone())
+            .await
+            .expect("write disabled config");
+        let disabled_runtime = ProxyConfig::load(context.paths.as_ref())
+            .await
+            .expect("load disabled config");
+        assert!(enabled_codex_account_ids(&disabled_runtime).is_empty());
+        codex.enabled = true;
+        config.upstreams = vec![codex];
+        token_proxy_config::write_config(context.paths.as_ref(), config)
+            .await
+            .expect("write enabled config");
+        service.reload(&context).await.expect("reload proxy");
+        tokio::time::timeout(Duration::from_secs(7), async {
             loop {
                 let record = context
                     .codex_accounts
@@ -585,7 +610,7 @@ fn start_spawns_codex_keepalive_without_codex_upstream() {
             }
         })
         .await
-        .expect("codex keepalive should refresh without codex upstream");
+        .expect("codex keepalive should refresh after enabled binding appears");
 
         let _ = service.stop().await;
         token_task.abort();

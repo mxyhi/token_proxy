@@ -14,43 +14,19 @@ use super::types::{
     CodexAccountSummary, CodexQuotaCache, CodexQuotaItem, CodexQuotaSummary, CodexTokenRecord,
 };
 
-const CODEX_USAGE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
-
+/// UI reads the persisted snapshot. Only the explicit refresh command contacts the provider.
 pub async fn fetch_quotas(store: &CodexAccountStore) -> Result<Vec<CodexQuotaSummary>, String> {
-    fetch_quotas_with_endpoint(store, CODEX_USAGE_ENDPOINT).await
-}
-
-#[cfg(test)]
-pub(crate) async fn fetch_quotas_with_usage_endpoint(
-    store: &CodexAccountStore,
-    usage_endpoint: &str,
-) -> Result<Vec<CodexQuotaSummary>, String> {
-    fetch_quotas_with_endpoint(store, usage_endpoint).await
-}
-
-async fn fetch_quotas_with_endpoint(
-    store: &CodexAccountStore,
-    usage_endpoint: &str,
-) -> Result<Vec<CodexQuotaSummary>, String> {
     let accounts = store.list_accounts().await?;
     let mut results = Vec::with_capacity(accounts.len());
     for account in accounts {
-        match refresh_quota_cache_with_endpoint(store, &account.account_id, usage_endpoint).await {
-            Ok(quota) => results.push(CodexQuotaSummary {
-                account_id: account.account_id.clone(),
-                plan_type: quota.plan_type,
-                quotas: quota.quotas,
-                error: quota.error,
-                checked_at: quota.checked_at,
-            }),
-            Err(err) => results.push(CodexQuotaSummary {
-                account_id: account.account_id.clone(),
-                plan_type: None,
-                quotas: Vec::new(),
-                error: Some(err),
-                checked_at: None,
-            }),
-        }
+        let quota = store.load_account(&account.account_id).await?.quota;
+        results.push(CodexQuotaSummary {
+            account_id: account.account_id,
+            plan_type: quota.plan_type,
+            quotas: quota.quotas,
+            error: quota.error,
+            checked_at: quota.checked_at,
+        });
     }
     Ok(results)
 }
@@ -66,7 +42,7 @@ pub(crate) async fn refresh_quota_cache(
     store: &CodexAccountStore,
     account_id: &str,
 ) -> Result<CodexQuotaCache, String> {
-    refresh_quota_cache_with_endpoint(store, account_id, CODEX_USAGE_ENDPOINT).await
+    refresh_quota_cache_with_endpoint(store, account_id, &store.usage_url().await).await
 }
 
 #[cfg(test)]
@@ -98,18 +74,13 @@ async fn refresh_quota_cache_with_endpoint(
         auto_refresh_enabled: record.auto_refresh_enabled(),
         quota_threshold_percent: record.quota_threshold_percent,
     };
-    let resolved = match store.get_account_record(account_id).await {
-        Ok(record) => record,
-        Err(err) => {
-            let mut failed_record = record;
-            failed_record.quota.error = Some(err);
-            failed_record.quota.checked_at = Some(checked_at);
-            return store
-                .persist_quota_cache(account_id, failed_record)
-                .await
-                .map(|summary| summary.quota);
-        }
-    };
+    // Quota probes must not exchange OAuth tokens or revive an invalid account.
+    if !record.is_usable() {
+        return Err(
+            "Codex account is not usable; sign in again before refreshing quota.".to_string(),
+        );
+    }
+    let resolved = record;
     match fetch_account_quota_with_endpoint(store, &account, &resolved, usage_endpoint).await {
         Ok(result) => {
             let mut next_record = result.record;
@@ -185,28 +156,12 @@ async fn fetch_account_quota_with_endpoint(
         Err(err) if err.relogin_required && record.oauth().is_some() => {
             tracing::warn!(
                 account_id = account.account_id.as_str(),
-                error = %err.message,
-                "codex usage request requires account refresh"
+                "codex quota rejected invalid credentials; automatic recovery stopped"
             );
             store
-                .refresh_account(&account.account_id)
-                .await
-                .map_err(|refresh_err| {
-                    format!("Codex usage request failed after token refresh failed: {refresh_err}")
-                })?;
-            let refreshed = store.load_account(&account.account_id).await?;
-            let authorization = store.authorization_header(&account.account_id).await?;
-            let proxy_url = store.effective_proxy_url(None).await;
-            let response = request_usage(
-                usage_endpoint,
-                &authorization,
-                refreshed.account_id.as_deref(),
-                proxy_url.as_deref(),
-            )
-            .await
-            .map_err(|retry_err| retry_err.message)?;
-            effective_record = refreshed;
-            response
+                .mark_invalid_if_credential_matches(&account.account_id, record)
+                .await?;
+            return Err(err.message);
         }
         Err(err) => return Err(err.message),
     };

@@ -15,6 +15,8 @@ use token_proxy_protocol::xai_client_tools::XaiClientToolMapping;
 pub(super) struct UpstreamAttempt {
     pub(super) response: reqwest::Response,
     pub(super) selected_account_id: Option<String>,
+    /// 仅用于 401 锁内版本比较，禁止写入日志或响应。
+    pub(super) codex_access_token: Option<String>,
     pub(super) meta: RequestMeta,
     pub(super) start_time: std::time::Instant,
     pub(super) timings: RequestTimings,
@@ -255,8 +257,12 @@ async fn retry_after_account_refresh(
         return Ok(first);
     };
     if provider == "codex" {
-        match state.codex_accounts.get_account_record(&account_id).await {
-            Ok(record) if record.agent_identity().is_some() => {
+        match state
+            .codex_accounts
+            .snapshot_account_record(&account_id)
+            .await
+        {
+            Ok(Some(record)) if record.agent_identity().is_some() => {
                 return retry_after_agent_identity_task_recovery(
                     state,
                     method,
@@ -275,14 +281,22 @@ async fn retry_after_account_refresh(
                 )
                 .await;
             }
-            Ok(_) => {}
+            Ok(Some(_)) => {}
+            Ok(None) => return Ok(first),
             Err(error) => {
                 tracing::warn!(account_id, error = %error, "codex account reload after 401 failed");
                 return Ok(first);
             }
         }
     }
-    if let Err(err) = refresh_account(state, provider, &account_id).await {
+    if let Err(err) = refresh_account(
+        state,
+        provider,
+        &account_id,
+        first.codex_access_token.as_deref(),
+    )
+    .await
+    {
         tracing::warn!(
             provider,
             account_id,
@@ -344,6 +358,7 @@ async fn retry_after_agent_identity_task_recovery(
     let UpstreamAttempt {
         response,
         selected_account_id,
+        codex_access_token,
         meta: attempt_meta,
         start_time,
         timings,
@@ -380,6 +395,7 @@ async fn retry_after_agent_identity_task_recovery(
         return Ok(UpstreamAttempt {
             response: reqwest::Response::from(rebuilt),
             selected_account_id,
+            codex_access_token,
             meta: attempt_meta,
             start_time,
             timings,
@@ -487,12 +503,6 @@ fn schedule_account_response_tasks(
                 let _ = store.refresh_quota_if_stale(&account_id).await;
             });
         }
-        "codex" if response.status().is_success() => {
-            let store = state.codex_accounts.clone();
-            tokio::spawn(async move {
-                let _ = store.refresh_quota_if_stale(&account_id).await;
-            });
-        }
         "xai" => {
             let store = state.xai_accounts.clone();
             let headers = response.headers().clone();
@@ -529,9 +539,17 @@ async fn refresh_account(
     state: &ProxyState,
     provider: &str,
     account_id: &str,
+    failed_codex_access_token: Option<&str>,
 ) -> Result<(), String> {
     match provider {
-        "codex" => state.codex_accounts.refresh_account(account_id).await,
+        "codex" => {
+            let token =
+                failed_codex_access_token.ok_or("Codex failed request token unavailable.")?;
+            state
+                .codex_accounts
+                .refresh_account_after_unauthorized(account_id, token)
+                .await
+        }
         "xai" => state.xai_accounts.refresh_account(account_id).await,
         _ => Err(format!(
             "Provider {provider} does not support account refresh."

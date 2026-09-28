@@ -7,12 +7,13 @@
  * - 成功导入触发 onConfigReload
  * - 账户 panel quota refresh 调用正确 command
  */
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { open as openFileDialog } from "@tauri-apps/plugin-dialog";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AccountCredentialPanel } from "@/features/config/cards/upstreams/account-credential-panel";
 import { UpstreamsCard } from "@/features/config/cards/upstreams-card";
 import { UpstreamEditorFields } from "@/features/config/cards/upstreams/editor-dialog-form";
 import { createEmptyUpstream } from "@/features/config/form";
@@ -319,6 +320,52 @@ describe("upstreams account UI (Phase D)", () => {
         accountId: "kiro-primary.json",
       });
     });
+  });
+
+  it("reads cached Codex quota on mount and refreshes only the selected account once", async () => {
+    let finishRefresh: (() => void) | undefined;
+    const pendingRefresh = new Promise<void>((resolve) => { finishRefresh = resolve; });
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "codex_list_accounts") {
+        return [{ account_id: "codex-primary", status: "active", auto_refresh_enabled: true }];
+      }
+      if (command === "codex_fetch_quotas") { return []; }
+      if (command === "codex_refresh_quota_now") { return pendingRefresh; }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    render(<AccountCredentialPanel draft={buildCodexAccountUpstream()} />);
+    const button = await screen.findByRole("button", { name: m.providers_account_refresh_quota() });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(invokeMock).toHaveBeenCalledWith("codex_fetch_quotas");
+    expect(invokeMock).not.toHaveBeenCalledWith("codex_refresh_quota_now", expect.anything());
+    act(() => { fireEvent.click(button); fireEvent.click(button); });
+    expect(invokeMock.mock.calls.filter(([command]) => command === "codex_refresh_quota_now")).toEqual([
+      ["codex_refresh_quota_now", { accountId: "codex-primary" }],
+    ]);
+    expect(button).toBeDisabled();
+    await act(async () => { finishRefresh?.(); await pendingRefresh; });
+    await waitFor(() => expect(button).toBeEnabled());
+    expect(invokeMock.mock.calls.filter(([command]) => command === "codex_fetch_quotas")).toHaveLength(2);
+  });
+
+  it("disables Codex quota and token network refresh for a disabled upstream", async () => {
+    invokeMock.mockImplementation(async (command: string) => {
+      if (command === "codex_list_accounts") {
+        return [{ account_id: "codex-primary", status: "active", auto_refresh_enabled: true }];
+      }
+      if (command === "codex_fetch_quotas") { return []; }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const draft = buildCodexAccountUpstream();
+    draft.enabled = false;
+    render(<AccountCredentialPanel draft={draft} />);
+    const quota = await screen.findByRole("button", { name: m.providers_account_refresh_quota() });
+    const token = screen.getByRole("button", { name: m.providers_account_refresh_token() });
+    expect(quota).toBeDisabled();
+    expect(token).toBeDisabled();
+    fireEvent.click(quota);
+    fireEvent.click(token);
+    expect(invokeMock.mock.calls.every(([command]) => ["codex_list_accounts", "codex_fetch_quotas"].includes(String(command)))).toBe(true);
   });
 
   it("configures the Codex usage threshold and shows used percentage", async () => {

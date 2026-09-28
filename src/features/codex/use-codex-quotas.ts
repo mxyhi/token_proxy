@@ -14,7 +14,8 @@ export function useCodexQuotas(options?: UseCodexQuotasOptions) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const refresh = useCallback(async () => {
+  // 此 IPC 仅读持久化缓存；联网刷新由当前账户的显式操作触发。
+  const reloadCache = useCallback(async () => {
     setLoading(true);
     try {
       const next = await fetchCodexQuotas();
@@ -31,8 +32,8 @@ export function useCodexQuotas(options?: UseCodexQuotasOptions) {
     if (!autoLoad) {
       return;
     }
-    void refresh();
-  }, [autoLoad, refresh]);
+    void reloadCache();
+  }, [autoLoad, reloadCache]);
 
-  return { quotas, loading, error, refresh };
+  return { quotas, loading, error, reloadCache };
 }

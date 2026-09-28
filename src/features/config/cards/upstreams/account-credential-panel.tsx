@@ -171,12 +171,14 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
   const kiroAccounts = useKiroAccounts({ autoLoad: isKiro });
   const codexAccounts = useCodexAccounts({ autoLoad: isCodex });
   const xaiAccounts = useXaiAccounts({ autoLoad: isXai });
-  // 配额按当前 provider 按需加载，避免编辑一个账户时打三家 quota API。
+  // 按当前 provider 加载；Codex 只读额度缓存，打开面板不发上游额度请求。
   const kiroQuotas = useKiroQuotas({ autoLoad: isKiro && !!accountId });
   const codexQuotas = useCodexQuotas({ autoLoad: isCodex && !!accountId });
   const xaiQuotas = useXaiQuotas();
 
   const [quotaBusy, setQuotaBusy] = useState(false);
+  const quotaRefreshRef = useRef(false);
+  const tokenRefreshRef = useRef(false);
   const [tokenBusy, setTokenBusy] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState("0");
   const thresholdCommitRef = useRef(false);
@@ -365,10 +367,16 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
     (isXai && xaiQuotas.error) ||
     "";
 
+  const codexRefreshDisabled =
+    isCodex && (!draft.enabled || summary?.status === "invalid" || summary?.status === "disabled");
+
   const refreshQuota = useCallback(async () => {
-    if (!provider || !accountId) {
+    if (
+      !provider || !accountId || quotaRefreshRef.current || quotaLoading || codexRefreshDisabled
+    ) {
       return;
     }
+    quotaRefreshRef.current = true;
     setQuotaBusy(true);
     try {
       console.debug("[upstream-account] refresh quota", { provider, accountId });
@@ -377,7 +385,7 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
         await kiroQuotas.refresh();
       } else if (isCodex) {
         await codexAccounts.refreshQuotaNow(accountId);
-        await codexQuotas.refresh();
+        await codexQuotas.reloadCache();
       } else if (isXai) {
         await xaiAccounts.refreshQuotaNow(accountId);
         await xaiQuotas.refresh();
@@ -386,12 +394,15 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
     } catch (error) {
       toast.error(parseError(error));
     } finally {
+      quotaRefreshRef.current = false;
       setQuotaBusy(false);
     }
   }, [
     accountId,
     codexAccounts,
     codexQuotas,
+    codexRefreshDisabled,
+    quotaLoading,
     isCodex,
     isKiro,
     isXai,
@@ -403,9 +414,12 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
   ]);
 
   const refreshToken = useCallback(async () => {
-    if (!accountId || (!isCodex && !isXai)) {
+    if (
+      !accountId || (!isCodex && !isXai) || tokenRefreshRef.current || codexRefreshDisabled
+    ) {
       return;
     }
+    tokenRefreshRef.current = true;
     setTokenBusy(true);
     try {
       console.debug("[upstream-account] refresh token", { provider, accountId });
@@ -418,9 +432,10 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
     } catch (error) {
       toast.error(parseError(error));
     } finally {
+      tokenRefreshRef.current = false;
       setTokenBusy(false);
     }
-  }, [accountId, codexAccounts, isCodex, isXai, provider, xaiAccounts]);
+  }, [accountId, codexAccounts, codexRefreshDisabled, isCodex, isXai, provider, xaiAccounts]);
 
   const toggleAutoRefresh = useCallback(
     async (enabledNext: boolean) => {
@@ -520,7 +535,7 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
             type="button"
             size="icon-sm"
             variant="outline"
-            disabled={quotaBusy || quotaLoading}
+            disabled={quotaBusy || quotaLoading || codexRefreshDisabled}
             onClick={() => {
               void refreshQuota();
             }}
@@ -609,7 +624,7 @@ export function AccountCredentialPanel({ draft }: AccountCredentialPanelProps) {
             type="button"
             size="sm"
             variant="secondary"
-            disabled={tokenBusy}
+            disabled={tokenBusy || codexRefreshDisabled}
             onClick={() => {
               void refreshToken();
             }}

@@ -73,25 +73,32 @@ fn is_success_response_object(response: &Map<String, Value>) -> bool {
 
 fn extract_error_message(value: &Value) -> Option<String> {
     let root = value.as_object()?;
-    if let Some(error) = root.get("error") {
+    if let Some(error) = root.get("error").filter(|error| !error.is_null()) {
         return Some(format!(
             "Codex upstream returned error payload: {}",
             error_message(error)
         ));
     }
-    if root.get("type").and_then(Value::as_str) == Some("error") {
-        if let Some(error) = root.get("error") {
-            return Some(format!(
-                "Codex upstream returned error payload: {}",
-                error_message(error)
-            ));
+    if let Some(response) = root.get("response") {
+        if let Some(message) = extract_error_message(response) {
+            return Some(message);
         }
-        if let Some(message) = root.get("message") {
-            return Some(format!(
-                "Codex upstream returned error payload: {}",
-                error_message(message)
-            ));
-        }
+    }
+    if matches!(
+        root.get("type").and_then(Value::as_str),
+        Some("error" | "response.failed" | "response.cancelled" | "response.canceled")
+    ) || matches!(
+        root.get("status").and_then(Value::as_str),
+        Some("failed" | "cancelled" | "canceled")
+    ) {
+        return Some(format!(
+            "Codex upstream returned error payload: {}",
+            root.get("message")
+                .or_else(|| root.get("status"))
+                .or_else(|| root.get("type"))
+                .map(error_message)
+                .unwrap_or_default()
+        ));
     }
     None
 }
@@ -353,6 +360,16 @@ fn resolve_finish_reason(response: &Map<String, Value>, has_tool_calls: bool) ->
         .unwrap_or("completed");
     if status == "completed" {
         Value::String(if has_tool_calls { "tool_calls" } else { "stop" }.to_string())
+    } else if status == "incomplete" {
+        match response
+            .get("incomplete_details")
+            .and_then(|details| details.get("reason"))
+            .and_then(Value::as_str)
+        {
+            Some("max_tokens" | "max_output_tokens") => json!("length"),
+            Some("content_filter") => json!("content_filter"),
+            _ => Value::Null,
+        }
     } else {
         Value::Null
     }

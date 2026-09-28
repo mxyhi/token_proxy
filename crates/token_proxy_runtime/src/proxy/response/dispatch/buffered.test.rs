@@ -894,3 +894,245 @@ fn empty_chat_completion_retry_message_skips_non_chat_outputs() {
     )
     .is_none());
 }
+
+async fn buffered_codex_response(
+    body: String,
+    content_type: Option<&str>,
+    transform: FormatTransform,
+) -> Response {
+    let mut upstream = axum::http::Response::builder().status(StatusCode::OK);
+    if let Some(content_type) = content_type {
+        upstream = upstream.header(CONTENT_TYPE, content_type);
+    }
+    let upstream = upstream
+        .body(reqwest::Body::from(body))
+        .expect("response")
+        .into();
+    let mut context = test_context();
+    context.provider = "codex".into();
+    let tracker = TokenRateTracker::new().register(None, None).await;
+    build_buffered_response(
+        StatusCode::OK,
+        upstream,
+        HeaderMap::new(),
+        context,
+        Arc::new(LogWriter::new(None)),
+        tracker,
+        transform,
+        None,
+        None,
+        None,
+        None,
+        Duration::from_secs(1),
+    )
+    .await
+}
+
+fn codex_terminal_sse(status: &str, text: &str, reason: Option<&str>) -> String {
+    format!(
+        "event: response.{status}\ndata: {}\n\n",
+        json!({
+            "type": format!("response.{status}"), "response": {
+                "id": "resp_codex", "object": "response", "status": status, "error": null,
+                "model": "gpt-6-astra", "incomplete_details": {"reason": reason},
+                "output": [{"type": "message", "role":"assistant", "content": [{"type": "output_text", "text": text}]}],
+                "usage": {"input_tokens": 12, "output_tokens": if text.is_empty() { 0 } else { 3 }, "total_tokens": 15}
+            }
+        })
+    )
+}
+
+#[tokio::test]
+async fn buffered_codex_sse_ignores_content_type_and_null_error() {
+    for content_type in [
+        None,
+        Some("application/json"),
+        Some("text/plain"),
+        Some("text/event-stream"),
+    ] {
+        let response = buffered_codex_response(
+            codex_terminal_sse("completed", "hello", None),
+            content_type,
+            FormatTransform::CodexToChat,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK, "{content_type:?}");
+        assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["choices"][0]["message"]["content"], "hello");
+        assert_eq!(value["usage"]["completion_tokens"], 3);
+    }
+}
+
+#[tokio::test]
+async fn buffered_codex_sse_requires_terminal_even_after_output() {
+    for event in [
+        json!({"type":"response.created", "response":{"id":"resp_1", "object":"response", "status":"in_progress"}}),
+        json!({"type":"response.output_text.delta", "delta":"partial"}),
+        json!({"type":"response.output_item.done", "item":{"type":"function_call", "name":"lookup", "arguments":"{}"}}),
+    ] {
+        for suffix in ["", "data: [DONE]\n\n"] {
+            let sse = format!("data: {event}\n\n{suffix}");
+            let response = buffered_codex_response(
+                sse,
+                Some("application/json"),
+                FormatTransform::CodexToChat,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+            let retry = response
+                .extensions()
+                .get::<RetryableStreamResponse>()
+                .expect("retryable EOF");
+            assert!(!retry.should_cooldown);
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            assert!(String::from_utf8_lossy(&body).contains("before response.completed"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn buffered_codex_sse_preserves_failures_and_request_scope() {
+    for (event, status, message) in [
+        (
+            json!({"type":"error", "message":"model is at capacity"}),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "model is at capacity",
+        ),
+        (
+            json!({"type":"response.failed", "response":{"error":{"code":"context_length_exceeded", "message":"context window exceeded"}}}),
+            StatusCode::BAD_REQUEST,
+            "context window exceeded",
+        ),
+        (
+            json!({"type":"response.failed", "status":429, "response":{"error":{"message":"try later"}}}),
+            StatusCode::TOO_MANY_REQUESTS,
+            "try later",
+        ),
+        (
+            json!({"type":"response.cancelled", "response":{"id":"resp_1", "object":"response", "status":"cancelled", "error":null}}),
+            StatusCode::BAD_GATEWAY,
+            "cancelled",
+        ),
+    ] {
+        let response = buffered_codex_response(
+            format!("data: {event}\n\n"),
+            None,
+            FormatTransform::CodexToResponses,
+        )
+        .await;
+        assert_eq!(response.status(), status);
+        if status == StatusCode::BAD_REQUEST {
+            assert!(response
+                .extensions()
+                .get::<NonRetryableSemanticResponse>()
+                .is_some());
+        }
+        if let Some(retry) = response.extensions().get::<RetryableStreamResponse>() {
+            assert!(!retry.should_cooldown);
+        }
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert!(String::from_utf8_lossy(&body).contains(message));
+    }
+}
+
+#[tokio::test]
+async fn buffered_codex_sse_maps_incomplete_and_rejects_empty_output() {
+    for (reason, finish_reason) in [
+        ("max_tokens", "length"),
+        ("max_output_tokens", "length"),
+        ("content_filter", "content_filter"),
+    ] {
+        let response = buffered_codex_response(
+            codex_terminal_sse("incomplete", "partial", Some(reason)),
+            None,
+            FormatTransform::CodexToChat,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["choices"][0]["finish_reason"], finish_reason);
+    }
+    let response = buffered_codex_response(
+        codex_terminal_sse("incomplete", "", Some("max_output_tokens")),
+        None,
+        FormatTransform::CodexToResponses,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn buffered_codex_sse_hydrates_tools_and_usage_for_responses() {
+    let item = json!({"id":"fc_1", "type":"function_call", "call_id":"call_1", "name":"lookup", "arguments":"{}"});
+    let done = json!({"type":"response.output_item.done", "output_index":0, "item":item});
+    let terminal = json!({"type":"response.completed", "response":{"id":"resp_1", "object":"response", "status":"completed", "error":null, "output":[], "usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15}}});
+    // 心跳数量不应影响 Codex SSE 识别，尤其是响应头缺失时。
+    let sse = format!(
+        "{}data: {done}\n\ndata: {terminal}\n\n",
+        ": keepalive\n\n".repeat(20)
+    );
+    let response = buffered_codex_response(sse, None, FormatTransform::CodexToResponses).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["output"], json!([item]));
+    assert_eq!(value["usage"]["total_tokens"], 15);
+}
+
+#[tokio::test]
+async fn buffered_codex_sse_shared_entry_supports_anthropic_and_images() {
+    let response = buffered_codex_response(
+        codex_terminal_sse("completed", "hello", None),
+        None,
+        FormatTransform::CodexToAnthropic,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["content"][0]["text"], "hello");
+    let terminal = json!({"type":"response.completed", "response":{"id":"resp_image", "object":"response", "status":"completed", "error":null, "output":[{"type":"image_generation_call","result":"aW1hZ2U="}]}});
+    let response = buffered_codex_response(
+        format!("data: {terminal}\n\n"),
+        Some("text/plain"),
+        FormatTransform::CodexToImagesGenerations,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["data"][0]["b64_json"], "aW1hZ2U=");
+}
+
+#[tokio::test]
+async fn buffered_codex_sse_rejects_malformed_payload_without_json_fallback() {
+    let response = buffered_codex_response(
+        "data: {invalid}\n\n".to_string(),
+        Some("application/json"),
+        FormatTransform::CodexToChat,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let message = String::from_utf8_lossy(&body);
+    assert!(message.contains("Invalid event-stream JSON payload"));
+    assert!(!message.contains("non-JSON success payload"));
+}
+
+#[tokio::test]
+async fn buffered_codex_preserves_normal_json_compatibility() {
+    let payload = json!({"id":"resp_json", "object":"response", "status":"completed", "error":null, "output":[{"type":"message", "content":[{"type":"output_text", "text":"hello"}]}]});
+    let response = buffered_codex_response(
+        payload.to_string(),
+        Some("application/json"),
+        FormatTransform::CodexToChat,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["choices"][0]["message"]["content"], "hello");
+}

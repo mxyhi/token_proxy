@@ -1996,7 +1996,12 @@ async fn build_test_state_handle_with_paths(
     let xai_accounts = Arc::new(
         token_proxy_account_xai::XaiAccountStore::new(&paths, app_proxy).expect("xai store"),
     );
-    let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+    // Routing fixtures must never reach the real OAuth endpoint. Refresh tests override this.
+    codex_accounts
+        .set_test_token_url("http://127.0.0.1:0/oauth/token")
+        .await;
+    // Keep routing fixtures outside the 24-hour proactive refresh window.
+    let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
         .format(&time::format_description::well_known::Rfc3339)
         .expect("format expires_at");
     for upstreams in config.upstreams.values() {
@@ -2834,7 +2839,7 @@ async fn assert_codex_transport_disconnect_does_not_restart_account_chain(pinned
     });
     let state = build_test_state_handle(config, data_dir.clone()).await;
     if !pinned {
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -2938,7 +2943,7 @@ async fn assert_codex_header_timeout_does_not_restart_account_chain() {
     config.sync_response_timeout = std::time::Duration::from_millis(20);
     let data_dir = next_test_data_dir("responses_unpinned_codex_header_timeout");
     let state = build_test_state_handle(config, data_dir.clone()).await;
-    let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+    let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
         .format(&time::format_description::well_known::Rfc3339)
         .expect("format expires_at");
     seed_codex_account(
@@ -4153,7 +4158,7 @@ fn codex_models_manifest_not_modified_does_not_switch_oauth_account() {
             // Phase B: 禁止 unbound 池选号；测试固定钉死 codex-a。
             .codex_account_id = Some("codex-a.json".to_string());
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -4947,7 +4952,7 @@ fn responses_request_uses_fixed_codex_account_binding() {
 
         let data_dir = next_test_data_dir("responses_codex_auto_select");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -5023,7 +5028,7 @@ fn responses_request_injects_codex_installation_id_from_selected_account() {
         )]);
         let data_dir = next_test_data_dir("responses_codex_installation");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account_with_device_id(
@@ -5225,7 +5230,7 @@ fn responses_request_refreshes_codex_account_after_unauthorized_before_failover(
 
         let data_dir = next_test_data_dir("responses_codex_refresh_retry");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         let (token_url, token_task) = spawn_codex_token_endpoint("codex-access-new").await;
@@ -5293,7 +5298,7 @@ fn responses_request_refreshes_pinned_codex_account_after_unauthorized() {
 
         let data_dir = next_test_data_dir("responses_codex_refresh_pinned");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         let (token_url, token_task) = spawn_codex_token_endpoint("codex-access-new").await;
@@ -5378,7 +5383,7 @@ fn responses_request_failovers_to_next_codex_upstream_after_invalidated_token() 
 
         let data_dir = next_test_data_dir("responses_codex_upstream_failover");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -5465,7 +5470,7 @@ fn responses_request_fixed_codex_account_does_not_switch_on_proxy_error() {
 
         let data_dir = next_test_data_dir("responses_codex_fixed_account_proxy_fail");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -5528,7 +5533,7 @@ fn chat_request_failovers_to_next_codex_upstream_after_empty_2xx_response() {
 
         let data_dir = next_test_data_dir("chat_codex_upstream_empty_response_failover");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -5672,7 +5677,7 @@ fn responses_request_cooldowns_same_codex_account_after_401() {
 
         let data_dir = next_test_data_dir("responses_codex_account_cooldown_401");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -5762,7 +5767,7 @@ fn responses_codex_session_scoped_cooldown_clears_after_successful_failover() {
 
         let data_dir = next_test_data_dir("responses_codex_session_cooldown_success");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -5867,7 +5872,7 @@ fn responses_codex_session_scoped_cooldown_isolates_failed_sessions() {
 
         let data_dir = next_test_data_dir("responses_codex_session_cooldown_isolated");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -5963,7 +5968,7 @@ fn responses_codex_session_scoped_cooldown_does_not_share_missing_session() {
 
         let data_dir = next_test_data_dir("responses_codex_missing_session_cooldown");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -6071,7 +6076,7 @@ fn responses_request_falls_back_to_responses_provider_when_all_codex_accounts_ar
 
         let data_dir = next_test_data_dir("responses_codex_cooling_cross_provider_fallback");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -6192,7 +6197,7 @@ fn responses_request_returns_service_unavailable_when_all_codex_accounts_are_coo
         config.retryable_failure_cooldown = std::time::Duration::from_secs(15);
         let data_dir = next_test_data_dir("responses_codex_all_accounts_cooling");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -6255,7 +6260,7 @@ fn responses_request_does_not_cooldown_same_codex_account_after_400() {
 
         let data_dir = next_test_data_dir("responses_codex_account_no_cooldown_400");
         let state = build_test_state_handle(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -6506,7 +6511,7 @@ fn responses_request_logs_selected_codex_account_id() {
 
         let data_dir = next_test_data_dir("responses_codex_logged_account");
         let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(
@@ -6602,7 +6607,7 @@ fn responses_request_logs_each_codex_account_failover_attempt() {
 
         let data_dir = next_test_data_dir("responses_codex_logs_all_attempts");
         let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;
-        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(1))
+        let expires_at = (OffsetDateTime::now_utc() + TimeDuration::days(2))
             .format(&time::format_description::well_known::Rfc3339)
             .expect("format expires_at");
         seed_codex_account(

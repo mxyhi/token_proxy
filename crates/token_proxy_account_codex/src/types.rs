@@ -228,6 +228,14 @@ impl CodexTokenRecord {
         self.quota
             .quotas
             .iter()
+            // Only the provider's reset time can release a blocked window; local cache TTL cannot.
+            .filter(|item| {
+                !item
+                    .reset_at
+                    .as_deref()
+                    .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+                    .is_some_and(|reset| reset <= OffsetDateTime::now_utc())
+            })
             .filter_map(|item| item.used_percentage)
             .any(|used| used >= threshold)
     }
@@ -275,6 +283,20 @@ mod tests {
         assert!(!record(Some(90.0), &[20.0, 89.9]).quota_threshold_reached());
         assert!(!record(Some(0.0), &[100.0]).quota_threshold_reached());
         assert!(!record(None, &[100.0]).quota_threshold_reached());
+    }
+
+    #[test]
+    fn quota_threshold_ignores_only_windows_with_a_confirmed_elapsed_reset() {
+        let mut record = record(Some(90.0), &[100.0, 95.0]);
+        record.quota.quotas[0].reset_at = Some("2020-01-01T00:00:00Z".into());
+        assert!(
+            record.quota_threshold_reached(),
+            "unknown second reset remains protected"
+        );
+        record.quota.quotas[1].reset_at = Some("2020-01-01T00:00:00Z".into());
+        assert!(!record.quota_threshold_reached());
+        record.quota.quotas[1].reset_at = Some("2099-01-01T00:00:00Z".into());
+        assert!(record.quota_threshold_reached());
     }
 }
 

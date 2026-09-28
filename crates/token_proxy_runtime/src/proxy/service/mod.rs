@@ -22,8 +22,7 @@ use token_proxy_config::ProxyConfig;
 /// 默认优雅停机等待时间；超时后会强制 abort server task。
 const DEFAULT_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const ACCOUNT_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
-const CODEX_QUOTA_REFRESH_MIN_SECONDS: u64 = 3 * 60;
-const CODEX_QUOTA_REFRESH_MAX_SECONDS: u64 = 10 * 60;
+const CODEX_ACCOUNT_REFRESH_INTERVAL: Duration = Duration::from_secs(5);
 
 type ProxyStateHandle = Arc<RwLock<Arc<ProxyState>>>;
 type ProxyRouter = axum::Router;
@@ -349,7 +348,6 @@ impl ProxyServiceInner {
             codex_account_refresh_task: Some(spawn_codex_account_refresh_task(
                 state_handle.clone(),
             )),
-            codex_quota_refresh_task: Some(spawn_codex_quota_refresh_task(state_handle.clone())),
             xai_account_refresh_task: Some(spawn_xai_account_refresh_task(state_handle.clone())),
             shutdown_timeout: DEFAULT_SHUTDOWN_TIMEOUT,
         });
@@ -425,22 +423,12 @@ impl ProxyServiceInner {
         if let Some(task) = running.model_discovery_task.take() {
             task.abort();
         }
-        if let Some(task) = running.codex_account_refresh_task.take() {
-            task.abort();
-        }
-        if let Some(task) = running.codex_quota_refresh_task.take() {
-            task.abort();
-        }
         if let Some(task) = running.xai_account_refresh_task.take() {
             task.abort();
         }
         running.model_discovery_task =
             Some(spawn_model_discovery_task(running.state_handle.clone()));
-        running.codex_account_refresh_task = Some(spawn_codex_account_refresh_task(
-            running.state_handle.clone(),
-        ));
-        running.codex_quota_refresh_task =
-            Some(spawn_codex_quota_refresh_task(running.state_handle.clone()));
+        // Codex 每轮读取最新 state，reload 不取消进行中的 token 轮换。
         running.xai_account_refresh_task =
             Some(spawn_xai_account_refresh_task(running.state_handle.clone()));
         tracing::debug!(
@@ -508,9 +496,6 @@ impl ProxyServiceInner {
         if let Some(task) = running.codex_account_refresh_task.take() {
             task.abort();
         }
-        if let Some(task) = running.codex_quota_refresh_task.take() {
-            task.abort();
-        }
         if let Some(task) = running.xai_account_refresh_task.take() {
             task.abort();
         }
@@ -551,7 +536,6 @@ struct RunningProxy {
     task: Option<JoinHandle<Result<(), String>>>,
     model_discovery_task: Option<JoinHandle<()>>,
     codex_account_refresh_task: Option<JoinHandle<()>>,
-    codex_quota_refresh_task: Option<JoinHandle<()>>,
     xai_account_refresh_task: Option<JoinHandle<()>>,
     shutdown_timeout: Duration,
 }
@@ -563,14 +547,31 @@ fn spawn_model_discovery_task(state_handle: ProxyStateHandle) -> JoinHandle<()> 
     })
 }
 
+fn enabled_codex_account_ids(config: &ProxyConfig) -> HashSet<String> {
+    // normalize_upstreams 已排除 disabled 上游，只维护当前实际可路由的 Codex 账户。
+    config
+        .provider_upstreams("codex")
+        .into_iter()
+        .flat_map(|provider| &provider.groups)
+        .flat_map(|group| &group.items)
+        .filter_map(|upstream| upstream.codex_account_id.as_deref())
+        .map(str::trim)
+        .filter(|account_id| !account_id.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn spawn_codex_account_refresh_task(state_handle: ProxyStateHandle) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
-            let store = {
+            let (store, account_ids) = {
                 let state = state_handle.read().await;
-                state.codex_accounts.clone()
+                (
+                    state.codex_accounts.clone(),
+                    enabled_codex_account_ids(&state.config),
+                )
             };
-            match store.refresh_due_accounts().await {
+            match store.refresh_due_accounts_for_ids(&account_ids).await {
                 Ok(refreshed) if !refreshed.is_empty() => {
                     tracing::info!(
                         refreshed = refreshed.len(),
@@ -582,39 +583,9 @@ fn spawn_codex_account_refresh_task(state_handle: ProxyStateHandle) -> JoinHandl
                     tracing::warn!(error = %err, "codex due account refresh failed");
                 }
             }
-            tokio::time::sleep(ACCOUNT_REFRESH_INTERVAL).await;
+            tokio::time::sleep(CODEX_ACCOUNT_REFRESH_INTERVAL).await;
         }
     })
-}
-
-fn spawn_codex_quota_refresh_task(state_handle: ProxyStateHandle) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        loop {
-            let store = {
-                let state = state_handle.read().await;
-                state.codex_accounts.clone()
-            };
-            match store.refresh_due_quota_accounts().await {
-                Ok(refreshed) if !refreshed.is_empty() => {
-                    tracing::info!(
-                        refreshed = refreshed.len(),
-                        "codex due quota refresh finished"
-                    );
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(error = %error, "codex due quota refresh failed");
-                }
-            }
-            tokio::time::sleep(random_codex_quota_refresh_delay()).await;
-        }
-    })
-}
-
-fn random_codex_quota_refresh_delay() -> Duration {
-    Duration::from_secs(rand::random_range(
-        CODEX_QUOTA_REFRESH_MIN_SECONDS..=CODEX_QUOTA_REFRESH_MAX_SECONDS,
-    ))
 }
 
 fn spawn_xai_account_refresh_task(state_handle: ProxyStateHandle) -> JoinHandle<()> {

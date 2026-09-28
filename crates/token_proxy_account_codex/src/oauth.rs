@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use token_proxy_account_store::oauth_util::build_reqwest_client;
 
-use super::error::format_oauth_status_error;
+use super::error::{format_oauth_status_error, oauth_status_is_retryable};
 
 const OPENAI_AUTH_URL: &str = "https://auth.openai.com/oauth/authorize";
 const OPENAI_TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
@@ -145,26 +145,71 @@ impl CodexOAuthClient {
             form.finish()
         };
 
+        let attempts = if payload.grant_type == "refresh_token" {
+            3
+        } else {
+            1
+        };
+        // A refresh round, including retry delays, stays inside the single-flight wait budget.
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            for attempt in 0..attempts {
+                match self.post_form_once(&body).await {
+                    Ok(response) => return Ok(response),
+                    Err((message, retryable)) => {
+                        if !retryable || attempt + 1 == attempts {
+                            return Err(message);
+                        }
+                        let delay_seconds = attempt + 1;
+                        tracing::warn!(
+                            attempt = attempt + 1,
+                            delay_seconds,
+                            "codex oauth transient failure; retry deferred"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(delay_seconds)).await;
+                    }
+                }
+            }
+            unreachable!("at least one OAuth attempt")
+        })
+        .await
+        .map_err(|_| "Codex OAuth refresh round timed out after 30 seconds.".to_string())?
+    }
+
+    async fn post_form_once(&self, body: &str) -> Result<CodexTokenResponse, (String, bool)> {
         let response = self
             .http
             .post(&self.token_url)
             .header("Content-Type", "application/x-www-form-urlencoded")
             .header("Accept", "application/json")
-            .body(body)
+            .body(body.to_string())
             .send()
             .await
-            .map_err(|err| format!("Codex OAuth request failed: {err}"))?;
+            .map_err(|error| {
+                (
+                    format!("Codex OAuth request failed: {error}"),
+                    error.is_connect() || error.is_timeout(),
+                )
+            })?;
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|err| format!("Failed to read Codex OAuth response: {err}"))?;
+        let bytes = response.bytes().await.map_err(|error| {
+            (
+                format!("Failed to read Codex OAuth response: {error}"),
+                false,
+            )
+        })?;
         if !status.is_success() {
             let body = String::from_utf8_lossy(&bytes);
-            return Err(format_oauth_status_error(status.as_u16(), body.as_ref()));
+            return Err((
+                format_oauth_status_error(status.as_u16(), &body),
+                oauth_status_is_retryable(status.as_u16(), &body),
+            ));
         }
-        serde_json::from_slice(&bytes)
-            .map_err(|err| format!("Failed to parse Codex OAuth response: {err}"))
+        serde_json::from_slice(&bytes).map_err(|error| {
+            (
+                format!("Failed to parse Codex OAuth response: {error}"),
+                false,
+            )
+        })
     }
 }
 

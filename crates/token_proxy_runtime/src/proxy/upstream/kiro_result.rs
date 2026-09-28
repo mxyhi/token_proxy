@@ -217,7 +217,6 @@ fn build_error_outcome(
         response: Some(response),
         is_timeout: false,
         should_cooldown,
-        deferred_log: None,
     }
 }
 

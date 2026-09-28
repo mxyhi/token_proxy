@@ -118,10 +118,6 @@ impl RequestTimings {
         )
     }
 
-    pub(crate) fn reserve_billing_attempt(&self) {
-        let _ = self.billing_attempt();
-    }
-
     fn mark_once(
         &self,
         select: impl FnOnce(&mut RequestTimingSnapshot) -> &mut Option<u128>,
@@ -194,8 +190,7 @@ pub(crate) fn build_log_entry(
         && context.status < 400
         && response_error.as_deref() == Some(super::response::STREAM_DROPPED_ERROR);
     if let Some(billing) = &context.timings.billing {
-        // 取消的后备流不能擦除尚未落库的先行 transport 错误。
-        billing.lifecycle.note_log(canceled);
+        billing.lifecycle.note_log();
     }
     let response_error = if canceled {
         Some(super::client_lifecycle::CLIENT_CANCELED_ERROR.to_string())

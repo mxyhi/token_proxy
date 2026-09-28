@@ -182,19 +182,34 @@ fn client_cancellation_preserves_prior_http_and_transport_failures() {
                 .await
                 .unwrap()
                 .unwrap();
-            wait_for_request_log_count(&pool, if streaming { 2 } else { 1 }).await;
+            let failure_count = if transport {
+                transport_failure.requests().len()
+            } else {
+                1
+            };
+            let expected_logs = failure_count + usize::from(streaming);
+            wait_for_request_log_count(&pool, expected_logs as i64).await;
             let rows = sqlx::query("SELECT status, upstream_id, is_billable, input_tokens, cost_nano_usd FROM request_logs")
                 .fetch_all(&pool)
                 .await
                 .unwrap();
-            assert_eq!(rows.len(), if streaming { 2 } else { 1 });
-            let failure = rows
+            assert_eq!(rows.len(), expected_logs);
+            let failures: Vec<_> = rows
                 .iter()
-                .find(|row| row.get::<String, _>("upstream_id") == "failed")
-                .expect("original failure retained");
+                .filter(|row| row.get::<String, _>("upstream_id") == "failed")
+                .collect();
+            assert_eq!(failures.len(), failure_count);
+            for failure in &failures {
+                assert_eq!(
+                    failure.get::<i64, _>("status"),
+                    if transport { 502 } else { 503 }
+                );
+            }
             assert_eq!(
-                failure.get::<i64, _>("status"),
-                if transport { 502 } else { 503 }
+                rows.iter()
+                    .filter(|row| row.get::<i64, _>("is_billable") == 1)
+                    .count(),
+                1
             );
             if streaming {
                 let canceled = rows
@@ -207,7 +222,9 @@ fn client_cancellation_preserves_prior_http_and_transport_failures() {
                 assert!(canceled
                     .get::<Option<i64>, _>("cost_nano_usd")
                     .is_some_and(|cost| cost > 0));
-                assert_eq!(failure.get::<i64, _>("is_billable"), 0);
+                assert!(failures
+                    .iter()
+                    .all(|row| row.get::<i64, _>("is_billable") == 0));
             }
             proxy_task.abort();
             upstream_task.abort();

@@ -139,8 +139,6 @@ enum AttemptOutcome {
         response: Option<Response>,
         is_timeout: bool,
         should_cooldown: bool,
-        /// 首响应头前 transport 诊断；仅在本请求最终失败时写入 SQLite，成功恢复不落 502 行。
-        deferred_log: Option<String>,
     },
     Fatal(Response),
     SkippedAuth,

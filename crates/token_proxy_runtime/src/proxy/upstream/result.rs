@@ -185,7 +185,6 @@ pub(super) async fn handle_upstream_result(
                 response: Some(response),
                 is_timeout: false,
                 should_cooldown,
-                deferred_log: None,
             }
         }
         Ok(res) => {
@@ -234,7 +233,6 @@ pub(super) async fn handle_upstream_result(
                     response: Some(response),
                     is_timeout: false,
                     should_cooldown: retryable.should_cooldown,
-                    deferred_log: None,
                 };
             }
             update_account_cooldown_from_status(
@@ -262,20 +260,28 @@ pub(super) async fn handle_upstream_result(
                 Some(message.clone()),
                 cooldown_scope,
             );
-            // 延后到本请求终态失败再写 SQLite，避免中间 attempt 刷 502。
-            meta.billing.lifecycle.remember_transport_error(
+            // 每次真实上游失败都落库；错误请求由 SQLite retention 在 7 天后清理。
+            log_upstream_error_if_needed(
+                &log,
+                request_detail.as_ref(),
+                meta,
                 provider,
                 upstream_id,
                 account_id.as_deref(),
-                if err.is_timeout() { 504 } else { 502 },
-                &message,
+                inbound_path,
+                if err.is_timeout() {
+                    StatusCode::GATEWAY_TIMEOUT
+                } else {
+                    StatusCode::BAD_GATEWAY
+                },
+                message.clone(),
+                start_time,
             );
             AttemptOutcome::Retryable {
                 message: message.clone(),
                 response: None,
                 is_timeout: err.is_timeout(),
                 should_cooldown: true,
-                deferred_log: Some(message),
             }
         }
         Err(err) => {
@@ -482,27 +488,6 @@ fn finalize_forward_response(
             );
         }
         return response;
-    }
-    // 仅终态失败落一条 deferred transport 诊断（中间 attempt 已跳过写库）。
-    if let Some(deferred) = summary.last_deferred_log.as_ref() {
-        let status = StatusCode::from_u16(deferred.status).unwrap_or(StatusCode::BAD_GATEWAY);
-        let upstream_id = if deferred.upstream_id.is_empty() {
-            LOCAL_UPSTREAM_ID
-        } else {
-            deferred.upstream_id.as_str()
-        };
-        log_upstream_error_if_needed(
-            log,
-            request_detail,
-            meta,
-            &deferred.provider,
-            upstream_id,
-            deferred.account_id.as_deref(),
-            inbound_path,
-            status,
-            deferred.message.clone(),
-            deferred.start_time,
-        );
     }
     if let Some(err) = summary.last_timeout_error {
         return http::error_response(StatusCode::GATEWAY_TIMEOUT, err);

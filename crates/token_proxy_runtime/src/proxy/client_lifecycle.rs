@@ -3,7 +3,7 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     task::{Context, Poll},
 };
@@ -22,15 +22,6 @@ pub(crate) const CLIENT_CANCELED_ERROR: &str = "client disconnected before compl
 pub(crate) struct ClientLifecycle {
     canceled: AtomicBool,
     logs: AtomicU64,
-    deferred: Mutex<Option<DeferredError>>,
-}
-
-struct DeferredError {
-    provider: String,
-    upstream_id: String,
-    account_id: Option<String>,
-    status: u16,
-    message: String,
 }
 
 impl ClientLifecycle {
@@ -38,31 +29,8 @@ impl ClientLifecycle {
         self.canceled.load(Ordering::Acquire)
     }
 
-    pub(crate) fn note_log(&self, preserve_deferred: bool) {
+    pub(crate) fn note_log(&self) {
         self.logs.fetch_add(1, Ordering::Relaxed);
-        if !preserve_deferred {
-            self.deferred
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .take();
-        }
-    }
-
-    pub(crate) fn remember_transport_error(
-        &self,
-        provider: &str,
-        upstream_id: &str,
-        account_id: Option<&str>,
-        status: u16,
-        message: &str,
-    ) {
-        *self.deferred.lock().unwrap_or_else(|e| e.into_inner()) = Some(DeferredError {
-            provider: provider.to_string(),
-            upstream_id: upstream_id.to_string(),
-            account_id: account_id.map(str::to_string),
-            status,
-            message: message.to_string(),
-        });
     }
 }
 
@@ -86,47 +54,21 @@ impl ClientGuard {
     }
 
     fn cancel(&self) {
-        // 先为历史错误保留完成序号，再释放后备流。否则延后落库的无 usage
-        // 诊断会获得更大序号，错误取代后备流成为该请求的唯一账单记录。
-        if self
-            .lifecycle
-            .deferred
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .is_some()
-        {
-            self.context.timings.reserve_billing_attempt();
-        }
         self.lifecycle.canceled.store(true, Ordering::Release);
         tracing::debug!(path = %self.context.path, "client response lifecycle canceled");
     }
 
     fn finish_cancel(&self) {
-        // 内层流先释放并写已收集的 usage。没有流日志时才补请求级诊断，
-        // 已发生的 transport 错误优先于取消，不更改账号冷却或触发重试。
-        let deferred = self
-            .lifecycle
-            .deferred
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
-        let mut context = self.context.clone();
-        let message = if let Some(error) = deferred {
-            context.provider = error.provider;
-            context.upstream_id = error.upstream_id;
-            context.account_id = error.account_id;
-            context.status = error.status;
-            error.message
-        } else if self.lifecycle.logs.load(Ordering::Relaxed) == 0 {
-            context.status = 499;
-            CLIENT_CANCELED_ERROR.to_string()
-        } else {
+        // 上游错误已即时写入；内层流释放后仅在没有任何日志时补请求级取消。
+        if self.lifecycle.logs.load(Ordering::Relaxed) > 0 {
             return;
-        };
+        }
+        let mut context = self.context.clone();
+        context.status = 499;
         self.log.clone().write_detached(build_log_entry(
             &context,
             UsageSnapshot::default(),
-            Some(message),
+            Some(CLIENT_CANCELED_ERROR.to_string()),
         ));
     }
 }

@@ -138,19 +138,23 @@ pub(super) async fn handle_send_error(
                 "Upstream did not respond within {}s.",
                 state.config.sync_response_timeout.as_secs()
             );
-            meta.billing.lifecycle.remember_transport_error(
+            result::log_upstream_error_if_needed(
+                &state.log,
+                request_detail.as_ref(),
+                meta,
                 "kiro",
                 &upstream.id,
                 account_id.as_deref(),
-                504,
-                &message,
+                inbound_path,
+                StatusCode::GATEWAY_TIMEOUT,
+                message.clone(),
+                start_time,
             );
             AttemptOutcome::Retryable {
                 message: message.clone(),
                 response: None,
                 is_timeout: true,
                 should_cooldown: true,
-                deferred_log: Some(message),
             }
         }
     }

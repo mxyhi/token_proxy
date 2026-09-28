@@ -235,7 +235,6 @@ async fn inspect_request_repair(
                     response: None,
                     is_timeout: error.is_timeout(),
                     should_cooldown: false,
-                    deferred_log: None,
                 },
                 selected_account_id,
             });

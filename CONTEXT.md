@@ -37,8 +37,8 @@ _Avoid_: Summary Visibility、Thinking Display
 _Avoid_: Reasoning Effort、Thinking Budget
 
 **Error Request**:
-最终 HTTP 状态码大于等于 400 的请求记录；它不参与长期请求统计，保留期（7 天）结束后整条删除。
-_Avoid_: 仅以 response_error 是否存在判断错误请求
+状态码大于等于 400 的请求或上游尝试记录，包含连接失败与超时；后续重试或切换成功不抹去此前错误，保留期（7 天）结束后整条删除，不参与长期请求统计。
+_Avoid_: 仅以 response_error 是否存在判断错误请求、成功恢复后隐藏失败记录
 
 **Client Cancellation（客户端取消）**:
 完整请求已进入转发后，客户端在响应完成前结束该请求；没有先行上游错误的取消日志记为 499，已观察到的真实上游错误保留原归因。并行候选淘汰不属于客户端取消。
@@ -101,7 +101,7 @@ _Avoid_: 原地重试、跨上游 failover、任意 400 重试
 _Avoid_: Retry Count、Cooldown Scope
 
 **Upstream Attempt（上游 Attempt）**:
-一次实际发往某个上游或账户的发送及其响应记录。每个 attempt 保留原始 usage、token、成本、账户和状态，用于排障与上游消耗审计；它不等于客户端看到的一次请求。
+一次向某个上游或账户发起的发送尝试，包含建立连接失败、响应前超时和收到响应的结果。每个 attempt 保留原始 usage、token、成本、账户和状态，用于排障与上游消耗审计；它不等于客户端看到的一次请求。
 _Avoid_: 客户端请求账单、最终请求
 
 **Final Client Request Billing（客户端最终请求账单）**:

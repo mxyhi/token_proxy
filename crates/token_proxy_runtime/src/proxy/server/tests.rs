@@ -2692,13 +2692,19 @@ async fn assert_disconnect_once_retries_same_upstream_before_fallback() {
     let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;
 
     let (status, response_text) = send_scripted_replay_probe(state).await;
-    // 成功恢复时不再写中间 502 行，只应有最终成功日志。
-    let logged_count = wait_for_request_log_count(&pool, 1).await;
+    // 即使内部连接恢复成功，先前失败仍保留，等待 7 天清理。
+    let logged_count = wait_for_request_log_count(&pool, 2).await;
     let failure_count =
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM request_logs WHERE status = 502;")
             .fetch_one(&pool)
             .await
             .expect("count transport failure logs");
+    let rows = sqlx::query(
+        "SELECT status, client_request_id, attempt_index, is_billable FROM request_logs ORDER BY attempt_index",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("query recovered request history");
     let primary_connections = primary.connections();
     let primary_requests = primary.requests();
     let fallback_requests = fallback.requests();
@@ -2718,10 +2724,19 @@ async fn assert_disconnect_once_retries_same_upstream_before_fallback() {
     );
     assert_wire_request_replayed(&primary_requests);
     assert!(fallback_requests.is_empty());
-    assert_eq!(logged_count, 1);
+    assert_eq!(logged_count, 2);
     assert_eq!(
-        failure_count, 0,
-        "recovered transport failure must not log intermediate 502"
+        failure_count, 1,
+        "recovered transport failure must retain intermediate 502"
+    );
+    assert_eq!(rows[0].get::<i64, _>("status"), 502);
+    assert_eq!(rows[0].get::<i64, _>("is_billable"), 0);
+    assert_eq!(rows[1].get::<i64, _>("status"), 200);
+    assert_eq!(rows[1].get::<i64, _>("is_billable"), 1);
+    assert_eq!(rows[1].get::<i64, _>("attempt_index"), 1);
+    assert_eq!(
+        rows[0].get::<String, _>("client_request_id"),
+        rows[1].get::<String, _>("client_request_id")
     );
 }
 
@@ -2761,15 +2776,24 @@ async fn assert_disconnect_twice_falls_back_after_one_fresh_retry() {
         dispatch: UpstreamDispatchRuntime::Serial,
     };
     let data_dir = next_test_data_dir("responses_disconnect_twice_fallback");
-    let state = build_test_state_handle(config, data_dir.clone()).await;
+    let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;
 
     let (status, response_text) = send_scripted_replay_probe(state).await;
     let primary_connections = primary.connections();
     let primary_requests = primary.requests();
     let fallback_requests = fallback.requests();
+    wait_for_request_log_count(&pool, primary_requests.len() as i64 + 1).await;
+    let rows = sqlx::query(
+        "SELECT upstream_id, status, client_request_id, attempt_index, is_billable, response_error \
+         FROM request_logs ORDER BY attempt_index",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("query complete fallback history");
 
     primary.abort();
     fallback.abort();
+    pool.close().await;
     let _ = std::fs::remove_dir_all(&data_dir);
 
     assert_eq!(status, StatusCode::OK);
@@ -2783,6 +2807,29 @@ async fn assert_disconnect_twice_falls_back_after_one_fresh_retry() {
     assert_eq!(fallback_requests.len(), 1);
     assert_eq!(fallback_requests[0].path, RESPONSES_PATH);
     assert_eq!(fallback_requests[0].body["model"].as_str(), Some("gpt-5"));
+    assert_eq!(rows.len(), primary_requests.len() + 1);
+    let request_id: String = rows[0].get("client_request_id");
+    for (index, row) in rows.iter().enumerate() {
+        let final_attempt = index + 1 == rows.len();
+        assert_eq!(row.get::<String, _>("client_request_id"), request_id);
+        assert_eq!(row.get::<i64, _>("attempt_index"), index as i64);
+        assert_eq!(row.get::<i64, _>("is_billable"), i64::from(final_attempt));
+        assert_eq!(
+            row.get::<i64, _>("status"),
+            if final_attempt { 200 } else { 502 }
+        );
+        assert_eq!(
+            row.get::<String, _>("upstream_id"),
+            if final_attempt {
+                "responses-fallback-after-fresh-exhausted"
+            } else {
+                "responses-disconnect-twice"
+            }
+        );
+        if !final_attempt {
+            assert!(!row.get::<String, _>("response_error").is_empty());
+        }
+    }
 }
 
 async fn assert_codex_transport_disconnect_does_not_restart_account_chain(pinned: bool) {
@@ -3032,7 +3079,7 @@ data: [DONE]\n\n",
     ]);
     config.stream_first_output_timeout = std::time::Duration::from_millis(20);
     let data_dir = next_test_data_dir("responses_stream_header_timeout_fallback");
-    let state = build_test_state_handle(config, data_dir.clone()).await;
+    let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;
 
     let response = proxy_request(
         State(state),
@@ -3057,9 +3104,17 @@ data: [DONE]\n\n",
     let response_text = String::from_utf8_lossy(&response_bytes);
     let primary_requests = primary.requests();
     let fallback_requests = fallback.requests();
+    wait_for_request_log_count(&pool, 3).await;
+    let rows = sqlx::query(
+        "SELECT status, account_id, is_billable FROM request_logs ORDER BY attempt_index",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("query timeout fallback history");
 
     primary.abort();
     fallback.abort();
+    pool.close().await;
     let _ = std::fs::remove_dir_all(&data_dir);
 
     assert_eq!(response_status, StatusCode::OK);
@@ -3072,6 +3127,14 @@ data: [DONE]\n\n",
     assert_eq!(fallback_requests.len(), 1);
     assert_eq!(primary_requests[0].path, CODEX_RESPONSES_PATH);
     assert_eq!(fallback_requests[0].path, RESPONSES_PATH);
+    assert_eq!(rows.len(), 3);
+    for row in &rows[..2] {
+        assert_eq!(row.get::<i64, _>("status"), 504);
+        assert_eq!(row.get::<i64, _>("is_billable"), 0);
+        assert!(row.get::<Option<String>, _>("account_id").is_some());
+    }
+    assert_eq!(rows[2].get::<i64, _>("status"), 200);
+    assert_eq!(rows[2].get::<i64, _>("is_billable"), 1);
 }
 
 async fn assert_responses_stream_fallbacks_after_attempt_first_output_deadline() {

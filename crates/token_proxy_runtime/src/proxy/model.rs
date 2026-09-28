@@ -9,7 +9,12 @@ pub(crate) fn is_openai_responses_reasoning_model(model: &str) -> bool {
         .next()
         .unwrap_or_default()
         .to_ascii_lowercase();
-    model.starts_with("gpt-5") || is_gpt6_sol_or_luna_model(&model)
+    // 按数字代际识别，避免新增 GPT 系列漏过滤；image/audio 不属于数字代际。
+    model
+        .strip_prefix("gpt-")
+        .and_then(|suffix| suffix.split(|c: char| !c.is_ascii_digit()).next())
+        .and_then(|generation| generation.parse::<u32>().ok())
+        .is_some_and(|generation| generation >= 5)
 }
 
 pub(crate) fn is_gpt6_sol_or_luna_model(model: &str) -> bool {

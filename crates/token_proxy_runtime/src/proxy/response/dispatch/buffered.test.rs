@@ -1136,3 +1136,168 @@ async fn buffered_codex_preserves_normal_json_compatibility() {
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(value["choices"][0]["message"]["content"], "hello");
 }
+
+fn responses_text_recovery_sse(output: serde_json::Value, status: &str) -> String {
+    let events = [
+        json!({"type":"response.output_item.added", "output_index":0, "item":{"id":"msg_a", "type":"message", "role":"assistant", "content":[]}}),
+        json!({"type":"response.output_text.delta", "item_id":"msg_a", "output_index":0, "content_index":0, "delta":"hello"}),
+        json!({"type":"response.output_text.delta", "item_id":"msg_a", "output_index":0, "content_index":0, "delta":" world"}),
+        json!({"type":"response.output_text.done", "item_id":"msg_a", "output_index":0, "content_index":0, "text":""}),
+        json!({"type":"response.output_item.done", "output_index":0, "item":{"id":"msg_a", "type":"message", "role":"assistant", "content":[]}}),
+        json!({"type":format!("response.{status}"), "response":{"id":"resp_recovery", "object":"response", "model":"gpt-6-astra", "status":status, "output":output, "incomplete_details":{"reason":"max_output_tokens"}, "usage":{"input_tokens":12,"output_tokens":3,"total_tokens":15}}}),
+    ];
+    events
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect()
+}
+
+#[test]
+fn buffered_responses_text_recovery_preserves_terminal_fields() {
+    for content in [
+        json!([]),
+        json!([{"type":"output_text", "text":"", "annotations":[]}]),
+    ] {
+        let output = json!([{"id":"msg_a", "type":"message", "role":"assistant", "status":"incomplete", "content":content}]);
+        let sse = responses_text_recovery_sse(output, "incomplete");
+        let body = buffer_event_stream_response(&Bytes::from(sse)).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["output"][0]["content"][0]["text"], "hello world");
+        assert_eq!(value["output"][0]["status"], "incomplete");
+        assert_eq!(value["status"], "incomplete");
+        assert_eq!(value["incomplete_details"]["reason"], "max_output_tokens");
+        assert_eq!(value["usage"]["total_tokens"], 15);
+    }
+}
+
+#[test]
+fn buffered_responses_text_recovery_preserves_final_text_and_refusal() {
+    for content in [
+        json!([{"type":"output_text", "text":"final authoritative text", "annotations":[{"type":"citation"}]}]),
+        json!([{"type":"refusal", "refusal":"cannot comply"}]),
+    ] {
+        let output =
+            json!([{"id":"msg_a", "type":"message", "role":"assistant", "content":content}]);
+        let body = buffer_event_stream_response(&Bytes::from(responses_text_recovery_sse(
+            output.clone(),
+            "completed",
+        )))
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["output"], output);
+    }
+}
+
+#[test]
+fn buffered_responses_text_recovery_aligns_items_and_content() {
+    let tool = json!({"type":"function_call", "id":"fc_1", "call_id":"call_1", "name":"lookup", "arguments":"{}"});
+    let events = [
+        json!({"type":"response.output_item.added", "output_index":0, "item":{"type":"message", "id":"msg_a", "content":[]}}),
+        json!({"type":"response.output_item.done", "output_index":1, "item":tool}),
+        json!({"type":"response.output_item.added", "output_index":2, "item":{"type":"message", "id":"msg_b", "content":[]}}),
+        json!({"type":"response.output_text.delta", "item_id":"msg_a", "output_index":0, "content_index":0, "delta":"first"}),
+        json!({"type":"response.output_text.delta", "item_id":"msg_b", "output_index":2, "content_index":0, "delta":"second"}),
+        json!({"type":"response.output_text.delta", "item_id":"msg_b", "content_index":1, "delta":"another part"}),
+        json!({"type":"response.output_item.done", "output_index":2, "item":{"type":"message", "id":"msg_b", "content":[]}}),
+        // IDs take precedence over final array positions; never fill unrelated messages.
+        json!({"type":"response.completed", "response":{"status":"completed", "output":[
+            {"type":"message", "id":"msg_b", "content":[{"type":"output_text", "text":""}, {"type":"output_text", "text":""}]},
+            tool,
+            {"type":"message", "id":"msg_a", "content":[]},
+            {"type":"message", "id":"msg_unrelated", "content":[]}
+        ]}}),
+    ];
+    let sse: String = events
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect();
+    let body = buffer_event_stream_response(&Bytes::from(sse)).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["output"][0]["content"][0]["text"], "second");
+    assert_eq!(value["output"][0]["content"][1]["text"], "another part");
+    assert_eq!(value["output"][1], tool);
+    assert_eq!(value["output"][2]["content"][0]["text"], "first");
+    assert_eq!(value["output"][3]["content"], json!([]));
+}
+
+#[tokio::test]
+async fn buffered_responses_text_recovery_reaches_all_codex_formats() {
+    for (transform, pointer) in [
+        (
+            FormatTransform::CodexToResponses,
+            "/output/0/content/0/text",
+        ),
+        (FormatTransform::CodexToChat, "/choices/0/message/content"),
+        (FormatTransform::CodexToAnthropic, "/content/0/text"),
+    ] {
+        let output = json!([{"id":"msg_a", "type":"message", "role":"assistant", "content":[]}]);
+        let response = buffered_codex_response(
+            responses_text_recovery_sse(output, "incomplete"),
+            None,
+            transform,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value.pointer(pointer), Some(&json!("hello world")));
+        match transform {
+            FormatTransform::CodexToResponses => assert_eq!(value["status"], "incomplete"),
+            FormatTransform::CodexToChat => {
+                assert_eq!(value["choices"][0]["finish_reason"], "length")
+            }
+            FormatTransform::CodexToAnthropic => assert_eq!(value["stop_reason"], "max_tokens"),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn buffered_responses_text_recovery_does_not_reuse_ids_or_guess_sparse_content() {
+    let events = [
+        json!({"type":"response.output_text.delta", "output_index":0, "content_index":0, "delta":"first"}),
+        json!({"type":"response.output_item.added", "output_index":0, "item":{"type":"message", "id":"msg_old", "content":[]}}),
+        json!({"type":"response.output_item.added", "output_index":0, "item":{"type":"message", "id":"msg_new", "content":[]}}),
+        json!({"type":"response.output_text.delta", "output_index":0, "content_index":0, "delta":"second"}),
+        json!({"type":"response.output_text.delta", "item_id":"msg_sparse", "output_index":2, "content_index":2, "delta":"must not shift"}),
+        json!({"type":"response.completed", "response":{"status":"completed", "output":[
+            {"type":"message", "id":"msg_new", "content":[]},
+            {"type":"message", "id":"msg_old", "content":[]},
+            {"type":"message", "id":"msg_sparse", "content":[{"type":"refusal", "refusal":"no"}]}
+        ]}}),
+    ];
+    let sse: String = events
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect();
+    let body = buffer_event_stream_response(&Bytes::from(sse)).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(value["output"][0]["content"][0]["text"], "second");
+    assert_eq!(value["output"][1]["content"][0]["text"], "first");
+    assert_eq!(
+        value["output"][2]["content"],
+        json!([{"type":"refusal", "refusal":"no"}])
+    );
+}
+
+#[test]
+fn buffered_responses_text_recovery_ignores_ambiguous_anonymous_delta() {
+    for items in [
+        json!([{"type":"function_call", "id":"fc_1", "name":"lookup", "arguments":"{}"}]),
+        json!([{"type":"message", "id":"msg_a", "content":[]}, {"type":"message", "id":"msg_b", "content":[]}]),
+    ] {
+        let mut sse = String::new();
+        for (index, item) in items.as_array().unwrap().iter().enumerate() {
+            let event =
+                json!({"type":"response.output_item.added", "output_index":index, "item":item});
+            sse.push_str(&format!("data: {event}\n\n"));
+        }
+        let delta = json!({"type":"response.output_text.delta", "delta":"unrelated"});
+        let terminal =
+            json!({"type":"response.completed", "response":{"status":"completed", "output":items}});
+        sse.push_str(&format!("data: {delta}\n\ndata: {terminal}\n\n"));
+        let body = buffer_event_stream_response(&Bytes::from(sse)).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["output"], items);
+    }
+}

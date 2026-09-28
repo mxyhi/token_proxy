@@ -1193,6 +1193,8 @@ fn map_anthropic_thinking_to_responses_reasoning(
 ) -> Option<Value> {
     let thinking = value?.as_object()?;
     let effort = match thinking.get("type").and_then(Value::as_str) {
+        // 显式关闭优先于 output_config.effort；省略 reasoning 会重新启用上游默认值。
+        Some("disabled") => "none",
         Some("enabled") => {
             let budget = thinking
                 .get("budget_tokens")

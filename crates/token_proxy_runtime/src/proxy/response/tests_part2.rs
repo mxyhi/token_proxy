@@ -1883,6 +1883,102 @@ fn stream_anthropic_to_responses_preserves_ordered_blocks_and_empty_arguments() 
 }
 
 #[test]
+fn stream_anthropic_to_responses_preserves_inline_tool_input() {
+    super::run_async(async {
+        let cases = [
+            (
+                "inline",
+                json!({"path": "例子.rs", "nested": {"enabled": true}}),
+                vec![],
+                true,
+            ),
+            ("empty_delta", json!({"path": "seed"}), vec![""], true),
+            (
+                "real_delta",
+                json!({"path": "seed"}),
+                vec!["", "{\"path\":", "\"delta\"}"],
+                true,
+            ),
+            ("empty_object", json!({}), vec![], true),
+            ("null", Value::Null, vec![], true),
+            ("eof", json!({"path": "seed"}), vec![], false),
+        ];
+        for (name, input, deltas, message_stop) in cases {
+            let (_, context, _) = super::setup_responses_stream().await;
+            let mut events = vec![json!({
+                "type": "content_block_start", "index": 0,
+                "content_block": {"type": "tool_use", "id": "tool_inline", "name": "read", "input": input}
+            })];
+            for delta in &deltas {
+                events.push(json!({
+                    "type": "content_block_delta", "index": 0,
+                    "delta": {"type": "input_json_delta", "partial_json": delta}
+                }));
+            }
+            if message_stop {
+                events.push(json!({"type": "content_block_stop", "index": 0}));
+                events.push(json!({"type": "message_stop"}));
+            }
+            let upstream = futures_util::stream::iter(events.into_iter().map(|event| {
+                Ok::<Bytes, std::io::Error>(Bytes::from(format!("data: {event}\n\n")))
+            }));
+            let tracker = crate::proxy::token_rate::TokenRateTracker::new()
+                .register(None, None)
+                .await;
+            let payloads = super::super::anthropic_to_responses::stream_anthropic_to_responses(
+                upstream,
+                context,
+                Arc::new(LogWriter::new(None)),
+                tracker,
+            )
+            .map(|item| item.expect("stream item"))
+            .filter_map(|chunk| future::ready(super::parse_sse_json(&chunk)))
+            .collect::<Vec<_>>()
+            .await;
+            let expected = if deltas.iter().any(|delta| !delta.is_empty()) {
+                deltas.concat()
+            } else if input.is_null() {
+                "{}".to_string()
+            } else {
+                input.to_string()
+            };
+            let arguments_done_index = payloads
+                .iter()
+                .position(|event| event["type"] == "response.function_call_arguments.done")
+                .expect("arguments done");
+            assert_eq!(
+                payloads[arguments_done_index]["arguments"], expected,
+                "case={name}"
+            );
+            let streamed_arguments = payloads[..arguments_done_index]
+                .iter()
+                .filter(|event| event["type"] == "response.function_call_arguments.delta")
+                .map(|event| event["delta"].as_str().expect("arguments delta"))
+                .collect::<String>();
+            // 空参数沿用现有 {} fallback；实际参数必须可由 done 之前的 delta 重建。
+            if expected != "{}" {
+                assert_eq!(streamed_arguments, expected, "case={name}");
+            } else {
+                assert!(streamed_arguments.is_empty(), "case={name}");
+            }
+            let item_done = payloads
+                .iter()
+                .find(|event| event["type"] == "response.output_item.done")
+                .expect("item done");
+            let completed = payloads
+                .iter()
+                .find(|event| event["type"] == "response.completed")
+                .expect("completed");
+            assert_eq!(item_done["item"]["arguments"], expected, "case={name}");
+            assert_eq!(
+                completed["response"]["output"][0]["arguments"], expected,
+                "case={name}"
+            );
+        }
+    });
+}
+
+#[test]
 fn stream_anthropic_to_responses_maps_split_web_search_queries_and_results() {
     super::run_async(async {
         let (_, context, _) = super::setup_responses_stream().await;

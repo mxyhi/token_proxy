@@ -217,3 +217,74 @@ fn codex_to_images_generations_response_maps_image_call_to_openai_images_shape()
     assert_eq!(value["data"][0]["revised_prompt"], json!("draw cat"));
     assert_eq!(value["usage"]["total_tokens"], json!(6));
 }
+
+#[test]
+fn anthropic_disabled_thinking_survives_openai_bridges() {
+    let clients = ProxyHttpClients::new().expect("http clients");
+    for transform in [
+        FormatTransform::AnthropicToResponses,
+        FormatTransform::AnthropicToChat,
+        FormatTransform::AnthropicToCodex,
+    ] {
+        let value = transform_request_value(
+            transform,
+            json!({
+                "model": "gpt-6-astra", "max_tokens": 123,
+                "thinking": {"type": "disabled", "display": "summarized"},
+                "output_config": {"effort": "high"},
+                "messages": [{"role": "user", "content": "hi"}]
+            }),
+            &clients,
+            None,
+        );
+        if matches!(transform, FormatTransform::AnthropicToChat) {
+            assert_eq!(value["reasoning_effort"], "none");
+        } else {
+            assert_eq!(value["reasoning"], json!({"effort": "none"}));
+        }
+    }
+    let unspecified = transform_request_value(
+        FormatTransform::AnthropicToResponses,
+        json!({
+            "model": "gpt-6-astra", "max_tokens": 123,
+            "messages": [{"role": "user", "content": "hi"}]
+        }),
+        &clients,
+        None,
+    );
+    assert!(unspecified.get("reasoning").is_none());
+}
+
+#[test]
+fn gpt_generation_sampling_contract_survives_openai_bridges() {
+    let clients = ProxyHttpClients::new().expect("http clients");
+    for (model, strip) in [
+        ("gpt-5.4-mini", true),
+        ("gpt-6", true),
+        ("gpt-6-astra", true),
+        ("openai/gpt-6-astra-20260901", true),
+        (" GPT-6-ASTRA ", true),
+        ("gpt-7", true),
+        ("gpt-4.1", false),
+        ("gpt-image-1", false),
+        ("gpt-audio", false),
+        ("custom-gpt-6", false),
+    ] {
+        for transform in [
+            FormatTransform::ChatToResponses,
+            FormatTransform::AnthropicToResponses,
+        ] {
+            let value = transform_request_value(
+                transform,
+                json!({
+                    "model": model, "max_tokens": 123, "temperature": 0.7, "top_p": 0.9,
+                    "messages": [{"role": "user", "content": "hi"}]
+                }),
+                &clients,
+                None,
+            );
+            assert_eq!(value.get("temperature").is_none(), strip, "model={model}");
+            assert_eq!(value.get("top_p").is_none(), strip, "model={model}");
+        }
+    }
+}

@@ -47,6 +47,7 @@ struct FunctionCallOutput {
     call_id: String,
     name: String,
     arguments: String,
+    pending_arguments: Option<String>,
 }
 
 struct WebSearchOutput {
@@ -333,6 +334,17 @@ where
                 let call_id = block.get("id").and_then(Value::as_str).unwrap_or("");
                 let name = block.get("name").and_then(Value::as_str).unwrap_or("");
                 let tool_index = self.ensure_function_call_output(index, Some(call_id), Some(name));
+                // 兼容中继可能在 start 中一次给全参数；延后发送，避免与后续 delta 拼成两份 JSON。
+                if let Some(input) = block
+                    .get("input")
+                    .and_then(Value::as_object)
+                    .filter(|input| !input.is_empty())
+                {
+                    self.function_calls[tool_index]
+                        .as_mut()
+                        .expect("call output exists")
+                        .pending_arguments = Some(Value::Object(input.clone()).to_string());
+                }
                 self.tool_call_by_block_index.insert(index, tool_index);
             }
             "server_tool_use"
@@ -499,6 +511,10 @@ where
                         .get_mut(call_index)
                         .and_then(Option::as_mut)
                         .expect("call output exists");
+                    // 只有真实非空增量才覆盖 start 参数；空占位增量不应造成参数丢失。
+                    if !partial_json.is_empty() {
+                        state.pending_arguments = None;
+                    }
                     state.arguments.push_str(partial_json);
                     (state.id.clone(), state.output_index)
                 };
@@ -645,6 +661,7 @@ where
             call_id,
             name,
             arguments: String::new(),
+            pending_arguments: None,
         }));
         call_index
     }
@@ -775,6 +792,31 @@ where
             return;
         }
         self.sent_done = true;
+
+        // 在生成 done 和终态快照前补发 inline 参数，也覆盖上游直接 EOF 的收尾路径。
+        for call_index in 0..self.function_calls.len() {
+            let Some(call) = self.function_calls[call_index].as_mut() else {
+                continue;
+            };
+            let Some(arguments) = call.pending_arguments.take() else {
+                continue;
+            };
+            call.arguments = arguments.clone();
+            let item_id = call.id.clone();
+            let output_index = call.output_index;
+            tracing::debug!(
+                output_index,
+                "restoring Claude inline tool input without argument deltas"
+            );
+            let sequence_number = self.next_sequence_number();
+            self.out.push_back(super::responses_event_sse(json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": item_id,
+                "output_index": output_index,
+                "delta": arguments,
+                "sequence_number": sequence_number
+            })));
+        }
 
         let completed_at = (super::now_ms() / 1000) as i64;
         let usage_snapshot = self.collector.finish();

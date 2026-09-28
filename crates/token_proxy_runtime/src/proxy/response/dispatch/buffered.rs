@@ -397,6 +397,11 @@ fn buffer_event_stream_response_impl(
 
     if let Some(response) = terminal_response.as_mut() {
         let hydrated = responses_buffer.hydrate_terminal_output_ids(response);
+        if let Some(items) = response.get_mut("output").and_then(Value::as_array_mut) {
+            for (index, item) in items.iter_mut().enumerate() {
+                responses_buffer.restore_item_text(index as i64, item);
+            }
+        }
         if hydrated > 0 {
             tracing::debug!(
                 hydrated,
@@ -679,8 +684,14 @@ struct ResponsesStreamBuffer {
     response: Map<String, Value>,
     output: BTreeMap<i64, Value>,
     output_item_ids: BTreeMap<i64, String>,
-    text: String,
+    text: BTreeMap<ResponseTextItem, BTreeMap<usize, String>>,
     saw_response_event: bool,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum ResponseTextItem {
+    Id(String),
+    Index(i64),
 }
 
 impl ResponsesStreamBuffer {
@@ -702,15 +713,8 @@ impl ResponsesStreamBuffer {
             "response.function_call_arguments.done" => {
                 self.push_function_call_arguments(value);
             }
-            "response.output_text.delta" => {
-                if let Some(delta) = value.get("delta").and_then(Value::as_str) {
-                    self.text.push_str(delta);
-                }
-            }
-            "response.output_text.done" => {
-                if let Some(text) = value.get("text").and_then(Value::as_str) {
-                    self.text = text.to_string();
-                }
+            "response.output_text.delta" | "response.output_text.done" => {
+                self.push_text(value, event_type == "response.output_text.done");
             }
             _ => {}
         }
@@ -735,7 +739,7 @@ impl ResponsesStreamBuffer {
                 .and_then(Value::as_str)
                 .filter(|id| !id.trim().is_empty()),
         ) {
-            self.output_item_ids.insert(index, item_id.to_string());
+            self.register_text_item_id(index, item_id);
         }
         let index = self.event_output_index(event);
         self.output.insert(index, item);
@@ -767,7 +771,173 @@ impl ResponsesStreamBuffer {
         event
             .get("output_index")
             .and_then(Value::as_i64)
-            .unwrap_or(self.output.len() as i64)
+            .or_else(|| {
+                let id = event
+                    .get("item_id")
+                    .or_else(|| event.pointer("/item/id"))?
+                    .as_str()?;
+                self.output.iter().find_map(|(index, item)| {
+                    (item.get("id").and_then(Value::as_str) == Some(id)).then_some(*index)
+                })
+            })
+            .unwrap_or_else(|| {
+                self.output
+                    .keys()
+                    .next_back()
+                    .map_or(0, |index| index.saturating_add(1))
+            })
+    }
+
+    fn push_text(&mut self, event: &Value, done: bool) {
+        let Some(text) = event
+            .get(if done { "text" } else { "delta" })
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+        else {
+            // Empty done snapshots must not erase deltas already received.
+            return;
+        };
+        let index = if event.get("output_index").is_none() && event.get("item_id").is_none() {
+            // Only the legacy single-message case has an unambiguous anonymous target.
+            if self.output.keys().any(|index| *index != 0)
+                || self
+                    .output
+                    .get(&0)
+                    .is_some_and(|item| item["type"] != "message")
+            {
+                return;
+            }
+            0
+        } else {
+            self.event_output_index(event)
+        };
+        let id = event
+            .get("item_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+            .or_else(|| self.output_item_ids.get(&index).cloned());
+        if self
+            .output
+            .get(&index)
+            .is_some_and(|item| item["type"] != "message")
+        {
+            return;
+        }
+        let key = id.as_ref().map_or(ResponseTextItem::Index(index), |id| {
+            ResponseTextItem::Id(id.clone())
+        });
+        if let Some(id) = id.as_ref() {
+            self.register_text_item_id(index, id);
+        }
+        if self
+            .output
+            .get(&index)
+            .and_then(|item| item.get("id"))
+            .and_then(Value::as_str)
+            .is_some_and(|existing| id.as_deref().is_some_and(|id| id != existing))
+        {
+            self.output.remove(&index);
+        }
+        let item = self.output.entry(index).or_insert_with(|| {
+            json!({
+                "type":"message", "role":"assistant", "content":[]
+            })
+        });
+        if let Some(id) = id {
+            if let Some(item) = item.as_object_mut() {
+                item.insert("id".to_string(), Value::String(id));
+            }
+        }
+        let content_index = event
+            .get("content_index")
+            .and_then(Value::as_u64)
+            .and_then(|index| usize::try_from(index).ok())
+            .unwrap_or(0);
+        let buffered = self
+            .text
+            .entry(key)
+            .or_default()
+            .entry(content_index)
+            .or_default();
+        if done {
+            *buffered = text.to_string();
+        } else {
+            buffered.push_str(text);
+        }
+    }
+
+    fn register_text_item_id(&mut self, index: i64, id: &str) {
+        // Bind earlier index-only deltas once; reusing an index for a new ID must not
+        // transfer the previous item's text to the new message.
+        if !self.output_item_ids.contains_key(&index) {
+            if let Some(text) = self.text.remove(&ResponseTextItem::Index(index)) {
+                self.text
+                    .entry(ResponseTextItem::Id(id.to_string()))
+                    .or_insert(text);
+            }
+        }
+        self.output_item_ids.insert(index, id.to_string());
+    }
+
+    fn restore_item_text(&self, index: i64, item: &mut Value) {
+        if item.get("type").and_then(Value::as_str) != Some("message") {
+            return;
+        }
+        let id = item
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty());
+        let key = id.map_or(ResponseTextItem::Index(index), |id| {
+            ResponseTextItem::Id(id.to_string())
+        });
+        // A known ID wins over the final array position, which may differ from output_index.
+        let text = self.text.get(&key).or_else(|| {
+            if self
+                .output_item_ids
+                .get(&index)
+                .is_some_and(|cached| Some(cached.as_str()) != id)
+            {
+                return None;
+            }
+            self.text.get(&ResponseTextItem::Index(index))
+        });
+        let Some(text) = text else { return };
+        let Some(object) = item.as_object_mut() else {
+            return;
+        };
+        let content = object.entry("content").or_insert_with(|| json!([]));
+        if content.is_null() {
+            *content = json!([]);
+        }
+        let Some(content) = content.as_array_mut() else {
+            return;
+        };
+        let mut recovered_parts = 0;
+        for (index, text) in text {
+            if let Some(part) = content.get_mut(*index) {
+                // Final text and refusal are authoritative; only fill empty output_text.
+                if part.get("type").and_then(Value::as_str) == Some("output_text")
+                    && part
+                        .get("text")
+                        .is_none_or(|value| value.is_null() || value.as_str() == Some(""))
+                {
+                    part["text"] = Value::String(text.clone());
+                    recovered_parts += 1;
+                }
+            } else if *index == content.len() {
+                // Do not shift sparse content indices or invent missing content parts.
+                content.push(json!({"type":"output_text", "text":text}));
+                recovered_parts += 1;
+            }
+        }
+        if recovered_parts > 0 {
+            tracing::debug!(
+                output_index = index,
+                recovered_parts,
+                "restored empty buffered Responses text parts"
+            );
+        }
     }
 
     fn hydrate_terminal_output_ids(&self, terminal: &mut Value) -> usize {
@@ -788,18 +958,11 @@ impl ResponsesStreamBuffer {
         if !self.saw_response_event {
             return None;
         }
-        if self.output.is_empty() && !self.text.is_empty() {
-            self.output.insert(
-                0,
-                json!({
-                    "type": "message",
-                    "role": "assistant",
-                    "content": [
-                        { "type": "output_text", "text": self.text }
-                    ]
-                }),
-            );
+        let mut output = std::mem::take(&mut self.output);
+        for (index, item) in &mut output {
+            self.restore_item_text(*index, item);
         }
+        self.output = output;
         if self.output.is_empty() {
             return None;
         }

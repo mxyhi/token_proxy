@@ -47,7 +47,12 @@ pub(super) fn build_request_headers(
             HeaderValue::from_static(DEFAULT_ANTHROPIC_VERSION),
         );
     }
-    codex_compat::apply_codex_headers_if_needed(provider, &mut request_headers, headers);
+    codex_compat::apply_codex_headers_if_needed(
+        provider,
+        inbound_path,
+        &mut request_headers,
+        headers,
+    );
 
     if let Some(extra_headers) = extra_headers {
         for (name, value) in extra_headers.iter() {

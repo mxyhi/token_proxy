@@ -20,6 +20,39 @@ use super::{
 };
 
 #[test]
+fn codex_service_tier_is_consistent_across_request_formats() {
+    for (tier, expected) in [
+        (json!("fast"), json!("priority")),
+        (json!(" Priority "), json!("priority")),
+        (json!("ultrafast"), json!("ultrafast")),
+        (json!("default"), Value::Null),
+        (json!("auto"), Value::Null),
+        (json!("flex"), Value::Null),
+        (json!("unknown"), Value::Null),
+        (json!(123), Value::Null),
+        (Value::Null, Value::Null),
+    ] {
+        for chat in [true, false] {
+            let mut input = if chat {
+                json!({"model":"gpt-5.6-sol", "messages":[{"role":"user", "content":"hi"}]})
+            } else {
+                json!({"model":"gpt-5.6-sol", "input":"hi"})
+            };
+            input["service_tier"] = tier.clone();
+            let bytes = Bytes::from(input.to_string());
+            let output = if chat {
+                chat_request_to_codex(&bytes, None)
+            } else {
+                responses_request_to_codex(&bytes, None)
+            }
+            .expect("convert");
+            let value: Value = serde_json::from_slice(&output).expect("json");
+            assert_eq!(value["service_tier"], expected, "chat={chat}, tier={tier}");
+        }
+    }
+}
+
+#[test]
 fn chat_request_to_codex_sets_model_and_stream() {
     let input = json!({
         "model": "gpt-5",

@@ -43,13 +43,14 @@ pub(crate) fn extract_tool_name_map_from_request_body(
 
 pub(crate) fn apply_codex_headers_if_needed(
     provider: &str,
+    inbound_path: &str,
     headers: &mut HeaderMap,
     inbound: &HeaderMap,
 ) {
     if provider != "codex" {
         return;
     }
-    apply_codex_headers(headers, inbound);
+    apply_codex_headers(headers, inbound, inbound_path);
 }
 
 // 单元测试拆到独立文件，使用 `#[path]` 以保持 `.test.rs` 命名约定。

@@ -214,13 +214,38 @@ async fn proxy_request_inner(
             Ok(prepared) => prepared,
             Err(response) => return http::with_cors_headers(&state.config, &headers, response),
         };
-    let response = forward_with_provider_fallbacks(
-        state.clone(),
-        method,
-        &uri,
-        &headers,
-        &prepared,
-        request_start,
+    let cancel_context = super::log::LogContext {
+        client_ip: prepared.client_ip.clone(),
+        path: prepared.path.clone(),
+        provider: PROVIDER_PROXY.to_string(),
+        upstream_id: LOCAL_UPSTREAM_ID.to_string(),
+        account_id: None,
+        model: prepared.meta.original_model.clone(),
+        mapped_model: prepared.meta.mapped_model.clone(),
+        stream: prepared.meta.stream,
+        status: 499,
+        upstream_request_id: None,
+        request_headers: None,
+        request_body: None,
+        ttfb_ms: None,
+        timings: super::log::RequestTimings::with_billing(prepared.meta.billing.clone()),
+        start: request_start,
+    };
+    let cancel_guard = super::client_lifecycle::ClientGuard::new(
+        prepared.meta.billing.lifecycle.clone(),
+        cancel_context,
+        state.log.clone(),
+    );
+    let response = super::client_lifecycle::ClientRequest::new(
+        forward_with_provider_fallbacks(
+            state.clone(),
+            method,
+            &uri,
+            &headers,
+            &prepared,
+            request_start,
+        ),
+        cancel_guard,
     )
     .await;
     http::with_cors_headers(&state.config, &headers, response)

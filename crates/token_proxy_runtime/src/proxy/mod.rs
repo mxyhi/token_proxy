@@ -1,6 +1,7 @@
 mod account_selector;
 mod anthropic_compat;
 mod claude_reasoning;
+mod client_lifecycle;
 mod codex_compat;
 mod codex_models_manifest;
 mod codex_turn_state;

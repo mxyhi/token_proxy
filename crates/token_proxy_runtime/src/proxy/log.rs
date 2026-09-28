@@ -16,6 +16,7 @@ use token_proxy_storage::pricing::{calculate_request_cost, default_model_pricing
 pub(crate) struct ClientRequestBilling {
     request_id: Arc<str>,
     next_completion_index: Arc<AtomicU64>,
+    pub(crate) lifecycle: Arc<super::client_lifecycle::ClientLifecycle>,
 }
 
 impl Default for ClientRequestBilling {
@@ -23,6 +24,7 @@ impl Default for ClientRequestBilling {
         Self {
             request_id: format!("{:032x}", rand::random::<u128>()).into(),
             next_completion_index: Arc::new(AtomicU64::new(0)),
+            lifecycle: Arc::default(),
         }
     }
 }
@@ -56,6 +58,7 @@ pub(crate) struct RequestTimings {
     inner: Arc<Mutex<RequestTimingSnapshot>>,
     billing: Option<ClientRequestBilling>,
     billing_attempt: Arc<OnceLock<BillingAttempt>>,
+    sent_service_tier: Arc<OnceLock<Option<String>>>,
 }
 
 impl RequestTimings {
@@ -64,7 +67,22 @@ impl RequestTimings {
             inner: Arc::default(),
             billing: Some(billing),
             billing_attempt: Arc::default(),
+            sent_service_tier: Arc::default(),
         }
+    }
+
+    pub(crate) fn record_sent_service_tier(&self, body: &[u8]) {
+        #[derive(serde::Deserialize)]
+        struct TierMetadata {
+            service_tier: Option<String>,
+        }
+        // 仅保存最终发出请求的档位，不保存正文；不受临时 Request Detail 开关影响。
+        let tier = serde_json::from_slice::<TierMetadata>(body)
+            .ok()
+            .and_then(|metadata| metadata.service_tier)
+            .map(|tier| tier.trim().to_string())
+            .filter(|tier| !tier.is_empty());
+        let _ = self.sent_service_tier.set(tier);
     }
 
     pub(crate) fn mark_upstream_response_headers(&self, value: u128) {
@@ -98,6 +116,10 @@ impl RequestTimings {
             self.billing_attempt
                 .get_or_init(|| billing.complete_attempt()),
         )
+    }
+
+    pub(crate) fn reserve_billing_attempt(&self) {
+        let _ = self.billing_attempt();
     }
 
     fn mark_once(
@@ -164,6 +186,22 @@ pub(crate) fn build_log_entry(
     usage: UsageSnapshot,
     response_error: Option<String>,
 ) -> LogEntry {
+    let canceled = context
+        .timings
+        .billing
+        .as_ref()
+        .is_some_and(|billing| billing.lifecycle.is_canceled())
+        && context.status < 400
+        && response_error.as_deref() == Some(super::response::STREAM_DROPPED_ERROR);
+    if let Some(billing) = &context.timings.billing {
+        // 取消的后备流不能擦除尚未落库的先行 transport 错误。
+        billing.lifecycle.note_log(canceled);
+    }
+    let response_error = if canceled {
+        Some(super::client_lifecycle::CLIENT_CANCELED_ERROR.to_string())
+    } else {
+        response_error
+    };
     let timing = context.timing_snapshot();
     let upstream_first_body_chunk_ms = timing
         .upstream_first_body_chunk_ms
@@ -178,10 +216,14 @@ pub(crate) fn build_log_entry(
         .or(upstream_first_body_chunk_ms)
         .or(timing.upstream_response_headers_ms)
         .unwrap_or_else(|| context.start.elapsed().as_millis());
-    let service_tier = usage
-        .service_tier
-        .clone()
-        .or_else(|| service_tier_from_request_body(context.request_body.as_deref()));
+    let service_tier =
+        usage
+            .service_tier
+            .clone()
+            .or_else(|| match context.timings.sent_service_tier.get() {
+                Some(tier) => tier.clone(),
+                None => service_tier_from_request_body(context.request_body.as_deref()),
+            });
     let pricing_settings = default_model_pricing_settings();
     let request_cost = calculate_request_cost(
         &pricing_settings,
@@ -207,7 +249,7 @@ pub(crate) fn build_log_entry(
         mapped_model: context.mapped_model.clone(),
         upstream_response_model: usage.response_model.clone(),
         stream: context.stream,
-        status: context.status,
+        status: if canceled { 499 } else { context.status },
         usage: usage.usage,
         billable_usage: usage.billable_usage,
         service_tier,
@@ -363,5 +405,45 @@ mod tests {
         assert_eq!(entry.cost_nano_usd, Some(4_325_000_000));
         assert_eq!(entry.pricing_model.as_deref(), Some("gpt-5.4"));
         assert_eq!(entry.pricing_context_tier.as_deref(), Some("long"));
+    }
+
+    #[test]
+    fn actual_service_tier_overrides_requested_fast_for_billing() {
+        let mut context = context(RequestTimings::default());
+        context.model = Some("gpt-5.6-terra".to_string());
+        context.request_body = Some(r#"{"service_tier":"fast"}"#.to_string());
+        context
+            .timings
+            .record_sent_service_tier(br#"{"service_tier":"priority"}"#);
+        let usage = UsageSnapshot {
+            billable_usage: BillableUsage {
+                uncached_input_tokens: 1,
+                output_tokens: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let requested = build_log_entry(&context, usage.clone(), None);
+        let actual = build_log_entry(
+            &context,
+            UsageSnapshot {
+                service_tier: Some("default".to_string()),
+                ..usage
+            },
+            None,
+        );
+        assert_eq!(requested.service_tier.as_deref(), Some("priority"));
+        assert_eq!(actual.service_tier.as_deref(), Some("default"));
+        assert_eq!(
+            requested.cost_nano_usd,
+            actual.cost_nano_usd.map(|cost| cost * 2)
+        );
+        context.timings = RequestTimings::default();
+        context.timings.record_sent_service_tier(b"{}");
+        let omitted = build_log_entry(&context, UsageSnapshot::default(), None);
+        assert_eq!(
+            omitted.service_tier, None,
+            "removed tier must not return from captured input"
+        );
     }
 }

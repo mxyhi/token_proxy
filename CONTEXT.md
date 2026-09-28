@@ -40,6 +40,14 @@ _Avoid_: Reasoning Effort、Thinking Budget
 最终 HTTP 状态码大于等于 400 的请求记录；它不参与长期请求统计，保留期（7 天）结束后整条删除。
 _Avoid_: 仅以 response_error 是否存在判断错误请求
 
+**Client Cancellation（客户端取消）**:
+完整请求已进入转发后，客户端在响应完成前结束该请求；没有先行上游错误的取消日志记为 499，已观察到的真实上游错误保留原归因。并行候选淘汰不属于客户端取消。
+_Avoid_: 任意流释放、上游故障、已发给客户端的 HTTP 状态
+
+**Service Tier（服务等级）**:
+一次请求实际使用的处理速度档位，以响应报告优先于请求意图；Fast 与 Priority 是同档位的不同名称，缺省不表示主动选择加速。
+_Avoid_: Reasoning Effort、账号套餐、渠道优先级
+
 **Request Detail**:
 为临时排障捕获的请求头、请求体、响应体和客户端 IP；不包含请求统计字段、`usage_json` 或错误摘要。成功请求的 Request Detail 在 7 天后清空，日志行本身永久保留。
 _Avoid_: Request Log（请求日志整行）、Usage Breakdown 原始 JSON

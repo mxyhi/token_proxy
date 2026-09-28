@@ -382,7 +382,16 @@ pub fn calculate_request_cost(
     let normalized_service_tier = normalize_service_tier(service_tier);
     let selected_profile = model_price
         .service_tier_profiles
-        .get(normalized_service_tier.as_str());
+        .get(normalized_service_tier.as_str())
+        .or_else(|| {
+            // Fast 是 Priority 的新名称；显式配置优先，别名回退避免按 standard 少计。
+            let alias = match normalized_service_tier.as_str() {
+                "fast" => "priority",
+                "priority" => "fast",
+                _ => return None,
+            };
+            model_price.service_tier_profiles.get(alias)
+        });
     let long_context = model_price
         .long_context
         .as_ref()
@@ -1718,6 +1727,7 @@ mod tests {
             for (service_tier, expected_cost) in [
                 (None, expected[0]),
                 (Some("priority"), expected[1]),
+                (Some("fast"), expected[1]),
                 (Some("flex"), expected[2]),
             ] {
                 let cost =

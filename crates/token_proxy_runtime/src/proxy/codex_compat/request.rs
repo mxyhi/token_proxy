@@ -120,6 +120,9 @@ pub(crate) fn chat_request_to_codex_with_prompt_cache_key(
         .ok_or_else(|| "Chat request must include messages.".to_string())?;
 
     let mut output = Map::new();
+    if let Some(tier) = codex_service_tier(object.get("service_tier")) {
+        output.insert("service_tier".to_string(), Value::String(tier.to_string()));
+    }
     output.insert("stream".to_string(), Value::Bool(true));
     output.insert("model".to_string(), Value::String(model.clone()));
     output.insert(
@@ -775,6 +778,11 @@ fn normalize_responses_payload(
     model_hint: Option<&str>,
     prompt_cache_key: Option<&str>,
 ) {
+    let service_tier = codex_service_tier(object.get("service_tier"));
+    object.remove("service_tier");
+    if let Some(tier) = service_tier {
+        object.insert("service_tier".to_string(), Value::String(tier.to_string()));
+    }
     let requested_model = object
         .get("model")
         .and_then(Value::as_str)
@@ -802,7 +810,6 @@ fn normalize_responses_payload(
         "top_p",
         "frequency_penalty",
         "presence_penalty",
-        "service_tier",
         "previous_response_id",
         "prompt_cache_retention",
         "safety_identifier",
@@ -834,6 +841,16 @@ fn normalize_responses_payload(
     ensure_default_instructions(object, &model);
     ensure_prompt_cache_key(object, prompt_cache_key);
     object.insert("input".to_string(), Value::Array(input));
+}
+
+fn codex_service_tier(value: Option<&Value>) -> Option<&'static str> {
+    // Codex 使用 priority 命名 Fast；缺省/不支持值保持原有服务端默认行为。
+    // ultrafast 仅为 Codex 兼容值，不扩展普通 OpenAI 端点的契约。
+    match value?.as_str()?.trim().to_ascii_lowercase().as_str() {
+        "fast" | "priority" => Some("priority"),
+        "ultrafast" => Some("ultrafast"),
+        _ => None,
+    }
 }
 
 fn remove_prompt_cache_breakpoints(items: &mut [Value]) -> usize {

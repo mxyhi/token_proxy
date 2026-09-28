@@ -19,8 +19,29 @@ const HEADER_CODEX_BETA_FEATURES_NAME: HeaderName =
     HeaderName::from_static("x-codex-beta-features");
 const REMOTE_COMPACTION_V2: &str = "remote_compaction_v2";
 
-pub(crate) fn apply_codex_headers(headers: &mut HeaderMap, inbound: &HeaderMap) {
+pub(crate) fn apply_codex_headers(
+    headers: &mut HeaderMap,
+    inbound: &HeaderMap,
+    inbound_path: &str,
+) {
     headers.remove(&HEADER_OPENAI_BETA_NAME);
+    // 只保留 Responses 原生入口支持的标记，避免旧实验协议或 WebSocket beta
+    // 改变当前 HTTP/SSE 转发协议；不主动为未声明的请求启用 multi-agent。
+    if matches!(
+        inbound_path,
+        "/responses" | "/v1/responses" | "/responses/compact" | "/v1/responses/compact"
+    ) && inbound
+        .get_all(&HEADER_OPENAI_BETA_NAME)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|token| token.trim() == "responses_multi_agent=v1")
+    {
+        headers.insert(
+            HEADER_OPENAI_BETA_NAME,
+            HeaderValue::from_static("responses_multi_agent=v1"),
+        );
+    }
     headers.remove(&HEADER_LEGACY_SESSION_ID_NAME);
     headers.remove(&HEADER_CONNECTION_NAME);
 

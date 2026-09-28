@@ -263,6 +263,13 @@ pub(super) async fn handle_upstream_result(
                 cooldown_scope,
             );
             // 延后到本请求终态失败再写 SQLite，避免中间 attempt 刷 502。
+            meta.billing.lifecycle.remember_transport_error(
+                provider,
+                upstream_id,
+                account_id.as_deref(),
+                if err.is_timeout() { 504 } else { 502 },
+                &message,
+            );
             AttemptOutcome::Retryable {
                 message: message.clone(),
                 response: None,

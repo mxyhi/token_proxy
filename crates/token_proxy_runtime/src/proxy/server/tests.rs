@@ -3,6 +3,9 @@ use super::*;
 #[path = "global_priority.test.rs"]
 mod global_priority;
 
+#[path = "cancellation.test.rs"]
+mod cancellation;
+
 use axum::{
     body::{to_bytes, Body, Bytes},
     extract::State,

@@ -174,6 +174,7 @@ async fn send_upstream_request_once(
             request_headers,
             state.config.xai_inject_x_search,
             state.config.max_request_body_bytes,
+            &timings,
         )
         .await?;
         let response_header_timeout = response_header_timeout_for_request(&state.config, meta);
@@ -413,6 +414,7 @@ async fn send_codex_attempt(
         request_headers,
         state.config.xai_inject_x_search,
         state.config.max_request_body_bytes,
+        &timings,
     )
     .await
     .map_err(CodexAttemptError::Fatal)?;
@@ -630,7 +632,14 @@ fn handle_upstream_timeout(
         "provider={provider}; class=timeout; recovery={}; status=504; message={message}",
         request_recovery.as_str(),
     ));
-    let _ = (inbound_path, meta);
+    meta.billing.lifecycle.remember_transport_error(
+        provider,
+        &upstream.id,
+        selected_account_id,
+        504,
+        deferred_log.as_deref().unwrap_or(&message),
+    );
+    let _ = inbound_path;
     AttemptOutcome::Retryable {
         message,
         response: None,
@@ -691,7 +700,14 @@ fn map_upstream_error(
         cooldown_scope,
     );
     // Retryable 诊断延后到本请求终态失败再落库；恢复成功则不刷中间 502。
-    let _ = (request_detail, start_time, inbound_path, meta);
+    meta.billing.lifecycle.remember_transport_error(
+        provider,
+        &upstream.id,
+        selected_account_id,
+        failure.status.as_u16(),
+        &failure.diagnostic_message,
+    );
+    let _ = (request_detail, start_time, inbound_path);
     AttemptOutcome::Retryable {
         message: failure.client_message,
         response: None,

@@ -2,6 +2,47 @@ use super::*;
 use axum::http::header::{ACCEPT_ENCODING, AUTHORIZATION};
 use url::form_urlencoded;
 
+#[test]
+fn codex_responses_preserves_only_supported_multi_agent_beta() {
+    for path in [
+        "/v1/responses",
+        "/v1/responses/compact",
+        "/v1/chat/completions",
+        "/v1/messages",
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "openai-beta",
+            HeaderValue::from_static("responses=experimental, responses_multi_agent=v1"),
+        );
+        headers.append(
+            "openai-beta",
+            HeaderValue::from_static(
+                "assistants=v2, responses_multi_agent=v1, responses_websockets=2026-02-06",
+            ),
+        );
+        let built = build_request_headers(
+            "codex",
+            path,
+            &headers,
+            http::UpstreamAuthHeader {
+                name: AUTHORIZATION,
+                value: HeaderValue::from_static("Bearer upstream"),
+            },
+            None,
+            None,
+        );
+        let expected = path
+            .starts_with("/v1/responses")
+            .then_some("responses_multi_agent=v1");
+        assert_eq!(
+            built.get("openai-beta").and_then(|v| v.to_str().ok()),
+            expected,
+            "{path}"
+        );
+    }
+}
+
 fn gemini_upstream() -> UpstreamRuntime {
     UpstreamRuntime {
         id: "gemini-test".to_string(),

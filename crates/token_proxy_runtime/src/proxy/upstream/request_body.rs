@@ -32,6 +32,7 @@ pub(super) async fn build_upstream_body(
     request_headers: &HeaderMap,
     xai_inject_x_search: bool,
     filter_limit_bytes: usize,
+    timings: &crate::proxy::log::RequestTimings,
 ) -> Result<reqwest::Body, AttemptOutcome> {
     let transformed = build_json_transformed_body_with_headers(
         provider,
@@ -46,6 +47,9 @@ pub(super) async fn build_upstream_body(
     )
     .await?;
     let final_source = transformed.as_ref().unwrap_or(body);
+    if let Ok(Some(bytes)) = final_source.read_bytes_if_small(filter_limit_bytes).await {
+        timings.record_sent_service_tier(&bytes);
+    }
     final_source.to_reqwest_body().await.map_err(|err| {
         AttemptOutcome::Fatal(http::error_response(
             StatusCode::BAD_GATEWAY,

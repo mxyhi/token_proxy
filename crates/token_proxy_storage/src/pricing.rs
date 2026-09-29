@@ -1084,7 +1084,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20260923"
+            "catalog.69854741.b88b66df+curated.20260928"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1194,6 +1194,13 @@ mod tests {
                 "2026-09-23"
             ))
         );
+        assert_eq!(
+            sources.get("claude-sonnet-5-5"),
+            Some(&(
+                "https://platform.claude.com/docs/en/about-claude/pricing",
+                "2026-09-28"
+            ))
+        );
     }
 
     #[test]
@@ -1262,7 +1269,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260923"));
+        assert!(settings.version.contains("+curated.20260928"));
     }
 
     #[test]
@@ -1341,7 +1348,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260923"));
+        assert!(settings.version.contains("+curated.20260928"));
     }
 
     #[test]
@@ -1423,7 +1430,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 5_440_095_000, "{model}");
             assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
         }
-        assert!(settings.version.contains("+curated.20260923"));
+        assert!(settings.version.contains("+curated.20260928"));
     }
 
     #[test]
@@ -1508,6 +1515,47 @@ mod tests {
             assert_eq!(cost.pricing_model, "claude-opus-5-5", "{model}");
             assert_eq!(cost.breakdown.cache_read_nano_usd, 200, "{model}");
             assert_eq!(cost.cost_nano_usd, 37_200, "{model}");
+        }
+    }
+
+    #[test]
+    fn claude_sonnet_5_5_aliases_apply_official_prices() {
+        let settings = default_model_pricing_settings();
+
+        // Official Sonnet 5.5 prices apply across the full 1M context window.
+        // https://platform.claude.com/docs/en/about-claude/pricing verified 2026-09-28.
+        for model in [
+            "claude-sonnet-5-5",
+            "anthropic/claude-sonnet-5-5",
+            "claude-sonnet-5.5",
+            "anthropic/claude-sonnet-5.5",
+        ] {
+            for input_tokens in [1, 200_001] {
+                let usage = BillableUsage {
+                    uncached_input_tokens: input_tokens,
+                    cache_read_tokens: 1,
+                    cache_write_tokens: 1,
+                    cache_write_5m_tokens: 1,
+                    cache_write_1h_tokens: 1,
+                    output_tokens: 1,
+                    ..BillableUsage::default()
+                };
+                let cost = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                    .expect("Sonnet 5.5 official price");
+                assert_eq!(cost.pricing_model, "claude-sonnet-5-5", "{model}");
+                assert_eq!(cost.context_tier, PricingContextTier::Standard, "{model}");
+                assert_eq!(
+                    cost.breakdown.uncached_input_nano_usd,
+                    input_tokens * 2_000,
+                    "{model}"
+                );
+                assert_eq!(cost.breakdown.cache_read_nano_usd, 200, "{model}");
+                assert_eq!(cost.breakdown.cache_write_nano_usd, 2_500, "{model}");
+                assert_eq!(cost.breakdown.cache_write_5m_nano_usd, 2_500, "{model}");
+                assert_eq!(cost.breakdown.cache_write_1h_nano_usd, 4_000, "{model}");
+                assert_eq!(cost.breakdown.output_nano_usd, 10_000, "{model}");
+                assert_eq!(cost.cost_nano_usd, input_tokens * 2_000 + 19_200, "{model}");
+            }
         }
     }
 
@@ -1831,7 +1879,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20260923");
+        assert_eq!(settings.version, "remote.test+curated.20260928");
     }
 
     #[test]

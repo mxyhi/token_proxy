@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "curated.20260923",
+  "version": "curated.20260928",
   "models": [
     {
       "source": {
@@ -524,6 +524,31 @@
           "cacheWriteNanoUsdPerToken": 5000,
           "cacheWrite5mNanoUsdPerToken": 5000,
           "cacheWrite1hNanoUsdPerToken": 8000
+        },
+        "serviceTierProfiles": {},
+        "longContext": null
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-09-28"
+      },
+      "model": {
+        "modelId": "claude-sonnet-5-5",
+        "aliases": [
+          "anthropic/claude-sonnet-5-5",
+          "claude-sonnet-5.5",
+          "anthropic/claude-sonnet-5.5"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 2000,
+          "outputNanoUsdPerToken": 10000,
+          "cacheReadNanoUsdPerToken": 200,
+          "cacheWriteNanoUsdPerToken": 2500,
+          "cacheWrite5mNanoUsdPerToken": 2500,
+          "cacheWrite1hNanoUsdPerToken": 4000
         },
         "serviceTierProfiles": {},
         "longContext": null

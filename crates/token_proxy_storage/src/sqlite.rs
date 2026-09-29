@@ -22,6 +22,10 @@ const DAY_MS: i64 = 24 * 60 * 60 * 1_000;
 const REQUEST_DETAIL_RETENTION_DAYS: i64 = 7;
 const ERROR_REQUEST_RETENTION_DAYS: i64 = 7;
 const RETENTION_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// WAL 允许多读并发；Dashboard 快照的多条聚合查询并行跑在读池上。
+const READ_POOL_MAX_CONNECTIONS: u32 = 4;
+/// 写入保持单连接，避免 SQLite 写锁竞争。
+const WRITE_POOL_MAX_CONNECTIONS: u32 = 1;
 
 #[derive(Debug, Default, Eq, PartialEq)]
 struct RequestLogRetentionStats {
@@ -58,10 +62,10 @@ async fn open_pools(db_path: &Path) -> Result<SqlitePools, String> {
             .await
             .map_err(|err| format!("Failed to create db directory: {err}"))?;
     }
-    let read = connect_pool(&db_path).await?;
-    init_schema(&read).await?;
-    let write = connect_pool(&db_path).await?;
+    // schema 与回填只需在同一数据库文件上执行一次；回填检查会扫描整张日志表。
+    let write = connect_pool(&db_path, WRITE_POOL_MAX_CONNECTIONS).await?;
     init_schema(&write).await?;
+    let read = connect_pool(&db_path, READ_POOL_MAX_CONNECTIONS).await?;
     guard.insert(
         db_path.clone(),
         SqlitePools {
@@ -161,7 +165,7 @@ fn current_time_ms() -> i64 {
         .min(i64::MAX as u128) as i64
 }
 
-async fn connect_pool(path: &PathBuf) -> Result<SqlitePool, String> {
+async fn connect_pool(path: &PathBuf, max_connections: u32) -> Result<SqlitePool, String> {
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
@@ -170,7 +174,7 @@ async fn connect_pool(path: &PathBuf) -> Result<SqlitePool, String> {
         .busy_timeout(Duration::from_secs(5));
 
     SqlitePoolOptions::new()
-        .max_connections(1)
+        .max_connections(max_connections)
         .connect_with(options)
         .await
         .map_err(|err| format!("Failed to connect sqlite: {err}"))
@@ -250,20 +254,6 @@ CREATE TABLE IF NOT EXISTS request_logs (
         .await
         .map_err(|err| format!("Failed to create idx_request_logs_ts_ms: {err}"))?;
 
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_request_logs_provider_ts_ms ON request_logs(provider, ts_ms);",
-    )
-    .execute(pool)
-    .await
-    .map_err(|err| format!("Failed to create idx_request_logs_provider_ts_ms: {err}"))?;
-
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_request_logs_upstream_ts_ms ON request_logs(upstream_id, ts_ms);",
-    )
-    .execute(pool)
-    .await
-    .map_err(|err| format!("Failed to create idx_request_logs_upstream_ts_ms: {err}"))?;
-
     // 归因更新只扫描同一客户端请求的 attempts，避免日志表增长后逐次全表扫描。
     sqlx::query(
         "CREATE INDEX IF NOT EXISTS idx_request_logs_client_attempt ON request_logs(client_request_id, attempt_index DESC, id DESC);",
@@ -272,14 +262,56 @@ CREATE TABLE IF NOT EXISTS request_logs (
     .await
     .map_err(|err| format!("Failed to create idx_request_logs_client_attempt: {err}"))?;
 
-    // 复合索引：优化中位数延迟查询（按时间范围过滤后按延迟排序）
+    ensure_dashboard_index(pool).await
+}
+
+/// Dashboard 聚合的部分覆盖索引。
+///
+/// 表行内含大体积 `usage_json` 等字段，聚合时回表会读取整张表；该索引覆盖
+/// Dashboard 查询用到的全部列，使聚合只扫描索引。它取代旧的
+/// provider/upstream/latency 组合索引，删除旧索引以抵消写入开销。
+async fn ensure_dashboard_index(pool: &SqlitePool) -> Result<(), String> {
+    for drop_legacy_index in [
+        "DROP INDEX IF EXISTS idx_request_logs_provider_ts_ms;",
+        "DROP INDEX IF EXISTS idx_request_logs_upstream_ts_ms;",
+        "DROP INDEX IF EXISTS idx_request_logs_ts_latency;",
+    ] {
+        sqlx::query(drop_legacy_index)
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to run `{drop_legacy_index}`: {err}"))?;
+    }
+
+    let exists = sqlx::query(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_request_logs_dashboard';",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| format!("Failed to inspect idx_request_logs_dashboard: {err}"))?
+    .is_some();
+    if exists {
+        return Ok(());
+    }
+
+    // 首次构建需扫描整张日志表，大库可能耗时数秒，记录耗时便于排查启动变慢。
+    let started_at = Instant::now();
     sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_request_logs_ts_latency ON request_logs(ts_ms, latency_ms);",
+        r#"
+CREATE INDEX IF NOT EXISTS idx_request_logs_dashboard ON request_logs(
+  ts_ms, upstream_id, model, mapped_model, provider, status, latency_ms,
+  input_tokens, output_tokens, total_tokens, uncached_input_tokens,
+  cache_read_tokens, cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
+  image_input_tokens, image_output_tokens, cost_nano_usd
+) WHERE is_billable = 1;
+"#,
     )
     .execute(pool)
     .await
-    .map_err(|err| format!("Failed to create idx_request_logs_ts_latency: {err}"))?;
-
+    .map_err(|err| format!("Failed to create idx_request_logs_dashboard: {err}"))?;
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "dashboard covering index built"
+    );
     Ok(())
 }
 

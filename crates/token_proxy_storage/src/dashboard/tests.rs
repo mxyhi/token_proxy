@@ -903,3 +903,53 @@ async fn read_snapshot_returns_recent_upstream_response_model() {
         Some("gpt-5.6-luna")
     );
 }
+
+// ============================================================================
+// 查询计划回归：Dashboard 聚合不得回退为扫描含大字段的整张 request_logs
+// ============================================================================
+
+fn max_placeholder_index(sql: &str) -> usize {
+    sql.match_indices('?')
+        .filter_map(|(index, _)| {
+            let digits: String = sql[index + 1..]
+                .chars()
+                .take_while(char::is_ascii_digit)
+                .collect();
+            digits.parse::<usize>().ok()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+#[tokio::test]
+async fn dashboard_queries_only_read_covering_index() {
+    let pool = setup_test_db().await;
+
+    for (name, query_sql) in sql::ALL {
+        // 只拼接模块内的常量 SQL，无外部输入。
+        let explain = sqlx::AssertSqlSafe(format!("EXPLAIN QUERY PLAN {query_sql}"));
+        let mut query = sqlx::query(explain);
+        for _ in 0..max_placeholder_index(query_sql) {
+            query = query.bind(1_i64);
+        }
+        let details = query
+            .fetch_all(&pool)
+            .await
+            .unwrap_or_else(|err| panic!("explain {name}: {err}"))
+            .into_iter()
+            .map(|row| row.get::<String, _>("detail"))
+            .collect::<Vec<_>>();
+
+        let table_steps = details
+            .iter()
+            .filter(|detail| detail.contains("request_logs"))
+            .collect::<Vec<_>>();
+        assert!(!table_steps.is_empty(), "{name} plan: {details:?}");
+        for detail in table_steps {
+            assert!(
+                detail.starts_with("SEARCH") && detail.contains("idx_request_logs_dashboard"),
+                "{name} must range-search idx_request_logs_dashboard, got {details:?}"
+            );
+        }
+    }
+}

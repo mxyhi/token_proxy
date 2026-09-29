@@ -4572,6 +4572,66 @@ fn models_index_allows_missing_local_key_when_local_auth_enabled() {
 }
 
 #[test]
+fn grok_models_v2_probe_returns_local_not_found_without_upstream_or_request_log() {
+    run_async(async {
+        let upstream = spawn_model_catalog_upstream(json!({
+            "object": "list",
+            "data": [
+                { "id": "grok-4.7", "object": "model" }
+            ]
+        }))
+        .await;
+        let data_dir = next_test_data_dir(
+            "grok_models_v2_probe_returns_local_not_found_without_upstream_or_request_log",
+        );
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_RESPONSES,
+            0,
+            "alpha",
+            upstream.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        config.local_api_key = Some("local-key".to_string());
+        let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir).await;
+        // Grok 带的是 xAI 登录 token，不是本地 key。
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer xai-login-token"),
+        );
+
+        let response = proxy_request(
+            State(state),
+            Method::GET,
+            Uri::from_static("/v1/models-v2"),
+            headers,
+            Body::empty(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        let probe_logs = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM request_logs WHERE path = '/v1/models-v2';",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("count models-v2 logs");
+        let requests = upstream.requests();
+        upstream.abort();
+
+        assert_eq!(
+            probe_logs, 0,
+            "Grok models-v2 probe must not write request_logs"
+        );
+        assert!(
+            requests.is_empty(),
+            "Grok models-v2 probe must not hit upstreams"
+        );
+    });
+}
+
+#[test]
 fn connectivity_hello_allows_missing_local_key_and_skips_request_log() {
     run_async(async {
         let data_dir =

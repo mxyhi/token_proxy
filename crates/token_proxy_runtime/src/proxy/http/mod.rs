@@ -29,6 +29,8 @@ const OPENAI_MODELS_INDEX_PATH: &str = "/v1/models";
 const OPENAI_COMPATIBLE_MODELS_INDEX_PATH: &str = "/v1beta/openai/models";
 /// Claude Code 启动探活：`HEAD/GET {ANTHROPIC_BASE_URL}/api/hello`，官方 Anthropic 上无需 key。
 const CLAUDE_CONNECTIVITY_HELLO_PATH: &str = "/api/hello";
+/// Grok CLI 空闲恢复时 `GET {models_base_url}/models-v2` 刷新模型元数据，且只携带 xAI 登录 token。
+const GROK_MODELS_V2_PATH: &str = "/v1/models-v2";
 const ORIGIN: HeaderName = HeaderName::from_static("origin");
 const VARY: HeaderName = HeaderName::from_static("vary");
 const ACCESS_CONTROL_REQUEST_METHOD: HeaderName =
@@ -109,6 +111,21 @@ fn is_public_model_catalog_request(method: &Method, path: &str) -> bool {
 /// Claude Code 探活只接受 GET/HEAD；POST 仍走本地 key。
 pub(crate) fn is_public_connectivity_hello_request(method: &Method, path: &str) -> bool {
     matches!(method.as_str(), "GET" | "HEAD") && path == CLAUDE_CONNECTIVITY_HELLO_PATH
+}
+
+/// Grok 元数据探测只接受 GET/HEAD；其余方法仍走普通路由与本地 key。
+pub(crate) fn is_grok_models_v2_probe_request(method: &Method, path: &str) -> bool {
+    matches!(method.as_str(), "GET" | "HEAD") && path == GROK_MODELS_V2_PATH
+}
+
+/// 本代理不提供 Grok 私有元数据格式，本地直接 404。
+/// 不能回 401：Grok 会误判登录 token 失效并强制刷新重试，且恢复后的对话轮次要等这一过程结束。
+/// 也不能回聚合目录：跨上游串行拉取要数十秒，同样会阻塞该轮次。
+pub(crate) fn grok_models_v2_probe_response() -> Response {
+    error_response(
+        StatusCode::NOT_FOUND,
+        "Grok models-v2 metadata is not served by this proxy.",
+    )
 }
 
 /// 探活成功体：Claude Code 只校验 HTTP 200；HEAD 无 body。

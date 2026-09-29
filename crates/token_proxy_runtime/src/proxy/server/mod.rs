@@ -147,6 +147,20 @@ async fn proxy_request_inner(
         );
     }
 
+    // Grok CLI 空闲恢复的元数据探测：无 key、不转发、不写 request_logs，立即 404。
+    if http::is_grok_models_v2_probe_request(&method, &path) {
+        tracing::info!(
+            method = %method,
+            path = %path,
+            "rejecting unsupported Grok models-v2 probe locally"
+        );
+        return http::with_cors_headers(
+            &state.config,
+            &headers,
+            http::grok_models_v2_probe_response(),
+        );
+    }
+
     let is_codex_models_manifest =
         codex_models_manifest::is_request(&method, &path, query.as_deref());
     // OpenAI 兼容模型索引：跨全部 enabled upstream 并集，不按 priority 单选 provider。

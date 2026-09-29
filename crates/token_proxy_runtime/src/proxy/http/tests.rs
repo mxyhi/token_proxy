@@ -248,6 +248,27 @@ fn local_auth_rejects_connectivity_hello_post_without_key() {
 }
 
 #[test]
+fn grok_models_v2_probe_matches_get_and_head_only() {
+    assert!(is_grok_models_v2_probe_request(
+        &Method::GET,
+        "/v1/models-v2"
+    ));
+    assert!(is_grok_models_v2_probe_request(
+        &Method::HEAD,
+        "/v1/models-v2"
+    ));
+    assert!(!is_grok_models_v2_probe_request(
+        &Method::POST,
+        "/v1/models-v2"
+    ));
+    assert!(!is_grok_models_v2_probe_request(&Method::GET, "/v1/models"));
+    assert_eq!(
+        grok_models_v2_probe_response().status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[test]
 fn connectivity_hello_response_is_ok_for_get_and_head() {
     let get = connectivity_hello_response(&Method::GET);
     assert_eq!(get.status(), StatusCode::OK);

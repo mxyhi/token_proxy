@@ -1084,7 +1084,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20260929"
+            "catalog.69854741.b88b66df+curated.20260930"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1188,6 +1188,13 @@ mod tests {
             ))
         );
         assert_eq!(
+            sources.get("gpt-reserve"),
+            Some(&(
+                "https://developers.openai.com/api/docs/pricing",
+                "2026-09-30"
+            ))
+        );
+        assert_eq!(
             sources.get("gpt-6-luna"),
             Some(&(
                 "https://developers.openai.com/api/docs/models/gpt-6-luna",
@@ -1276,7 +1283,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260929"));
+        assert!(settings.version.contains("+curated.20260930"));
     }
 
     #[test]
@@ -1355,7 +1362,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260929"));
+        assert!(settings.version.contains("+curated.20260930"));
     }
 
     #[test]
@@ -1437,7 +1444,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 5_440_095_000, "{model}");
             assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
         }
-        assert!(settings.version.contains("+curated.20260929"));
+        assert!(settings.version.contains("+curated.20260930"));
     }
 
     #[test]
@@ -1801,6 +1808,9 @@ mod tests {
         for (model, expected) in [
             ("gpt-5.6-terra", [16_700, 33_400, 8_350]),
             ("gpt-5.6-luna", [1_670, 3_340, 835]),
+            // gpt-reserve 是 Codex 的 Luna Reserve 额度桶，无独立官方价，按 GPT-5.6 Luna 计价。
+            ("gpt-reserve", [1_670, 3_340, 835]),
+            ("openai/gpt-reserve", [1_670, 3_340, 835]),
         ] {
             for (service_tier, expected_cost) in [
                 (None, expected[0]),
@@ -1909,7 +1919,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20260929");
+        assert_eq!(settings.version, "remote.test+curated.20260930");
     }
 
     #[test]

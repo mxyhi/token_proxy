@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "curated.20260929",
+  "version": "curated.20260930",
   "models": [
     {
       "source": {
@@ -540,6 +540,51 @@
             "outputNanoUsdPerToken": 250,
             "cacheReadNanoUsdPerToken": 5,
             "cacheWriteNanoUsdPerToken": 63
+          }
+        },
+        "longContext": {
+          "threshold": 272000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-09-30"
+      },
+      "model": {
+        "modelId": "gpt-reserve",
+        "aliases": [
+          "openai/gpt-reserve"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 200,
+          "outputNanoUsdPerToken": 1200,
+          "cacheReadNanoUsdPerToken": 20,
+          "cacheWriteNanoUsdPerToken": 250,
+          "cacheWrite5mNanoUsdPerToken": 250
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 400,
+            "outputNanoUsdPerToken": 2400,
+            "cacheReadNanoUsdPerToken": 40,
+            "cacheWriteNanoUsdPerToken": 500
+          },
+          "fast": {
+            "inputNanoUsdPerToken": 400,
+            "outputNanoUsdPerToken": 2400,
+            "cacheReadNanoUsdPerToken": 40,
+            "cacheWriteNanoUsdPerToken": 500
+          },
+          "flex": {
+            "inputNanoUsdPerToken": 100,
+            "outputNanoUsdPerToken": 600,
+            "cacheReadNanoUsdPerToken": 10,
+            "cacheWriteNanoUsdPerToken": 125
           }
         },
         "longContext": {

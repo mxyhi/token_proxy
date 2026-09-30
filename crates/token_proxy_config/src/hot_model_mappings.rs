@@ -7,6 +7,7 @@ const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
     // GPT-6 官方 ID 不带 openai/ 前缀；命名空间前缀改写成上游 ID。
     ("openai/gpt-6-astra", "gpt-6-astra"),
     ("openai/gpt-6-sol", "gpt-6-sol"),
+    ("openai/gpt-6.1-sol", "gpt-6.1-sol"),
     ("openai/gpt-6-luna", "gpt-6-luna"),
     ("openai/gpt-5.6-sol", "gpt-5.6-sol"),
     ("openai/gpt-5.6-terra", "gpt-5.6-terra"),

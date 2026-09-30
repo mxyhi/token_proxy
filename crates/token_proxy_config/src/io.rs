@@ -1,5 +1,5 @@
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use token_proxy_account_store::paths::TokenProxyPaths;
@@ -8,8 +8,12 @@ use tokio::io::AsyncWriteExt;
 use super::migrate::migrate_config_json;
 use super::ProxyConfigFile;
 
-/// 测试专用：临时文件已 flush/sync 后、rename 前注入失败，验证旧主文件保持。
-static FAIL_RENAME_AFTER_TEMP_WRITE: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    /// 测试专用：临时文件已 flush/sync 后、rename 前注入失败，验证旧主文件保持。
+    /// 线程局部而非全局：cargo test 并发时不能让其他测试的写盘也命中注入；
+    /// #[tokio::test] 默认 current_thread，设置与检查在同一线程。
+    static FAIL_RENAME_AFTER_TEMP_WRITE: Cell<bool> = const { Cell::new(false) };
+}
 
 const DEFAULT_CONFIG_HEADER: &str = concat!(
     "// Token Proxy config (JSONC). Comments and trailing commas are supported.\n",
@@ -120,7 +124,7 @@ pub(super) async fn save_config_file(
 /// 测试 seam：临时文件已成功写入后、rename 前失败。
 #[cfg(test)]
 pub(crate) fn set_fail_rename_after_temp_write(fail: bool) {
-    FAIL_RENAME_AFTER_TEMP_WRITE.store(fail, Ordering::SeqCst);
+    FAIL_RENAME_AFTER_TEMP_WRITE.with(|flag| flag.set(fail));
 }
 
 /// 可靠写盘：tmp → flush/sync → rename 覆盖目标。rename 前失败不触碰旧主文件。
@@ -139,7 +143,7 @@ async fn atomic_write_bytes(path: &Path, bytes: &[u8]) -> Result<(), String> {
     }
 
     // 窄 seam：证明 temp 已落盘后 rename 失败不会改写主文件。
-    if FAIL_RENAME_AFTER_TEMP_WRITE.load(Ordering::SeqCst) {
+    if FAIL_RENAME_AFTER_TEMP_WRITE.with(Cell::get) {
         let _ = tokio::fs::remove_file(&temp_path).await;
         tracing::error!(
             target = %path.display(),

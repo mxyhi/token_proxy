@@ -1084,7 +1084,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20260928"
+            "catalog.69854741.b88b66df+curated.20260929"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1181,6 +1181,13 @@ mod tests {
             ))
         );
         assert_eq!(
+            sources.get("gpt-6.1-sol"),
+            Some(&(
+                "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+                "2026-09-29"
+            ))
+        );
+        assert_eq!(
             sources.get("gpt-6-luna"),
             Some(&(
                 "https://developers.openai.com/api/docs/models/gpt-6-luna",
@@ -1269,7 +1276,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260928"));
+        assert!(settings.version.contains("+curated.20260929"));
     }
 
     #[test]
@@ -1348,7 +1355,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260928"));
+        assert!(settings.version.contains("+curated.20260929"));
     }
 
     #[test]
@@ -1430,7 +1437,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 5_440_095_000, "{model}");
             assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
         }
-        assert!(settings.version.contains("+curated.20260928"));
+        assert!(settings.version.contains("+curated.20260929"));
     }
 
     #[test]
@@ -1467,6 +1474,29 @@ mod tests {
             assert_eq!(standard.cost_nano_usd, 14_700, "{model}");
             assert_eq!(fast.cost_nano_usd, 29_400, "{model}");
             assert_eq!(flex.cost_nano_usd, 7_350, "{model}");
+            assert_eq!(long.cost_nano_usd, 1_088_019_000, "{model}");
+            assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
+        }
+
+        // Official GPT-6.1 Sol only halves cache read vs GPT-6 Sol: $2 / $0.10 cache / $2.50 write / $10.
+        // https://developers.openai.com/api/docs/models/gpt-6.1-sol verified 2026-09-29.
+        for model in ["gpt-6.1-sol", "openai/gpt-6.1-sol"] {
+            let standard = calculate_request_cost(&settings, Some(model), None, None, &short_usage)
+                .expect("GPT-6.1 Sol standard price");
+            let fast =
+                calculate_request_cost(&settings, Some(model), None, Some("fast"), &short_usage)
+                    .expect("GPT-6.1 Sol fast price");
+            let flex =
+                calculate_request_cost(&settings, Some(model), None, Some("flex"), &short_usage)
+                    .expect("GPT-6.1 Sol flex price");
+            let long = calculate_request_cost(&settings, Some(model), None, None, &long_usage)
+                .expect("GPT-6.1 Sol long-context price");
+
+            assert_eq!(standard.pricing_model, "gpt-6.1-sol", "{model}");
+            assert_eq!(standard.breakdown.cache_read_nano_usd, 100, "{model}");
+            assert_eq!(standard.cost_nano_usd, 14_600, "{model}");
+            assert_eq!(fast.cost_nano_usd, 29_200, "{model}");
+            assert_eq!(flex.cost_nano_usd, 7_300, "{model}");
             assert_eq!(long.cost_nano_usd, 1_088_019_000, "{model}");
             assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
         }
@@ -1879,7 +1909,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20260928");
+        assert_eq!(settings.version, "remote.test+curated.20260929");
     }
 
     #[test]

@@ -142,6 +142,7 @@
   "upstreams_row_enable": "启用 {rowLabel}",
   "upstreams_row_disable": "禁用 {rowLabel}",
   "upstreams_row_delete": "删除 {rowLabel}",
+  "upstreams_row_priority": "{rowLabel} 优先级",
   "upstreams_editor_title_add": "添加渠道",
   "upstreams_editor_title_edit": "编辑渠道",
   "upstreams_editor_title_default": "渠道",

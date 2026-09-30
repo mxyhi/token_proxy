@@ -142,6 +142,7 @@
   "upstreams_row_enable": "Enable {rowLabel}",
   "upstreams_row_disable": "Disable {rowLabel}",
   "upstreams_row_delete": "Delete {rowLabel}",
+  "upstreams_row_priority": "Priority of {rowLabel}",
   "upstreams_editor_title_add": "Add Channel",
   "upstreams_editor_title_edit": "Edit Channel",
   "upstreams_editor_title_default": "Channel",

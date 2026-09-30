@@ -1,6 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UPSTREAM_COLUMNS } from "@/features/config/cards/upstreams/constants";
 import { UpstreamsTable } from "@/features/config/cards/upstreams/table";
@@ -11,6 +11,23 @@ const LONG_ID = "codex-account-with-a-very-long-upstream-id-for-tooltip";
 afterEach(() => {
   cleanup();
 });
+
+function renderPriorityTable(onPriorityChange: (index: number, priority: string) => void) {
+  render(
+    <UpstreamsTable
+      upstreams={[buildUpstream()]}
+      columns={UPSTREAM_COLUMNS}
+      showApiKeys={false}
+      disableDelete={false}
+      onEdit={() => undefined}
+      onCopy={() => undefined}
+      onToggleEnabled={() => undefined}
+      onPriorityChange={onPriorityChange}
+      onDelete={() => undefined}
+    />
+  );
+  return screen.getByRole("textbox", { name: /priority of/i });
+}
 
 function buildUpstream(): UpstreamForm {
   return {
@@ -48,6 +65,7 @@ describe("upstreams/table", () => {
         onEdit={() => undefined}
         onCopy={() => undefined}
         onToggleEnabled={() => undefined}
+        onPriorityChange={() => undefined}
         onDelete={() => undefined}
       />
     );
@@ -67,6 +85,7 @@ describe("upstreams/table", () => {
         onEdit={() => undefined}
         onCopy={() => undefined}
         onToggleEnabled={() => undefined}
+        onPriorityChange={() => undefined}
         onDelete={() => undefined}
       />
     );
@@ -95,6 +114,7 @@ describe("upstreams/table", () => {
         onEdit={() => undefined}
         onCopy={() => undefined}
         onToggleEnabled={() => undefined}
+        onPriorityChange={() => undefined}
         onDelete={() => undefined}
       />
     );
@@ -117,6 +137,7 @@ describe("upstreams/table", () => {
         onEdit={() => undefined}
         onCopy={() => undefined}
         onToggleEnabled={() => undefined}
+        onPriorityChange={() => undefined}
         onDelete={() => undefined}
       />
     );
@@ -124,5 +145,43 @@ describe("upstreams/table", () => {
     expect(
       screen.getByRole("button", { name: /copy channel/i })
     ).toBeDisabled();
+  });
+
+  it("commits inline priority edits on Enter", async () => {
+    const user = userEvent.setup();
+    const onPriorityChange = vi.fn();
+    const input = renderPriorityTable(onPriorityChange);
+
+    expect(input).toHaveValue("10");
+    await user.clear(input);
+    await user.type(input, " 25 {Enter}");
+
+    expect(onPriorityChange).toHaveBeenCalledExactlyOnceWith(0, "25");
+    expect(input).not.toHaveFocus();
+  });
+
+  it("reverts invalid inline priority without committing", async () => {
+    const user = userEvent.setup();
+    const onPriorityChange = vi.fn();
+    const input = renderPriorityTable(onPriorityChange);
+
+    await user.clear(input);
+    await user.type(input, "abc");
+    await user.tab();
+
+    expect(onPriorityChange).not.toHaveBeenCalled();
+    expect(input).toHaveValue("10");
+  });
+
+  it("discards inline priority edits on Escape", async () => {
+    const user = userEvent.setup();
+    const onPriorityChange = vi.fn();
+    const input = renderPriorityTable(onPriorityChange);
+
+    await user.clear(input);
+    await user.type(input, "99{Escape}");
+
+    expect(onPriorityChange).not.toHaveBeenCalled();
+    expect(input).toHaveValue("10");
   });
 });

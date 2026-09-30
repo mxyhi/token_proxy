@@ -263,6 +263,10 @@ export function UpstreamsCard({
               }
               onChange(index, { enabled: !upstream.enabled });
             }}
+            onPriorityChange={(index, priority) => {
+              console.debug("[upstreams-card] inline priority change", { index, priority });
+              onChange(index, { priority });
+            }}
             onDelete={(index) => setDeleteDialog({ open: true, index })}
           />
         ) : (

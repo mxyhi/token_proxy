@@ -50,6 +50,7 @@ const UPSTREAM_DISPATCH_VALUES: ReadonlySet<string> = new Set(
   UPSTREAM_DISPATCH_STRATEGIES.map((strategy) => strategy.value)
 );
 const CELL_PLACEHOLDER = "—";
+const PRIORITY_PATTERN = /^-?\d+$/;
 const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 
 function toUpstreamOrderStrategy(value: string): UpstreamOrderStrategy | null {
@@ -273,11 +274,43 @@ function renderTextCell(value: string, placeholder: string) {
   );
 }
 
-function renderPriorityCell(value: string) {
-  return value.trim() ? (
-    <span className="text-foreground">{value}</span>
-  ) : (
-    <span className="text-muted-foreground">0</span>
+type PriorityCellProps = {
+  value: string;
+  rowLabel: string;
+  onCommit: (value: string) => void;
+};
+
+// 行内编辑优先级：非受控输入，失焦/回车提交、Esc 放弃；外部值变化时由 key 重置。
+// 不逐键提交，避免表格按优先级重排导致输入中的行跳走。
+function PriorityCell({ value, rowLabel, onCommit }: PriorityCellProps) {
+  const commit = (input: HTMLInputElement) => {
+    const next = input.value.trim();
+    // 空值与表单校验一致视为「未设置」；非整数直接回滚，避免把非法值送进自动保存。
+    if ((next && !PRIORITY_PATTERN.test(next)) || next === value.trim()) {
+      input.value = value;
+      return;
+    }
+    onCommit(next);
+  };
+
+  return (
+    <Input
+      key={value}
+      defaultValue={value}
+      placeholder="0"
+      inputMode="numeric"
+      aria-label={m.upstreams_row_priority({ rowLabel })}
+      className="h-7 w-16 px-2 tabular-nums"
+      onBlur={(event) => commit(event.currentTarget)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        } else if (event.key === "Escape") {
+          event.currentTarget.value = value;
+          event.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
@@ -296,6 +329,8 @@ function renderUpstreamCell(
   columnId: UpstreamColumnId,
   upstream: UpstreamForm,
   showApiKeys: boolean,
+  rowLabel: string,
+  onPriorityChange: (priority: string) => void,
 ) {
   const providerLabel = upstream.providers
     .map((value) => value.trim())
@@ -313,7 +348,9 @@ function renderUpstreamCell(
     case "proxyUrl":
       return renderProxyUrlCell(upstream, showApiKeys);
     case "priority":
-      return renderPriorityCell(upstream.priority);
+      return (
+        <PriorityCell value={upstream.priority} rowLabel={rowLabel} onCommit={onPriorityChange} />
+      );
     case "status":
       return (
         <Badge variant={upstream.enabled ? "default" : "secondary"}>
@@ -406,6 +443,7 @@ type UpstreamsTableRowProps = {
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
   onToggleEnabled: (index: number) => void;
+  onPriorityChange: (index: number, priority: string) => void;
   onDelete: (index: number) => void;
 };
 
@@ -421,6 +459,7 @@ function UpstreamsTableRow({
   onEdit,
   onCopy,
   onToggleEnabled,
+  onPriorityChange,
   onDelete,
 }: UpstreamsTableRowProps) {
   const rowLabel = getUpstreamLabel(displayIndex);
@@ -434,7 +473,9 @@ function UpstreamsTableRow({
           className={["px-3 py-2 align-top", column.cellClassName].filter(Boolean).join(" ")}
         >
           <div className="flex h-8 min-w-0 items-center">
-            {renderUpstreamCell(column.id, upstream, showApiKeys)}
+            {renderUpstreamCell(column.id, upstream, showApiKeys, rowLabel, (priority) =>
+              onPriorityChange(upstreamIndex, priority)
+            )}
           </div>
         </td>
       ))}
@@ -462,6 +503,7 @@ export type UpstreamsTableProps = {
   onEdit: (index: number) => void;
   onCopy: (index: number) => void;
   onToggleEnabled: (index: number) => void;
+  onPriorityChange: (index: number, priority: string) => void;
   onDelete: (index: number) => void;
 };
 
@@ -506,6 +548,7 @@ export function UpstreamsTable({
   onEdit,
   onCopy,
   onToggleEnabled,
+  onPriorityChange,
   onDelete,
 }: UpstreamsTableProps) {
   const sortedUpstreams = sortUpstreamsByPriority(upstreams);
@@ -529,6 +572,7 @@ export function UpstreamsTable({
                 onEdit={onEdit}
                 onCopy={onCopy}
                 onToggleEnabled={onToggleEnabled}
+                onPriorityChange={onPriorityChange}
                 onDelete={onDelete}
               />
             ))}

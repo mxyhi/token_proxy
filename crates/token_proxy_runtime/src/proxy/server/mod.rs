@@ -187,7 +187,8 @@ async fn proxy_request_inner(
             Ok(body) => body,
             Err(response) => return http::with_cors_headers(&state.config, &headers, response),
         };
-        let request_auth = match resolve_request_auth_or_respond(
+        // 目录来自后台缓存、不透传客户端凭证，这里只保留请求头格式校验与错误日志。
+        if let Err(response) = resolve_request_auth_or_respond(
             &state.config,
             &headers,
             &state.log,
@@ -197,12 +198,10 @@ async fn proxy_request_inner(
             "models",
             request_start,
         ) {
-            Ok(request_auth) => request_auth,
-            Err(response) => return http::with_cors_headers(&state.config, &headers, response),
-        };
-        tracing::debug!(path = %path, "serving aggregated multi-provider model catalog");
-        let response =
-            aggregate_all_providers_model_catalog(state.clone(), &headers, &request_auth).await;
+            return http::with_cors_headers(&state.config, &headers, response);
+        }
+        tracing::debug!(path = %path, "serving cached multi-provider model catalog");
+        let response = aggregate_all_providers_model_catalog(state.clone()).await;
         return http::with_cors_headers(&state.config, &headers, response);
     }
 

@@ -10,6 +10,7 @@ use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
 use super::log::LogWriter;
+use super::model_discovery::UpstreamModelDiscoveryCache;
 pub use super::model_discovery::UpstreamModelProbe;
 use super::request_detail::RequestDetailCapture;
 use super::server;
@@ -258,6 +259,8 @@ impl ProxyService {
 struct ProxyServiceInner {
     running: Option<RunningProxy>,
     sqlite_pool: Option<SqlitePool>,
+    /// 跨 reload/restart 复用，避免重建 state 后模型目录出现空窗；新一轮探测会覆盖旧结果。
+    model_discovery: Arc<UpstreamModelDiscoveryCache>,
     last_error: Option<String>,
 }
 
@@ -266,6 +269,7 @@ impl ProxyServiceInner {
         Self {
             running: None,
             sqlite_pool: None,
+            model_discovery: Arc::new(UpstreamModelDiscoveryCache::new()),
             last_error: None,
         }
     }
@@ -319,7 +323,13 @@ impl ProxyServiceInner {
         let loaded_config = ProxyConfig::load(ctx.paths.as_ref()).await?;
         let addr = loaded_config.addr();
 
-        let (state_handle, router) = build_router_state(ctx, loaded_config, sqlite_pool).await?;
+        let (state_handle, router) = build_router_state(
+            ctx,
+            loaded_config,
+            sqlite_pool,
+            self.model_discovery.clone(),
+        )
+        .await?;
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let listener = tokio::net::TcpListener::bind(&addr)
             .await
@@ -411,7 +421,13 @@ impl ProxyServiceInner {
         }
 
         let sqlite_pool = self.sqlite_pool.clone();
-        let new_state = build_proxy_state(ctx, loaded_config, sqlite_pool).await?;
+        let new_state = build_proxy_state(
+            ctx,
+            loaded_config,
+            sqlite_pool,
+            self.model_discovery.clone(),
+        )
+        .await?;
         let Some(running) = self.running.as_mut() else {
             tracing::debug!("proxy reload: running cleared before swap");
             return Ok(());
@@ -616,8 +632,9 @@ async fn build_router_state(
     ctx: &ProxyContext,
     config: ProxyConfig,
     sqlite_pool: Option<SqlitePool>,
+    model_discovery: Arc<UpstreamModelDiscoveryCache>,
 ) -> Result<(ProxyStateHandle, ProxyRouter), String> {
-    let state = build_proxy_state(ctx, config, sqlite_pool).await?;
+    let state = build_proxy_state(ctx, config, sqlite_pool, model_discovery).await?;
     let max_request_body_bytes = state.config.max_request_body_bytes;
     let state_handle = Arc::new(RwLock::new(state));
     let router = server::build_router(state_handle.clone(), max_request_body_bytes)
@@ -629,6 +646,7 @@ async fn build_proxy_state(
     ctx: &ProxyContext,
     config: ProxyConfig,
     sqlite_pool: Option<SqlitePool>,
+    model_discovery: Arc<UpstreamModelDiscoveryCache>,
 ) -> Result<Arc<ProxyState>, String> {
     ctx.logging.apply_level(config.log_level);
     let log = Arc::new(LogWriter::new(sqlite_pool));
@@ -654,7 +672,7 @@ async fn build_proxy_state(
         global_upstreams,
         request_detail,
         token_rate,
-        model_discovery: Arc::new(super::model_discovery::UpstreamModelDiscoveryCache::new()),
+        model_discovery,
         kiro_accounts,
         codex_accounts,
         codex_turn_state: super::codex_turn_state::CodexTurnStateProvenance::new(),

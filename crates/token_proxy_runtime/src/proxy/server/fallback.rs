@@ -96,7 +96,7 @@ pub(super) async fn forward_with_provider_fallbacks(
     };
 
     current_response =
-        augment_codex_models_manifest(state.clone(), headers, prepared, current_response).await;
+        augment_codex_models_manifest(state.clone(), prepared, current_response).await;
     finalize_codex_responses_cooldown(&state, &codex_cooldown_scope, current_response.status());
     state
         .codex_turn_state
@@ -210,7 +210,6 @@ async fn forward_native_routes(
 
 async fn augment_codex_models_manifest(
     state: Arc<ProxyState>,
-    headers: &HeaderMap,
     prepared: &PreparedRequest,
     response: Response,
 ) -> Response {
@@ -246,12 +245,8 @@ async fn augment_codex_models_manifest(
         .filter_map(|model| model.get("slug").and_then(Value::as_str))
         .map(str::to_string)
         .collect::<std::collections::HashSet<_>>();
-    let entries = super::super::upstream::collect_model_catalog_entries_for_manifest(
-        state.as_ref(),
-        headers,
-        &prepared.request_auth,
-    )
-    .await;
+    let entries =
+        super::super::upstream::collect_model_catalog_entries_for_manifest(state.as_ref()).await;
     let mut added = 0usize;
     for (id, display_name) in entries {
         if !known_ids.insert(id.clone()) {

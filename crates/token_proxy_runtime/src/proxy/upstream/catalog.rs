@@ -1,5 +1,5 @@
 use axum::{
-    body::{Body, Bytes},
+    body::Body,
     http::{HeaderMap, Method, StatusCode},
     response::Response,
 };
@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use super::super::http::RequestAuth;
@@ -16,19 +16,18 @@ use super::super::{
     codex_compat::supported_codex_model_ids,
     config::{expand_model_ids_with_mappings, UpstreamRuntime},
     http,
-    model_discovery::{UpstreamModelProbe, UpstreamModelProbeStatus},
-    request_body::ReplayableBody,
+    model_discovery::{
+        ModelCatalogEntry, ModelCatalogKey, UpstreamModelProbe, UpstreamModelProbeStatus,
+    },
     ProxyState, RequestMeta,
 };
 use super::{utils::sanitize_upstream_error, AttemptOutcome};
 
 const MODEL_DISCOVERY_MAX_PARALLEL: usize = 8;
+/// 单个上游目录探测上限；与 sync_response_timeout 取较小值，避免一个慢上游拖住整轮刷新。
+const MODEL_CATALOG_PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ModelCatalogEntry {
-    id: String,
-    display_name: Option<String>,
-}
+type FetchedModelCatalogs = HashMap<ModelCatalogKey, Vec<ModelCatalogEntry>>;
 
 #[derive(Clone)]
 struct ModelDiscoveryJob {
@@ -39,24 +38,23 @@ struct ModelDiscoveryJob {
 
 /// 聚合全部已配置 provider 的模型目录（OpenAI 兼容 `/v1/models` 入口）。
 /// 不再按 priority 只选一个 provider，避免模型选择器只露出 1/3 上游。
-pub(super) async fn aggregate_all_providers_model_catalog(
-    state: Arc<ProxyState>,
-    headers: &HeaderMap,
-    request_auth: &RequestAuth,
-) -> Response {
+/// 远端目录只读后台探测缓存，请求路径不访问上游（逐个实时拉取会超过网关超时）。
+pub(super) async fn aggregate_all_providers_model_catalog(state: Arc<ProxyState>) -> Response {
     let mut providers: Vec<String> = state.config.upstreams.keys().cloned().collect();
     providers.sort();
+    let fetched = state.model_discovery.fetched_catalogs().await;
     tracing::debug!(
         provider_count = providers.len(),
         providers = ?providers,
-        "aggregating model catalog across all providers"
+        cached_catalogs = fetched.len(),
+        "aggregating cached model catalog across all providers"
     );
 
     let mut sources: Vec<(String, Vec<ModelCatalogEntry>)> = Vec::new();
     let mut successful = 0usize;
     for provider in &providers {
         let (count, provider_sources) =
-            collect_provider_model_sources(state.as_ref(), provider, headers, request_auth).await;
+            collect_provider_model_sources(state.as_ref(), provider, &fetched);
         successful += count;
         sources.extend(provider_sources);
     }
@@ -76,11 +74,10 @@ pub(super) async fn aggregate_all_providers_model_catalog(
 /// manifest 只补充本地目录中不存在的模型；原始 Codex manifest 的字段和顺序由调用方保留。
 pub(super) async fn collect_model_catalog_entries_for_manifest(
     state: &ProxyState,
-    headers: &HeaderMap,
-    request_auth: &RequestAuth,
 ) -> Vec<(String, Option<String>)> {
     let mut providers: Vec<String> = state.config.upstreams.keys().cloned().collect();
     providers.sort();
+    let fetched = state.model_discovery.fetched_catalogs().await;
     let mut sources = Vec::new();
     for provider in providers {
         // Codex manifest already owns the GPT catalog returned by ChatGPT; only supplement it
@@ -88,8 +85,7 @@ pub(super) async fn collect_model_catalog_entries_for_manifest(
         if provider == "codex" {
             continue;
         }
-        let (_, provider_sources) =
-            collect_provider_model_sources(state, &provider, headers, request_auth).await;
+        let (_, provider_sources) = collect_provider_model_sources(state, &provider, &fetched);
         sources.extend(provider_sources);
     }
 
@@ -114,11 +110,11 @@ pub(super) async fn collect_model_catalog_entries_for_manifest(
     entries
 }
 
-async fn collect_provider_model_sources(
+/// 按当前配置叠加缓存的远端目录；返回 (可用来源数, [(upstream_id, models)])。
+fn collect_provider_model_sources(
     state: &ProxyState,
     provider: &str,
-    headers: &HeaderMap,
-    request_auth: &RequestAuth,
+    fetched: &FetchedModelCatalogs,
 ) -> (usize, Vec<(String, Vec<ModelCatalogEntry>)>) {
     let Some(provider_upstreams) = state.config.provider_upstreams(provider) else {
         return (0, Vec::new());
@@ -126,81 +122,55 @@ async fn collect_provider_model_sources(
 
     let mut sources: Vec<(String, Vec<ModelCatalogEntry>)> = Vec::new();
     let mut successful = 0usize;
-    let meta = RequestMeta {
-        client_ip: None,
-        stream: false,
-        original_model: None,
-        mapped_model: None,
-        reasoning_effort: None,
-        response_format: None,
-        estimated_input_tokens: None,
-        billing: Default::default(),
-    };
-    let empty_body = ReplayableBody::from_bytes(Bytes::new());
-    // 探测路径按 provider 自身能力，不跟客户端请求 path 绑定（跨 provider 并集时尤为重要）。
-    let probe_paths = model_catalog_probe_paths(provider);
-
     for group in &provider_upstreams.groups {
         for upstream in &group.items {
-            let mut models = model_catalog_entries_from_ids(&upstream.advertised_model_ids);
-            merge_model_catalog_entries(
-                &mut models,
-                model_catalog_entries_from_ids(&builtin_model_ids(provider)),
-            );
-            expand_model_catalog_entries_with_mappings(
-                &mut models,
-                &state.config.hot_model_mappings,
-            );
-            restrict_model_catalog_entries(upstream, &mut models);
-            let Some((inbound_path, upstream_path)) = probe_paths else {
-                if !models.is_empty() {
-                    successful += 1;
-                    sources.push((upstream.id.clone(), models));
-                }
-                continue;
-            };
-
-            let upstream_model_catalog = fetch_upstream_model_catalog(
+            let upstream_catalog = fetched.get(&model_catalog_key(provider, upstream));
+            let models = resolve_upstream_model_entries(
                 state,
                 provider,
                 upstream,
-                inbound_path,
-                upstream_path,
-                headers,
-                &meta,
-                request_auth,
-                &empty_body,
-            )
-            .await;
-            match upstream_model_catalog {
-                Ok(fetched_models) => {
-                    successful += 1;
-                    merge_model_catalog_entries(&mut models, fetched_models);
-                    expand_model_catalog_entries_with_mappings(
-                        &mut models,
-                        &state.config.hot_model_mappings,
-                    );
-                    restrict_model_catalog_entries(upstream, &mut models);
-                    sources.push((upstream.id.clone(), models));
-                }
-                Err(err) => {
-                    if !models.is_empty() {
-                        successful += 1;
-                        sources.push((upstream.id.clone(), models));
-                        continue;
-                    }
-                    tracing::warn!(
-                        provider = %provider,
-                        upstream = %upstream.id,
-                        error = %err,
-                        "failed to fetch upstream model catalog"
-                    );
-                }
+                upstream_catalog.cloned(),
+            );
+            // 远端目录拉取成功（即使为空）或本地可广告模型非空，都算可用来源。
+            if upstream_catalog.is_some() || !models.is_empty() {
+                successful += 1;
+                sources.push((upstream.id.clone(), models));
             }
         }
     }
 
     (successful, sources)
+}
+
+/// 本地可广告模型 + 内置目录为底，再叠加远端目录；映射与 available_models 按当前配置实时生效。
+fn resolve_upstream_model_entries(
+    state: &ProxyState,
+    provider: &str,
+    upstream: &UpstreamRuntime,
+    fetched: Option<Vec<ModelCatalogEntry>>,
+) -> Vec<ModelCatalogEntry> {
+    let mut models = model_catalog_entries_from_ids(&upstream.advertised_model_ids);
+    merge_model_catalog_entries(
+        &mut models,
+        model_catalog_entries_from_ids(&builtin_model_ids(provider)),
+    );
+    expand_model_catalog_entries_with_mappings(&mut models, &state.config.hot_model_mappings);
+    restrict_model_catalog_entries(upstream, &mut models);
+    let Some(fetched) = fetched else {
+        return models;
+    };
+    merge_model_catalog_entries(&mut models, fetched);
+    expand_model_catalog_entries_with_mappings(&mut models, &state.config.hot_model_mappings);
+    restrict_model_catalog_entries(upstream, &mut models);
+    models
+}
+
+fn model_catalog_key(provider: &str, upstream: &UpstreamRuntime) -> ModelCatalogKey {
+    ModelCatalogKey {
+        provider: provider.to_string(),
+        upstream_id: upstream.id.clone(),
+        account_id: probe_account_id(upstream),
+    }
 }
 
 fn model_catalog_list_response(
@@ -276,6 +246,15 @@ fn restrict_model_catalog_entries(
     entries.retain(|entry| allowed.contains(&entry.id));
 }
 
+struct ModelDiscoveryOutcome {
+    probe: UpstreamModelProbe,
+    /// 本次成功拉到的远端原始目录；None 表示失败或 provider 无目录接口，缓存保留旧值。
+    fetched: Option<Vec<ModelCatalogEntry>>,
+    elapsed_ms: u64,
+}
+
+/// 刷新模型目录缓存（启动、配置热加载、Dashboard 手动刷新触发）。
+/// 并发探测且每个上游完成即写入，慢上游不阻塞其它结果。
 pub(super) async fn refresh_model_discovery(state: Arc<ProxyState>) {
     let jobs = collect_model_discovery_jobs(&state);
     let pending = jobs
@@ -288,23 +267,45 @@ pub(super) async fn refresh_model_discovery(state: Arc<ProxyState>) {
             )
         })
         .collect();
-    state.model_discovery.replace_all(pending).await;
+    state.model_discovery.begin_refresh(pending).await;
 
-    let completed = stream::iter(jobs.into_iter().enumerate())
-        .map(|(index, job)| {
+    let started = Instant::now();
+    let job_count = jobs.len();
+    let (failed, slowest) = stream::iter(jobs)
+        .map(|job| {
             let state = state.clone();
-            async move {
-                let probe = refresh_model_discovery_job(state.as_ref(), job).await;
-                (index, probe)
-            }
+            async move { refresh_model_discovery_job(state.as_ref(), job).await }
         })
         .buffer_unordered(MODEL_DISCOVERY_MAX_PARALLEL)
-        .collect::<Vec<_>>()
+        .fold(
+            (0usize, None::<(String, u64)>),
+            |(failed, slowest), outcome| {
+                let state = state.clone();
+                async move {
+                    let failed = failed
+                        + usize::from(outcome.probe.status == UpstreamModelProbeStatus::Failed);
+                    let slowest = match slowest {
+                        Some(current) if current.1 >= outcome.elapsed_ms => Some(current),
+                        _ => Some((outcome.probe.upstream_id.clone(), outcome.elapsed_ms)),
+                    };
+                    state
+                        .model_discovery
+                        .complete_probe(outcome.probe, outcome.fetched)
+                        .await;
+                    (failed, slowest)
+                }
+            },
+        )
         .await;
-
-    for (index, probe) in completed {
-        state.model_discovery.replace_at(index, probe).await;
-    }
+    let (slowest_upstream, slowest_ms) = slowest.unwrap_or_default();
+    tracing::info!(
+        jobs = job_count,
+        failed,
+        slowest_upstream = %slowest_upstream,
+        slowest_ms,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "model discovery refresh finished"
+    );
 }
 
 fn collect_model_discovery_jobs(state: &ProxyState) -> Vec<ModelDiscoveryJob> {
@@ -341,22 +342,22 @@ fn probe_account_id(upstream: &UpstreamRuntime) -> Option<String> {
 async fn refresh_model_discovery_job(
     state: &ProxyState,
     job: ModelDiscoveryJob,
-) -> UpstreamModelProbe {
-    let mut models = model_catalog_entries_from_ids(&job.upstream.advertised_model_ids);
-    merge_model_catalog_entries(
-        &mut models,
-        model_catalog_entries_from_ids(&builtin_model_ids(job.provider.as_str())),
-    );
-    expand_model_catalog_entries_with_mappings(&mut models, &state.config.hot_model_mappings);
-    restrict_model_catalog_entries(&job.upstream, &mut models);
-    let model_ids = models
-        .iter()
-        .map(|entry| entry.id.clone())
-        .collect::<Vec<_>>();
+) -> ModelDiscoveryOutcome {
+    let provider = job.provider.as_str();
+    let completed = |status, error, models: Vec<ModelCatalogEntry>| {
+        UpstreamModelProbe::completed(
+            job.upstream.id.as_str(),
+            provider,
+            job.account_id.clone(),
+            status,
+            error,
+            models.into_iter().map(|entry| entry.id).collect(),
+        )
+    };
 
-    let Some((inbound_path, upstream_path)) = model_catalog_probe_paths(job.provider.as_str())
-    else {
-        let (status, error) = if model_ids.is_empty() {
+    let Some((inbound_path, upstream_path)) = model_catalog_probe_paths(provider) else {
+        let models = resolve_upstream_model_entries(state, provider, &job.upstream, None);
+        let (status, error) = if models.is_empty() {
             (
                 UpstreamModelProbeStatus::Unsupported,
                 Some("Model list endpoint is not supported for this provider.".to_string()),
@@ -364,67 +365,65 @@ async fn refresh_model_discovery_job(
         } else {
             (UpstreamModelProbeStatus::Ok, None)
         };
-        return UpstreamModelProbe::completed(
-            job.upstream.id.as_str(),
-            job.provider.as_str(),
-            job.account_id,
-            status,
-            error,
-            model_ids,
-        );
+        return ModelDiscoveryOutcome {
+            probe: completed(status, error, models),
+            fetched: None,
+            elapsed_ms: 0,
+        };
     };
 
-    let meta = RequestMeta {
-        client_ip: None,
-        stream: false,
-        original_model: None,
-        mapped_model: None,
-        reasoning_effort: None,
-        response_format: None,
-        estimated_input_tokens: None,
-        billing: Default::default(),
-    };
-    let headers = HeaderMap::new();
-    let request_auth = RequestAuth::default();
-    let empty_body = ReplayableBody::from_bytes(Bytes::new());
-
-    match fetch_upstream_model_catalog(
-        state,
-        job.provider.as_str(),
-        &job.upstream,
-        inbound_path,
-        upstream_path,
-        &headers,
-        &meta,
-        &request_auth,
-        &empty_body,
+    let started = Instant::now();
+    let probe_timeout = MODEL_CATALOG_PROBE_TIMEOUT.min(state.config.sync_response_timeout);
+    let result = tokio::time::timeout(
+        probe_timeout,
+        fetch_upstream_model_catalog(state, provider, &job.upstream, inbound_path, upstream_path),
     )
     .await
-    {
-        Ok(fetched_models) => {
-            merge_model_catalog_entries(&mut models, fetched_models);
-            expand_model_catalog_entries_with_mappings(
-                &mut models,
-                &state.config.hot_model_mappings,
+    .unwrap_or_else(|_| Err("Timed out fetching upstream model catalog.".to_string()));
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(fetched) => {
+            tracing::debug!(
+                provider = %provider,
+                upstream = %job.upstream.id,
+                elapsed_ms,
+                model_count = fetched.len(),
+                "upstream model catalog probed"
             );
-            restrict_model_catalog_entries(&job.upstream, &mut models);
-            UpstreamModelProbe::completed(
-                job.upstream.id.as_str(),
-                job.provider.as_str(),
-                job.account_id,
-                UpstreamModelProbeStatus::Ok,
-                None,
-                models.iter().map(|entry| entry.id.clone()).collect(),
-            )
+            let models = resolve_upstream_model_entries(
+                state,
+                provider,
+                &job.upstream,
+                Some(fetched.clone()),
+            );
+            ModelDiscoveryOutcome {
+                probe: completed(UpstreamModelProbeStatus::Ok, None, models),
+                fetched: Some(fetched),
+                elapsed_ms,
+            }
         }
-        Err(error) => UpstreamModelProbe::completed(
-            job.upstream.id.as_str(),
-            job.provider.as_str(),
-            job.account_id,
-            UpstreamModelProbeStatus::Failed,
-            Some(error),
-            model_ids,
-        ),
+        Err(error) => {
+            tracing::warn!(
+                provider = %provider,
+                upstream = %job.upstream.id,
+                elapsed_ms,
+                error = %error,
+                "failed to probe upstream model catalog"
+            );
+            // 失败时展示与 /v1/models 一致：本地模型 + 上次成功的远端目录。
+            let last_fetched = state
+                .model_discovery
+                .fetched_catalog(&model_catalog_key(provider, &job.upstream))
+                .await;
+            let models =
+                resolve_upstream_model_entries(state, provider, &job.upstream, last_fetched);
+            ModelDiscoveryOutcome {
+                probe: completed(UpstreamModelProbeStatus::Failed, Some(error), models),
+                fetched: None,
+                elapsed_ms,
+            }
+        }
     }
 }
 
@@ -447,26 +446,33 @@ fn model_catalog_probe_paths(provider: &str) -> Option<(&'static str, &'static s
     }
 }
 
+/// 后台探测不携带客户端请求头，统一使用上游自身凭证。
 async fn fetch_upstream_model_catalog(
     state: &ProxyState,
     provider: &str,
     upstream: &UpstreamRuntime,
     inbound_path: &str,
     upstream_path_with_query: &str,
-    headers: &HeaderMap,
-    meta: &RequestMeta,
-    request_auth: &RequestAuth,
-    body: &ReplayableBody,
 ) -> Result<Vec<ModelCatalogEntry>, String> {
+    let meta = RequestMeta {
+        client_ip: None,
+        stream: false,
+        original_model: None,
+        mapped_model: None,
+        reasoning_effort: None,
+        response_format: None,
+        estimated_input_tokens: None,
+        billing: Default::default(),
+    };
     let prepared = super::prepare_upstream_request(
         state,
         provider,
         upstream,
         inbound_path,
         upstream_path_with_query,
-        headers,
-        meta,
-        request_auth,
+        &HeaderMap::new(),
+        &meta,
+        &RequestAuth::default(),
         &crate::proxy::cooldown_scope::CooldownScope::Global,
     )
     .await
@@ -481,17 +487,11 @@ async fn fetch_upstream_model_catalog(
             .http_clients
             .client_for_proxy_url(prepared.proxy_url.as_deref())?
     };
-    let request_body = body
-        .to_reqwest_body()
-        .await
-        .map_err(|err| format!("Failed to build upstream request body: {err}"))?;
-    let request = client
+    let response = client
         .request(Method::GET, &prepared.upstream_url)
         .headers(prepared.request_headers)
-        .body(request_body);
-    let response = tokio::time::timeout(state.config.sync_response_timeout, request.send())
+        .send()
         .await
-        .map_err(|_| "Timed out fetching upstream model catalog.".to_string())?
         .map_err(|err| {
             format!(
                 "Failed to fetch upstream model catalog: {}",

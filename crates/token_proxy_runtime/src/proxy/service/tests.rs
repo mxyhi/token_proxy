@@ -516,6 +516,55 @@ fn refresh_model_discovery_updates_cache_on_demand() {
 }
 
 #[test]
+fn reload_keeps_last_model_catalog_when_upstream_probe_fails() {
+    run_async(async {
+        let upstream = spawn_model_catalog_probe_upstream(json!({
+            "object": "list",
+            "data": [{ "id": "gpt-5.5", "object": "model" }]
+        }))
+        .await;
+        let (context, data_dir) = create_test_context();
+        let mut config = test_config_file(0);
+        config.upstreams = vec![upstream_config(
+            "openai-a",
+            "openai-response",
+            upstream.base_url.as_str(),
+        )];
+        token_proxy_config::write_config(context.paths.as_ref(), config.clone())
+            .await
+            .expect("write config");
+
+        let service = ProxyServiceHandle::new();
+        service.start(&context).await.expect("start proxy");
+        service.refresh_model_discovery().await;
+
+        // 同一上游改到不可达地址后保存：reload 重建 state，但缓存沿用上次成功目录。
+        config.upstreams = vec![upstream_config(
+            "openai-a",
+            "openai-response",
+            "http://127.0.0.1:1",
+        )];
+        token_proxy_config::write_config(context.paths.as_ref(), config)
+            .await
+            .expect("rewrite config");
+        let result = service.apply_saved_config(&context).await;
+        assert!(result.apply_error.is_none());
+        let probes = service.refresh_model_discovery().await;
+
+        let probe = probes
+            .iter()
+            .find(|probe| probe.upstream_id == "openai-a")
+            .expect("openai probe");
+        assert_eq!(probe.status, UpstreamModelProbeStatus::Failed);
+        assert!(probe.models.contains(&"gpt-5.5".to_string()));
+
+        let _ = service.stop().await;
+        upstream.abort();
+        let _ = std::fs::remove_dir_all(data_dir);
+    });
+}
+
+#[test]
 fn codex_keepalive_only_refreshes_accounts_referenced_by_enabled_upstreams() {
     run_async(async {
         let (context, data_dir) = create_test_context();

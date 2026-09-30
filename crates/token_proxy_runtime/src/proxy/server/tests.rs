@@ -4024,6 +4024,104 @@ async fn send_models_request(state: ProxyStateHandle) -> (StatusCode, Value) {
     (status, json)
 }
 
+/// `/v1/models` 只读后台缓存；测试先模拟启动/保存配置时触发的目录探测。
+async fn refresh_model_catalog(state: &ProxyStateHandle) {
+    let state = state.read().await.clone();
+    super::refresh_model_discovery(state).await;
+}
+
+#[test]
+fn models_index_serves_cached_catalog_without_touching_upstreams() {
+    run_async(async {
+        let upstream = spawn_model_catalog_upstream(json!({
+            "object": "list",
+            "data": [{ "id": "gpt-5", "object": "model" }]
+        }))
+        .await;
+        let data_dir = next_test_data_dir("models_index_serves_cached_catalog");
+        let config = config_with_runtime_upstreams(&[(
+            PROVIDER_RESPONSES,
+            0,
+            "alpha",
+            upstream.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        let state = build_test_state_handle(config, data_dir).await;
+
+        let (cold_status, _) = send_models_request(state.clone()).await;
+        let cold_requests = upstream.requests().len();
+
+        refresh_model_catalog(&state).await;
+        let (first_status, first_body) = send_models_request(state.clone()).await;
+        let (second_status, _) = send_models_request(state).await;
+        let requests = upstream.requests();
+        upstream.abort();
+
+        // 缓存未就绪且无本地模型时不阻塞等待上游。
+        assert_eq!(cold_status, StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            cold_requests, 0,
+            "models index must not probe upstreams inline"
+        );
+        assert_eq!(first_status, StatusCode::OK);
+        assert_eq!(second_status, StatusCode::OK);
+        assert_eq!(first_body["data"][0]["id"].as_str(), Some("gpt-5"));
+        assert_eq!(
+            requests.len(),
+            1,
+            "only the background refresh hits upstream"
+        );
+    });
+}
+
+#[test]
+fn model_discovery_probe_times_out_slow_upstream() {
+    run_async(async {
+        // 只接受连接不回响应，模拟卡住的上游。
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind hanging upstream");
+        let addr = listener.local_addr().expect("hanging upstream addr");
+        let hanging = tokio::spawn(async move {
+            let mut held = Vec::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                held.push(socket);
+            }
+        });
+        let base_url = format!("http://{addr}");
+        let data_dir = next_test_data_dir("model_discovery_probe_times_out_slow_upstream");
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_RESPONSES,
+            0,
+            "slow",
+            base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        config.sync_response_timeout = std::time::Duration::from_millis(200);
+        let state = build_test_state_handle(config, data_dir).await;
+
+        let started = std::time::Instant::now();
+        refresh_model_catalog(&state).await;
+        let elapsed = started.elapsed();
+        let probes = state.read().await.model_discovery.snapshot().await;
+        hanging.abort();
+
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "probe took {elapsed:?}"
+        );
+        assert_eq!(probes.len(), 1);
+        assert_eq!(
+            probes[0].status,
+            super::super::model_discovery::UpstreamModelProbeStatus::Failed
+        );
+        assert_eq!(
+            probes[0].error.as_deref(),
+            Some("Timed out fetching upstream model catalog.")
+        );
+    });
+}
+
 #[test]
 fn codex_models_manifest_is_forwarded_with_oauth_headers_and_etag() {
     run_async(async {
@@ -4159,6 +4257,7 @@ fn codex_models_manifest_augments_non_gpt_models_and_preserves_unknown_fields() 
             ),
         ]);
         let state = build_test_state_handle(config, data_dir.clone()).await;
+        refresh_model_catalog(&state).await;
 
         let response = proxy_request(
             State(state),
@@ -4365,6 +4464,7 @@ fn models_index_aggregates_unique_ids_when_prefix_disabled() {
         ]);
         let state = build_test_state_handle(config, data_dir).await;
 
+        refresh_model_catalog(&state).await;
         let (status, body) = send_models_request(state).await;
         assert_eq!(status, StatusCode::OK);
         let mut ids = body["data"]
@@ -4426,6 +4526,7 @@ fn models_index_unions_models_across_providers() {
         ]);
         let state = build_test_state_handle(config, data_dir).await;
 
+        refresh_model_catalog(&state).await;
         let (status, body) = send_models_request(state).await;
         assert_eq!(status, StatusCode::OK);
         let mut ids = body["data"]
@@ -4524,6 +4625,7 @@ fn models_index_applies_upstream_available_models() {
         runtime.advertised_model_ids = runtime.available_models.clone();
         let state = build_test_state_handle(config, data_dir).await;
 
+        refresh_model_catalog(&state).await;
         let (status, body) = send_models_request(state).await;
 
         assert_eq!(status, StatusCode::OK);
@@ -4560,6 +4662,7 @@ fn models_index_allows_missing_local_key_when_local_auth_enabled() {
         config.local_api_key = Some("local-key".to_string());
         let state = build_test_state_handle(config, data_dir).await;
 
+        refresh_model_catalog(&state).await;
         let (status, body) = send_models_request(state).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"][0]["id"].as_str(), Some("gpt-5"));
@@ -4740,6 +4843,7 @@ fn models_index_adds_prefixed_entries_and_duplicate_alias_when_enabled() {
         config.model_list_prefix = true;
         let state = build_test_state_handle(config, data_dir).await;
 
+        refresh_model_catalog(&state).await;
         let (status, body) = send_models_request(state).await;
         assert_eq!(status, StatusCode::OK);
         let mut ids = body["data"]
@@ -4792,6 +4896,7 @@ fn models_index_includes_exact_model_mapping_keys_when_catalog_is_empty() {
             .advertised_model_ids = vec!["alias-gpt-5".to_string(), "alias-gpt-4.1".to_string()];
         let state = build_test_state_handle(config, data_dir).await;
 
+        refresh_model_catalog(&state).await;
         let (status, body) = send_models_request(state).await;
         assert_eq!(status, StatusCode::OK);
         let mut ids = body["data"]

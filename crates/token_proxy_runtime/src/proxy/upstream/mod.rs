@@ -49,12 +49,8 @@ use super::{
     request_body::ReplayableBody, request_detail::RequestDetailSnapshot, ProxyState, RequestMeta,
 };
 
-pub(super) async fn aggregate_all_providers_model_catalog(
-    state: Arc<ProxyState>,
-    headers: &HeaderMap,
-    request_auth: &RequestAuth,
-) -> Response {
-    catalog::aggregate_all_providers_model_catalog(state, headers, request_auth).await
+pub(super) async fn aggregate_all_providers_model_catalog(state: Arc<ProxyState>) -> Response {
+    catalog::aggregate_all_providers_model_catalog(state).await
 }
 
 pub(super) async fn refresh_model_discovery(state: Arc<ProxyState>) {
@@ -63,10 +59,8 @@ pub(super) async fn refresh_model_discovery(state: Arc<ProxyState>) {
 
 pub(super) async fn collect_model_catalog_entries_for_manifest(
     state: &ProxyState,
-    headers: &HeaderMap,
-    request_auth: &RequestAuth,
 ) -> Vec<(String, Option<String>)> {
-    catalog::collect_model_catalog_entries_for_manifest(state, headers, request_auth).await
+    catalog::collect_model_catalog_entries_for_manifest(state).await
 }
 
 pub(super) async fn forward_upstream_request(

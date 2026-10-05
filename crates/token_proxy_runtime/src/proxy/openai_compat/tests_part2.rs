@@ -985,3 +985,53 @@ fn gemini_and_anthropic_response_conversions() {
         json!(10)
     );
 }
+
+#[test]
+fn responses_and_anthropic_tool_schemas_normalize_true_subschemas_for_chat() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let schema = json!({
+        "type": "object",
+        "additionalProperties": false,
+        "properties": { "patch": { "type": "array", "items": true }, "never": false }
+    });
+    let responses = Bytes::from(
+        json!({
+            "model": "gpt-4.1",
+            "input": "hi",
+            "tools": [{ "type": "function", "name": "rancher", "parameters": schema }]
+        })
+        .to_string(),
+    );
+    let chat = transform_request_body(
+        FormatTransform::ResponsesToChat,
+        &responses,
+        &http_clients,
+        None,
+    );
+    let chat: Value = serde_json::from_slice(&run_async(chat).expect("responses to chat")).unwrap();
+    let parameters = &chat["tools"][0]["function"]["parameters"];
+    assert_eq!(parameters["properties"]["patch"]["items"], json!({}));
+    assert_eq!(parameters["properties"]["never"], json!(false));
+    assert_eq!(parameters["additionalProperties"], json!(false));
+
+    let anthropic = Bytes::from(
+        json!({
+            "model": "gpt-4.1",
+            "max_tokens": 16,
+            "messages": [{ "role": "user", "content": "hi" }],
+            "tools": [{ "name": "rancher", "input_schema": schema }]
+        })
+        .to_string(),
+    );
+    let chat = transform_request_body(
+        FormatTransform::AnthropicToChat,
+        &anthropic,
+        &http_clients,
+        None,
+    );
+    let chat: Value = serde_json::from_slice(&run_async(chat).expect("anthropic to chat")).unwrap();
+    assert_eq!(
+        chat["tools"][0]["function"]["parameters"]["properties"]["patch"]["items"],
+        json!({})
+    );
+}

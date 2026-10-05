@@ -609,6 +609,7 @@ pub(super) fn log_upstream_error_if_needed(
         upstream_request_id: None,
         request_headers,
         request_body,
+        client_request_body: None,
         ttfb_ms: None,
         // local 404/502 是代理在选上游前生成的诊断，不代表一次可计费上游尝试。
         timings: request_timings_for_upstream(upstream_id, &meta.billing),

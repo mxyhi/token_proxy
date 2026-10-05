@@ -89,7 +89,7 @@ where
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
         let tool_name_map =
-            extract_tool_name_map_from_request_body(context.request_body.as_deref());
+            extract_tool_name_map_from_request_body(context.tool_identity_request_body());
 
         Self {
             upstream,
@@ -444,7 +444,7 @@ where
     ) -> Self {
         let now_seconds = now_unix_seconds();
         let tool_name_map =
-            extract_tool_name_map_from_request_body(context.request_body.as_deref());
+            extract_tool_name_map_from_request_body(context.tool_identity_request_body());
         let model = context
             .model
             .clone()

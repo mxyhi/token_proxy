@@ -380,3 +380,72 @@ fn p1_active_tool_delta_is_forwarded_before_upstream_finishes() {
         assert_eq!(delta["delta"]["partial_json"], "{");
     });
 }
+
+#[test]
+fn gemini_stream_keeps_thoughts_out_of_text_and_round_trips_function_signature() {
+    run_async(async {
+        let events = vec![
+            json!({"candidates":[{"content":{"role":"model","parts":[{"text":"thinking","thought":true}]}}]}),
+            json!({"candidates":[{"content":{"role":"model","parts":[{"text":"final"}]}}]}),
+            json!({"candidates":[{"content":{"role":"model","parts":[
+                {"functionCall":{"name":"lookup","args":{"q":"x"}},"thoughtSignature":"sig_fc"}
+            ]},"finishReason":"STOP"}]}),
+        ];
+
+        let chat = convert(events.clone(), Route::GeminiChat).await;
+        let text: String = chat
+            .iter()
+            .filter_map(|event| event["choices"][0]["delta"]["content"].as_str())
+            .collect();
+        let reasoning: String = chat
+            .iter()
+            .filter_map(|event| event["choices"][0]["delta"]["reasoning_content"].as_str())
+            .collect();
+        assert_eq!(text, "final");
+        assert_eq!(reasoning, "thinking");
+
+        let responses = convert(events, Route::GeminiResponses).await;
+        let call = responses
+            .iter()
+            .find(|event| {
+                event["type"] == json!("response.output_item.done")
+                    && event["item"]["type"] == json!("function_call")
+            })
+            .map(|event| event["item"].clone())
+            .expect("function call item");
+        assert_eq!(
+            call["provider_specific_fields"],
+            json!({"provider":"gemini","thought_signature":"sig_fc"})
+        );
+
+        // 下一轮客户端回放该调用时，签名必须回到 Gemini functionCall part。
+        let replay = Bytes::from(
+            json!({
+                "model": "gemini-3-pro",
+                "input": [
+                    {"type":"message","role":"user","content":"hi"},
+                    call,
+                    {"type":"function_call_output","call_id":call["call_id"],"output":"ok"}
+                ]
+            })
+            .to_string(),
+        );
+        let gemini = crate::proxy::openai_compat::transform_request_body(
+            crate::proxy::openai_compat::FormatTransform::ResponsesToGemini,
+            &replay,
+            &crate::proxy::http_client::ProxyHttpClients::new().expect("http clients"),
+            None,
+        )
+        .await
+        .expect("responses to gemini");
+        let gemini: Value = serde_json::from_slice(&gemini).unwrap();
+        let signed = gemini["contents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|content| content["parts"].as_array().into_iter().flatten())
+            .find(|part| part.get("functionCall").is_some())
+            .expect("functionCall part");
+        assert_eq!(signed["thoughtSignature"], json!("sig_fc"));
+    });
+}

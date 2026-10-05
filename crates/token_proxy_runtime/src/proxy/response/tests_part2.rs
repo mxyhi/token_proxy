@@ -20,6 +20,7 @@ async fn collect_chat_to_responses_payloads(events: Vec<String>) -> Vec<Value> {
         upstream_request_id: None,
         request_headers: None,
         request_body: None,
+        client_request_body: None,
         ttfb_ms: None,
         timings: Default::default(),
         start: Instant::now(),
@@ -724,6 +725,7 @@ fn stream_gemini_to_anthropic_emits_single_input_json_delta_for_tool_calls() {
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: Instant::now(),
@@ -848,6 +850,7 @@ fn stream_responses_to_chat_persists_log_when_client_drops_stream_early() {
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: Instant::now(),
@@ -903,6 +906,7 @@ fn stream_responses_to_anthropic_emits_thinking_from_reasoning_summary_events() 
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: Instant::now(),
@@ -1149,6 +1153,7 @@ fn stream_responses_to_anthropic_emits_redacted_thinking_from_encrypted_reasonin
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: Instant::now(),
@@ -1693,6 +1698,7 @@ fn stream_anthropic_to_responses_emits_reasoning_summary_events_and_snapshot() {
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: Instant::now(),
@@ -1798,6 +1804,7 @@ fn stream_anthropic_to_responses_preserves_ordered_blocks_and_empty_arguments() 
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: Instant::now(),
@@ -2114,6 +2121,7 @@ fn stream_anthropic_to_responses_adds_cache_tokens_to_openai_input_usage() {
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: Instant::now(),
@@ -2173,6 +2181,83 @@ fn stream_anthropic_to_responses_adds_cache_tokens_to_openai_input_usage() {
 }
 
 #[test]
+fn stream_anthropic_to_responses_does_not_double_count_cumulative_delta_cache_usage() {
+    super::run_async(async {
+        let sqlite_pool = super::create_test_sqlite_pool().await;
+        let log = Arc::new(LogWriter::new(Some(sqlite_pool)));
+        let context = LogContext {
+            client_ip: None,
+            path: "/v1/responses".to_string(),
+            provider: "anthropic".to_string(),
+            upstream_id: "unit-test".to_string(),
+            account_id: None,
+            model: Some("claude-3-7-sonnet".to_string()),
+            mapped_model: Some("claude-3-7-sonnet".to_string()),
+            stream: true,
+            status: 200,
+            upstream_request_id: None,
+            request_headers: None,
+            request_body: None,
+            client_request_body: None,
+            ttfb_ms: None,
+            timings: Default::default(),
+            start: Instant::now(),
+        };
+
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<Bytes, reqwest::Error>(Bytes::from(
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-3-7-sonnet\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":4,\"cache_creation_input_tokens\":6}}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"final answer\"}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":4,\"cache_creation_input_tokens\":6,\"output_tokens\":3},\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+            )),
+        ]);
+
+        let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None, None)
+            .await;
+        let responses_stream = super::super::anthropic_to_responses::stream_anthropic_to_responses(
+            upstream,
+            context,
+            log,
+            token_tracker,
+        );
+
+        let chunks: Vec<Bytes> = responses_stream
+            .map(|item| item.expect("stream item"))
+            .collect()
+            .await;
+        let payloads = chunks
+            .iter()
+            .filter_map(super::parse_sse_json)
+            .collect::<Vec<_>>();
+        let completed = payloads
+            .iter()
+            .find(|payload| payload["type"] == json!("response.completed"))
+            .expect("completed event");
+        let usage = &completed["response"]["usage"];
+
+        assert_eq!(usage["input_tokens"], json!(20));
+        assert_eq!(usage["output_tokens"], json!(3));
+        assert_eq!(usage["total_tokens"], json!(23));
+        assert_eq!(usage["input_tokens_details"]["cached_tokens"], json!(4));
+        assert_eq!(
+            usage["input_tokens_details"]["cached_creation_tokens"],
+            json!(6)
+        );
+    });
+}
+
+#[test]
 fn stream_anthropic_to_responses_maps_redacted_thinking_to_encrypted_reasoning() {
     super::run_async(async {
         let sqlite_pool = super::create_test_sqlite_pool().await;
@@ -2190,6 +2275,7 @@ fn stream_anthropic_to_responses_maps_redacted_thinking_to_encrypted_reasoning()
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: Instant::now(),
@@ -2306,6 +2392,7 @@ fn stream_anthropic_to_responses_maps_max_tokens_to_incomplete_event() {
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: Instant::now(),
@@ -2389,6 +2476,7 @@ fn stream_chat_to_gemini_waits_for_complete_tool_call_arguments() {
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: Instant::now(),

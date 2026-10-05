@@ -40,6 +40,7 @@ fn xai_meta(model: &str, stream: bool) -> RequestMeta {
         reasoning_effort: None,
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     }
 }
@@ -555,6 +556,7 @@ async fn normalizes_anthropic_one_meg_model_suffix_in_upstream_body() {
         reasoning_effort: None,
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
@@ -681,6 +683,7 @@ async fn strips_sampling_params_for_openai_responses_reasoning_model() {
         reasoning_effort: None,
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
@@ -724,6 +727,7 @@ async fn strips_sampling_params_for_openai_responses_reasoning_model_from_prefix
         reasoning_effort: None,
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
@@ -772,6 +776,7 @@ async fn rejects_large_openai_responses_reasoning_body_when_sampling_params_cann
         reasoning_effort: None,
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from(
@@ -1091,6 +1096,7 @@ async fn json_transform_pipeline_applies_reasoning_filters_and_role_rewrite_toge
         reasoning_effort: Some("high".to_string()),
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
@@ -1145,6 +1151,7 @@ async fn openai_responses_grok_reasoning_effort_is_preserved() {
         reasoning_effort: Some("high".to_string()),
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
@@ -1188,6 +1195,7 @@ async fn openai_chat_reasoning_effort_normalizes_glm_xhigh_to_max() {
         reasoning_effort: Some("xhigh".to_string()),
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
@@ -1233,6 +1241,7 @@ async fn openai_chat_reasoning_effort_keeps_non_glm_xhigh() {
         reasoning_effort: Some("xhigh".to_string()),
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
@@ -1277,6 +1286,7 @@ async fn injects_codex_installation_id_into_client_metadata() {
         reasoning_effort: None,
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(
@@ -1325,6 +1335,7 @@ async fn preserves_existing_codex_installation_id() {
         reasoning_effort: None,
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let body = ReplayableBody::from_bytes(Bytes::from_static(

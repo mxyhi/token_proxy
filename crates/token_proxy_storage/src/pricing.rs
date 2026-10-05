@@ -1084,7 +1084,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20260930"
+            "catalog.69854741.b88b66df+curated.20261003"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1171,7 +1171,10 @@ mod tests {
         );
         assert_eq!(
             sources.get("gpt-6-astra"),
-            Some(&("https://platform.openai.com/docs/pricing", "2026-09-04"))
+            Some(&(
+                "https://developers.openai.com/api/docs/pricing",
+                "2026-10-03"
+            ))
         );
         assert_eq!(
             sources.get("gpt-6-sol"),
@@ -1283,7 +1286,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260930"));
+        assert!(settings.version.contains("+curated.20261003"));
     }
 
     #[test]
@@ -1362,7 +1365,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20260930"));
+        assert!(settings.version.contains("+curated.20261003"));
     }
 
     #[test]
@@ -1433,6 +1436,23 @@ mod tests {
             let flex =
                 calculate_request_cost(&settings, Some(model), None, Some("flex"), &short_usage)
                     .expect("GPT-6 Astra flex price");
+            // Ultrafast 仅 Astra 公开，官方总表为 Standard 的 6x（2026-10-03 核对）。
+            let ultrafast = calculate_request_cost(
+                &settings,
+                Some(model),
+                None,
+                Some("ultrafast"),
+                &short_usage,
+            )
+            .expect("GPT-6 Astra ultrafast price");
+            let long_ultrafast = calculate_request_cost(
+                &settings,
+                Some(model),
+                None,
+                Some("ultrafast"),
+                &long_usage,
+            )
+            .expect("GPT-6 Astra long ultrafast price");
             let long = calculate_request_cost(&settings, Some(model), None, None, &long_usage)
                 .expect("GPT-6 Astra long-context price");
 
@@ -1441,10 +1461,13 @@ mod tests {
             assert_eq!(priority.cost_nano_usd, 147_000, "{model}");
             assert_eq!(fast.cost_nano_usd, 147_000, "{model}");
             assert_eq!(flex.cost_nano_usd, 36_750, "{model}");
+            assert_eq!(ultrafast.cost_nano_usd, 441_000, "{model}");
+            assert_eq!(ultrafast.service_tier, "ultrafast", "{model}");
             assert_eq!(long.cost_nano_usd, 5_440_095_000, "{model}");
+            assert_eq!(long_ultrafast.cost_nano_usd, 32_640_570_000, "{model}");
             assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
         }
-        assert!(settings.version.contains("+curated.20260930"));
+        assert!(settings.version.contains("+curated.20261003"));
     }
 
     #[test]
@@ -1919,7 +1942,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20260930");
+        assert_eq!(settings.version, "remote.test+curated.20261003");
     }
 
     #[test]

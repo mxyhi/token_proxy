@@ -22,6 +22,15 @@ pub fn restore_responses_tool_identities(output: &mut Value, request: &Value) ->
     restore_responses_tool_identities_with_state(output, request, &mut custom_item_ids)
 }
 
+/// 只有 namespace、custom 或被改名的工具才需要回程还原；全部原名直通时调用方可跳过逐事件解析。
+pub fn responses_tool_identities_need_restore(request: &Value) -> bool {
+    collect_response_tool_identities(request)
+        .iter()
+        .any(|(mapped, (local, namespace, custom))| {
+            *custom || !namespace.is_empty() || mapped != local
+        })
+}
+
 /// Restores tool identities while retaining custom item ids across SSE events.
 pub fn restore_responses_tool_identities_with_state(
     output: &mut Value,

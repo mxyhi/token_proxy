@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "curated.20260930",
+  "version": "curated.20261003",
   "models": [
     {
       "source": {
@@ -371,8 +371,8 @@
     },
     {
       "source": {
-        "pricingUrl": "https://platform.openai.com/docs/pricing",
-        "verifiedAt": "2026-09-04"
+        "pricingUrl": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-10-03"
       },
       "model": {
         "modelId": "gpt-6-astra",
@@ -405,6 +405,12 @@
             "outputNanoUsdPerToken": 25000,
             "cacheReadNanoUsdPerToken": 500,
             "cacheWriteNanoUsdPerToken": 6250
+          },
+          "ultrafast": {
+            "inputNanoUsdPerToken": 60000,
+            "outputNanoUsdPerToken": 300000,
+            "cacheReadNanoUsdPerToken": 6000,
+            "cacheWriteNanoUsdPerToken": 75000
           }
         },
         "longContext": {

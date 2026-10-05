@@ -42,6 +42,7 @@ fn local_upstream_diagnostic_does_not_create_billable_attempt() {
         upstream_request_id: None,
         request_headers: None,
         request_body: None,
+        client_request_body: None,
         ttfb_ms: None,
         timings: request_timings_for_upstream(LOCAL_UPSTREAM_ID, &billing),
         start: Instant::now(),

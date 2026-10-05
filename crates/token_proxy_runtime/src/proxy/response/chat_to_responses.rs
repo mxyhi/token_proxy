@@ -11,7 +11,7 @@ use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
 use super::super::usage::SseUsageCollector;
 use super::streaming::STREAM_DROPPED_ERROR;
-use format::{snapshot_to_output_item, usage_to_value, OutputItemSnapshot};
+use format::{function_call_item, snapshot_to_output_item, usage_to_value, OutputItemSnapshot};
 use state_types::{FunctionCallOutput, MessageOutput, ReasoningOutput};
 
 mod format;
@@ -92,10 +92,7 @@ where
             .model
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
-        let tool_identity_request = context
-            .request_body
-            .as_deref()
-            .and_then(|body| serde_json::from_str(body).ok());
+        let tool_identity_request = super::stream_tool_identity_request(&context);
 
         let mut state = Self {
             upstream,
@@ -186,34 +183,11 @@ where
     }
 
     fn restore_queued_tool_identities(&mut self) {
-        let Some(request) = self.tool_identity_request.as_ref() else {
-            return;
-        };
-        for chunk in &mut self.out {
-            let Ok(text) = std::str::from_utf8(chunk.as_ref()) else {
-                continue;
-            };
-            let Some(data) = text
-                .strip_prefix("data: ")
-                .and_then(|value| value.strip_suffix("\n\n"))
-            else {
-                continue;
-            };
-            if data == "[DONE]" {
-                continue;
-            }
-            let Ok(mut value) = serde_json::from_str::<Value>(data) else {
-                continue;
-            };
-            if token_proxy_protocol::tool_identity::restore_responses_tool_identities_with_state(
-                &mut value,
-                request,
-                &mut self.custom_tool_item_ids,
-            ) > 0
-            {
-                *chunk = Bytes::from(format!("data: {value}\n\n"));
-            }
-        }
+        super::restore_queued_tool_identities(
+            &mut self.out,
+            self.tool_identity_request.as_ref(),
+            &mut self.custom_tool_item_ids,
+        );
     }
 
     fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
@@ -370,6 +344,13 @@ where
             .and_then(|function| function.get("arguments"))
             .and_then(Value::as_str);
 
+        if let Some(fields) = tool_call
+            .get("provider_specific_fields")
+            .filter(|fields| fields.is_object())
+        {
+            self.ensure_function_call_output(call_index, call_id, name)
+                .provider_specific_fields = Some(fields.clone());
+        }
         if let Some(arguments_delta) = arguments_delta {
             let was_added = {
                 let state = self.ensure_function_call_output(call_index, call_id, name);
@@ -498,6 +479,7 @@ where
                 arguments: String::new(),
                 item_added: false,
                 has_source_id,
+                provider_specific_fields: None,
             });
         } else {
             let state = self.function_calls[call_index]
@@ -748,6 +730,7 @@ where
                     call.arguments.clone()
                 },
                 status: response_status.to_string(),
+                provider_specific_fields: call.provider_specific_fields.clone(),
             });
         }
         snapshots.sort_by_key(|item| match item {
@@ -812,6 +795,7 @@ where
                 name,
                 arguments,
                 status,
+                provider_specific_fields,
             } => self.push_function_call_done_events(
                 id,
                 *output_index,
@@ -819,6 +803,7 @@ where
                 name,
                 arguments,
                 status,
+                provider_specific_fields.as_ref(),
             ),
         }
     }
@@ -931,6 +916,7 @@ where
         name: &str,
         arguments: &str,
         status: &str,
+        provider_specific_fields: Option<&Value>,
     ) {
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
@@ -946,14 +932,14 @@ where
         self.out.push_back(super::responses_event_sse(json!({
             "type": "response.output_item.done",
             "output_index": output_index,
-            "item": {
-                "id": item_id,
-                "type": "function_call",
-                "status": status,
-                "call_id": call_id,
-                "name": name,
-                "arguments": arguments
-            },
+            "item": function_call_item(
+                item_id,
+                status,
+                call_id,
+                name,
+                arguments,
+                provider_specific_fields,
+            ),
             "sequence_number": sequence_number
         })));
     }

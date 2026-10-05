@@ -69,6 +69,8 @@ struct RequestMeta {
     reasoning_effort: Option<String>,
     response_format: Option<String>,
     estimated_input_tokens: Option<u64>,
+    /// 客户端原始请求体，只用于响应侧还原工具身份；不写入日志，与 Request Detail 开关无关。
+    client_request_body: Option<axum::body::Bytes>,
     billing: log::ClientRequestBilling,
 }
 

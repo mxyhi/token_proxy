@@ -49,6 +49,7 @@ fn force_openai_chat_stream_usage_inserts_stream_options_include_usage() {
             reasoning_effort: None,
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         };
         let body = ReplayableBody::from_bytes(input);
@@ -168,6 +169,7 @@ fn apply_reasoning_suffix_for_chat_sets_reasoning_effort_and_model() {
             reasoning_effort: Some("high".to_string()),
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         };
         let body = ReplayableBody::from_bytes(Bytes::from_static(
@@ -205,6 +207,7 @@ fn apply_reasoning_suffix_for_responses_sets_reasoning_object_and_model() {
             reasoning_effort: Some("high".to_string()),
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         };
         let body = ReplayableBody::from_bytes(Bytes::from_static(
@@ -245,6 +248,7 @@ fn apply_reasoning_suffix_prefers_mapped_model_as_upstream_model() {
             reasoning_effort: Some("high".to_string()),
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         };
         let body = ReplayableBody::from_bytes(Bytes::from_static(

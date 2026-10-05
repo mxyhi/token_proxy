@@ -38,6 +38,17 @@ fn map_responses_tool(value: &Value) -> Option<Value> {
         );
         return Some(Value::Object(out));
     }
+    if tool_type == "custom" {
+        let name = tool.get("name").and_then(Value::as_str)?;
+        let mut out = Map::new();
+        out.insert("name".to_string(), Value::String(name.to_string()));
+        if let Some(description) = tool.get("description") {
+            out.insert("description".to_string(), description.clone());
+        }
+        out.insert("input_schema".to_string(), custom_tool_input_schema());
+        tracing::debug!("mapped Responses custom tool to Claude string-input tool");
+        return Some(Value::Object(out));
+    }
     if tool_type != "function" {
         return None;
     }
@@ -82,6 +93,14 @@ fn map_responses_tool(value: &Value) -> Option<Value> {
             .unwrap_or_else(empty_claude_tool_input_schema),
     );
     Some(Value::Object(out))
+}
+
+fn custom_tool_input_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": { "input": { "type": "string" } },
+        "required": ["input"]
+    })
 }
 
 fn copy_tool_strict(source: &Map<String, Value>, target: &mut Map<String, Value>) {
@@ -142,7 +161,12 @@ fn normalize_claude_tool_input_schema(schema: &Value) -> Value {
             "normalized root unions in Claude tool input schema"
         );
     }
-    Value::Object(root)
+    let mut root = Value::Object(root);
+    let changed = crate::schema_bool::normalize_true_subschemas(&mut root);
+    if changed > 0 {
+        tracing::debug!(changed, "normalized Claude tool boolean subschemas");
+    }
+    root
 }
 
 fn empty_claude_tool_input_schema() -> Value {

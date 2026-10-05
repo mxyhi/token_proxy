@@ -19,7 +19,8 @@ pub(super) async fn responses_request_to_anthropic(
     let Some(object) = value.as_object_mut() else {
         return Err("Request body must be a JSON object.".to_string());
     };
-    token_proxy_protocol::tool_identity::flatten_responses_namespaces(object, &[])?;
+    // Claude 工具名限 64 字符 [A-Za-z0-9_-]；与 Chat 共用确定性映射，历史与 tool_choice 同步改写。
+    token_proxy_protocol::tool_identity::normalize_responses_tool_names(object, &[])?;
 
     let model = object
         .get("model")
@@ -826,13 +827,12 @@ fn parse_tool_input_object(arguments: &str) -> Value {
     }
 }
 
-// Anthropic requires every tool input to be an object, while custom tools may carry freeform JSON.
+// Anthropic tool input 必须是对象；custom 工具的自由文本统一放进声明里的 `input` 字段。
 fn custom_tool_input_to_claude_object(input: Option<&Value>) -> Value {
     match input {
-        Some(Value::String(input)) => parse_tool_input_object(input),
-        Some(Value::Object(input)) => Value::Object(input.clone()),
-        Some(input) => json!({ "_": input }),
-        None => json!({}),
+        Some(Value::String(input)) => json!({ "input": input }),
+        Some(Value::Null) | None => json!({ "input": "" }),
+        Some(input) => json!({ "input": input.to_string() }),
     }
 }
 
@@ -1192,29 +1192,16 @@ fn map_anthropic_thinking_to_responses_reasoning(
     output_config: Option<&Value>,
 ) -> Option<Value> {
     let thinking = value?.as_object()?;
+    let config_effort = output_config_effort(output_config);
     let effort = match thinking.get("type").and_then(Value::as_str) {
         // 显式关闭优先于 output_config.effort；省略 reasoning 会重新启用上游默认值。
         Some("disabled") => "none",
-        Some("enabled") => {
-            let budget = thinking
-                .get("budget_tokens")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            if budget >= 10_000 {
-                "high"
-            } else if budget >= 5_000 {
-                "medium"
-            } else if budget >= 2_000 {
-                "low"
-            } else {
-                "minimal"
-            }
-        }
-        Some("adaptive") => output_config
-            .and_then(Value::as_object)
-            .and_then(|config| config.get("effort"))
-            .and_then(Value::as_str)
-            .unwrap_or("medium"),
+        Some("enabled") => match thinking.get("budget_tokens").and_then(Value::as_i64) {
+            // 旧式预算仍是权威值；没有预算时才采用显式 effort，避免 high 被降成 minimal。
+            Some(budget) => effort_from_thinking_budget(budget),
+            None => config_effort.unwrap_or("minimal"),
+        },
+        Some("adaptive") => config_effort.unwrap_or("medium"),
         _ => return None,
     };
 
@@ -1226,6 +1213,26 @@ fn map_anthropic_thinking_to_responses_reasoning(
     }
     tracing::debug!(?visibility, "mapped Anthropic reasoning summary visibility");
     Some(Value::Object(reasoning))
+}
+
+fn output_config_effort(output_config: Option<&Value>) -> Option<&str> {
+    output_config
+        .and_then(|config| config.get("effort"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|effort| !effort.is_empty())
+}
+
+fn effort_from_thinking_budget(budget: i64) -> &'static str {
+    if budget >= 10_000 {
+        "high"
+    } else if budget >= 5_000 {
+        "medium"
+    } else if budget >= 2_000 {
+        "low"
+    } else {
+        "minimal"
+    }
 }
 
 fn map_responses_reasoning_to_anthropic(value: Option<&Value>, out: &mut Map<String, Value>) {

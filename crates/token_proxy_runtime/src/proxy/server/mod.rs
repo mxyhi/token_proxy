@@ -240,6 +240,7 @@ async fn proxy_request_inner(
         upstream_request_id: None,
         request_headers: None,
         request_body: None,
+        client_request_body: None,
         ttfb_ms: None,
         timings: super::log::RequestTimings::with_billing(prepared.meta.billing.clone()),
         start: request_start,

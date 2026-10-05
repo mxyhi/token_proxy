@@ -147,6 +147,8 @@ pub(crate) struct LogContext {
     pub(crate) upstream_request_id: Option<String>,
     pub(crate) request_headers: Option<String>,
     pub(crate) request_body: Option<String>,
+    /// 见 `RequestMeta::client_request_body`；`request_body` 仅在 Request Detail 开启时存在。
+    pub(crate) client_request_body: Option<axum::body::Bytes>,
     // Legacy field name: this records first upstream body chunk, not response headers.
     pub(crate) ttfb_ms: Option<u128>,
     pub(crate) timings: RequestTimings,
@@ -154,6 +156,14 @@ pub(crate) struct LogContext {
 }
 
 impl LogContext {
+    /// 响应侧还原工具身份所需的原始请求；优先使用常驻的客户端请求体。
+    pub(crate) fn tool_identity_request_body(&self) -> Option<&str> {
+        self.client_request_body
+            .as_deref()
+            .and_then(|body| std::str::from_utf8(body).ok())
+            .or(self.request_body.as_deref())
+    }
+
     pub(crate) fn mark_upstream_first_byte(&mut self) {
         let value = self.start.elapsed().as_millis();
         if self.ttfb_ms.is_none() {
@@ -336,6 +346,7 @@ mod tests {
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings,
             start: Instant::now() - Duration::from_millis(300),

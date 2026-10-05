@@ -1213,6 +1213,9 @@ async fn prepare_upstream_stream_inner(
             }
             None => {
                 if buffered_chunks.is_empty() {
+                    if status.is_success() {
+                        return Err(empty_stream_retry_response(status, context, log));
+                    }
                     return Err(http::build_response(status, headers.clone(), Body::empty()));
                 }
                 return Ok(chain_buffered_chunks(buffered_chunks, upstream, context));
@@ -1410,6 +1413,35 @@ fn chain_buffered_chunks(
     .boxed()
 }
 
+/// 成功响应头之后、任何 SSE 字节之前就断流：客户端尚未收到内容，可安全换上游重试。
+/// 不冷却：多为连接或网关瞬断，而非渠道持续故障。
+fn empty_stream_retry_response(
+    upstream_status: StatusCode,
+    context: &mut LogContext,
+    log: &Arc<LogWriter>,
+) -> Response {
+    let status = StatusCode::BAD_GATEWAY;
+    let message = "Upstream stream ended before sending any data.".to_string();
+    tracing::warn!(
+        provider = %context.provider,
+        upstream = %context.upstream_id,
+        account = ?context.account_id,
+        path = %context.path,
+        upstream_status = upstream_status.as_u16(),
+        "upstream stream closed before first payload"
+    );
+    context.status = status.as_u16();
+    let entry = build_log_entry(context, UsageSnapshot::default(), Some(message.clone()));
+    log.clone().write_detached(entry);
+    let mut response = http::error_response(status, &message);
+    response.extensions_mut().insert(RetryableStreamResponse {
+        status,
+        message,
+        should_cooldown: false,
+    });
+    response
+}
+
 fn stream_error_response(
     err: upstream_stream::UpstreamStreamError<reqwest::Error>,
     context: &mut LogContext,
@@ -1529,6 +1561,7 @@ mod tests {
             upstream_request_id: None,
             request_headers: None,
             request_body: None,
+            client_request_body: None,
             ttfb_ms: None,
             timings: Default::default(),
             start: std::time::Instant::now(),
@@ -1631,6 +1664,38 @@ mod tests {
             .extensions()
             .get::<RetryableStreamResponse>()
             .is_some());
+    }
+
+    #[tokio::test]
+    async fn empty_success_stream_returns_retryable_bad_gateway() {
+        let upstream_res = reqwest_response_from_items(Vec::new());
+        let mut context = test_context();
+        context.provider = PROVIDER_CODEX.to_string();
+        let log = Arc::new(LogWriter::new(None));
+
+        let response = match prepare_upstream_stream(
+            StatusCode::OK,
+            &HeaderMap::new(),
+            upstream_res,
+            FormatTransform::None,
+            &mut context,
+            &log,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(30),
+        )
+        .await
+        {
+            Ok(_) => panic!("empty success stream should trigger failover"),
+            Err(response) => response,
+        };
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        let retry = response
+            .extensions()
+            .get::<RetryableStreamResponse>()
+            .expect("retryable marker");
+        assert!(!retry.should_cooldown);
     }
 
     #[tokio::test]

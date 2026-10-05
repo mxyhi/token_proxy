@@ -92,6 +92,9 @@ struct AnthropicToResponsesState<S> {
     input_tokens: u64,
     cache_read_input_tokens: u64,
     cache_creation_input_tokens: u64,
+    // Claude 侧工具名经过限长/去重映射，回给客户端前按原请求还原。
+    tool_identity_request: Option<Value>,
+    custom_tool_item_ids: HashMap<String, String>,
 }
 
 impl<S> AnthropicToResponsesState<S> {
@@ -163,7 +166,10 @@ where
             input_tokens: 0,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            tool_identity_request: None,
+            custom_tool_item_ids: HashMap::new(),
         };
+        state.tool_identity_request = super::stream_tool_identity_request(&state.context);
         state.push_response_created();
         state
     }
@@ -189,6 +195,7 @@ where
                     for data in events {
                         self.handle_event(&data, &mut texts);
                     }
+                    self.restore_queued_tool_identities();
                     for text in texts {
                         self.token_tracker.add_output_text(&text).await;
                     }
@@ -211,6 +218,7 @@ where
                     if !self.sent_done {
                         self.push_done();
                     }
+                    self.restore_queued_tool_identities();
                     self.log_usage_once();
                     if self.out.is_empty() {
                         return Ok(None);
@@ -218,6 +226,14 @@ where
                 }
             }
         }
+    }
+
+    fn restore_queued_tool_identities(&mut self) {
+        super::restore_queued_tool_identities(
+            &mut self.out,
+            self.tool_identity_request.as_ref(),
+            &mut self.custom_tool_item_ids,
+        );
     }
 
     fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
@@ -820,10 +836,15 @@ where
 
         let completed_at = (super::now_ms() / 1000) as i64;
         let usage_snapshot = self.collector.finish();
-        let usage = usage_snapshot.usage.clone().map(|mut usage| {
-            self.fill_missing_anthropic_stream_usage(&mut usage);
+        let usage = usage_snapshot.usage.clone().map(|usage| {
+            // 收集器的 input_tokens 已含 cache；Anthropic 的 message_delta 常带累计 cache 桶，
+            // 这里统一用转换器维护的未缓存输入 + cache 桶，避免把 cache 计入两次。
             usage_to_value(
-                usage,
+                TokenUsage {
+                    input_tokens: Some(self.input_tokens),
+                    output_tokens: usage.output_tokens,
+                    total_tokens: None,
+                },
                 Some(AnthropicCacheUsage {
                     read_tokens: self.cache_read_input_tokens,
                     creation_tokens: self.cache_creation_input_tokens,
@@ -1127,12 +1148,6 @@ where
             "incomplete_details": incomplete_details.unwrap_or(Value::Null),
             "metadata": {}
         })
-    }
-
-    fn fill_missing_anthropic_stream_usage(&self, usage: &mut TokenUsage) {
-        if usage.input_tokens.is_none() && self.input_tokens > 0 {
-            usage.input_tokens = Some(self.input_tokens);
-        }
     }
 
     fn parallel_tool_calls(&self) -> bool {

@@ -23,10 +23,30 @@ pub const OFFICIAL_API_BASE_URL: &str = "https://api.x.ai/v1";
 pub const CLI_TOKEN_AUTH_HEADER: &str = "x-xai-token-auth";
 pub const CLI_TOKEN_AUTH_VALUE: &str = "xai-grok-cli";
 pub const CLI_CLIENT_VERSION_HEADER: &str = "x-grok-client-version";
-pub const CLI_CLIENT_VERSION: &str = "0.2.93";
-pub const CLI_USER_AGENT: &str = "xai-grok-workspace/0.2.93";
-pub(crate) const CLI_BILLING_USER_AGENT: &str =
-    "grok-pager/0.2.93 grok-shell/0.2.93 (macos; aarch64)";
+/// cli-chat-proxy 会以 426 拒绝低于 1.0.13 的客户端；固定为已抓包核对的官方 CLI 版本。
+pub const CLI_CLIENT_VERSION: &str = "1.0.46";
+
+/// 官方交互式 Grok CLI 主请求的身份头（1.0.46 抓包，对齐 Sub2API v0.2.13）。
+/// 推理、额度探测与模型目录共用同一身份；User-Agent 由 [`cli_user_agent`] 按平台生成。
+pub const CLI_IDENTITY_HEADERS: [(&str, &str); 5] = [
+    (CLI_TOKEN_AUTH_HEADER, CLI_TOKEN_AUTH_VALUE),
+    (CLI_CLIENT_VERSION_HEADER, CLI_CLIENT_VERSION),
+    ("x-grok-client-identifier", "grok-pager"),
+    ("x-grok-client-mode", "interactive"),
+    ("x-authenticateresponse", "authenticate-response"),
+];
+
+/// 官方 CLI UA，平台与架构使用 Rust 的命名（macos/linux/windows、aarch64/x86_64）。
+pub fn cli_user_agent() -> &'static str {
+    static USER_AGENT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        format!(
+            "grok-pager/{CLI_CLIENT_VERSION} grok-shell/{CLI_CLIENT_VERSION} ({}; {})",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )
+    });
+    USER_AGENT.as_str()
+}
 
 /// CLI OAuth provider 不调用 `/models`，使用与当前参考实现一致的内建目录。
 /// `grok-4.7-high` / `grok-4.7-xhigh` 与 `grok-4.6` 的 effort 别名同价，不单独列入上游 ID。

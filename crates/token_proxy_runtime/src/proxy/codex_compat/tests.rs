@@ -319,6 +319,47 @@ fn codex_requests_normalize_gpt_6_sol_luna_aliases_and_effort() {
 }
 
 #[test]
+fn codex_requests_normalize_gpt_6_1_sol_and_reject_disabled_reasoning() {
+    for (incoming_model, effort) in [
+        ("gpt-6.1-sol", "medium"),
+        ("gpt-6.1-sol-high", "high"),
+        ("openai/GPT-6.1-SOL-max", "max"),
+    ] {
+        let input = json!({"model": incoming_model, "input": "hi"});
+        let output = responses_request_to_codex(&Bytes::from(input.to_string()), None)
+            .expect("convert responses request");
+        let value: Value = serde_json::from_slice(&output).expect("json");
+
+        assert_eq!(value["model"], "gpt-6.1-sol", "{incoming_model}");
+        assert_eq!(value["reasoning"]["effort"], effort, "{incoming_model}");
+        assert_eq!(
+            value["instructions"],
+            "You are Codex, an agent based on GPT-6."
+        );
+    }
+
+    // 6.1 Sol 只有 low..max；关闭推理必须报错而不是被静默改成默认档。
+    for (model, reasoning) in [
+        ("gpt-6.1-sol-none", Value::Null),
+        ("gpt-6.1-sol", json!({"effort": "minimal"})),
+    ] {
+        let mut input = json!({"model": model, "input": "hi"});
+        if !reasoning.is_null() {
+            input["reasoning"] = reasoning;
+        }
+        let error = responses_request_to_codex(&Bytes::from(input.to_string()), None)
+            .expect_err("disabled reasoning must be rejected");
+        assert!(error.contains("gpt-6.1-sol"), "{error}");
+    }
+    let chat = json!({
+        "model": "gpt-6.1-sol",
+        "reasoning_effort": "none",
+        "messages": [{ "role": "user", "content": "hi" }]
+    });
+    assert!(chat_request_to_codex(&Bytes::from(chat.to_string()), None).is_err());
+}
+
+#[test]
 fn responses_request_to_codex_normalizes_dated_gpt_6_astra_variant() {
     let input = json!({
         "model": "OPENAI/GPT-6_ASTRA_2026-09-01",
@@ -355,6 +396,8 @@ fn supported_codex_models_include_current_codex_families() {
     assert!(models.contains(&"gpt-6-max".to_string()));
     assert!(models.contains(&"gpt-6-astra".to_string()));
     assert!(models.contains(&"gpt-6-astra-max".to_string()));
+    assert!(models.contains(&"gpt-6.1-sol".to_string()));
+    assert!(models.contains(&"gpt-6.1-sol-max".to_string()));
     assert!(models.contains(&"gpt-6-sol".to_string()));
     assert!(models.contains(&"gpt-6-sol-high".to_string()));
     assert!(models.contains(&"gpt-6-luna".to_string()));
@@ -1141,6 +1184,7 @@ fn test_log_context() -> LogContext {
         upstream_request_id: None,
         request_headers: None,
         request_body: None,
+        client_request_body: None,
         ttfb_ms: None,
         timings: Default::default(),
         start: Instant::now(),
@@ -2174,4 +2218,53 @@ fn codex_response_rejects_nested_errors_and_unsuccessful_statuses() {
             codex_response_to_responses(&bytes, None).expect_err("failure must not become success");
         assert!(!message.ends_with("null"));
     }
+}
+
+#[test]
+fn codex_requests_normalize_blank_function_call_arguments() {
+    let input = json!({
+        "model": "gpt-5.5",
+        "input": [
+            { "type": "function_call", "call_id": "call_blank", "name": "noop", "arguments": "" },
+            { "type": "function_call_output", "call_id": "call_blank", "output": "ok" },
+            { "type": "function_call", "call_id": "call_space", "name": "noop", "arguments": "  " },
+            { "type": "function_call_output", "call_id": "call_space", "output": "ok" },
+            { "type": "function_call", "call_id": "call_bad", "name": "noop", "arguments": "not-json" },
+            { "type": "function_call_output", "call_id": "call_bad", "output": "ok" },
+            { "type": "custom_tool_call", "call_id": "call_custom", "name": "apply_patch", "input": "" },
+            { "type": "custom_tool_call_output", "call_id": "call_custom", "output": "ok" }
+        ]
+    });
+    let output = responses_request_to_codex(&Bytes::from(input.to_string()), None)
+        .expect("convert responses request");
+    let value: Value = serde_json::from_slice(&output).expect("json");
+    let items = value["input"].as_array().expect("input");
+
+    assert_eq!(items[0]["arguments"], "{}");
+    assert_eq!(items[2]["arguments"], "{}");
+    // 非空的非法 JSON 不吞掉，保留给上游报原始错误。
+    assert_eq!(items[4]["arguments"], "not-json");
+    assert_eq!(items[6]["input"], "");
+    assert!(items[6].get("arguments").is_none());
+
+    let chat = json!({
+        "model": "gpt-5.5",
+        "messages": [
+            { "role": "user", "content": "hi" },
+            { "role": "assistant", "content": null, "tool_calls": [
+                { "id": "call_chat", "type": "function", "function": { "name": "noop", "arguments": "" } }
+            ] },
+            { "role": "tool", "tool_call_id": "call_chat", "content": "ok" }
+        ]
+    });
+    let output =
+        chat_request_to_codex(&Bytes::from(chat.to_string()), None).expect("convert chat request");
+    let value: Value = serde_json::from_slice(&output).expect("json");
+    let call = value["input"]
+        .as_array()
+        .expect("input")
+        .iter()
+        .find(|item| item["type"] == "function_call")
+        .expect("function_call");
+    assert_eq!(call["arguments"], "{}");
 }

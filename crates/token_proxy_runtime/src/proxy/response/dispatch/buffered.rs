@@ -188,7 +188,13 @@ pub(super) async fn build_buffered_response(
     let is_non_retryable_semantic_error = !status.is_success()
         && (is_context_window_error(response_error.as_deref(), &bytes)
             || is_request_policy_rejection);
-    let request_body = context.request_body.clone();
+    // Bytes 克隆只增引用计数；不能把整段请求体复制成 String（非流式响应每次都会经过这里）。
+    let client_request_body = context.client_request_body.clone();
+    let captured_request_body = context.request_body.clone();
+    let request_body = client_request_body
+        .as_deref()
+        .and_then(|body| std::str::from_utf8(body).ok())
+        .or(captured_request_body.as_deref());
     let output = if status.is_success() {
         match convert_success_body(
             response_transform,

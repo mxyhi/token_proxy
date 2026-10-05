@@ -9923,6 +9923,7 @@ fn gemini_outbound_path_rejects_mapped_model_path_injection() {
         reasoning_effort: None,
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
 
@@ -10200,6 +10201,7 @@ fn anthropic_beta_query_is_not_forwarded_to_responses_fallback() {
             reasoning_effort: None,
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         },
     )
@@ -10224,6 +10226,7 @@ fn anthropic_beta_query_is_preserved_for_native_anthropic() {
             reasoning_effort: None,
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         },
     )
@@ -10658,6 +10661,7 @@ fn codex_alpha_search_preserves_query_on_outbound_path() {
             reasoning_effort: None,
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         },
     )
@@ -10929,6 +10933,7 @@ fn openai_models_route_with_gemini_query_dispatches_to_gemini_and_rewrites_path(
             reasoning_effort: None,
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         },
     )
@@ -10964,6 +10969,7 @@ fn openai_model_detail_route_with_gemini_header_rewrites_to_gemini_model_detail(
             reasoning_effort: None,
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         },
     )
@@ -10998,6 +11004,7 @@ fn openai_compatible_models_index_route_prefers_openai_provider_and_rewrites_pat
             reasoning_effort: None,
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         },
     )
@@ -11032,6 +11039,7 @@ fn openai_compatible_model_detail_route_rewrites_to_openai_models_detail() {
             reasoning_effort: None,
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         },
     )
@@ -11352,4 +11360,71 @@ fn openai_files_route_falls_back_to_responses_provider_when_openai_missing() {
     let config = config_with_upstreams(&[(PROVIDER_RESPONSES, 0, "responses", FORMATS_RESPONSES)]);
     let plan = resolve_dispatch_plan(&config, "/v1/files/file_123").expect("should dispatch");
     assert_eq!(plan.provider, PROVIDER_RESPONSES);
+}
+
+#[test]
+fn responses_namespace_tool_identity_restores_without_request_detail_capture() {
+    run_async(async {
+        let upstream = spawn_mock_raw_upstream(
+            StatusCode::OK,
+            Bytes::from(
+                "data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"mcp__docs__search\",\"arguments\":\"{}\"}}]}}]}\n\n\
+data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
+data: [DONE]\n\n",
+            ),
+            "text/event-stream",
+        )
+        .await;
+        let config = config_with_runtime_upstreams(&[(
+            PROVIDER_CHAT,
+            10,
+            "chat-namespace",
+            upstream.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        let data_dir = next_test_data_dir("namespace_restore_without_capture");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        // 工具身份还原不能依赖临时的 Request Detail 捕获窗口。
+        assert!(!state.read().await.request_detail.should_capture());
+
+        let response = proxy_request(
+            State(state),
+            Method::POST,
+            Uri::from_static(RESPONSES_PATH),
+            axum::http::HeaderMap::new(),
+            Body::from(
+                json!({
+                    "model": "gpt-5",
+                    "stream": true,
+                    "input": "hi",
+                    "tools": [{
+                        "type": "namespace",
+                        "name": "mcp__docs",
+                        "tools": [{ "type": "function", "name": "search", "parameters": { "type": "object" } }]
+                    }]
+                })
+                .to_string(),
+            ),
+        )
+        .await;
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("proxy response bytes");
+        let requests = upstream.requests();
+        upstream.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(
+            requests[0].body["tools"][0]["function"]["name"],
+            json!("mcp__docs__search")
+        );
+        let done = String::from_utf8_lossy(&bytes)
+            .lines()
+            .filter_map(|line| line.strip_prefix("data: "))
+            .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+            .find(|event| event["type"] == json!("response.output_item.done"))
+            .expect("output_item.done");
+        assert_eq!(done["item"]["name"], json!("search"));
+        assert_eq!(done["item"]["namespace"], json!("mcp__docs"));
+    });
 }

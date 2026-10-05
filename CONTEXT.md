@@ -45,7 +45,7 @@ _Avoid_: 仅以 response_error 是否存在判断错误请求、成功恢复后�
 _Avoid_: 任意流释放、上游故障、已发给客户端的 HTTP 状态
 
 **Service Tier（服务等级）**:
-一次请求实际使用的处理速度档位，以响应报告优先于请求意图；Fast 与 Priority 是同档位的不同名称，缺省不表示主动选择加速。
+一次请求实际使用的处理速度档位，以响应报告优先于请求意图；Fast 与 Priority 是同档位的不同名称，缺省不表示主动选择加速。Ultrafast 是独立档位（目前仅 GPT-6 Astra 公开，Standard 的 6 倍），不能回退到 Fast/Priority 或 Standard 计价。
 _Avoid_: Reasoning Effort、账号套餐、渠道优先级
 
 **Request Detail**:
@@ -215,6 +215,10 @@ _Avoid_: call_id、function-call-output item ID
 **Codex Custom Tool Item ID**:
 Codex Responses 输入中 custom tool 调用及输出项的标识；调用使用 `ctc` 前缀，输出使用 `ctco` 前缀，并在单次请求内确定、幂等且无碰撞。
 _Avoid_: call_id、function-call item ID、随机 ID
+
+**Tool Identity Restoration（工具身份还原）**:
+上游只认识扁平、限长函数名时，代理在回给客户端前按原请求把调用还原为声明时的 namespace/custom 工具身份。还原依据是随请求常驻的客户端原始请求体，不依赖临时开启的 Request Detail，也不写入日志。
+_Avoid_: 依赖 Request Detail 请求体还原、把截断后的名字直接返回客户端
 
 **Custom Tool Call（自定义自由格式工具调用）**:
 携带自由格式 `input` 的 Responses 工具调用项；它与输出项通过 `call_id` 配对，在仅接受对象参数的 Provider 协议中仍保留同一调用身份。

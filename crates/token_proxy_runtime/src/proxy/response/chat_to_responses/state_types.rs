@@ -25,4 +25,6 @@ pub(super) struct FunctionCallOutput {
     pub(super) arguments: String,
     pub(super) item_added: bool,
     pub(super) has_source_id: bool,
+    // Gemini 等上游随调用返回的签名；只透传，供下一轮回放给同一 provider。
+    pub(super) provider_specific_fields: Option<Value>,
 }

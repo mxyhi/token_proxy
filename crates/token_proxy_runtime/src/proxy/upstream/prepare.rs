@@ -425,10 +425,6 @@ pub(super) fn account_resolution_outcome(provider_label: &str, err: String) -> A
     }
 }
 
-const XAI_TOKEN_AUTH_HEADER: HeaderName =
-    HeaderName::from_static(token_proxy_account_xai::CLI_TOKEN_AUTH_HEADER);
-const XAI_CLIENT_VERSION_HEADER: HeaderName =
-    HeaderName::from_static(token_proxy_account_xai::CLI_CLIENT_VERSION_HEADER);
 const XAI_CONVERSATION_ID_HEADER: HeaderName = HeaderName::from_static("x-grok-conv-id");
 
 pub(super) fn xai_request_url(upstream_path_with_query: &str) -> Result<String, &'static str> {
@@ -478,8 +474,9 @@ pub(super) fn enforce_xai_request_headers(
     protected_headers: Option<&HeaderMap>,
     request_headers: &mut HeaderMap,
 ) {
-    request_headers.remove(&XAI_TOKEN_AUTH_HEADER);
-    request_headers.remove(&XAI_CLIENT_VERSION_HEADER);
+    for (name, _) in token_proxy_account_xai::CLI_IDENTITY_HEADERS {
+        request_headers.remove(name);
+    }
     request_headers.remove(&XAI_CONVERSATION_ID_HEADER);
     if let Some(protected_headers) = protected_headers {
         for (name, value) in protected_headers {
@@ -503,17 +500,15 @@ pub(super) fn enforce_xai_request_headers(
         return;
     }
 
-    request_headers.insert(
-        XAI_TOKEN_AUTH_HEADER,
-        HeaderValue::from_static(token_proxy_account_xai::CLI_TOKEN_AUTH_VALUE),
-    );
-    request_headers.insert(
-        XAI_CLIENT_VERSION_HEADER,
-        HeaderValue::from_static(token_proxy_account_xai::CLI_CLIENT_VERSION),
-    );
+    for (name, value) in token_proxy_account_xai::CLI_IDENTITY_HEADERS {
+        request_headers.insert(
+            HeaderName::from_static(name),
+            HeaderValue::from_static(value),
+        );
+    }
     request_headers.insert(
         USER_AGENT,
-        HeaderValue::from_static(token_proxy_account_xai::CLI_USER_AGENT),
+        HeaderValue::from_static(token_proxy_account_xai::cli_user_agent()),
     );
     request_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     request_headers.insert(
@@ -568,6 +563,7 @@ pub(super) fn build_mapped_meta(meta: &RequestMeta, upstream: &UpstreamRuntime) 
         reasoning_effort,
         response_format: meta.response_format.clone(),
         estimated_input_tokens: meta.estimated_input_tokens,
+        client_request_body: meta.client_request_body.clone(),
         billing: meta.billing.clone(),
     }
 }

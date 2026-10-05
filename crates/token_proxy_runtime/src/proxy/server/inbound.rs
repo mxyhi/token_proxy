@@ -247,6 +247,7 @@ pub(super) fn log_request_error(
         upstream_request_id: None,
         request_headers,
         request_body,
+        client_request_body: None,
         ttfb_ms: None,
         timings: Default::default(),
         start,

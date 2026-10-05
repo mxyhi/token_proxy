@@ -76,6 +76,13 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
         mappings.get("anthropic/claude-sonnet-5"),
         Some(&"claude-sonnet-5".to_string())
     );
+    for alias in ["anthropic/claude-sonnet-5-5", "anthropic/claude-sonnet-5.5"] {
+        assert_eq!(
+            mappings.get(alias),
+            Some(&"claude-sonnet-5-5".to_string()),
+            "{alias}"
+        );
+    }
     assert_eq!(
         mappings.get("anthropic/claude-fable-5-1"),
         Some(&"claude-fable-5-1".to_string())

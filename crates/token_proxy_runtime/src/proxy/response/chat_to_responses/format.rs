@@ -24,6 +24,7 @@ pub(super) enum OutputItemSnapshot {
         name: String,
         arguments: String,
         status: String,
+        provider_specific_fields: Option<Value>,
     },
 }
 
@@ -106,14 +107,37 @@ pub(super) fn snapshot_to_output_item(snapshot: &OutputItemSnapshot) -> Value {
             name,
             arguments,
             status,
+            provider_specific_fields,
             ..
-        } => json!({
-            "id": id,
-            "type": "function_call",
-            "status": status,
-            "call_id": call_id,
-            "name": name,
-            "arguments": arguments
-        }),
+        } => function_call_item(
+            id,
+            status,
+            call_id,
+            name,
+            arguments,
+            provider_specific_fields.as_ref(),
+        ),
     }
+}
+
+pub(super) fn function_call_item(
+    id: &str,
+    status: &str,
+    call_id: &str,
+    name: &str,
+    arguments: &str,
+    provider_specific_fields: Option<&Value>,
+) -> Value {
+    let mut item = json!({
+        "id": id,
+        "type": "function_call",
+        "status": status,
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments
+    });
+    if let Some(fields) = provider_specific_fields {
+        item["provider_specific_fields"] = fields.clone();
+    }
+    item
 }

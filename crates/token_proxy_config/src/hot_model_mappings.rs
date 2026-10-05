@@ -44,6 +44,9 @@ const DEFAULT_HOT_MODEL_MAPPING_PAIRS: &[(&str, &str)] = &[
     ("anthropic/claude-opus-4.6", "claude-opus-4.6"),
     ("anthropic/claude-opus-4.6-fast", "claude-opus-4.6-fast"),
     ("anthropic/claude-sonnet-5", "claude-sonnet-5"),
+    // Sonnet 5.5 官方 ID 是 claude-sonnet-5-5；点号写法对齐 opus-5.5。
+    ("anthropic/claude-sonnet-5-5", "claude-sonnet-5-5"),
+    ("anthropic/claude-sonnet-5.5", "claude-sonnet-5-5"),
     // Fable 5.1 官方 ID 是 claude-fable-5-1；点号写法对齐 opus-4.7 别名。
     ("anthropic/claude-fable-5-1", "claude-fable-5-1"),
     ("anthropic/claude-fable-5.1", "claude-fable-5-1"),

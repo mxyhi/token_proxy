@@ -15,6 +15,7 @@ fn test_context() -> LogContext {
         upstream_request_id: None,
         request_headers: None,
         request_body: None,
+        client_request_body: None,
         ttfb_ms: None,
         timings: Default::default(),
         start: std::time::Instant::now(),

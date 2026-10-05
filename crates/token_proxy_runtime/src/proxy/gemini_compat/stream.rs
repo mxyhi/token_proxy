@@ -271,6 +271,24 @@ where
                 continue;
             };
 
+            // 思考内容走 reasoning_content，不能混进正文（与非流式转换一致）。
+            if part.get("thought").and_then(Value::as_bool) == Some(true) {
+                if let Some(text) = part.get("text").and_then(Value::as_str) {
+                    if !text.is_empty() {
+                        token_texts.push(text.to_string());
+                        self.ensure_role_sent();
+                        self.out.push_back(chat_chunk_sse(
+                            &self.chat_id,
+                            self.created,
+                            &self.model,
+                            json!({ "reasoning_content": text }),
+                            None,
+                        ));
+                    }
+                }
+                continue;
+            }
+
             // 文本内容
             if let Some(text) = part.get("text").and_then(Value::as_str) {
                 if !text.is_empty() {
@@ -290,8 +308,16 @@ where
             if let Some(function_call) = part.get("functionCall").and_then(Value::as_object) {
                 has_tool_calls = true;
                 self.ensure_role_sent();
-                let tool_call =
+                let mut tool_call =
                     gemini_function_call_to_chat_tool_call(function_call, self.tool_call_index);
+                // Gemini 3 下一轮会校验当前轮首个 functionCall 的签名；流式也必须随调用透传。
+                if let Some(signature) = part.get("thoughtSignature").and_then(Value::as_str) {
+                    tool_call["provider_specific_fields"] = json!({
+                        "provider": "gemini",
+                        "thought_signature": signature
+                    });
+                    tracing::debug!("forwarded Gemini stream function call thought signature");
+                }
                 self.tool_call_index += 1;
 
                 // 发送工具调用 delta

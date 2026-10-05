@@ -146,13 +146,15 @@ fn kiro_models_request(
 }
 
 fn xai_models_request(client: &Client, token: &str) -> RequestBuilder {
-    client
-        .get(format!("{}/models", xai::CLI_BASE_URL))
+    xai::CLI_IDENTITY_HEADERS
+        .iter()
+        .fold(
+            client.get(format!("{}/models", xai::CLI_BASE_URL)),
+            |request, (name, value)| request.header(*name, *value),
+        )
         .bearer_auth(token)
         .header("Accept", "application/json")
-        .header(xai::CLI_TOKEN_AUTH_HEADER, xai::CLI_TOKEN_AUTH_VALUE)
-        .header(xai::CLI_CLIENT_VERSION_HEADER, xai::CLI_CLIENT_VERSION)
-        .header("User-Agent", xai::CLI_USER_AGENT)
+        .header("User-Agent", xai::cli_user_agent())
 }
 
 async fn fetch_model_pages(provider: &str, request: RequestBuilder) -> Result<Vec<String>, String> {

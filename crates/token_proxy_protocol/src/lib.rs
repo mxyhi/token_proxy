@@ -16,6 +16,7 @@ pub mod responses_failure;
 pub mod responses_input;
 pub mod responses_sequence;
 pub mod responses_text;
+pub mod schema_bool;
 pub mod sse;
 pub mod token_estimator;
 pub mod tool_identity;

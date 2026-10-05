@@ -186,7 +186,13 @@ fn normalize_tool_parameters(value: Option<&Value>) -> Option<Value> {
             if !normalized.contains_key("type") {
                 normalized.insert("type".to_string(), json!("object"));
             }
-            Some(Value::Object(normalized))
+            let mut normalized = Value::Object(normalized);
+            let changed =
+                token_proxy_protocol::schema_bool::normalize_true_subschemas(&mut normalized);
+            if changed > 0 {
+                tracing::debug!(changed, "normalized Chat tool boolean subschemas");
+            }
+            Some(normalized)
         }
         Some(other) => Some(other.clone()),
         None => Some(json!({ "type": "object" })),

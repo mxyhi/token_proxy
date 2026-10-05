@@ -813,6 +813,7 @@ mod tests {
             reasoning_effort: None,
             response_format: None,
             estimated_input_tokens: None,
+            client_request_body: None,
             billing: Default::default(),
         };
 

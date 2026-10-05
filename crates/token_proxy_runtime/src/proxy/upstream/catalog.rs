@@ -462,6 +462,7 @@ async fn fetch_upstream_model_catalog(
         reasoning_effort: None,
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
     let prepared = super::prepare_upstream_request(

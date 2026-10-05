@@ -185,7 +185,8 @@ pub(crate) fn transform_response_body_with_request_body(
             anthropic_compat::responses_response_to_anthropic(bytes, model_hint)
         }
         FormatTransform::AnthropicToResponses => {
-            anthropic_compat::anthropic_response_to_responses(bytes)
+            let output = anthropic_compat::anthropic_response_to_responses(bytes)?;
+            restore_response_tool_names(output, request_body)
         }
         FormatTransform::ResponsesInputTokensToAnthropicCountTokens => {
             responses_input_tokens_response_to_anthropic_count_tokens(bytes)
@@ -199,6 +200,7 @@ pub(crate) fn transform_response_body_with_request_body(
         }
         FormatTransform::AnthropicToChat => {
             let intermediate = anthropic_compat::anthropic_response_to_responses(bytes)?;
+            let intermediate = restore_response_tool_names(intermediate, request_body)?;
             responses_response_to_chat(&intermediate, model_hint)
         }
         FormatTransform::GeminiToAnthropic => gemini_response_to_anthropic(bytes, model_hint),

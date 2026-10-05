@@ -278,6 +278,7 @@ fn parse_codex_effort_suffix(model: &str) -> Option<String> {
         .to_ascii_lowercase()
         .replace('_', "-");
     for prefix in [
+        "gpt-6.1-sol-",
         "gpt-6-astra-",
         "gpt-6-sol-",
         "gpt-6-luna-",
@@ -542,7 +543,8 @@ fn map_tool_calls(
             let arguments = function
                 .get("arguments")
                 .and_then(Value::as_str)
-                .unwrap_or_default();
+                .filter(|arguments| !arguments.trim().is_empty())
+                .unwrap_or("{}");
             (
                 json!({
                     "type": "function_call",
@@ -882,7 +884,8 @@ fn normalize_codex_reasoning_effort(
 ) {
     if !matches!(
         model,
-        "gpt-6-astra"
+        "gpt-6.1-sol"
+            | "gpt-6-astra"
             | "gpt-6-sol"
             | "gpt-6-luna"
             | "gpt-5.6-sol"
@@ -970,6 +973,9 @@ fn normalize_codex_model(model: &str) -> String {
     if compact == "gpt-6" || compact.starts_with("gpt-6-astra-") {
         return "gpt-6-astra".to_string();
     }
+    if compact == "gpt-6.1-sol" || compact.starts_with("gpt-6.1-sol-") {
+        return "gpt-6.1-sol".to_string();
+    }
     if compact == "gpt-6-sol" || compact.starts_with("gpt-6-sol-") {
         return "gpt-6-sol".to_string();
     }
@@ -1011,10 +1017,32 @@ fn normalize_codex_model(model: &str) -> String {
     model_id.to_string()
 }
 
+fn reject_gpt61_sol_disabled_reasoning(
+    model: &str,
+    object: &Map<String, Value>,
+) -> Result<(), String> {
+    if model != "gpt-6.1-sol" {
+        return Ok(());
+    }
+    let effort = object
+        .get("reasoning")
+        .and_then(|reasoning| reasoning.get("effort"))
+        .and_then(Value::as_str)
+        .map(|effort| effort.trim().to_ascii_lowercase());
+    if matches!(effort.as_deref(), Some("none" | "minimal")) {
+        return Err(format!(
+            "gpt-6.1-sol does not support reasoning effort {:?}; use low, medium, high, xhigh or max.",
+            effort.unwrap_or_default()
+        ));
+    }
+    Ok(())
+}
+
 fn reject_codex_spark_non_text_features(
     model: &str,
     object: &Map<String, Value>,
 ) -> Result<(), String> {
+    reject_gpt61_sol_disabled_reasoning(model, object)?;
     if model != "gpt-5.3-codex-spark" {
         return Ok(());
     }
@@ -1145,6 +1173,12 @@ const CODEX_MODEL_ALIASES: &[(&str, &str)] = &[
     ("gpt-6-astra-high", "gpt-6-astra"),
     ("gpt-6-astra-xhigh", "gpt-6-astra"),
     ("gpt-6-astra-max", "gpt-6-astra"),
+    ("gpt-6.1-sol", "gpt-6.1-sol"),
+    ("gpt-6.1-sol-low", "gpt-6.1-sol"),
+    ("gpt-6.1-sol-medium", "gpt-6.1-sol"),
+    ("gpt-6.1-sol-high", "gpt-6.1-sol"),
+    ("gpt-6.1-sol-xhigh", "gpt-6.1-sol"),
+    ("gpt-6.1-sol-max", "gpt-6.1-sol"),
     ("gpt-6-sol", "gpt-6-sol"),
     ("gpt-6-sol-none", "gpt-6-sol"),
     ("gpt-6-sol-minimal", "gpt-6-sol"),
@@ -1308,7 +1342,8 @@ fn ensure_default_instructions(object: &mut Map<String, Value>, model: &str) {
 
 fn codex_base_instructions_for_model(model: &str) -> &'static str {
     let model = model.trim().to_ascii_lowercase();
-    if model.starts_with("gpt-6-astra")
+    if model.starts_with("gpt-6.1-sol")
+        || model.starts_with("gpt-6-astra")
         || model.starts_with("gpt-6-sol")
         || model.starts_with("gpt-6-luna")
     {
@@ -1369,6 +1404,7 @@ fn sanitize_responses_input_for_codex(items: &[Value]) -> Vec<Value> {
             if had_reasoning_id && sanitized.get("id").is_none() {
                 removed_reasoning_ids += 1;
             }
+            normalize_blank_function_call_arguments(&mut sanitized);
             sanitized
         })
         .collect::<Vec<_>>();
@@ -1380,6 +1416,21 @@ fn sanitize_responses_input_for_codex(items: &[Value]) -> Vec<Value> {
     }
     normalize_codex_input_item_ids(&mut sanitized);
     sanitized
+}
+
+// 只改写空白字符串；非空的非法 JSON 保持原样，让上游返回原始错误。custom_tool_call 用 input，不受影响。
+fn normalize_blank_function_call_arguments(item: &mut Value) {
+    if item.get("type").and_then(Value::as_str) != Some("function_call") {
+        return;
+    }
+    let is_blank = item
+        .get("arguments")
+        .and_then(Value::as_str)
+        .is_some_and(|arguments| arguments.trim().is_empty());
+    if is_blank {
+        item["arguments"] = Value::String("{}".to_string());
+        tracing::debug!("normalized blank Codex function_call arguments");
+    }
 }
 
 // Codex caps every retained input item id, not only function call ids. Keep a

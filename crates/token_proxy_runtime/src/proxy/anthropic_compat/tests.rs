@@ -261,6 +261,54 @@ fn anthropic_request_to_responses_filters_billing_header_and_maps_adaptive_think
 }
 
 #[test]
+fn anthropic_enabled_thinking_uses_output_config_effort_without_budget() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let cases = [
+        (
+            json!({ "type": "enabled" }),
+            json!({ "effort": "high" }),
+            "high",
+        ),
+        // 旧式预算仍优先于 output_config.effort。
+        (
+            json!({ "type": "enabled", "budget_tokens": 8192 }),
+            json!({ "effort": "high" }),
+            "medium",
+        ),
+        (
+            json!({ "type": "enabled" }),
+            json!({ "effort": "  " }),
+            "minimal",
+        ),
+        (
+            json!({ "type": "enabled" }),
+            json!({ "effort": 123 }),
+            "minimal",
+        ),
+        (json!({ "type": "enabled" }), json!({}), "minimal"),
+    ];
+    for (thinking, output_config, expected) in cases {
+        let input = bytes_from_json(json!({
+            "model": "gpt-5.4-mini",
+            "max_tokens": 64,
+            "thinking": thinking,
+            "output_config": output_config,
+            "messages": [{ "role": "user", "content": "hi" }]
+        }));
+        let value = json_from_bytes(run_async(async {
+            anthropic_request_to_responses(&input, &http_clients)
+                .await
+                .expect("transform")
+        }));
+        assert_eq!(
+            value["reasoning"]["effort"],
+            json!(expected),
+            "{thinking} {output_config}"
+        );
+    }
+}
+
+#[test]
 fn reasoning_summary_visibility_round_trips_between_anthropic_and_responses() {
     let http_clients = ProxyHttpClients::new().expect("http clients");
 
@@ -827,7 +875,7 @@ fn responses_request_to_anthropic_pairs_custom_tool_calls_with_results() {
     assert_eq!(messages[1]["content"][0]["name"], json!("apply_patch"));
     assert_eq!(
         messages[1]["content"][0]["input"],
-        json!({ "_raw": "*** Begin Patch" })
+        json!({ "input": "*** Begin Patch" })
     );
     assert_eq!(messages[2]["role"], json!("user"));
     assert_eq!(messages[2]["content"][0]["type"], json!("tool_result"));
@@ -1531,4 +1579,123 @@ fn responses_bridge_rejects_unmarked_openai_encrypted_content() {
     let value = json_from_bytes(output);
     assert_eq!(value["content"][0]["type"], json!("text"));
     assert_eq!(value["content"][0]["text"], json!("answer"));
+}
+
+#[test]
+fn responses_request_to_anthropic_bounds_namespace_names_and_maps_custom_tools() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let namespace = "mcp__enterprise_integration_platform_for_internal_knowledge_base_search";
+    let input = bytes_from_json(json!({
+        "model": "claude-sonnet-4-5",
+        "input": [
+            { "type": "function_call", "call_id": "call_1", "namespace": namespace, "name": "search_documents", "arguments": "{}" },
+            { "type": "function_call_output", "call_id": "call_1", "output": "ok" },
+            { "type": "custom_tool_call", "call_id": "call_2", "name": "apply_patch", "input": "*** Begin Patch" },
+            { "type": "custom_tool_call_output", "call_id": "call_2", "output": "done" }
+        ],
+        "tools": [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "tools": [
+                    { "type": "function", "name": "search_documents", "parameters": { "type": "object" } },
+                    { "type": "function", "name": "search_documents_v2", "parameters": { "type": "object" } }
+                ]
+            },
+            { "type": "custom", "name": "apply_patch", "description": "patch files" }
+        ],
+        "tool_choice": { "type": "function", "namespace": namespace, "name": "search_documents" }
+    }));
+
+    let value = json_from_bytes(run_async(async {
+        responses_request_to_anthropic(&input, &http_clients)
+            .await
+            .expect("transform")
+    }));
+    let tools = value["tools"].as_array().expect("tools");
+    let names: Vec<&str> = tools
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+
+    assert_eq!(names.len(), 3);
+    for name in &names {
+        assert!(name.len() <= 64, "{name}");
+        assert!(name
+            .bytes()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, b'_' | b'-')));
+    }
+    assert_ne!(
+        names[0], names[1],
+        "truncated namespace names must stay unique"
+    );
+    // custom 工具声明不能丢，且与历史 tool_use 的 {"input": ...} 形状一致。
+    let custom = tools
+        .iter()
+        .find(|tool| tool["name"] == json!("apply_patch"))
+        .expect("custom tool declaration");
+    assert_eq!(custom["input_schema"]["required"], json!(["input"]));
+    let history_names: Vec<&str> = value["messages"]
+        .as_array()
+        .expect("messages")
+        .iter()
+        .flat_map(|message| message["content"].as_array().into_iter().flatten())
+        .filter(|block| block["type"] == json!("tool_use"))
+        .filter_map(|block| block["name"].as_str())
+        .collect();
+    assert_eq!(history_names, vec![names[0], "apply_patch"]);
+    assert_eq!(value["tool_choice"]["name"], json!(names[0]));
+}
+
+#[test]
+fn anthropic_response_to_responses_restores_bounded_tool_identities() {
+    let namespace = "mcp__enterprise_integration_platform_for_internal_knowledge_base_search";
+    let request = json!({
+        "model": "claude-sonnet-4-5",
+        "input": "hi",
+        "tools": [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "tools": [{ "type": "function", "name": "search_documents", "parameters": { "type": "object" } }]
+            },
+            { "type": "custom", "name": "apply_patch" }
+        ]
+    });
+    let mut upstream_request = request.as_object().cloned().expect("request");
+    token_proxy_protocol::tool_identity::normalize_responses_tool_names(&mut upstream_request, &[])
+        .expect("normalize");
+    let claude_name = upstream_request["tools"][0]["name"]
+        .as_str()
+        .expect("bounded name")
+        .to_string();
+    let response = bytes_from_json(json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [
+            { "type": "tool_use", "id": "toolu_1", "name": claude_name, "input": { "q": "x" } },
+            { "type": "tool_use", "id": "toolu_2", "name": "apply_patch", "input": { "input": "*** Begin Patch" } }
+        ],
+        "stop_reason": "tool_use",
+        "usage": { "input_tokens": 1, "output_tokens": 1 }
+    }));
+
+    let output = crate::proxy::openai_compat::transform_response_body_with_request_body(
+        crate::proxy::openai_compat::FormatTransform::AnthropicToResponses,
+        &response,
+        None,
+        Some(&request.to_string()),
+    )
+    .expect("transform");
+    let value = json_from_bytes(output);
+    let items = value["output"].as_array().expect("output");
+
+    assert_eq!(items[0]["type"], json!("function_call"));
+    assert_eq!(items[0]["name"], json!("search_documents"));
+    assert_eq!(items[0]["namespace"], json!(namespace));
+    assert_eq!(items[1]["type"], json!("custom_tool_call"));
+    assert_eq!(items[1]["name"], json!("apply_patch"));
+    assert_eq!(items[1]["input"], json!("*** Begin Patch"));
 }

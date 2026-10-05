@@ -147,6 +147,7 @@ pub(super) async fn build_proxy_response(
         upstream_request_id: http::extract_request_id(upstream_res.headers()),
         request_headers,
         request_body,
+        client_request_body: meta.client_request_body.clone(),
         ttfb_ms: None,
         timings,
         start,
@@ -242,6 +243,7 @@ pub(super) async fn build_proxy_response_buffered(
         upstream_request_id: http::extract_request_id(upstream_res.headers()),
         request_headers,
         request_body,
+        client_request_body: meta.client_request_body.clone(),
         ttfb_ms: None,
         timings,
         start,
@@ -360,6 +362,50 @@ where
 
 fn responses_event_sse(event: Value) -> Bytes {
     Bytes::from(format!("data: {}\n\n", event.to_string()))
+}
+
+/// 流式转换只在请求确有需还原的工具时保留原请求，避免每个 SSE 事件都重建工具映射。
+fn stream_tool_identity_request(context: &super::log::LogContext) -> Option<Value> {
+    let request = serde_json::from_str::<Value>(context.tool_identity_request_body()?).ok()?;
+    token_proxy_protocol::tool_identity::responses_tool_identities_need_restore(&request)
+        .then_some(request)
+}
+
+/// 把仅认识扁平函数名的上游输出还原为客户端声明的 namespace/custom 工具身份。
+fn restore_queued_tool_identities(
+    out: &mut std::collections::VecDeque<Bytes>,
+    request: Option<&Value>,
+    custom_item_ids: &mut std::collections::HashMap<String, String>,
+) {
+    let Some(request) = request else {
+        return;
+    };
+    for chunk in out.iter_mut() {
+        let Ok(text) = std::str::from_utf8(chunk.as_ref()) else {
+            continue;
+        };
+        let Some(data) = text
+            .strip_prefix("data: ")
+            .and_then(|value| value.strip_suffix("\n\n"))
+        else {
+            continue;
+        };
+        // 只有函数调用相关事件需要还原；正文 delta 不做 JSON 解析。
+        if data == "[DONE]" || !data.contains("function_call") {
+            continue;
+        }
+        let Ok(mut value) = serde_json::from_str::<Value>(data) else {
+            continue;
+        };
+        if token_proxy_protocol::tool_identity::restore_responses_tool_identities_with_state(
+            &mut value,
+            request,
+            custom_item_ids,
+        ) > 0
+        {
+            *chunk = Bytes::from(format!("data: {value}\n\n"));
+        }
+    }
 }
 
 fn anthropic_event_sse(event_type: &str, event: Value) -> Bytes {

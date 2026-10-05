@@ -8,10 +8,7 @@ use token_proxy_account_store::oauth_util::{build_reqwest_client_no_redirect, no
 
 use super::store::XaiAccountStore;
 use super::types::{XaiQuotaCache, XaiQuotaItem, XaiQuotaSummary};
-use super::{
-    CLI_BILLING_USER_AGENT, CLI_CLIENT_VERSION, CLI_CLIENT_VERSION_HEADER, CLI_TOKEN_AUTH_HEADER,
-    CLI_TOKEN_AUTH_VALUE,
-};
+use super::{cli_user_agent, CLI_IDENTITY_HEADERS};
 
 const BILLING_WEEKLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const BILLING_MONTHLY_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing";
@@ -172,13 +169,15 @@ fn apply_cli_headers(
     access_token: &str,
     accept: &str,
 ) -> reqwest::RequestBuilder {
-    request
+    CLI_IDENTITY_HEADERS
+        .iter()
+        .fold(request, |request, (name, value)| {
+            request.header(*name, *value)
+        })
         .bearer_auth(access_token)
         .header("Accept", accept)
         .header("Content-Type", "application/json")
-        .header(CLI_TOKEN_AUTH_HEADER, CLI_TOKEN_AUTH_VALUE)
-        .header(CLI_CLIENT_VERSION_HEADER, CLI_CLIENT_VERSION)
-        .header("User-Agent", CLI_BILLING_USER_AGENT)
+        .header("User-Agent", cli_user_agent())
 }
 
 fn build_billing_cache(windows: &BillingWindows) -> XaiQuotaCache {
@@ -594,5 +593,28 @@ mod tests {
     #[test]
     fn cli_base_url_constant_matches_probe_host() {
         assert!(ACTIVE_PROBE_URL.starts_with(super::super::CLI_BASE_URL));
+    }
+
+    #[test]
+    fn billing_requests_use_interactive_cli_identity() {
+        let request = apply_cli_headers(
+            reqwest::Client::new().get(BILLING_MONTHLY_URL),
+            "token",
+            "application/json",
+        )
+        .build()
+        .expect("request");
+        let headers = request.headers();
+        for (name, value) in CLI_IDENTITY_HEADERS {
+            assert_eq!(headers.get(name).unwrap(), value, "{name}");
+        }
+        assert_eq!(headers.get("x-grok-client-mode").unwrap(), "interactive");
+        assert!(headers
+            .get("user-agent")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .starts_with("grok-pager/1.0.46 grok-shell/1.0.46 ("));
+        assert_eq!(headers.get("authorization").unwrap(), "Bearer token");
     }
 }

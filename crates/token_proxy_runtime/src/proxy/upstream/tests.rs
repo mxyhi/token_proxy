@@ -298,6 +298,7 @@ fn gemini_upstream_mapping_rejects_model_path_injection() {
         reasoning_effort: None,
         response_format: None,
         estimated_input_tokens: None,
+        client_request_body: None,
         billing: Default::default(),
     };
 
@@ -322,7 +323,7 @@ fn xai_official_api_headers_keep_bearer_and_remove_cli_identity() {
         );
         headers.insert(
             header::USER_AGENT,
-            HeaderValue::from_static(token_proxy_account_xai::CLI_USER_AGENT),
+            HeaderValue::from_static(token_proxy_account_xai::cli_user_agent()),
         );
         headers.insert(
             token_proxy_account_xai::CLI_TOKEN_AUTH_HEADER,
@@ -343,8 +344,9 @@ fn xai_official_api_headers_keep_bearer_and_remove_cli_identity() {
                 .and_then(|value| value.to_str().ok()),
             Some("Bearer account-token")
         );
-        assert!(!headers.contains_key(token_proxy_account_xai::CLI_TOKEN_AUTH_HEADER));
-        assert!(!headers.contains_key(token_proxy_account_xai::CLI_CLIENT_VERSION_HEADER));
+        for (name, _) in token_proxy_account_xai::CLI_IDENTITY_HEADERS {
+            assert!(!headers.contains_key(name), "{name}");
+        }
         assert!(!headers.contains_key("x-grok-conv-id"));
         assert!(!headers.contains_key(header::USER_AGENT));
         assert_eq!(
@@ -425,19 +427,29 @@ fn xai_video_content_uses_binary_accept_without_json_content_type() {
 
 #[test]
 fn xai_cli_responses_headers_include_identity_and_conversation() {
-    use axum::http::{header, HeaderMap};
+    use axum::http::{header, HeaderMap, HeaderValue};
 
     let body =
         ReplayableBody::from_bytes(Bytes::from_static(br#"{"prompt_cache_key":"session-123"}"#));
     let mut headers = HeaderMap::new();
+    // 客户端伪造的身份头必须被官方 CLI 身份覆盖。
+    headers.insert("x-grok-client-version", HeaderValue::from_static("0.2.93"));
+    headers.insert("x-grok-client-mode", HeaderValue::from_static("headless"));
     prepare::enforce_xai_request_headers("/v1/responses", &body, true, None, &mut headers);
 
-    assert_eq!(
-        headers
-            .get(token_proxy_account_xai::CLI_TOKEN_AUTH_HEADER)
-            .and_then(|value| value.to_str().ok()),
-        Some(token_proxy_account_xai::CLI_TOKEN_AUTH_VALUE)
-    );
+    for (name, expected) in [
+        ("x-xai-token-auth", "xai-grok-cli"),
+        ("x-grok-client-version", "1.0.46"),
+        ("x-grok-client-identifier", "grok-pager"),
+        ("x-grok-client-mode", "interactive"),
+        ("x-authenticateresponse", "authenticate-response"),
+    ] {
+        assert_eq!(
+            headers.get(name).and_then(|value| value.to_str().ok()),
+            Some(expected),
+            "{name}"
+        );
+    }
     assert_eq!(
         headers
             .get("x-grok-conv-id")
@@ -448,6 +460,13 @@ fn xai_cli_responses_headers_include_identity_and_conversation() {
         headers
             .get(header::USER_AGENT)
             .and_then(|value| value.to_str().ok()),
-        Some(token_proxy_account_xai::CLI_USER_AGENT)
+        Some(
+            format!(
+                "grok-pager/1.0.46 grok-shell/1.0.46 ({}; {})",
+                std::env::consts::OS,
+                std::env::consts::ARCH
+            )
+            .as_str()
+        )
     );
 }

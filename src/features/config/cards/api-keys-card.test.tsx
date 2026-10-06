@@ -162,6 +162,45 @@ describe("API Key management", () => {
     expect(savedKeys()[0].scope).toEqual(stale.scope);
   });
 
+  it("selects multiple account upstreams and preserves the exact selection after reload", () => {
+    const upstreams = ["account-a", "account-b", "account-c"].map((id) => ({
+      ...createEmptyUpstream(),
+      id,
+      providers: ["codex"],
+      accountId: `${id}.json`,
+    }));
+    const initial = { ...EMPTY_FORM, upstreams };
+    const view = render(<Harness initial={initial} />);
+    fireEvent.click(screen.getByText(m.api_keys_add()));
+    fireEvent.change(screen.getByLabelText(m.api_keys_name()), {
+      target: { value: "Two accounts" },
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "Auto" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /account-a/ }));
+    fireEvent.click(screen.getByRole("checkbox", { name: /account-b/ }));
+    fireEvent.click(screen.getByRole("button", { name: m.common_save() }));
+    expect(savedKeys()[0].scope).toEqual({
+      type: "selected",
+      upstream_ids: ["account-a", "account-b"],
+    });
+    const reloaded = toForm({
+      ...toPayload(initial),
+      local_api_keys: savedKeys(),
+    });
+    view.unmount();
+    render(<Harness initial={reloaded} />);
+    fireEvent.click(screen.getByRole("button", { name: m.common_edit() }));
+    expect(screen.getByRole("checkbox", { name: /account-a/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /account-b/ })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /account-c/ })).not.toBeChecked();
+    fireEvent.click(screen.getByRole("checkbox", { name: /account-a/ }));
+    fireEvent.click(screen.getByRole("button", { name: m.common_save() }));
+    expect(savedKeys()[0].scope).toEqual({
+      type: "selected",
+      upstream_ids: ["account-b"],
+    });
+  });
+
   it("form validation blocks empty selected scope and duplicates before auto save", () => {
     const key = { ...createLocalApiKey(), name: "Key" };
     expect(

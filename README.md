@@ -98,7 +98,7 @@ Notes:
 | --- | --- | --- |
 | `host` | `127.0.0.1` | Listen address (IPv6 allowed; will be bracketed in URLs) |
 | `port` | `9208` release / `19208` debug | Change if the port is taken |
-| `local_api_key` | `null` | When set: local auth uses format-specific headers (see Auth rules); local auth inputs are **not** forwarded upstream. |
+| `local_api_keys` | `[]` | When nonempty: local auth uses format-specific headers (see Auth rules); local auth inputs are **not** forwarded upstream. |
 | `app_proxy_url` | `null` | Proxy for app updater & as placeholder for upstreams (`"$app_proxy_url"`). Supports `http/https/socks5/socks5h`. |
 | `log_level` | `silent` | `silent|error|warn|info|debug|trace`; debug/trace log request headers (auth redacted) and small bodies (≤64KiB). Release builds force `silent`. |
 | `max_request_body_bytes` | `104857600` (100 MiB) | 0 = fallback to default. Shared inbound, JSON filter, and format-conversion ceiling. |
@@ -130,7 +130,7 @@ Notes:
 
 | `type` | Shape | Notes |
 | --- | --- | --- |
-| `passthrough` | `{ "type": "passthrough" }` | No static upstream key; may rely on request-header fallback when `local_api_key` is unset. **Not allowed** for `kiro` / `codex` / `xai`. |
+| `passthrough` | `{ "type": "passthrough" }` | No static upstream key; may rely on request-header fallback when `local_api_keys` is empty. **Not allowed** for `kiro` / `codex` / `xai`. |
 | `api_keys` | `{ "type": "api_keys", "api_keys": ["key-a", "key-b"] }` | Static keys; empty list behaves like passthrough after normalize. **Not allowed** for account-based providers. |
 | `account` | `{ "type": "account", "provider": "kiro"\|"codex"\|"xai", "account_id": "..." }` | Binds one Provider Account. `provider` must match the sole account-based entry in `providers[]`. One `(provider, account_id)` may bind only one upstream. |
 
@@ -154,17 +154,34 @@ Legacy flat fields (`api_key`, `api_keys`, `kiro_account_id`, `codex_account_id`
 - Other Gemini native endpoints are pass-through only and require a configured `gemini` upstream.
 
 ## Auth rules (important)
-- Local access: `local_api_key` enabled → require format-specific key. Local auth inputs are reserved for gateway access and **not** used as upstream credentials.
-  - Public whitelist: `GET` / `HEAD` `/v1/models` and `/v1beta/openai/models` do not require local key.
+- Local access: `local_api_keys` nonempty → require format-specific key. Local auth inputs are reserved for gateway access and **not** used as upstream credentials.
+  - Model catalogs (`GET` / `HEAD` `/v1/models` and `/v1beta/openai/models`) require the same key and only include authorized upstreams. Connectivity probes and allowed CORS preflight keep their existing behavior.
   - OpenAI / Responses: `Authorization: Bearer <key>`
   - Anthropic `/v1/messages`: `x-api-key` or `x-anthropic-api-key`
   - Gemini native API: `x-goog-api-key` or `?key=...`
-- When `local_api_key` is enabled, inbound request auth headers are **not** collected for upstream; configure `credential.api_keys` (or an account credential) on the upstream instead.
+- When `local_api_keys` is nonempty, inbound request auth headers are **not** collected for upstream; configure `credential.api_keys` (or an account credential) on the upstream instead.
 - Upstream auth resolution (per request; runtime expands `credential.api_keys` into the attempt key):
-  - **OpenAI-compatible** (and most non-Anthropic providers): `credential.api_keys` → request `x-openai-api-key` / `Authorization` **only when** `local_api_key` is unset → no key.
-  - **Anthropic**: `credential.api_keys` → request `x-api-key` / `x-anthropic-api-key` / bearer fallback **only when** `local_api_key` is unset → no key. Missing `anthropic-version` is auto-filled with `2023-06-01`.
-  - **Gemini**: `credential.api_keys` → request `x-goog-api-key` → query `?key=...` (query/header fallback only when `local_api_key` is unset) → skip attempt.
+  - **OpenAI-compatible** (and most non-Anthropic providers): `credential.api_keys` → request `x-openai-api-key` / `Authorization` **only when** `local_api_keys` is empty → no key.
+  - **Anthropic**: `credential.api_keys` → request `x-api-key` / `x-anthropic-api-key` / bearer fallback **only when** `local_api_keys` is empty → no key. Missing `anthropic-version` is auto-filled with `2023-06-01`.
+  - **Gemini**: `credential.api_keys` → request `x-goog-api-key` → query `?key=...` (query/header fallback only when `local_api_keys` is empty) → skip attempt.
   - **Account-backed** (`kiro` / `codex` / `xai`): uses the bound Provider Account identity (OAuth / Agent Assertion); not `api_keys`.
+
+### Local access keys and migration
+
+Manage keys in **API Key**, after Upstreams. Each key has a stable ID, name, secret, enabled state and scope:
+
+```json
+"local_api_keys": [
+  { "id": "desktop", "name": "Desktop", "key": "replace-with-your-secret", "enabled": true, "scope": { "type": "auto" } },
+  { "id": "limited", "name": "Limited", "key": "replace-with-another-secret", "enabled": true, "scope": { "type": "selected", "upstream_ids": ["your-upstream-id"] } }
+]
+```
+
+An empty list disables local authentication. A nonempty list with all keys disabled rejects authenticated routes. Auto includes all eligible enabled upstreams, including future additions; selected scope never expands automatically. Disabled or deleted upstream bindings remain restricted and are shown as unavailable. Explicit unauthorized `upstream-id/model` routes return 403; missing, invalid or disabled keys return 401. Retries, parallel dispatch, provider fallback and cached/augmented model catalogs share this scope.
+
+The legacy `local_api_key` is migrated unchanged to an enabled Auto entry, with a backup and a migration notice. Both old and new fields in one configuration are an error. Configurations saved by this version are not guaranteed to be readable by older versions. New requests use saved changes immediately; in-flight requests retain their original configuration.
+
+Claude Code and Codex setup require an explicit selection when multiple keys are enabled. One enabled key is selected automatically. Client setup sends the selected ID to the backend; disabled or deleted selections are rejected.
 
 ## Load balancing & retries
 - Priorities: higher `priority` groups first.
@@ -199,7 +216,7 @@ Legacy flat fields (`api_key`, `api_keys`, `kiro_account_id`, `codex_account_id`
 
 ## FAQ
 - **Port already in use?** Change `port` in `config.jsonc`; remember to update your client base URL.
-- **Got 401?** If `local_api_key` is set, you must send the format-specific local key (OpenAI/Responses: `Authorization`, Anthropic: `x-api-key`, Gemini: `x-goog-api-key` or `?key=`). With local auth enabled, configure upstream keys in `upstreams[].credential` (`api_keys` or `account`).
+- **Got 401?** If `local_api_keys` is nonempty, you must send the format-specific local key (OpenAI/Responses: `Authorization`, Anthropic: `x-api-key`, Gemini: `x-goog-api-key` or `?key=`). With local auth enabled, configure upstream keys in `upstreams[].credential` (`api_keys` or `account`).
 - **Got 504?** Upstream did not send response headers or the first body chunk within 120s. For streaming responses, a 120s idle timeout between chunks may also close the connection.
 - **413 Payload Too Large?** Body exceeded `max_request_body_bytes` (default 100 MiB) or the transform limit for format-conversion requests.
 - **Why no system proxy?** By design, `reqwest` is built with `.no_proxy()`; set per-upstream `proxy_url` if needed.

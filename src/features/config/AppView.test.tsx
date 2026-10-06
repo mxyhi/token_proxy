@@ -43,7 +43,6 @@ const IDLE_PROXY_STATUS: ProxyServiceStatus = {
 const BASE_APP_VIEW_PROPS = {
   form: EMPTY_FORM,
   statusBadge: { id: "saved" as const, label: "saved", variant: "default" as const },
-  showLocalKey: false,
   showUpstreamKeys: false,
   providerOptions: [],
   configPath: "/tmp/config.json",
@@ -54,7 +53,6 @@ const BASE_APP_VIEW_PROPS = {
   proxyServiceStatus: IDLE_PROXY_STATUS,
   proxyServiceRequestState: "idle" as const,
   proxyServiceMessage: "",
-  onToggleLocalKey: () => undefined,
   onToggleUpstreamKeys: () => undefined,
   onFormChange: () => undefined,
   onResetHotModelMappings: () => undefined,

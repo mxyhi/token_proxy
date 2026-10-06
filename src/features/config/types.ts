@@ -115,10 +115,21 @@ export type UpstreamConfig = {
   };
 };
 
+export type LocalApiKeyScope = { type: "auto" } | { type: "selected"; upstream_ids: string[] };
+
+export type LocalApiKey = {
+  id: string;
+  name: string;
+  key: string;
+  enabled: boolean;
+  scope: LocalApiKeyScope;
+};
+
 export type ProxyConfigFileBase = {
   host: string;
   port: number;
-  local_api_key: string | null;
+  local_api_keys: LocalApiKey[];
+  local_api_keys_migrated?: boolean;
   app_proxy_url: string | null;
   cors_enabled?: boolean;
   model_list_prefix?: boolean;
@@ -232,7 +243,8 @@ export type ModelMappingForm = {
 export type ConfigForm = {
   host: string;
   port: string;
-  localApiKey: string;
+  localApiKeys: LocalApiKey[];
+  localApiKeysMigrated: boolean;
   appProxyUrl: string;
   corsEnabled: boolean;
   modelListPrefix: boolean;

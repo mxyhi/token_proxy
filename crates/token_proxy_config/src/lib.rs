@@ -3,6 +3,7 @@
 mod hot_model_mappings;
 mod io;
 mod jsonc;
+mod local_api_keys;
 mod migrate;
 mod model_mapping;
 mod normalize;
@@ -19,6 +20,7 @@ const MIN_TIMEOUT_SECS: u64 = 1;
 pub use hot_model_mappings::default_hot_model_mappings;
 pub use hot_model_mappings::expand_model_ids_with_mappings;
 pub use jsonc::sanitize_jsonc;
+pub use local_api_keys::{LocalApiKey, LocalApiKeyScope};
 pub use model_mapping::ModelMappingRules;
 pub use types::StaticApiKeyHeaders;
 pub use types::{
@@ -83,6 +85,7 @@ impl ProxyConfig {
 }
 
 fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> {
+    local_api_keys::validate(&config.local_api_keys)?;
     let log_level = config.log_level;
     let max_request_body_bytes = resolve_max_request_body_bytes(config.max_request_body_bytes);
     let app_proxy_url = normalize_app_proxy_url(config.app_proxy_url.as_deref())?;
@@ -106,7 +109,12 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
     Ok(ProxyConfig {
         host: config.host,
         port: config.port,
-        local_api_key: config.local_api_key,
+        local_api_keys: config.local_api_keys,
+        upstream_ids: config
+            .upstreams
+            .iter()
+            .map(|upstream| upstream.id.trim().to_string())
+            .collect(),
         cors_enabled: config.cors_enabled,
         model_list_prefix: config.model_list_prefix,
         log_level,

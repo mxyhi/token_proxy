@@ -65,6 +65,8 @@ vi.mock("@/features/config/AppView", () => ({
     onSave: () => void;
   }) => (
     <div>
+      <button type="button" onClick={() => onFormChange({ localApiKeys: [{ id: "client", name: "Client", key: "test-secret", enabled: true, scope: { type: "selected", upstream_ids: ["deleted-upstream"] } }] })}>add-local-key</button>
+      <div data-testid="local-keys">{form.localApiKeys.map((key) => key.id).join(",")}</div>
       <label htmlFor="mock-host">host</label>
       <input
         id="mock-host"
@@ -149,6 +151,30 @@ describe("config/ConfigScreen auto save", () => {
       </ConfigScreenProvider>
     );
   }
+
+  it("auto saves local keys and restores their exact scopes on reload", async () => {
+    const invokeMock = vi.mocked(invoke);
+    let persisted = toPayload(EMPTY_FORM);
+    invokeMock.mockImplementation(async (command, args) => {
+      if (command === "read_proxy_config") return { path: "/tmp/config.json", config: persisted };
+      if (command === "proxy_status") return PROXY_STATUS;
+      if (command === "save_proxy_config") {
+        if (!args || !("config" in args)) throw new Error("missing config payload");
+        persisted = args.config as typeof persisted;
+        return createSaveResult();
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+    const view = render(<I18nProvider><ConfigScreen activeSectionId="api-keys" /></I18nProvider>);
+    await waitFor(() => expect(screen.getByTestId("status")).toHaveTextContent("idle"));
+    fireEvent.click(screen.getByText("add-local-key"));
+    await waitForAutoSaveWindow();
+    expect(persisted.local_api_keys).toEqual([{ id: "client", name: "Client", key: "test-secret", enabled: true, scope: { type: "selected", upstream_ids: ["deleted-upstream"] } }]);
+    view.unmount();
+    render(<I18nProvider><ConfigScreen activeSectionId="api-keys" /></I18nProvider>);
+    await waitFor(() => expect(screen.getByTestId("local-keys")).toHaveTextContent("client"));
+    expect(invokeMock.mock.calls.filter(([command]) => command === "save_proxy_config")).toHaveLength(1);
+  });
 
   it("persists an account upstream disable after the editor leaf route unmounts", async () => {
     const invokeMock = vi.mocked(invoke);

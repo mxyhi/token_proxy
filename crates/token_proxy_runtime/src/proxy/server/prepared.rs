@@ -45,6 +45,32 @@ pub(super) fn build_outbound_path_with_query(outbound_path: &str, uri: &Uri) -> 
     format!("{outbound_path}?{outbound_query}")
 }
 
+pub(super) fn build_authorized_outbound_path(
+    outbound_path: &str,
+    uri: &Uri,
+    auth: &http::RequestAuth,
+) -> String {
+    let path = build_outbound_path_with_query(outbound_path, uri);
+    if !auth.local_auth_enabled {
+        return path;
+    }
+    let Some((base, query)) = path.split_once('?') else {
+        return path;
+    };
+    let mut serializer = form_urlencoded::Serializer::new(String::new());
+    for (name, value) in form_urlencoded::parse(query.as_bytes()) {
+        if name != "key" {
+            serializer.append_pair(&name, &value);
+        }
+    }
+    let query = serializer.finish();
+    if query.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{query}")
+    }
+}
+
 pub(super) fn resolve_request_auth_or_respond(
     config: &ProxyConfig,
     headers: &HeaderMap,
@@ -101,20 +127,12 @@ pub(super) async fn finalize_prepared_request(
             );
             http::error_response(StatusCode::BAD_REQUEST, message)
         })?;
-    let outbound_path_with_query = build_outbound_path_with_query(&outbound_path, uri);
+    let outbound_path_with_query =
+        build_authorized_outbound_path(&outbound_path, uri, &inbound.request_auth);
     let client_gemini_api_key =
         http::resolve_client_gemini_api_key(&state.config, headers, &inbound.path, uri.query())
             .map_err(|message| http::error_response(StatusCode::UNAUTHORIZED, message))?;
-    let request_auth = resolve_request_auth_or_respond(
-        &state.config,
-        headers,
-        &state.log,
-        inbound.request_detail.clone(),
-        inbound.client_ip.clone(),
-        &inbound.path,
-        inbound.plan.provider,
-        request_start,
-    )?;
+    let request_auth = inbound.request_auth;
     Ok(PreparedRequest {
         path: inbound.path,
         client_ip: inbound.client_ip,

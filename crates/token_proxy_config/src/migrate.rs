@@ -75,7 +75,8 @@ fn needs_migration(root: &Value) -> bool {
         root_obj.contains_key("model_discovery_refresh_secs");
     let needs_model_list_prefix_default_on = needs_model_list_prefix_default_on_migration(root_obj);
 
-    had_legacy_enable
+    root_obj.contains_key("local_api_key")
+        || had_legacy_enable
         || had_legacy_provider
         || had_legacy_api_key
         || had_legacy_flat_credential
@@ -105,6 +106,7 @@ fn apply_migrations(root: &mut Value) -> Result<bool, String> {
         take_bool(root_obj, "enable_api_format_conversion").unwrap_or(true);
 
     let mut changed = false;
+    changed |= super::local_api_keys::migrate(root_obj)?;
     changed |= had_legacy_enable;
     changed |= migrate_legacy_upstream_strategy(root_obj);
     changed |= migrate_hot_model_mappings(root_obj);

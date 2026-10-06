@@ -183,12 +183,18 @@ pub(super) async fn run_upstream_groups(
     }
     if summary.attempted == 0
         && meta.original_model.is_some()
-        && provider_has_route_candidate(upstreams, inbound_format, target_upstream_id.as_deref())
+        && provider_has_route_candidate(
+            upstreams,
+            inbound_format,
+            target_upstream_id.as_deref(),
+            request_auth,
+        )
         && !provider_has_model_candidate(
             upstreams,
             inbound_format,
             target_upstream_id.as_deref(),
             meta.original_model.as_deref(),
+            request_auth,
         )
     {
         summary.model_unsupported = true;
@@ -206,13 +212,15 @@ fn provider_has_route_candidate(
     upstreams: &ProviderUpstreams,
     inbound_format: Option<InboundApiFormat>,
     target_upstream_id: Option<&str>,
+    request_auth: &RequestAuth,
 ) -> bool {
     upstreams
         .groups
         .iter()
         .flat_map(|group| &group.items)
         .any(|item| {
-            inbound_format.is_none_or(|format| item.supports_inbound(format))
+            request_auth.allows_upstream(&item.id)
+                && inbound_format.is_none_or(|format| item.supports_inbound(format))
                 && target_upstream_id.is_none_or(|target| item.id == target)
         })
 }
@@ -222,13 +230,15 @@ fn provider_has_model_candidate(
     inbound_format: Option<InboundApiFormat>,
     target_upstream_id: Option<&str>,
     original_model: Option<&str>,
+    request_auth: &RequestAuth,
 ) -> bool {
     upstreams
         .groups
         .iter()
         .flat_map(|group| &group.items)
         .any(|item| {
-            inbound_format.is_none_or(|format| item.supports_inbound(format))
+            request_auth.allows_upstream(&item.id)
+                && inbound_format.is_none_or(|format| item.supports_inbound(format))
                 && target_upstream_id.is_none_or(|target| item.id == target)
                 && item.supports_model(original_model)
         })
@@ -267,6 +277,7 @@ async fn try_group_upstreams(
         inbound_format,
         target_upstream_id,
         meta.original_model.as_deref(),
+        request_auth,
     );
     if eligible_order.is_empty() {
         return GroupAttemptResult::new();
@@ -297,11 +308,13 @@ fn filter_eligible_upstreams(
     inbound_format: Option<InboundApiFormat>,
     target_upstream_id: Option<&str>,
     original_model: Option<&str>,
+    request_auth: &RequestAuth,
 ) -> Vec<usize> {
     order
         .into_iter()
         .filter(|item_index| {
-            inbound_format.is_none_or(|format| items[*item_index].supports_inbound(format))
+            request_auth.allows_upstream(&items[*item_index].id)
+                && inbound_format.is_none_or(|format| items[*item_index].supports_inbound(format))
                 && target_upstream_id.is_none_or(|target| items[*item_index].id.as_str() == target)
                 && items[*item_index].supports_model(original_model)
         })

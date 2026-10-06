@@ -1,3 +1,4 @@
+import { validateLocalApiKeys } from "./local-api-keys";
 import {
   type ConfigForm,
   type InboundApiFormat,
@@ -103,7 +104,8 @@ function normalizeAvailableModels(values: readonly string[]) {
 const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "host",
   "port",
-  "local_api_key",
+  "local_api_keys",
+  "local_api_keys_migrated",
   "app_proxy_url",
   "cors_enabled",
   "model_list_prefix",
@@ -131,7 +133,8 @@ const REMOVED_CONFIG_KEYS: ReadonlySet<string> = new Set([
 export const EMPTY_FORM: ConfigForm = {
   host: "127.0.0.1",
   port: "9208",
-  localApiKey: "",
+  localApiKeys: [],
+  localApiKeysMigrated: false,
   appProxyUrl: "",
   corsEnabled: false,
   modelListPrefix: true,
@@ -251,7 +254,8 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
   return {
     host: config.host,
     port: String(config.port),
-    localApiKey: config.local_api_key ?? "",
+    localApiKeys: config.local_api_keys ?? [],
+    localApiKeysMigrated: config.local_api_keys_migrated ?? false,
     appProxyUrl: config.app_proxy_url ?? "",
     corsEnabled: config.cors_enabled ?? false,
     modelListPrefix: config.model_list_prefix ?? true,
@@ -310,7 +314,8 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
   return {
     host: form.host.trim(),
     port,
-    local_api_key: form.localApiKey.trim() ? form.localApiKey.trim() : null,
+    local_api_keys: form.localApiKeys,
+    local_api_keys_migrated: form.localApiKeysMigrated,
     app_proxy_url: form.appProxyUrl.trim() ? form.appProxyUrl.trim() : null,
     cors_enabled: form.corsEnabled,
     model_list_prefix: form.modelListPrefix,
@@ -365,6 +370,8 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
 }
 
 export function validate(form: ConfigForm) {
+  const keyError = validateLocalApiKeys(form.localApiKeys);
+  if (keyError) return { valid: false, message: keyError };
   if (!form.host.trim()) {
     return { valid: false, message: m.error_host_required() };
   }

@@ -6,7 +6,7 @@ use std::{sync::Arc, time::Instant};
 
 use super::super::{inbound::detect_inbound_api_format, upstream::forward_upstream_request};
 use super::{
-    prepared::{build_outbound_body_or_respond, build_outbound_path_with_query, PreparedRequest},
+    prepared::{build_authorized_outbound_path, build_outbound_body_or_respond, PreparedRequest},
     resolve_outbound_path, DispatchPlan, ProxyState,
 };
 use crate::logging::LogLevel;
@@ -69,7 +69,7 @@ pub(super) async fn prepare_dispatch_request_for_model(
     )
     .await?;
     Ok(OutboundRequest {
-        path: build_outbound_path_with_query(&outbound_path, uri),
+        path: build_authorized_outbound_path(&outbound_path, uri, &prepared.request_auth),
         body,
     })
 }

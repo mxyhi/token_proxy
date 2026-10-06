@@ -15,8 +15,6 @@ describe("ProxyCoreCard", () => {
     render(
       <ProxyCoreCard
         form={EMPTY_FORM}
-        showLocalKey={false}
-        onToggleLocalKey={vi.fn()}
         onChange={vi.fn()}
         onResetHotModelMappings={vi.fn()}
         proxyService={{
@@ -48,8 +46,6 @@ describe("ProxyCoreCard", () => {
     render(
       <ProxyCoreCard
         form={EMPTY_FORM}
-        showLocalKey={false}
-        onToggleLocalKey={vi.fn()}
         onChange={onChange}
         onResetHotModelMappings={vi.fn()}
         proxyService={{

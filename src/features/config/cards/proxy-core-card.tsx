@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { PasswordInput } from "@/components/ui/password-input";
 import {
   Select,
   SelectContent,
@@ -31,8 +30,6 @@ function isKiroPreferredEndpoint(value: string): value is KiroPreferredEndpoint 
 
 type ProxyCoreCardProps = {
   form: ConfigForm;
-  showLocalKey: boolean;
-  onToggleLocalKey: () => void;
   onChange: (patch: Partial<ConfigForm>) => void;
   onResetHotModelMappings: () => void;
   proxyService: ProxyServiceViewProps;
@@ -40,13 +37,11 @@ type ProxyCoreCardProps = {
 
 type ProxyCoreFieldsProps = Pick<
   ProxyCoreCardProps,
-  "form" | "showLocalKey" | "onToggleLocalKey" | "onChange" | "onResetHotModelMappings"
+  "form" | "onChange" | "onResetHotModelMappings"
 >;
 
 function ProxyCoreFields({
   form,
-  showLocalKey,
-  onToggleLocalKey,
   onChange,
   onResetHotModelMappings,
 }: ProxyCoreFieldsProps) {
@@ -72,18 +67,6 @@ function ProxyCoreFields({
             inputMode="numeric"
           />
         </div>
-      </div>
-      <div className="grid gap-2">
-        <Label htmlFor="proxy-key">{m.proxy_core_local_api_key_label()}</Label>
-        <PasswordInput
-          id="proxy-key"
-          visible={showLocalKey}
-          onVisibilityChange={onToggleLocalKey}
-          value={form.localApiKey}
-          onChange={(event) => onChange({ localApiKey: event.target.value })}
-          placeholder={m.common_optional()}
-        />
-        <p className="text-xs text-muted-foreground">{m.proxy_core_local_api_key_help()}</p>
       </div>
       <div className="grid gap-2">
         <Label htmlFor="app-proxy-url">{m.proxy_core_app_proxy_url_label()}</Label>
@@ -298,8 +281,6 @@ function ProxyCoreServiceSection({ proxyService }: ProxyCoreServiceSectionProps)
 
 export function ProxyCoreCard({
   form,
-  showLocalKey,
-  onToggleLocalKey,
   onChange,
   onResetHotModelMappings,
   proxyService,
@@ -313,8 +294,6 @@ export function ProxyCoreCard({
       <CardContent className="space-y-5">
         <ProxyCoreFields
           form={form}
-          showLocalKey={showLocalKey}
-          onToggleLocalKey={onToggleLocalKey}
           onChange={onChange}
           onResetHotModelMappings={onResetHotModelMappings}
         />

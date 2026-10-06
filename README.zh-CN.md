@@ -98,7 +98,7 @@ pnpm exec tsc --noEmit
 | --- | --- | --- |
 | `host` | `127.0.0.1` | 监听地址；支持 IPv6（URL 会自动加方括号） |
 | `port` | `9208`（release）/`19208`（debug） | 端口冲突时修改 |
-| `local_api_key` | `null` | 设置后，本地鉴权按接口格式生效（见“鉴权规则”）；本地鉴权不会转给上游 |
+| `local_api_keys` | `[]` | 列表非空时，本地鉴权按接口格式生效（见“鉴权规则”）；本地鉴权不会转给上游 |
 | `app_proxy_url` | `null` | 应用更新 & 上游可复用的代理；支持 `http/https/socks5/socks5h`；可在 upstream `proxy_url` 用 `"$app_proxy_url"` 占位 |
 | `log_level` | `silent` | `silent|error|warn|info|debug|trace`；debug/trace 会记录请求头（鉴权打码）与小体积请求体（≤64KiB）；release 强制 `silent` |
 | `max_request_body_bytes` | `104857600` (100 MiB) | 0 表示回落到默认；入站、JSON 过滤和格式转换共用上限 |
@@ -130,7 +130,7 @@ pnpm exec tsc --noEmit
 
 | `type` | 形态 | 说明 |
 | --- | --- | --- |
-| `passthrough` | `{ "type": "passthrough" }` | 无静态上游密钥；仅当未设置 `local_api_key` 时可用请求头 fallback。**禁止**用于 `kiro` / `codex` / `xai`。 |
+| `passthrough` | `{ "type": "passthrough" }` | 无静态上游密钥；仅当 `local_api_keys` 为空时可用请求头 fallback。**禁止**用于 `kiro` / `codex` / `xai`。 |
 | `api_keys` | `{ "type": "api_keys", "api_keys": ["key-a", "key-b"] }` | 静态密钥列表；空列表 normalize 后等价于透传。**禁止**用于账户型 provider。 |
 | `account` | `{ "type": "account", "provider": "kiro"\|"codex"\|"xai", "account_id": "..." }` | 绑定一个 Provider Account；`provider` 必须与 `providers[]` 中唯一账户型一致。同一 `(provider, account_id)` 只能绑定一条 Upstream。 |
 
@@ -154,17 +154,34 @@ Kiro / Codex / xAI **必须**使用 `credential.type = "account"`。登录/导�
 - 其它 Gemini 原生端点仅支持 pass-through，必须配置 `gemini` upstream
 
 ## 鉴权规则（重要）
-- 本地访问：设置了 `local_api_key` 必须按接口格式携带本地 key；本地鉴权只服务网关，**不会**当作上游凭据
-  - 公开白名单：`GET` / `HEAD` `/v1/models` 与 `/v1beta/openai/models` 不需要本地 key
+- 本地访问：`local_api_keys` 非空时必须按接口格式携带本地 key；本地鉴权只服务网关，**不会**当作上游凭据
+  - 模型目录：`GET` / `HEAD` `/v1/models` 与 `/v1beta/openai/models` 同样需要本地 Key，且只展示授权上游；探活和允许的 CORS 预检保持原行为
   - OpenAI / Responses：`Authorization: Bearer <key>`
   - Anthropic `/v1/messages`：`x-api-key` / `x-anthropic-api-key`
   - Gemini 原生 API：`x-goog-api-key` 或 `?key=...`
-- 启用 `local_api_key` 时，入站鉴权头不会被收集用于上游；请在上游配置 `credential.api_keys`（或 account credential）
+- `local_api_keys` 非空时，入站鉴权头不会被收集用于上游；请在上游配置 `credential.api_keys`（或 account credential）
 - 上游鉴权解析（逐请求；runtime 将 `credential.api_keys` 展开为 attempt key）：
-  - **OpenAI 兼容**（及多数非 Anthropic provider）：`credential.api_keys` → 请求头 `x-openai-api-key` / `Authorization`（**仅当**未设置 `local_api_key`）→ 无密钥
-  - **Anthropic**：`credential.api_keys` → 请求头 `x-api-key` / `x-anthropic-api-key` / bearer fallback（**仅当**未设置 `local_api_key`）→ 无密钥；缺少 `anthropic-version` 自动补 `2023-06-01`
-  - **Gemini**：`credential.api_keys` → 请求头 `x-goog-api-key` → 查询 `?key=`（请求侧 fallback 同样仅当未设置 `local_api_key`）→ 跳过该 attempt
+  - **OpenAI 兼容**（及多数非 Anthropic provider）：`credential.api_keys` → 请求头 `x-openai-api-key` / `Authorization`（**仅当** `local_api_keys` 为空）→ 无密钥
+  - **Anthropic**：`credential.api_keys` → 请求头 `x-api-key` / `x-anthropic-api-key` / bearer fallback（**仅当** `local_api_keys` 为空）→ 无密钥；缺少 `anthropic-version` 自动补 `2023-06-01`
+  - **Gemini**：`credential.api_keys` → 请求头 `x-goog-api-key` → 查询 `?key=`（请求侧 fallback 同样仅当 `local_api_keys` 为空）→ 跳过该 attempt
   - **账户型**（`kiro` / `codex` / `xai`）：使用绑定的 Provider Account 身份（OAuth / Agent Assertion），不用 `api_keys`
+
+### 本地访问 Key 与迁移
+
+在「上游」后的独立「API Key」菜单中管理。每条 Key 包含稳定 ID、名称、密钥、启用状态及授权范围：
+
+```json
+"local_api_keys": [
+  { "id": "desktop", "name": "桌面客户端", "key": "replace-with-your-secret", "enabled": true, "scope": { "type": "auto" } },
+  { "id": "limited", "name": "指定上游", "key": "replace-with-another-secret", "enabled": true, "scope": { "type": "selected", "upstream_ids": ["your-upstream-id"] } }
+]
+```
+
+空列表关闭本地鉴权；列表非空但全部禁用时拒绝需要鉴权的请求。Auto 使用所有符合请求条件的已启用上游，包括以后新增的上游。手动模式至少选择一个上游；禁用或删除的绑定保留，不自动扩大范围，界面标明已失效。显式指定未授权的 `上游ID/模型` 返回 403；缺失、无效或禁用 Key 返回 401。重试、并发、跨 Provider 回退、缓存模型目录和补充目录均受相同范围限制。
+
+旧 `local_api_key` 原值迁移为一条启用的 Auto 记录，原文件先备份，界面展示迁移结果；新旧字段并存时报错。新版保存的配置不保证旧版可读取。保存后新请求立即采用新配置，已开始请求保留原配置。
+
+Claude Code／Codex 一键配置只有一条启用 Key 时自动选择；多条时必须明确选择，并将 ID 传给后端。已删除或禁用的选择报错，不自动替换。
 
 ## 负载均衡与重试
 - 优先级：高优先级组先尝试。
@@ -198,7 +215,7 @@ Kiro / Codex / xAI **必须**使用 `credential.type = "account"`。登录/导�
 
 ## FAQ
 - **端口被占用？** 修改 `config.jsonc` 里的 `port`，并同步更新客户端 base URL
-- **返回 401？** 设置了 `local_api_key` 就必须按接口格式发送本地 key（OpenAI/Responses 用 `Authorization`；Anthropic 用 `x-api-key`；Gemini 用 `x-goog-api-key` 或 `?key=`）；开启本地鉴权后，上游密钥请配置在 `upstreams[].credential`（`api_keys` 或 `account`）
+- **返回 401？** `local_api_keys` 非空时就必须按接口格式发送本地 key（OpenAI/Responses 用 `Authorization`；Anthropic 用 `x-api-key`；Gemini 用 `x-goog-api-key` 或 `?key=`）；开启本地鉴权后，上游密钥请配置在 `upstreams[].credential`（`api_keys` 或 `account`）
 - **返回 504？** 上游在 120 秒内未返回响应头或首个 body chunk。对于流式响应，若相邻 chunk 间空闲超过 120 秒，连接也可能被关闭。
 - **413 Payload Too Large？** 请求体超过 `max_request_body_bytes`（默认 100 MiB）或格式转换处理上限
 - **为什么不走系统代理？** `reqwest` 默认 `no_proxy()`；如需代理，请在每个 upstream 设置 `proxy_url`

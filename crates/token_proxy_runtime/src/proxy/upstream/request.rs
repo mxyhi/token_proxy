@@ -144,8 +144,10 @@ pub(super) fn resolve_gemini_upstream(
         ))
     } else if let Some(api_key) = request_auth.gemini_api_key.as_deref() {
         Some((api_key, None))
-    } else {
+    } else if !request_auth.local_auth_enabled {
         query_key.as_deref().map(|api_key| (api_key, None))
+    } else {
+        None
     };
 
     let Some((api_key, precompiled_header_value)) = selected else {

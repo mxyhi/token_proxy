@@ -58,9 +58,7 @@ pub(super) fn snapshot_to_output_item(snapshot: &OutputItemSnapshot) -> Value {
                 "id": id,
                 "type": "reasoning",
                 "status": status,
-                "summary": [
-                    { "type": "summary_text", "text": text }
-                ]
+                "summary": if text.is_empty() { vec![] } else { vec![json!({"type":"summary_text", "text":text})] }
             });
             if let Some(item) = item.as_object_mut() {
                 if let Some(encrypted_content) = encrypted_content {

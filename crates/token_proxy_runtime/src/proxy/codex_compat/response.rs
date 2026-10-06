@@ -146,7 +146,13 @@ fn build_chat_completion_value(
         .unwrap_or("unknown")
         .to_string();
     let finish_reason = resolve_finish_reason(response, !tool_calls.is_empty());
-    let message = build_chat_message(&content_text, &reasoning_text, tool_calls);
+    let mut message = build_chat_message(&content_text, &reasoning_text, tool_calls);
+    let annotations = token_proxy_protocol::responses_annotations::response_chat_annotations(
+        response.get("output"),
+    );
+    if !annotations.is_empty() {
+        message.insert("annotations".to_string(), Value::Array(annotations));
+    }
 
     let mut output = Map::new();
     output.insert("id".to_string(), Value::String(id));
@@ -213,9 +219,7 @@ fn extract_response_output(
                 }
             }
             Some("message") => {
-                if content_text.is_empty() {
-                    content_text = extract_output_text(item);
-                }
+                content_text.push_str(&extract_output_text(item));
             }
             Some("function_call" | "custom_tool_call") => {
                 if let Some(tool_call) = build_tool_call(item, tool_name_map) {
@@ -276,21 +280,13 @@ fn extract_reasoning_summary(item: &Map<String, Value>) -> String {
 }
 
 fn extract_output_text(item: &Map<String, Value>) -> String {
-    let Some(content) = item.get("content").and_then(Value::as_array) else {
-        return String::new();
-    };
-    for part in content {
-        let Some(part) = part.as_object() else {
-            continue;
-        };
-        if part.get("type").and_then(Value::as_str) != Some("output_text") {
-            continue;
-        }
-        if let Some(text) = part.get("text").and_then(Value::as_str) {
-            return text.to_string();
-        }
-    }
-    String::new()
+    item.get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("output_text"))
+        .filter_map(|part| part.get("text").and_then(Value::as_str))
+        .collect()
 }
 
 fn build_tool_call(

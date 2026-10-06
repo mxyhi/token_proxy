@@ -130,10 +130,7 @@ pub(crate) fn chat_request_to_codex_with_prompt_cache_key(
         Value::String(codex_base_instructions_for_model(&model).to_string()),
     );
     output.insert("parallel_tool_calls".to_string(), Value::Bool(true));
-    output.insert(
-        "include".to_string(),
-        json!(["reasoning.encrypted_content"]),
-    );
+    output.insert("include".to_string(), codex_include(object.get("include")));
     output.insert(
         "reasoning".to_string(),
         json!({ "effort": effort, "summary": "auto" }),
@@ -775,6 +772,20 @@ fn apply_text_format(
     }
 }
 
+fn codex_include(requested: Option<&Value>) -> Value {
+    let mut include = Vec::new();
+    for value in requested.and_then(Value::as_array).into_iter().flatten() {
+        if !include.contains(value) {
+            include.push(value.clone());
+        }
+    }
+    let reasoning = json!("reasoning.encrypted_content");
+    if !include.contains(&reasoning) {
+        include.push(reasoning);
+    }
+    Value::Array(include)
+}
+
 fn normalize_responses_payload(
     object: &mut Map<String, Value>,
     model_hint: Option<&str>,
@@ -800,10 +811,7 @@ fn normalize_responses_payload(
     }
     object.insert("stream".to_string(), Value::Bool(true));
     object.insert("store".to_string(), Value::Bool(false));
-    object.insert(
-        "include".to_string(),
-        json!(["reasoning.encrypted_content"]),
-    );
+    object.insert("include".to_string(), codex_include(object.get("include")));
     let removed_prompt_cache_options = object.remove("prompt_cache_options").is_some();
     for key in [
         "max_output_tokens",

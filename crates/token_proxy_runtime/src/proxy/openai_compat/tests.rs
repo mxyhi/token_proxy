@@ -44,6 +44,8 @@ fn transform_response_value(
 }
 
 // Split the test suite to keep each file below the project's line limit.
+#[path = "local_shell.test.rs"]
+mod local_shell;
 #[path = "tests_part1.rs"]
 mod part1;
 #[path = "tests_part2.rs"]

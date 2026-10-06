@@ -11,6 +11,11 @@ import {
 } from "@/features/config/form";
 
 describe("config/form", () => {
+  it("uses the development proxy port without replacing saved ports", () => {
+    expect(EMPTY_FORM.port).toBe("19208");
+    expect(toForm({ ...toPayload(EMPTY_FORM), port: 9208 }).port).toBe("9208");
+  });
+
   it("validates required host", () => {
     expect(validate({ ...EMPTY_FORM, host: "   " }).valid).toBe(false);
   });

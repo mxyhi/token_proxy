@@ -273,7 +273,9 @@ fn p1_truncated_or_non_object_tool_arguments_never_finish_as_complete() {
                 let responses = convert(events.clone(), Route::ChatResponses).await;
                 assert!(
                     responses.iter().any(|event| event["type"]
-                        == if incomplete {
+                        == if finish.is_none() {
+                            "response.failed"
+                        } else if incomplete {
                             "response.incomplete"
                         } else {
                             "response.completed"
@@ -282,6 +284,10 @@ fn p1_truncated_or_non_object_tool_arguments_never_finish_as_complete() {
                 );
                 let anthropic = convert(events, Route::ChatAnthropic).await;
                 assert_blocks(&anthropic);
+                if finish.is_none() {
+                    assert!(anthropic.iter().any(|event| event["type"] == "error"));
+                    continue;
+                }
                 let expected = if finish == Some("content_filter") {
                     "refusal"
                 } else if incomplete {
@@ -346,6 +352,88 @@ fn p1_gemini_usage_after_finish_survives_chat_and_responses_bridges() {
                 _ => unreachable!(),
             }
             assert_eq!(usage["total_tokens"], 63);
+        }
+    });
+}
+
+#[test]
+fn gemini_partial_usage_matches_client_and_persistence() {
+    run_async(async {
+        for zero_tail in [false, true] {
+            for responses in [false, true] {
+                let (log, context, pool) = setup_responses_stream().await;
+                let mut events = vec![
+                    json!({"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP"}]}),
+                    json!({"usageMetadata":{"promptTokenCount":16,"cachedContentTokenCount":4}}),
+                    json!({"usageMetadata":{"candidatesTokenCount":5}}),
+                    json!({"usageMetadata":{"thoughtsTokenCount":42,"totalTokenCount":63}}),
+                    json!({"usageMetadata":{"thoughtsTokenCount":42,"totalTokenCount":63}}),
+                ];
+                if zero_tail {
+                    events.push(json!({"usageMetadata":{
+                        "candidatesTokenCount":0,"cachedContentTokenCount":0,"totalTokenCount":58
+                    }}));
+                }
+                let upstream = futures_util::stream::iter(events.into_iter().map(|event| {
+                    Ok::<_, std::io::Error>(Bytes::from(format!("data: {event}\n\n")))
+                }));
+                let chat = gemini_compat::stream_gemini_to_chat(
+                    upstream,
+                    context.clone(),
+                    if responses {
+                        Arc::new(LogWriter::new(None))
+                    } else {
+                        log.clone()
+                    },
+                    crate::proxy::token_rate::RequestTokenTracker::disabled(),
+                )
+                .boxed();
+                let converted: BoxStream<'static, Result<Bytes, std::io::Error>> = if responses {
+                    stream_chat_to_responses(
+                        chat,
+                        context,
+                        log,
+                        crate::proxy::token_rate::RequestTokenTracker::disabled(),
+                    )
+                    .boxed()
+                } else {
+                    chat
+                };
+                let events = converted
+                    .collect::<Vec<_>>()
+                    .await
+                    .into_iter()
+                    .filter_map(|chunk| parse_sse_json(&chunk.expect("converted stream")))
+                    .collect::<Vec<_>>();
+                let usage = events
+                    .iter()
+                    .find_map(|event| {
+                        event
+                            .get("usage")
+                            .or_else(|| event.pointer("/response/usage"))
+                            .filter(|usage| usage.is_object())
+                    })
+                    .expect("final client usage");
+                let output = if zero_tail { 42 } else { 47 };
+                let total = if zero_tail { 58 } else { 63 };
+                let cached = if zero_tail { 0 } else { 4 };
+                if responses {
+                    assert_eq!(usage["input_tokens"], 16);
+                    assert_eq!(usage["output_tokens"], output);
+                    assert_eq!(usage["input_tokens_details"]["cached_tokens"], cached);
+                    assert_eq!(usage["output_tokens_details"]["reasoning_tokens"], 42);
+                } else {
+                    assert_eq!(usage["prompt_tokens"], 16);
+                    assert_eq!(usage["completion_tokens"], output);
+                    assert_eq!(usage["prompt_tokens_details"]["cached_tokens"], cached);
+                    assert_eq!(usage["completion_tokens_details"]["reasoning_tokens"], 42);
+                }
+                assert_eq!(usage["total_tokens"], total);
+                assert_eq!(
+                    read_first_usage_tokens(&pool).await,
+                    (Some(16), Some(output), Some(total))
+                );
+            }
         }
     });
 }

@@ -1,5 +1,64 @@
 use super::*;
 
+#[test]
+fn schema_root_rejects_non_object_parameters() {
+    for parameters in [
+        json!({"type":"string","properties":{"x":{"type":"string"}}}),
+        json!({"type":"array","items":{"type":"string"}}),
+        json!({"type":["string","null"]}),
+        json!({"type":"null"}),
+        json!({"allOf":[{"type":"string"}]}),
+        json!(false),
+    ] {
+        let tools =
+            json!([{"type":"function","function":{"name":"invalid","parameters":parameters}}]);
+        let error = map_chat_tools_to_gemini(&tools).expect_err("invalid tool root");
+        assert!(error.contains("invalid"));
+        assert!(error.contains("object"));
+    }
+}
+
+#[test]
+fn schema_types_are_inferred_only_for_unambiguous_object_nodes() {
+    let instance = json!({"properties":{"data":{"type":null}},"type":null});
+    let tools = json!([{"type":"function","function":{"name":"typed","parameters":{
+        "allOf":[{"properties":{
+            "nested":{"type":null,"properties":{"x":{"type":"string"}}},
+            "dict":{"additionalProperties":{"properties":{"x":{"type":"integer"}}}},
+            "scalar":{"type":"string","properties":{"x":{"type":"string"}}},
+            "union":{"type":["object","null"],"properties":{"x":{"type":"string"}}},
+            "nullable":{"anyOf":[{"properties":{"x":{"type":"string"}}},{"type":"null"}]},
+            "nullable_object":{"anyOf":[{"type":"object","nullable":true,"properties":{"x":{"type":"string"}}}]},
+            "open_union":{"anyOf":[{"properties":{"x":{"type":"string"}}},{}]},
+            "intersection":{"allOf":[{"type":"string"},{"properties":{"x":{"type":"string"}}}]},
+            "ambiguous":{"properties":{"x":{"type":"string"}},"items":{"type":"number"}},
+            "data":{"default":instance,"enum":[instance],"const":instance}
+        }}]
+    }}}]);
+    let mapped = map_chat_tools_to_gemini(&tools).unwrap();
+    let schema = &mapped[0]["functionDeclarations"][0]["parametersJsonSchema"];
+    assert_eq!(schema["type"], "object");
+    let properties = &schema["properties"];
+    assert_eq!(properties["nested"]["type"], "object");
+    assert_eq!(properties["dict"]["type"], "object");
+    assert_eq!(properties["dict"]["additionalProperties"]["type"], "object");
+    assert_eq!(properties["scalar"]["type"], "string");
+    assert_eq!(properties["union"]["type"], json!(["object", "null"]));
+    assert!(properties["nullable"].get("type").is_none());
+    assert_eq!(properties["nullable"]["anyOf"][0]["type"], "object");
+    assert_eq!(properties["nullable"]["anyOf"][1]["type"], "null");
+    assert_eq!(properties["nullable_object"]["anyOf"][0]["nullable"], true);
+    assert!(properties["open_union"].get("type").is_none());
+    assert_eq!(properties["open_union"]["anyOf"][1], json!({}));
+    assert!(properties["intersection"].get("type").is_none());
+    assert_eq!(properties["intersection"]["allOf"][0]["type"], "string");
+    assert!(properties["ambiguous"].get("type").is_none());
+    assert_eq!(properties["ambiguous"]["items"]["type"], "number");
+    assert_eq!(properties["data"]["default"], instance);
+    assert_eq!(properties["data"]["enum"], json!([instance]));
+    assert_eq!(properties["data"]["const"], instance);
+}
+
 // 严格模式仅影响 auto/缺省，不得覆盖明确的调用选择。
 #[test]
 fn strict_tools_preserve_explicit_tool_choice() {
@@ -58,7 +117,7 @@ fn json_schema_keeps_constraints_and_instance_values() {
             "free":{"type":"object", "additionalProperties":true, "default":example, "examples":[example]}
         }, "required":["value","nested"]
     }}]);
-    let mapped = map_chat_tools_to_gemini(&tools);
+    let mapped = map_chat_tools_to_gemini(&tools).unwrap();
     let declaration = &mapped[0]["functionDeclarations"][0];
     assert!(declaration.get("parameters").is_none());
     assert!(declaration.get("strict").is_none());

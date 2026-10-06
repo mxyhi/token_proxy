@@ -44,7 +44,7 @@ struct CodexToChatState<S> {
     created: i64,
     model: String,
     function_call_index: i64,
-    text_recovery: token_proxy_protocol::responses_text::ResponsesTextRecovery,
+    text_recovery: token_proxy_protocol::responses_annotations::ResponsesChatOutput,
     finish_reason: Option<&'static str>,
     sent_done: bool,
     logged: bool,
@@ -183,10 +183,15 @@ where
             return;
         };
 
-        for text in self.text_recovery.process(&value) {
+        let (texts, annotations) = self.text_recovery.process(&value);
+        for text in texts {
             self.context.mark_first_output();
             token_texts.push(text.clone());
             self.push_chunk(json!({"role":"assistant","content":text}));
+        }
+
+        if !annotations.is_empty() {
+            self.push_chunk(json!({"role":"assistant","annotations":annotations}));
         }
 
         match event_type {

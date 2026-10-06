@@ -96,14 +96,14 @@ fn stream_chat_to_responses_does_not_complete_partial_tool_without_finish_reason
         ])
         .await;
 
-        // 截断参数保留在 incomplete 快照里，但绝不能宣称 completed。
+        // 缺少结束原因属于上游截断；failed 响应保留 incomplete 工具快照。
         assert!(!payloads
             .iter()
             .any(|payload| payload["type"] == "response.completed"));
         let terminal = payloads
             .iter()
-            .find(|payload| payload["type"] == "response.incomplete")
-            .expect("incomplete");
+            .find(|payload| payload["type"] == "response.failed")
+            .expect("failed");
         assert_eq!(terminal["response"]["output"][0]["status"], "incomplete");
         assert_eq!(
             terminal["response"]["output"][0]["arguments"],
@@ -332,7 +332,7 @@ fn stream_with_logging_drops_chat_events_after_done() {
         context.path = "/v1/chat/completions".to_string();
         let upstream = futures_util::stream::iter(vec![
             Ok::<Bytes, std::io::Error>(Bytes::from(concat!(
-                "data: {\"choices\":[{\"delta\":{\"content\":\"clean\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"clean\"},\"finish_reason\":\"stop\"}]}\n\n",
                 "data: [DONE]\n\n",
                 "data: {\"choices\":[{\"delta\":{\"content\":\"dirty-same-chunk\"}}]}\n\n"
             ))),

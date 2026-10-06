@@ -2268,3 +2268,168 @@ fn codex_requests_normalize_blank_function_call_arguments() {
         .expect("function_call");
     assert_eq!(call["arguments"], "{}");
 }
+
+#[test]
+fn codex_preserves_requested_search_sources_include() {
+    for chat in [true, false] {
+        let mut request = if chat {
+            json!({"model":"gpt-5", "messages":[{"role":"user","content":"search"}]})
+        } else {
+            json!({"model":"gpt-5", "input":"search"})
+        };
+        request["include"] = json!([
+            "web_search_call.action.sources",
+            "reasoning.encrypted_content",
+            "web_search_call.action.sources"
+        ]);
+        let bytes = Bytes::from(request.to_string());
+        let result = if chat {
+            chat_request_to_codex(&bytes, None)
+        } else {
+            responses_request_to_codex(&bytes, None)
+        }
+        .unwrap();
+        let result: Value = serde_json::from_slice(&result).unwrap();
+        assert_eq!(
+            result["include"],
+            json!([
+                "web_search_call.action.sources",
+                "reasoning.encrypted_content"
+            ])
+        );
+    }
+}
+
+fn cited_search_response() -> Value {
+    let citation = json!({"type":"url_citation","url":"https://example.com","title":"来源","start_index":0,"end_index":2});
+    json!({"id":"resp_search","object":"response","status":"completed","output":[
+        {"id":"m","type":"message","role":"assistant","content":[
+            {"type":"output_text","text":"你🌍","annotations":[citation.clone()]},
+            {"type":"output_text","text":"事实","annotations":[citation.clone()]}
+        ]},
+        {"id":"n","type":"message","role":"assistant","content":[
+            {"type":"output_text","text":"再次","annotations":[citation]}
+        ]}
+    ]})
+}
+
+#[test]
+fn codex_search_citations_preserve_all_text_parts_and_unicode_offsets() {
+    let response = cited_search_response();
+    let converted = codex_response_to_chat(&Bytes::from(response.to_string()), None).unwrap();
+    let converted: Value = serde_json::from_slice(&converted).unwrap();
+    let message = &converted["choices"][0]["message"];
+    assert_eq!(message["content"], "你🌍事实再次");
+    let annotations = message["annotations"].as_array().unwrap();
+    assert_eq!(annotations.len(), 3);
+    for (index, citation) in annotations.iter().enumerate() {
+        assert_eq!(citation["url_citation"]["url"], "https://example.com");
+        assert_eq!(citation["url_citation"]["start_index"], index * 2);
+        assert_eq!(citation["url_citation"]["end_index"], index * 2 + 2);
+    }
+}
+
+#[tokio::test]
+async fn codex_stream_search_citations_deduplicate_snapshots_by_text_part() {
+    let response = cited_search_response();
+    let mut events = vec![
+        json!({"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"你🌍"}),
+        json!({"type":"response.output_text.annotation.added","output_index":0,"content_index":0,"annotation_index":0,"annotation":response["output"][0]["content"][0]["annotations"][0]}),
+    ];
+    for (index, item) in response["output"].as_array().unwrap().iter().enumerate() {
+        events.push(json!({"type":"response.output_item.done","output_index":index,"item":item}));
+    }
+    events.push(json!({"type":"response.completed","response":response.clone()}));
+    events.push(json!({"type":"response.completed","response":response}));
+    let upstream = futures_util::stream::iter(
+        events
+            .into_iter()
+            .map(|event| Ok::<_, std::io::Error>(Bytes::from(format!("data: {event}\n\n")))),
+    );
+    let tracker = TokenRateTracker::new().register(None, None).await;
+    let converted = stream_codex_to_chat(
+        upstream,
+        test_log_context(),
+        Arc::new(LogWriter::new(None)),
+        tracker,
+    )
+    .collect::<Vec<_>>()
+    .await;
+    let text = join_stream_chunks(&converted);
+    let chunks: Vec<Value> = text
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str(data).ok())
+        .collect();
+    let content: String = chunks
+        .iter()
+        .filter_map(|chunk| chunk["choices"][0]["delta"]["content"].as_str())
+        .collect();
+    assert_eq!(content, "你🌍事实再次");
+    let citations: Vec<&Value> = chunks
+        .iter()
+        .flat_map(|chunk| {
+            chunk["choices"][0]["delta"]["annotations"]
+                .as_array()
+                .into_iter()
+                .flatten()
+        })
+        .collect();
+    assert_eq!(citations.len(), 3, "{chunks:?}");
+    for (index, citation) in citations.into_iter().enumerate() {
+        assert_eq!(citation["url_citation"]["start_index"], index * 2);
+        assert_eq!(citation["url_citation"]["end_index"], index * 2 + 2);
+    }
+}
+
+#[tokio::test]
+async fn codex_stream_search_citations_follow_interleaved_text_positions() {
+    let annotation = json!({"type":"url_citation","url":"https://example.com","title":"来源","start_index":1,"end_index":2});
+    let events = vec![
+        json!({"type":"response.output_text.delta","item_id":"a","output_index":0,"delta":"你"}),
+        json!({"type":"response.output_text.delta","item_id":"b","output_index":1,"delta":"🌍"}),
+        json!({"type":"response.output_text.annotation.added","item_id":"a","output_index":0,"annotation":annotation}),
+        json!({"type":"response.output_text.delta","item_id":"a","output_index":0,"delta":"好"}),
+        json!({"type":"response.completed","response":{"status":"completed","output":[
+            {"id":"a","type":"message","role":"assistant","content":[{"type":"output_text","text":"你好","annotations":[annotation]}]},
+            {"id":"b","type":"message","role":"assistant","content":[{"type":"output_text","text":"🌍"}]}
+        ]}}),
+    ];
+    let upstream = futures_util::stream::iter(
+        events
+            .into_iter()
+            .map(|event| Ok::<_, std::io::Error>(Bytes::from(format!("data: {event}\n\n")))),
+    );
+    let tracker = TokenRateTracker::new().register(None, None).await;
+    let chunks = stream_codex_to_chat(
+        upstream,
+        test_log_context(),
+        Arc::new(LogWriter::new(None)),
+        tracker,
+    )
+    .collect::<Vec<_>>()
+    .await;
+    let data = join_stream_chunks(&chunks);
+    let chunks: Vec<Value> = data
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .filter_map(|data| serde_json::from_str(data).ok())
+        .collect();
+    let content: String = chunks
+        .iter()
+        .filter_map(|chunk| chunk["choices"][0]["delta"]["content"].as_str())
+        .collect();
+    assert_eq!(content, "你🌍好");
+    let annotations: Vec<&Value> = chunks
+        .iter()
+        .flat_map(|chunk| {
+            chunk["choices"][0]["delta"]["annotations"]
+                .as_array()
+                .into_iter()
+                .flatten()
+        })
+        .collect();
+    assert_eq!(annotations.len(), 1);
+    assert_eq!(annotations[0]["url_citation"]["start_index"], 2);
+    assert_eq!(annotations[0]["url_citation"]["end_index"], 3);
+}

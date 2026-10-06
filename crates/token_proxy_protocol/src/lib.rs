@@ -11,6 +11,7 @@ pub mod gemini_tools;
 pub mod gemini_usage;
 pub mod openai_usage;
 pub mod request_token_estimate;
+pub mod responses_annotations;
 pub mod responses_error;
 pub mod responses_failure;
 pub mod responses_input;

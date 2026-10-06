@@ -110,7 +110,7 @@ pub(crate) fn chat_request_to_gemini_with_summary_visibility(
 
     // 工具
     if let Some(tools) = object.get("tools") {
-        let gemini_tools = map_chat_tools_to_gemini(tools);
+        let gemini_tools = map_chat_tools_to_gemini(tools)?;
         if let Some(arr) = gemini_tools.as_array() {
             if !arr.is_empty() {
                 out.insert("tools".to_string(), gemini_tools);

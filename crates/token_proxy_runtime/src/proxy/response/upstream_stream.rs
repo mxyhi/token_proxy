@@ -2,6 +2,11 @@ use axum::body::Bytes;
 use futures_util::{stream::try_unfold, StreamExt};
 use std::{error::Error, fmt, time::Duration};
 
+mod chat;
+pub(super) use chat::{
+    chat_stream_error, valid_finish_reason, with_chat_finish_validation, CHAT_TRUNCATED_ERROR,
+};
+
 #[derive(Debug)]
 pub(crate) enum UpstreamStreamError<E> {
     IdleTimeout(Duration),

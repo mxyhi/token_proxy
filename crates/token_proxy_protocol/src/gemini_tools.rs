@@ -11,46 +11,57 @@ use schema::clean_tool_schema;
 mod tests;
 
 /// 将 OpenAI Chat 格式的 tools 转换为 Gemini 格式的 functionDeclarations
-pub fn map_chat_tools_to_gemini(tools: &Value) -> Value {
+pub fn map_chat_tools_to_gemini(tools: &Value) -> Result<Value, String> {
     let Some(tools) = tools.as_array() else {
-        return json!([]);
+        return Ok(json!([]));
     };
 
-    let declarations: Vec<Value> = tools
-        .iter()
-        .filter_map(|tool| {
-            let tool = tool.as_object()?;
-            if !matches!(
-                tool.get("type").and_then(Value::as_str),
-                Some("function" | "custom")
-            ) {
-                return None;
-            }
-            let function = tool
-                .get("function")
-                .and_then(Value::as_object)
-                .unwrap_or(tool);
-            let name = function.get("name").and_then(Value::as_str)?;
-            let description = function
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            let parameters = function
-                .get("parameters")
-                .or_else(|| function.get("format"))
-                .map(clean_tool_schema)
-                .unwrap_or_else(|| json!({}));
-            Some(json!({
-                "name": name,
-                "description": description,
-                "parametersJsonSchema": parameters
-            }))
-        })
-        .collect();
+    let mut declarations = Vec::new();
+    for tool in tools {
+        let Some(tool) = tool.as_object() else {
+            continue;
+        };
+        if !matches!(
+            tool.get("type").and_then(Value::as_str),
+            Some("function" | "custom")
+        ) {
+            continue;
+        }
+        let function = tool
+            .get("function")
+            .and_then(Value::as_object)
+            .unwrap_or(tool);
+        let Some(name) = function.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let description = function
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let parameters = function
+            .get("parameters")
+            .or_else(|| function.get("format"))
+            .map(clean_tool_schema)
+            .unwrap_or_else(|| json!({"type":"object","properties":{}}));
+        if schema::explicit_non_object_root(&parameters) {
+            tracing::warn!(
+                tool_name = name,
+                "rejected non-object Gemini tool parameters"
+            );
+            return Err(format!(
+                "Gemini tool '{name}' parameters must describe an object."
+            ));
+        }
+        declarations.push(json!({
+            "name": name,
+            "description": description,
+            "parametersJsonSchema": parameters
+        }));
+    }
 
-    json!([{
+    Ok(json!([{
         "functionDeclarations": declarations
-    }])
+    }]))
 }
 
 /// 将 OpenAI Chat 格式的 tool_choice 转换为 Gemini 格式的 toolConfig

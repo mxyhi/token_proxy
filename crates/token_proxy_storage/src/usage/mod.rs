@@ -8,6 +8,7 @@ use token_proxy_protocol::sse::SseEventParser;
 pub struct SseUsageCollector {
     parser: SseEventParser,
     snapshot: UsageSnapshot,
+    gemini_usage: Value,
 }
 
 impl SseUsageCollector {
@@ -15,18 +16,22 @@ impl SseUsageCollector {
         Self {
             parser: SseEventParser::new(),
             snapshot: UsageSnapshot::default(),
+            gemini_usage: Value::Null,
         }
     }
 
     pub fn push_chunk(&mut self, chunk: &[u8]) {
         let snapshot = &mut self.snapshot;
+        let gemini_usage = &mut self.gemini_usage;
         self.parser
-            .push_chunk(chunk, |data| update_usage(snapshot, &data));
+            .push_chunk(chunk, |data| update_usage(snapshot, gemini_usage, &data));
     }
 
     pub fn finish(&mut self) -> UsageSnapshot {
         let snapshot = &mut self.snapshot;
-        self.parser.finish(|data| update_usage(snapshot, &data));
+        let gemini_usage = &mut self.gemini_usage;
+        self.parser
+            .finish(|data| update_usage(snapshot, gemini_usage, &data));
         self.snapshot.clone()
     }
 }
@@ -250,39 +255,20 @@ fn snapshot_from_usage_value(value: &Value) -> UsageSnapshot {
 }
 
 fn snapshot_from_usage_metadata_value(value: &Value) -> UsageSnapshot {
-    let raw_input_tokens = value
-        .get("promptTokenCount")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let raw_output_tokens = token_proxy_protocol::gemini_usage::output_tokens(value);
-    let cache_read_tokens = value
-        .get("cachedContentTokenCount")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let billable_usage = BillableUsage {
-        uncached_input_tokens: raw_input_tokens.saturating_sub(cache_read_tokens),
-        cache_read_tokens,
-        output_tokens: raw_output_tokens,
-        ..BillableUsage::default()
-    };
+    // 转换出口与落库共用输入、缓存、正文和思考 token 的归一化口径。
+    let normalized = token_proxy_protocol::gemini_usage::to_chat(value);
+    let mut snapshot = snapshot_from_usage_value(&normalized);
     let has_usage = value.get("promptTokenCount").is_some()
         || value.get("candidatesTokenCount").is_some()
         || value.get("thoughtsTokenCount").is_some()
         || value.get("totalTokenCount").is_some();
-    UsageSnapshot {
-        usage: has_usage.then(|| TokenUsage {
-            input_tokens: Some(raw_input_tokens),
-            output_tokens: Some(raw_output_tokens),
-            total_tokens: value
-                .get("totalTokenCount")
-                .and_then(Value::as_u64)
-                .or_else(|| Some(raw_input_tokens.saturating_add(raw_output_tokens))),
-        }),
-        billable_usage,
-        service_tier: None,
-        usage_json: Some(value.clone()),
-        response_model: None,
-    }
+    snapshot.usage = has_usage.then(|| TokenUsage {
+        input_tokens: normalized.get("prompt_tokens").and_then(Value::as_u64),
+        output_tokens: normalized.get("completion_tokens").and_then(Value::as_u64),
+        total_tokens: normalized.get("total_tokens").and_then(Value::as_u64),
+    });
+    snapshot.usage_json = Some(value.clone());
+    snapshot
 }
 
 /// 各协议响应信封上的模型字段。优先嵌套的 response/message，避免把外层回显当成上游实际模型。
@@ -354,7 +340,7 @@ fn service_tier_from_envelope(value: &Value) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
-fn update_usage(snapshot: &mut UsageSnapshot, data: &str) {
+fn update_usage(snapshot: &mut UsageSnapshot, gemini_usage: &mut Value, data: &str) {
     if data == "[DONE]" {
         return;
     }
@@ -365,9 +351,20 @@ fn update_usage(snapshot: &mut UsageSnapshot, data: &str) {
     if let Some(model) = response_model_from_envelope(&value) {
         snapshot.response_model = Some(model);
     }
-    let Some(mut updated) = extract_usage_from_event(&value) else {
+    let metadata = value
+        .get("usageMetadata")
+        .or_else(|| value.pointer("/response/usageMetadata"))
+        .filter(|metadata| metadata.is_object());
+    let updated = if let Some(metadata) = metadata {
+        token_proxy_protocol::gemini_usage::merge_snapshot(gemini_usage, metadata);
+        Some(snapshot_from_usage_metadata_value(gemini_usage))
+    } else {
+        extract_usage_from_event(&value)
+    };
+    let Some(mut updated) = updated else {
         return;
     };
+    updated.service_tier = service_tier_from_envelope(&value).or(updated.service_tier);
     updated.response_model = snapshot.response_model.clone();
     if updated.usage_json.is_some() {
         *snapshot = updated;

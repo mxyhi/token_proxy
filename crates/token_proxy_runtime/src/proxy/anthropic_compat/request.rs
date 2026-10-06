@@ -229,10 +229,24 @@ pub(super) async fn anthropic_request_to_responses(
     }
 
     if let Some(tools_value) = object.get("tools") {
-        out.insert(
-            "tools".to_string(),
-            tools::map_anthropic_tools_to_responses(tools_value),
-        );
+        let mapped_tools = tools::map_anthropic_tools_to_responses(tools_value);
+        if mapped_tools.as_array().is_some_and(|tools| {
+            tools.iter().any(|tool| {
+                matches!(
+                    tool.get("type").and_then(Value::as_str),
+                    Some("web_search" | "web_search_preview")
+                )
+            })
+        }) {
+            out.insert(
+                "include".to_string(),
+                json!([
+                    "reasoning.encrypted_content",
+                    "web_search_call.action.sources"
+                ]),
+            );
+        }
+        out.insert("tools".to_string(), mapped_tools);
     }
 
     let (tool_choice, parallel_tool_calls) =
@@ -1366,5 +1380,27 @@ fn map_anthropic_metadata_to_responses_user(value: Option<&Value>) -> Option<Str
         None
     } else {
         Some(user.chars().take(64).collect())
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn claude_search_request_includes_action_sources() {
+        let request = json!({"model":"claude-sonnet-4","max_tokens":1024,"messages":[{"role":"user","content":"search"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]});
+        let clients = ProxyHttpClients::new().unwrap();
+        let converted = anthropic_request_to_responses(&Bytes::from(request.to_string()), &clients)
+            .await
+            .unwrap();
+        let converted: Value = serde_json::from_slice(&converted).unwrap();
+        assert_eq!(
+            converted["include"],
+            json!([
+                "reasoning.encrypted_content",
+                "web_search_call.action.sources"
+            ])
+        );
     }
 }

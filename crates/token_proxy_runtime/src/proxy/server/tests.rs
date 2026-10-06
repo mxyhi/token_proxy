@@ -1,3 +1,5 @@
+#[path = "chat_truncation.test.rs"]
+mod chat_truncation_tests;
 #[path = "local_api_keys.test.rs"]
 mod local_api_keys_tests;
 

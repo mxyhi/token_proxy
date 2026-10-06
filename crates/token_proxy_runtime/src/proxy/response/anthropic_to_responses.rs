@@ -39,6 +39,7 @@ struct ReasoningOutput {
     output_index: u64,
     text: String,
     encrypted_content: Option<String>,
+    closed: bool,
 }
 
 struct FunctionCallOutput {
@@ -183,6 +184,10 @@ where
             if self.upstream_ended {
                 return Ok(None);
             }
+            if self.sent_done {
+                self.log_usage_once();
+                return Ok(None);
+            }
 
             match self.upstream.next().await {
                 Some(Ok(chunk)) => {
@@ -201,8 +206,14 @@ where
                     }
                 }
                 Some(Err(err)) => {
-                    self.log_usage_once();
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+                    let message = format!("Failed to read upstream response: {err}");
+                    tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                        "Claude to Responses upstream stream failed");
+                    self.context.status = 502;
+                    self.write_log_once(Some(message.clone()));
+                    self.finish_response(Some(message));
+                    self.upstream_ended = true;
+                    self.restore_queued_tool_identities();
                 }
                 None => {
                     self.upstream_ended = true;
@@ -269,7 +280,7 @@ where
                         .and_then(|message| message.get("usage")),
                 );
             }
-            "content_block_start" => self.handle_content_block_start(&value),
+            "content_block_start" => self.handle_content_block_start(&value, token_texts),
             "content_block_delta" => self.handle_content_block_delta(&value, token_texts),
             "content_block_stop" => self.handle_content_block_stop(&value),
             "message_delta" => self.handle_message_delta(&value),
@@ -288,10 +299,13 @@ where
             .and_then(Value::as_object)
             .and_then(|delta| delta.get("stop_reason"))
             .and_then(Value::as_str);
-        let (status, incomplete_reason) =
-            compat_reason::responses_status_from_anthropic_stop_reason(stop_reason);
-        self.response_status = status;
-        self.incomplete_reason = incomplete_reason;
+        if stop_reason.is_some() {
+            // 尾部仅含 usage 的累计快照不能清除已经收到的 pause_turn/max_tokens。
+            let (status, incomplete_reason) =
+                compat_reason::responses_status_from_anthropic_stop_reason(stop_reason);
+            self.response_status = status;
+            self.incomplete_reason = incomplete_reason;
+        }
     }
 
     fn capture_anthropic_usage(&mut self, usage: Option<&Value>) {
@@ -312,7 +326,7 @@ where
         }
     }
 
-    fn handle_content_block_start(&mut self, value: &Value) {
+    fn handle_content_block_start(&mut self, value: &Value, token_texts: &mut Vec<String>) {
         let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
         let Some(block) = value.get("content_block").and_then(Value::as_object) else {
             return;
@@ -329,6 +343,9 @@ where
                     self.set_reasoning_carrier(reasoning_index, signature.to_string());
                 }
                 self.reasoning_by_block_index.insert(index, reasoning_index);
+                if let Some(text) = block.get("thinking").and_then(Value::as_str) {
+                    self.handle_reasoning_text(reasoning_index, text, token_texts);
+                }
             }
             "redacted_thinking" => {
                 let reasoning_index = self.ensure_reasoning_output(index);
@@ -420,24 +437,7 @@ where
                         reasoning_index
                     }
                 };
-                let (item_id, output_index) = {
-                    let state = self
-                        .reasonings
-                        .get_mut(reasoning_index)
-                        .and_then(Option::as_mut)
-                        .expect("reasoning output exists");
-                    state.text.push_str(text);
-                    (state.id.clone(), state.output_index)
-                };
-                token_texts.push(text.to_string());
-                let sequence_number = self.next_sequence_number();
-                self.out.push_back(super::responses_event_sse(json!({
-                    "type": "response.reasoning_summary_text.delta",
-                    "item_id": item_id,
-                    "output_index": output_index,
-                    "delta": text,
-                    "sequence_number": sequence_number
-                })));
+                self.handle_reasoning_text(reasoning_index, text, token_texts);
             }
             "signature_delta" => {
                 let Some(signature) = delta
@@ -549,7 +549,62 @@ where
 
     fn handle_content_block_stop(&mut self, value: &Value) {
         let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+        if let Some(reasoning_index) = self.reasoning_by_block_index.get(&index).copied() {
+            self.close_reasoning(reasoning_index);
+        }
         self.finish_web_search_query(index);
+    }
+
+    fn handle_reasoning_text(&mut self, index: usize, text: &str, token_texts: &mut Vec<String>) {
+        let state = self.reasonings[index]
+            .as_mut()
+            .expect("reasoning output exists");
+        if text.is_empty() || state.closed {
+            return;
+        }
+        let start_part = state.text.is_empty();
+        state.text.push_str(text);
+        let item_id = state.id.clone();
+        let output_index = state.output_index;
+        if start_part {
+            let sequence_number = self.next_sequence_number();
+            self.out.push_back(super::responses_event_sse(json!({
+                "type": "response.reasoning_summary_part.added", "item_id": item_id,
+                "output_index": output_index, "summary_index": 0,
+                "part": {"type":"summary_text","text":""}, "sequence_number": sequence_number
+            })));
+        }
+        token_texts.push(text.to_string());
+        let sequence_number = self.next_sequence_number();
+        self.out.push_back(super::responses_event_sse(json!({
+            "type":"response.reasoning_summary_text.delta", "item_id":item_id,
+            "output_index":output_index, "summary_index":0, "delta":text,
+            "sequence_number":sequence_number
+        })));
+    }
+
+    fn close_reasoning(&mut self, index: usize) {
+        let state = self.reasonings[index]
+            .as_mut()
+            .expect("reasoning output exists");
+        if state.closed {
+            return;
+        }
+        state.closed = true;
+        let item_id = state.id.clone();
+        let output_index = state.output_index;
+        let text = state.text.clone();
+        let carrier = state.encrypted_content.clone();
+        let encrypted_content = carrier
+            .as_deref()
+            .and_then(|carrier| self.reasoning_carrier(&text, carrier));
+        self.push_reasoning_done_events(
+            &item_id,
+            output_index,
+            &text,
+            encrypted_content.as_deref(),
+            "completed",
+        );
     }
 
     fn finish_web_search_queries(&mut self) {
@@ -588,6 +643,9 @@ where
     }
 
     fn ensure_reasoning_output(&mut self, block_index: usize) -> usize {
+        if let Some(index) = self.reasoning_by_block_index.get(&block_index) {
+            return *index;
+        }
         let reasoning_index = self.reasonings.len();
         let output_index = self.next_output_index;
         self.next_output_index += 1;
@@ -599,6 +657,7 @@ where
             output_index,
             text: String::new(),
             encrypted_content: None,
+            closed: false,
         }));
         reasoning_index
     }
@@ -804,6 +863,10 @@ where
     }
 
     fn push_done(&mut self) {
+        self.finish_response(None);
+    }
+
+    fn finish_response(&mut self, response_error: Option<String>) {
         if self.sent_done {
             return;
         }
@@ -912,10 +975,30 @@ where
             OutputItemSnapshot::WebSearch { output_index, .. } => *output_index,
         });
 
-        let status = self.response_status.unwrap_or("completed");
+        let status = if response_error.is_some() {
+            "incomplete"
+        } else {
+            self.response_status.unwrap_or("completed")
+        };
         let output = snapshots
             .iter()
-            .map(|snapshot| snapshot_to_output_item(snapshot, status))
+            .map(|snapshot| {
+                let item_status = if let OutputItemSnapshot::Reasoning { id, .. } = snapshot {
+                    if self
+                        .reasonings
+                        .iter()
+                        .flatten()
+                        .any(|reasoning| reasoning.id == *id && reasoning.closed)
+                    {
+                        "completed"
+                    } else {
+                        status
+                    }
+                } else {
+                    status
+                };
+                snapshot_to_output_item(snapshot, item_status)
+            })
             .collect::<Vec<_>>();
         for snapshot in &snapshots {
             self.push_item_done_events(snapshot, status);
@@ -924,14 +1007,19 @@ where
         let incomplete_details = self
             .incomplete_reason
             .map(|reason| json!({ "reason": reason }));
-        let response = self.build_response_object(
+        let mut response = self.build_response_object(
             status,
             output,
             usage,
             Some(completed_at),
             incomplete_details,
         );
-        let event_type = if status == "incomplete" {
+        let event_type = if let Some(message) = response_error {
+            response["status"] = json!("failed");
+            response["completed_at"] = Value::Null;
+            response["error"] = json!({"code":"upstream_stream_error","message":message});
+            "response.failed"
+        } else if status == "incomplete" {
             "response.incomplete"
         } else {
             "response.completed"
@@ -952,13 +1040,22 @@ where
                 output_index,
                 text,
                 encrypted_content,
-            } => self.push_reasoning_done_events(
-                id,
-                *output_index,
-                text,
-                encrypted_content.as_deref(),
-                response_status,
-            ),
+            } => {
+                if !self
+                    .reasonings
+                    .iter()
+                    .flatten()
+                    .any(|reasoning| reasoning.id == *id && reasoning.closed)
+                {
+                    self.push_reasoning_done_events(
+                        id,
+                        *output_index,
+                        text,
+                        encrypted_content.as_deref(),
+                        response_status,
+                    );
+                }
+            }
             OutputItemSnapshot::Message {
                 id,
                 output_index,
@@ -988,6 +1085,24 @@ where
         encrypted_content: Option<&str>,
         response_status: &str,
     ) {
+        if !text.is_empty() {
+            let sequence_number = self.next_sequence_number();
+            self.out.push_back(super::responses_event_sse(json!({
+                "type":"response.reasoning_summary_text.done", "item_id":item_id,
+                "output_index":output_index, "summary_index":0, "text":text,
+                "sequence_number":sequence_number
+            })));
+            let sequence_number = self.next_sequence_number();
+            let mut event = json!({
+                "type":"response.reasoning_summary_part.done", "item_id":item_id,
+                "output_index":output_index, "summary_index":0,
+                "part":{"type":"summary_text","text":text}, "sequence_number":sequence_number
+            });
+            if response_status == "incomplete" {
+                event["status"] = json!("incomplete");
+            }
+            self.out.push_back(super::responses_event_sse(event));
+        }
         let mut item = json!({
             "id": item_id,
             "type": "reasoning",

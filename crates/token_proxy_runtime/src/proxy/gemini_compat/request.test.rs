@@ -2,6 +2,25 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn chat_to_gemini_rejects_explicit_non_object_tool_parameters() {
+    for parameters in [
+        json!({"type":"string","properties":{"x":{"type":"string"}}}),
+        json!({"type":"array","items":{"type":"string"}}),
+        json!({"type":["string","null"]}),
+        json!({"type":"null"}),
+        json!(false),
+    ] {
+        let input = json!({"messages":[{"role":"user","content":"hello"}],"tools":[{
+            "type":"function","function":{"name":"bad_schema","parameters":parameters}
+        }]});
+        let error = chat_request_to_gemini(&Bytes::from(input.to_string()))
+            .expect_err("non-object parameters must not be sent upstream");
+        assert!(error.contains("bad_schema"), "{error}");
+        assert!(error.contains("object"), "{error}");
+    }
+}
+
+#[test]
 fn gemini_request_to_chat_maps_system_tools_and_format() {
     let input = json!({
         "systemInstruction": { "parts": [{ "text": "sys" }] },
@@ -277,10 +296,16 @@ fn chat_request_to_gemini_cleans_unsupported_tool_schema_fields() {
     assert!(parameters.get("$defs").is_none());
     assert!(parameters.get("definitions").is_none());
     assert_eq!(parameters["additionalProperties"], false);
-    assert_eq!(parameters["properties"]["path"]["type"], json!("string"));
+    assert_eq!(
+        parameters["properties"]["path"]["type"],
+        json!(["string", "null"])
+    );
     assert_eq!(parameters["properties"]["path"]["minLength"], 1);
-    assert_eq!(parameters["properties"]["count"]["type"], json!("integer"));
-    assert!(parameters["properties"]["empty"].get("type").is_none());
+    assert_eq!(
+        parameters["properties"]["count"]["type"],
+        json!(["null", "integer"])
+    );
+    assert_eq!(parameters["properties"]["empty"]["type"], json!(["null"]));
 }
 
 #[test]

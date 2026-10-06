@@ -13,7 +13,7 @@ struct Tool {
     order: usize,
 }
 
-fn sources(object: &Map<String, Value>) -> Vec<&Value> {
+pub(super) fn sources(object: &Map<String, Value>) -> Vec<&Value> {
     let mut tools = Vec::new();
     if let Some(values) = object.get("tools").and_then(Value::as_array) {
         tools.extend(values);

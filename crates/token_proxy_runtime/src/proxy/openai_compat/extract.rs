@@ -115,7 +115,8 @@ pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
     let mut content_parts = Vec::new();
     let mut reasoning_text = String::new();
     let mut tool_calls = Vec::new();
-    let mut annotations = Vec::new();
+    let annotations =
+        token_proxy_protocol::responses_annotations::response_chat_annotations(value.get("output"));
     let mut audio = None;
     let mut thinking_blocks = Vec::new();
 
@@ -161,13 +162,6 @@ pub(super) fn extract_responses_output(value: &Value) -> ResponsesOutput {
                                     "type": "thinking",
                                     "thinking": text
                                 }));
-                            }
-                        }
-                        if part_type == Some("output_text") {
-                            if let Some(part_annotations) =
-                                part_obj.get("annotations").and_then(Value::as_array)
-                            {
-                                annotations.extend(part_annotations.iter().cloned());
                             }
                         }
                         if part_type == Some("output_audio") && audio.is_none() {

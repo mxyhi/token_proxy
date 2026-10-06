@@ -1,6 +1,20 @@
 //! Gemini 思考 token 是输出的一部分，转换和持久化必须使用同一计数口径。
 use serde_json::{json, Value};
 
+/// usageMetadata 是累计快照而非增量；缺失字段保留，显式零值也必须覆盖。
+pub fn merge_snapshot(accumulated: &mut Value, incoming: &Value) {
+    let Some(fields) = incoming.as_object() else {
+        return;
+    };
+    if !accumulated.is_object() {
+        *accumulated = json!({});
+    }
+    let accumulated = accumulated.as_object_mut().expect("usage object");
+    for (field, value) in fields {
+        accumulated.insert(field.clone(), value.clone());
+    }
+}
+
 pub fn output_tokens(usage: &Value) -> u64 {
     count(usage, "candidatesTokenCount").saturating_add(count(usage, "thoughtsTokenCount"))
 }

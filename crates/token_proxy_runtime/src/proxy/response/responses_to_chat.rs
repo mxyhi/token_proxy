@@ -50,7 +50,7 @@ struct ResponsesToChatState<S> {
     content_parts_sent: bool,
     audio_sent: bool,
     finish_reason_override: Option<&'static str>,
-    text_recovery: token_proxy_protocol::responses_text::ResponsesTextRecovery,
+    text_recovery: token_proxy_protocol::responses_annotations::ResponsesChatOutput,
     saw_reasoning_delta: bool,
     sent_redacted_thinking: bool,
     final_usage: Option<Value>,
@@ -206,8 +206,19 @@ where
         if is_responses_terminal_event(event_type) {
             self.capture_terminal_usage(&value);
         }
-        for text in self.text_recovery.process(&value) {
+        let (texts, annotations) = self.text_recovery.process(&value);
+        for text in texts {
             self.emit_output_text(&text, token_texts);
+        }
+        if !annotations.is_empty() {
+            self.ensure_role_sent();
+            self.out.push_back(chat_chunk_sse(
+                &self.chat_id,
+                self.created,
+                &self.model,
+                json!({"annotations":annotations}),
+                None,
+            ));
         }
         if event_type.ends_with("reasoning_text.delta")
             || event_type.ends_with("reasoning_summary_text.delta")

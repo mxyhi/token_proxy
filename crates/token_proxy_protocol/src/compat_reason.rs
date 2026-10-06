@@ -144,6 +144,10 @@ pub fn anthropic_stop_reason_from_chat_finish_reason(reason: &str) -> &'static s
 pub fn responses_status_from_anthropic_stop_reason(
     stop_reason: Option<&str>,
 ) -> (Option<&'static str>, Option<&'static str>) {
+    // pause_turn 表示服务器工具工作尚未完成，不能伪造 token 限额或重放请求。
+    if stop_reason == Some("pause_turn") {
+        return (Some("incomplete"), None);
+    }
     let finish_reason = match stop_reason {
         Some("max_tokens") => Some("length"),
         Some("refusal") => Some("content_filter"),
@@ -166,6 +170,14 @@ fn map_responses_reason_to_chat_finish_reason(reason: &str) -> &'static str {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn pause_turn_remains_incomplete_without_token_limit_reason() {
+        assert_eq!(
+            responses_status_from_anthropic_stop_reason(Some("pause_turn")),
+            (Some("incomplete"), None)
+        );
+    }
 
     #[test]
     fn summary_visibility_parsers_preserve_three_states() {

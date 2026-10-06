@@ -75,6 +75,32 @@ pub(super) fn clean_tool_schema(schema: &Value) -> Value {
     }
 }
 
+pub(super) fn explicit_non_object_root(schema: &Value) -> bool {
+    let Some(object) = schema.as_object() else {
+        return true;
+    };
+    match object.get("type") {
+        Some(Value::String(schema_type)) => schema_type != "object",
+        Some(Value::Array(schema_types)) => !schema_types.iter().any(|value| value == "object"),
+        Some(value) if !value.is_null() => true,
+        _ => {
+            let non_object_union = ["anyOf", "oneOf"].iter().any(|key| {
+                object
+                    .get(*key)
+                    .and_then(Value::as_array)
+                    .is_some_and(|branches| {
+                        !branches.is_empty() && branches.iter().all(explicit_non_object_root)
+                    })
+            });
+            non_object_union
+                || object
+                    .get("allOf")
+                    .and_then(Value::as_array)
+                    .is_some_and(|branches| branches.iter().any(explicit_non_object_root))
+        }
+    }
+}
+
 fn clean_tool_schema_object(object: &Map<String, Value>) -> Value {
     let mut source = object.clone();
     normalize_prefix_items(&mut source);
@@ -143,15 +169,19 @@ fn clean_tool_schema_object(object: &Map<String, Value>) -> Value {
     if removed > 0 {
         tracing::debug!(removed, "removed unsupported Gemini schema keywords");
     }
-    normalize_gemini_schema_type(&mut cleaned);
     merge_all_of_properties(&mut cleaned, all_of.as_ref());
     merge_union_properties(&mut cleaned, "anyOf", any_of.as_ref());
     merge_union_properties(&mut cleaned, "oneOf", one_of.as_ref());
+    // 组合分支可能刚刚合并出 properties，必须在合并之后判断结构类型。
+    normalize_gemini_schema_type(&mut cleaned);
     if cleaned.get("items").is_some() {
-        let keep_items = cleaned
-            .get("type")
-            .and_then(Value::as_str)
-            .is_some_and(|schema_type| schema_type == "array");
+        let keep_items = match cleaned.get("type") {
+            Some(Value::String(schema_type)) => schema_type == "array",
+            Some(Value::Array(schema_types)) => schema_types.iter().any(|value| value == "array"),
+            // 对象与数组结构并存时保留证据，不能猜类型或删除其中一种结构。
+            None => true,
+            _ => false,
+        };
         if !keep_items {
             cleaned.remove("items");
         }
@@ -186,32 +216,22 @@ fn normalize_prefix_items(source: &mut Map<String, Value>) {
     source.insert("items".to_string(), replacement);
 }
 
-fn append_schema_description(cleaned: &mut Map<String, Value>, hint: &str) {
-    let description = cleaned
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let combined = if description.is_empty() {
-        hint.to_string()
-    } else {
-        format!("{description}; {hint}")
-    };
-    cleaned.insert("description".to_string(), Value::String(combined));
-}
-
 fn merge_union_properties(cleaned: &mut Map<String, Value>, key: &str, union: Option<&Value>) {
     let Some(union) = union.and_then(Value::as_array) else {
         return;
     };
     let branches = union.iter().map(clean_tool_schema).collect::<Vec<_>>();
+    let has_object_branch = branches
+        .iter()
+        .any(|branch| branch.get("type").and_then(Value::as_str) == Some("object"));
+    let has_untyped_branch = branches.iter().any(|branch| branch.get("type").is_none());
+    // JSON Schema 支持原生联合；标量、可空或开放分支不能收窄为 object。
+    if branches.iter().any(has_non_object_type) || (has_object_branch && has_untyped_branch) {
+        cleaned.insert(key.to_string(), Value::Array(branches));
+        return;
+    }
     let mut branch_properties = Map::new();
-    let mut accepted_types = Vec::new();
     for branch in &branches {
-        if let Some(schema_type) = branch.get("type").and_then(Value::as_str) {
-            if !accepted_types.iter().any(|value| value == schema_type) {
-                accepted_types.push(schema_type.to_string());
-            }
-        }
         if let Some(properties) = branch.get("properties").and_then(Value::as_object) {
             for (name, schema) in properties {
                 branch_properties
@@ -229,9 +249,6 @@ fn merge_union_properties(cleaned: &mut Map<String, Value>, key: &str, union: Op
             for (name, schema) in branch_properties {
                 properties.entry(name).or_insert(schema);
             }
-            cleaned
-                .entry("type".to_string())
-                .or_insert_with(|| Value::String("object".to_string()));
         }
     } else if let Some(selected) = branches.first().and_then(Value::as_object) {
         for (name, value) in selected {
@@ -242,9 +259,6 @@ fn merge_union_properties(cleaned: &mut Map<String, Value>, key: &str, union: Op
     }
 
     cleaned.remove(key);
-    if accepted_types.len() > 1 {
-        append_schema_description(cleaned, &format!("Accepts: {}", accepted_types.join(" | ")));
-    }
 }
 
 fn normalize_malformed_schema_object(object: &Map<String, Value>) -> Map<String, Value> {
@@ -335,8 +349,12 @@ fn merge_all_of_properties(cleaned: &mut Map<String, Value>, all_of: Option<&Val
     let Some(branches) = all_of.and_then(Value::as_array) else {
         return;
     };
-    for branch in branches {
-        let branch = clean_tool_schema(branch);
+    let branches = branches.iter().map(clean_tool_schema).collect::<Vec<_>>();
+    if branches.iter().any(has_non_object_type) {
+        cleaned.insert("allOf".to_string(), Value::Array(branches));
+        return;
+    }
+    for branch in &branches {
         let Some(branch_properties) = branch.get("properties").and_then(Value::as_object) else {
             continue;
         };
@@ -365,37 +383,50 @@ fn normalize_gemini_schema_type(object: &mut Map<String, Value>) {
         Some(Value::Array(schema_types)) => {
             let normalized = schema_types
                 .iter()
-                .filter_map(Value::as_str)
-                .filter(|schema_type| !schema_type.eq_ignore_ascii_case("null"))
-                .find(|schema_type| {
-                    object.contains_key("items") && schema_type.eq_ignore_ascii_case("array")
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(|value| Value::String(value.to_ascii_lowercase()))
+                        .unwrap_or_else(|| value.clone())
                 })
-                .or_else(|| {
-                    schema_types
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .find(|schema_type| !schema_type.eq_ignore_ascii_case("null"))
-                })
-                .map(str::to_ascii_lowercase);
-            match normalized {
-                Some(schema_type) => {
-                    object.insert("type".to_string(), Value::String(schema_type));
-                }
-                None => {
-                    object.remove("type");
-                }
+                .collect();
+            object.insert("type".to_string(), Value::Array(normalized));
+        }
+        None | Some(Value::Null) => {
+            object.remove("type");
+            let object_structure = object.get("properties").is_some_and(Value::is_object)
+                || object.contains_key("additionalProperties");
+            let array_structure = object.contains_key("items");
+            // 保留联合/可空分支的语义，不因附近存在 properties 收窄其类型。
+            let has_union = ["anyOf", "oneOf", "allOf"]
+                .iter()
+                .any(|key| object.contains_key(*key));
+            let inferred = match (object_structure, array_structure, has_union) {
+                (true, false, false) => Some("object"),
+                (false, true, false) => Some("array"),
+                _ => None,
+            };
+            if let Some(inferred) = inferred {
+                object.insert("type".to_string(), Value::String(inferred.to_string()));
             }
         }
-        Some(Value::Null) if object.contains_key("items") => {
-            object.insert("type".to_string(), Value::String("array".to_string()));
-        }
-        Some(Value::Null) => {
-            object.remove("type");
-        }
-        None if object.contains_key("items") => {
-            object.insert("type".to_string(), Value::String("array".to_string()));
-        }
         _ => {}
+    }
+}
+
+fn has_non_object_type(schema: &Value) -> bool {
+    if schema.get("nullable").and_then(Value::as_bool) == Some(true) {
+        return true;
+    }
+    match schema.get("type") {
+        Some(Value::String(schema_type)) => !schema_type.eq_ignore_ascii_case("object"),
+        Some(Value::Array(_)) => true,
+        _ => ["anyOf", "oneOf", "allOf"].iter().any(|key| {
+            schema
+                .get(*key)
+                .and_then(Value::as_array)
+                .is_some_and(|branches| branches.iter().any(has_non_object_type))
+        }),
     }
 }
 

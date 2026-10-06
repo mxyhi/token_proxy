@@ -880,7 +880,7 @@ fn responses_response_to_chat_maps_reasoning_summary_and_annotations() {
     assert_eq!(message["reasoning_content"], json!("analyze first"));
     assert_eq!(message["annotations"][0]["type"], json!("url_citation"));
     assert_eq!(
-        message["annotations"][0]["url"],
+        message["annotations"][0]["url_citation"]["url"],
         json!("https://example.com")
     );
 }

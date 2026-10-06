@@ -94,6 +94,12 @@ pub(crate) fn responses_search_results_from_claude(content: Option<&Value>) -> V
     Value::Array(entries)
 }
 
+pub(crate) fn responses_search_results(item: &Map<String, Value>) -> Option<&Value> {
+    item.get("results")
+        .filter(|results| results.as_array().is_some_and(|items| !items.is_empty()))
+        .or_else(|| item.get("action").and_then(|action| action.get("sources")))
+}
+
 pub(crate) fn claude_search_results_from_responses(results: Option<&Value>) -> Value {
     let Some(Value::Array(items)) = results else {
         return Value::Array(Vec::new());
@@ -143,7 +149,7 @@ pub(super) fn responses_search_call_to_claude(item: &Map<String, Value>) -> Opti
     let result_block = json!({
         "type": "web_search_tool_result",
         "tool_use_id": tool_use_id,
-        "content": claude_search_results_from_responses(item.get("results"))
+        "content": claude_search_results_from_responses(responses_search_results(item))
     });
     Some((use_block, result_block))
 }
@@ -202,4 +208,24 @@ pub(super) fn citations_to_annotations(citations: Option<&Value>) -> Value {
             .cloned()
             .collect(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn search_sources_require_real_anthropic_credentials() {
+        let item = json!({"id":"ws_search","type":"web_search_call","results":null,"action":{"type":"search","query":"q","sources":[
+            {"type":"url","url":"https://plain.example","title":"plain"},
+            {"type":"url","url":"https://signed.example","title":"signed","encrypted_content":"opaque-signature"}
+        ]}});
+        let (_, result) = responses_search_call_to_claude(item.as_object().unwrap()).unwrap();
+        assert_eq!(result["content"].as_array().unwrap().len(), 1);
+        assert_eq!(result["content"][0]["url"], "https://signed.example");
+        assert_eq!(
+            result["content"][0]["encrypted_content"],
+            "opaque-signature"
+        );
+    }
 }

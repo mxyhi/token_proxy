@@ -44,6 +44,10 @@ pub(super) fn stream_with_logging_and_semantic_timeout<E>(
 where
     E: std::error::Error + Send + Sync + 'static,
 {
+    let upstream = super::upstream_stream::with_chat_finish_validation(
+        upstream,
+        is_chat_stream(&context.provider, &context.path),
+    );
     if openai_stream_semantics(&context.provider, &context.path).responses_events {
         let state = ModelOverrideStreamState::new(
             upstream,
@@ -191,6 +195,9 @@ where
                 self.collector.push_chunk(&out_chunk);
                 self.response_body_buf
                     .push_str(&String::from_utf8_lossy(out_chunk.as_ref()));
+                if self.terminal_error.is_some() {
+                    self.write_terminal_log_once();
+                }
                 if observation.starts_client_output {
                     self.context.mark_first_output();
                 }
@@ -225,6 +232,13 @@ where
                     self.token_tracker.add_output_text(&text).await;
                 }
                 let message = format!("Failed to read upstream response: {err}");
+                if is_chat_stream(&self.context.provider, &self.context.path) {
+                    self.context.status = 502;
+                    self.terminal_seen = true;
+                    self.write_log_once(Some(message.clone()));
+                    self.context.mark_first_client_flush();
+                    return Ok(Some((chat_error_chunk(&message), self)));
+                }
                 if semantics.responses_events {
                     let sequence_number = self.sequence.take_next();
                     let out_chunk = openai_response_failed_done_chunk(
@@ -330,6 +344,10 @@ pub(super) fn stream_with_logging_and_model_override_semantic_timeout<E>(
 where
     E: std::error::Error + Send + Sync + 'static,
 {
+    let upstream = super::upstream_stream::with_chat_finish_validation(
+        upstream,
+        is_chat_stream(&context.provider, &context.path),
+    );
     let state = ModelOverrideStreamState::new(
         upstream,
         context,
@@ -483,6 +501,9 @@ where
                         self.terminal_seen = true;
                     }
                     apply_observed_error(&mut self.context, &mut self.terminal_error, &observation);
+                    if self.terminal_error.is_some() {
+                        self.write_terminal_log_once();
+                    }
                     if observation.starts_client_output {
                         self.context.mark_first_output();
                     }
@@ -492,6 +513,14 @@ where
                 }
                 Some(Err(err)) => {
                     let semantics = self.openai_stream_semantics();
+                    if is_chat_stream(&self.context.provider, &self.context.path) {
+                        let message = format!("Failed to read upstream response: {err}");
+                        self.context.status = 502;
+                        self.terminal_seen = true;
+                        self.write_log_once(Some(message.clone()));
+                        self.context.mark_first_client_flush();
+                        return Ok(Some((chat_error_chunk(&message), self)));
+                    }
                     if semantics.responses_events {
                         let message = format!("Failed to read upstream response: {err}");
                         let sequence_number = self.sequence.take_next();
@@ -743,6 +772,11 @@ fn observe_stream_data(
             observation.terminal = true;
             observation.terminal_json = true;
         }
+    } else if semantics.done_sentinel {
+        if let Some(error) = super::upstream_stream::chat_stream_error(&value) {
+            observation.terminal = true;
+            observation.terminal_error = Some(error);
+        }
     }
     if openai_responses_data_starts_client_output(provider, &value) {
         observation.starts_client_output = true;
@@ -870,6 +904,24 @@ fn openai_stream_semantics(provider: &str, path: &str) -> OpenAiStreamSemantics 
         done_sentinel,
         responses_events: done_sentinel && is_openai_responses_stream_path(path),
     }
+}
+
+fn is_chat_stream(provider: &str, path: &str) -> bool {
+    let path = path.split_once('?').map(|(path, _)| path).unwrap_or(path);
+    openai_stream_semantics(provider, path).done_sentinel
+        && matches!(path, "/v1/chat/completions" | "/chat/completions")
+}
+
+fn chat_error_chunk(message: &str) -> Bytes {
+    tracing::warn!(
+        error = message,
+        "upstream Chat stream failed after response commitment"
+    );
+    super::responses_event_sse(serde_json::json!({"error": {
+        "message": message,
+        "type": "upstream_error",
+        "code": "upstream_stream_error"
+    }}))
 }
 
 fn is_openai_responses_stream_path(path: &str) -> bool {

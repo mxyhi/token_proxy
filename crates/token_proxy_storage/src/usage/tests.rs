@@ -2,6 +2,41 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn gemini_usage_merges_partial_snapshots_without_adding_duplicates() {
+    for nested in [false, true] {
+        let mut collector = SseUsageCollector::new();
+        for metadata in [
+            json!({"promptTokenCount":16,"cachedContentTokenCount":4}),
+            json!({"candidatesTokenCount":5,"thoughtsTokenCount":42}),
+            json!({"candidatesTokenCount":5,"thoughtsTokenCount":42}),
+            json!({"candidatesTokenCount":0,"cachedContentTokenCount":0}),
+        ] {
+            let envelope = if nested {
+                json!({"response":{"usageMetadata":metadata}})
+            } else {
+                json!({"usageMetadata":metadata})
+            };
+            collector.push_chunk(format!("data: {envelope}\n\n").as_bytes());
+        }
+        let snapshot = collector.finish();
+        let usage = snapshot.usage.expect("usage");
+        assert_eq!(usage.input_tokens, Some(16));
+        assert_eq!(usage.output_tokens, Some(42));
+        assert_eq!(usage.total_tokens, Some(58));
+        assert_eq!(snapshot.billable_usage.uncached_input_tokens, 16);
+        assert_eq!(snapshot.billable_usage.cache_read_tokens, 0);
+        assert_eq!(snapshot.billable_usage.output_tokens, 42);
+        assert_eq!(
+            snapshot.usage_json.unwrap(),
+            json!({
+                "promptTokenCount":16,"cachedContentTokenCount":0,
+                "candidatesTokenCount":0,"thoughtsTokenCount":42
+            })
+        );
+    }
+}
+
+#[test]
 fn gemini_thinking_is_billable_output_in_json_and_usage_only_sse() {
     for (candidates, expected) in [(Some(5), 47), (None, 42)] {
         let mut metadata =

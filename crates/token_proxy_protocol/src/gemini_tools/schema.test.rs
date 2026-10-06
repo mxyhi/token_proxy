@@ -220,7 +220,10 @@ fn clean_schema_repairs_boolean_required_and_array_schema_edges() {
     assert_eq!(cleaned["properties"]["tuple"]["type"], "array");
     assert_eq!(cleaned["properties"]["tuple"]["items"]["type"], "string");
     assert_eq!(cleaned["properties"]["inferred"]["type"], "array");
-    assert_eq!(cleaned["properties"]["union"]["type"], "array");
+    assert_eq!(
+        cleaned["properties"]["union"]["type"],
+        json!(["string", "array"])
+    );
     assert!(cleaned["properties"]["wrong"].get("items").is_none());
     assert_eq!(cleaned["properties"]["nested"]["items"], json!({}));
 }

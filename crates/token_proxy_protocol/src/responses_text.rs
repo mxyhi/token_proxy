@@ -7,12 +7,28 @@ const MAX_TEXT_PARTS: usize = 128;
 
 #[derive(Default)]
 pub struct ResponsesTextRecovery {
-    parts: HashMap<(String, u64), String>,
+    parts: HashMap<(String, u64), TextPart>,
+    emitted_chars: usize,
+    next_part_id: usize,
     item_ids: HashMap<u64, String>,
     bytes: usize,
     unindexed_delta: bool,
     disabled: bool,
     finished: bool,
+}
+
+struct TextPart {
+    text: String,
+    offset: usize,
+    identity: usize,
+    chars: usize,
+    spans: Vec<TextSpan>,
+}
+
+struct TextSpan {
+    local_start: usize,
+    global_start: usize,
+    chars: usize,
 }
 
 impl ResponsesTextRecovery {
@@ -94,6 +110,61 @@ impl ResponsesTextRecovery {
         output
     }
 
+    /// Returns stable part identity and the character offset in delivered Chat text.
+    /// Identity survives output_index-to-item_id reconciliation.
+    pub fn part_position(
+        &mut self,
+        id: Option<&str>,
+        index: Option<u64>,
+        content: u64,
+    ) -> Option<(usize, usize)> {
+        let key = self.key(id, index, content)?;
+        self.parts
+            .get(&key)
+            .map(|part| (part.identity, part.offset))
+    }
+
+    /// Maps a part-local citation to the actual delivered text. Interleaved
+    /// parts produce disjoint spans, so a citation never covers another part.
+    pub fn part_ranges(
+        &mut self,
+        id: Option<&str>,
+        index: Option<u64>,
+        content: u64,
+        start: usize,
+        end: usize,
+    ) -> Option<Vec<(usize, usize)>> {
+        let key = self.key(id, index, content)?;
+        let part = self.parts.get(&key)?;
+        if start > end || end > part.chars {
+            return None;
+        }
+        if start == end {
+            let span = part
+                .spans
+                .iter()
+                .find(|span| start < span.local_start + span.chars)
+                .or_else(|| part.spans.last())?;
+            let position = span.global_start + start - span.local_start;
+            return Some(vec![(position, position)]);
+        }
+        Some(
+            part.spans
+                .iter()
+                .filter_map(|span| {
+                    let left = start.max(span.local_start);
+                    let right = end.min(span.local_start + span.chars);
+                    (left < right).then(|| {
+                        (
+                            span.global_start + left - span.local_start,
+                            span.global_start + right - span.local_start,
+                        )
+                    })
+                })
+                .collect(),
+        )
+    }
+
     fn recover_item(&mut self, item: &Value, index: Option<u64>, output: &mut Vec<String>) {
         if item.get("type").and_then(Value::as_str) != Some("message")
             || item.get("role").and_then(Value::as_str) != Some("assistant")
@@ -137,7 +208,11 @@ impl ResponsesTextRecovery {
         {
             return;
         }
-        let previous = self.parts.get(&key).map(String::as_str).unwrap_or("");
+        let previous = self
+            .parts
+            .get(&key)
+            .map(|part| part.text.as_str())
+            .unwrap_or("");
         let Some(tail) = text.strip_prefix(previous).filter(|tail| !tail.is_empty()) else {
             return;
         };
@@ -200,7 +275,34 @@ impl ResponsesTextRecovery {
             return;
         }
         self.bytes += text.len();
-        self.parts.entry(key).or_default().push_str(text);
+        let part = self.parts.entry(key).or_insert_with(|| {
+            let identity = self.next_part_id;
+            self.next_part_id += 1;
+            TextPart {
+                text: String::new(),
+                offset: self.emitted_chars,
+                identity,
+                chars: 0,
+                spans: Vec::new(),
+            }
+        });
+        let chars = text.chars().count();
+        if let Some(span) = part
+            .spans
+            .last_mut()
+            .filter(|span| span.global_start + span.chars == self.emitted_chars)
+        {
+            span.chars += chars;
+        } else {
+            part.spans.push(TextSpan {
+                local_start: part.chars,
+                global_start: self.emitted_chars,
+                chars,
+            });
+        }
+        part.text.push_str(text);
+        part.chars += chars;
+        self.emitted_chars += chars;
     }
 
     fn disable(&mut self) {

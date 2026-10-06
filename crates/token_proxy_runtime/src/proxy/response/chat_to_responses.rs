@@ -15,6 +15,7 @@ use format::{function_call_item, snapshot_to_output_item, usage_to_value, Output
 use state_types::{FunctionCallOutput, MessageOutput, ReasoningOutput};
 
 mod format;
+mod local_shell;
 mod state_types;
 
 pub(super) fn stream_chat_to_responses<E>(
@@ -44,6 +45,7 @@ struct ChatToResponsesState<S> {
     model: String,
     next_output_index: u64,
     reasoning: Option<ReasoningOutput>,
+    completed_reasonings: Vec<ReasoningOutput>,
     message: Option<MessageOutput>,
     function_calls: Vec<Option<FunctionCallOutput>>,
     sequence: u64,
@@ -53,6 +55,7 @@ struct ChatToResponsesState<S> {
     upstream_ended: bool,
     response_body_buf: String,
     tool_identity_request: Option<Value>,
+    shell_bridge_name: Option<String>,
     custom_tool_item_ids: HashMap<String, String>,
 }
 
@@ -93,6 +96,12 @@ where
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
         let tool_identity_request = super::stream_tool_identity_request(&context);
+        let shell_bridge_name = context
+            .tool_identity_request_body()
+            .and_then(|body| serde_json::from_str::<Value>(body).ok())
+            .and_then(|request| {
+                token_proxy_protocol::tool_identity::local_shell::bridge_name(&request)
+            });
 
         let mut state = Self {
             upstream,
@@ -108,6 +117,7 @@ where
             model,
             next_output_index: 0,
             reasoning: None,
+            completed_reasonings: Vec::new(),
             message: None,
             function_calls: Vec::new(),
             sequence: 0,
@@ -117,6 +127,7 @@ where
             upstream_ended: false,
             response_body_buf: String::new(),
             tool_identity_request,
+            shell_bridge_name,
             custom_tool_item_ids: HashMap::new(),
         };
         state.push_response_created();
@@ -131,6 +142,10 @@ where
             }
 
             if self.upstream_ended {
+                return Ok(None);
+            }
+            if self.sent_done {
+                self.log_usage_once();
                 return Ok(None);
             }
 
@@ -155,8 +170,8 @@ where
                     }
                 }
                 Some(Err(err)) => {
-                    self.log_usage_once();
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+                    self.push_failed(format!("Failed to read upstream response: {err}"));
+                    self.restore_queued_tool_identities();
                 }
                 None => {
                     self.upstream_ended = true;
@@ -201,6 +216,10 @@ where
         let Ok(value) = serde_json::from_str::<Value>(data) else {
             return;
         };
+        if let Some(error) = super::upstream_stream::chat_stream_error(&value) {
+            self.push_error(error);
+            return;
+        }
 
         let Some(choice) = value
             .get("choices")
@@ -213,7 +232,7 @@ where
             .get("finish_reason")
             .and_then(Value::as_str)
             .map(str::trim)
-            .filter(|value| !value.is_empty())
+            .filter(|value| super::upstream_stream::valid_finish_reason(value))
         {
             self.finish_reason = Some(finish_reason.to_string());
         }
@@ -246,6 +265,9 @@ where
     }
 
     fn handle_text_delta(&mut self, delta: &str, token_texts: &mut Vec<String>) {
+        if !delta.is_empty() {
+            self.close_reasoning_output();
+        }
         self.ensure_message_output();
         self.ensure_message_text_part();
         let (item_id, output_index) = {
@@ -267,11 +289,26 @@ where
     }
 
     fn handle_reasoning_delta(&mut self, delta: &str, token_texts: &mut Vec<String>) {
-        let (item_id, output_index) = {
+        if delta.is_empty() {
+            return;
+        }
+        let (item_id, output_index, start_part) = {
             let reasoning = self.ensure_reasoning_output();
+            let start_part = reasoning.text.is_empty();
             reasoning.text.push_str(delta);
-            (reasoning.id.clone(), reasoning.output_index)
+            (reasoning.id.clone(), reasoning.output_index, start_part)
         };
+        if start_part {
+            let sequence_number = self.next_sequence_number();
+            self.out.push_back(super::responses_event_sse(json!({
+                "type": "response.reasoning_summary_part.added",
+                "item_id": item_id,
+                "output_index": output_index,
+                "summary_index": 0,
+                "part": {"type": "summary_text", "text": ""},
+                "sequence_number": sequence_number
+            })));
+        }
         token_texts.push(delta.to_string());
 
         let sequence_number = self.next_sequence_number();
@@ -279,6 +316,7 @@ where
             "type": "response.reasoning_summary_text.delta",
             "item_id": item_id,
             "output_index": output_index,
+            "summary_index": 0,
             "delta": delta,
             "sequence_number": sequence_number
         })));
@@ -319,6 +357,7 @@ where
     }
 
     fn handle_audio_delta(&mut self, delta: &Value) {
+        self.close_reasoning_output();
         self.ensure_message_output();
         let message = self.message.as_mut().expect("message output must exist");
         match &mut message.audio {
@@ -333,6 +372,7 @@ where
         let Some(tool_call) = tool_call.as_object() else {
             return;
         };
+        self.close_reasoning_output();
         let call_index = tool_call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
 
         let call_id = tool_call.get("id").and_then(Value::as_str);
@@ -377,6 +417,7 @@ where
         let Some(function_call) = function_call.as_object() else {
             return;
         };
+        self.close_reasoning_output();
         let name = function_call.get("name").and_then(Value::as_str);
         let arguments_delta = function_call.get("arguments").and_then(Value::as_str);
 
@@ -406,7 +447,7 @@ where
         if self.reasoning.is_none() {
             let output_index = self.next_output_index;
             self.next_output_index += 1;
-            let reasoning_id = format!("rs_{}", self.id_seed);
+            let reasoning_id = format!("rs_{}_{}", self.id_seed, output_index);
             self.push_reasoning_item_added(&reasoning_id, output_index);
             self.reasoning = Some(ReasoningOutput {
                 id: reasoning_id,
@@ -418,6 +459,20 @@ where
         self.reasoning
             .as_mut()
             .expect("reasoning output must exist")
+    }
+
+    fn close_reasoning_output(&mut self) {
+        let Some(reasoning) = self.reasoning.take() else {
+            return;
+        };
+        self.push_reasoning_done_events(
+            &reasoning.id,
+            reasoning.output_index,
+            &reasoning.text,
+            reasoning.encrypted_content.as_deref(),
+            "completed",
+        );
+        self.completed_reasonings.push(reasoning);
     }
 
     fn ensure_message_output(&mut self) {
@@ -507,6 +562,16 @@ where
 
     /// 发布前必须已有工具名；终止时仅为有实际身份/参数的空名调用合成名称。
     fn emit_function_call_if_ready(&mut self, call_index: usize, terminal: bool) -> bool {
+        if self
+            .function_calls
+            .get(call_index)
+            .and_then(Option::as_ref)
+            .is_some_and(|call| {
+                !call.item_added && self.shell_bridge_name.as_deref() == Some(call.name.as_str())
+            })
+        {
+            return self.emit_shell_call_if_ready(call_index, terminal);
+        }
         let Some(call) = self
             .function_calls
             .get_mut(call_index)
@@ -636,6 +701,44 @@ where
         if self.sent_done {
             return;
         }
+        if self.finish_reason.is_none() {
+            self.push_failed(super::upstream_stream::CHAT_TRUNCATED_ERROR.to_string());
+            return;
+        }
+        if let Err(error) = self.validate_shell_calls() {
+            self.push_failed(error);
+            return;
+        }
+        self.finish_response(None);
+    }
+
+    fn push_failed(&mut self, message: String) {
+        self.push_error(super::responses_error::ResponsesStreamError {
+            message,
+            error_type: "upstream_error".to_string(),
+            code: Some(json!("upstream_stream_error")),
+            status: axum::http::StatusCode::BAD_GATEWAY,
+            retryable_before_output: false,
+        });
+    }
+
+    fn push_error(&mut self, error: super::responses_error::ResponsesStreamError) {
+        if self.sent_done {
+            return;
+        }
+        tracing::warn!(upstream_id = %self.context.upstream_id, error = %error.message,
+            "Chat to Responses upstream stream failed");
+        self.context.status = error.status.as_u16();
+        // 错误立即落库；后续客户端取消或终态队列未消费不会把它改写成 drop。
+        self.write_log_once(Some(error.message.clone()));
+        self.finish_response(Some(Value::Object(error.openai_error_object())));
+        self.upstream_ended = true;
+    }
+
+    fn finish_response(&mut self, response_error: Option<Value>) {
+        if self.sent_done {
+            return;
+        }
         self.sent_done = true;
 
         let completed_at = (super::now_ms() / 1000) as i64;
@@ -651,6 +754,12 @@ where
             let Some(call) = call else {
                 continue;
             };
+            // 已失败的流不发布可执行 shell action，包括尚未完整的参数。
+            if response_error.is_some()
+                && self.shell_bridge_name.as_deref() == Some(call.name.as_str())
+            {
+                continue;
+            }
             let meaningful = call.has_source_id
                 || !call.name.trim().is_empty()
                 || !call.arguments.trim().is_empty();
@@ -675,8 +784,17 @@ where
         {
             terminal_finish = Some("length".to_string());
         }
-        let (response_status, event_type, incomplete_reason) =
-            incomplete_status(terminal_finish.as_deref());
+        let (response_status, event_type, incomplete_reason) = if response_error.is_some() {
+            ("failed", "response.failed", None)
+        } else {
+            incomplete_status(terminal_finish.as_deref())
+        };
+        // Responses 输出 item 的中断状态为 incomplete，failed 仅属于顶层 Response。
+        let item_status = if response_status == "failed" {
+            "incomplete"
+        } else {
+            response_status
+        };
         for call_index in &finalizable_calls {
             self.emit_function_call_if_ready(*call_index, true);
         }
@@ -697,13 +815,25 @@ where
             .or_else(|| usage_snapshot.usage.map(usage_to_value));
 
         let mut snapshots = Vec::new();
-        if let Some(reasoning) = &self.reasoning {
+        for reasoning in self
+            .completed_reasonings
+            .iter()
+            .chain(self.reasoning.iter())
+        {
             snapshots.push(OutputItemSnapshot::Reasoning {
                 id: reasoning.id.clone(),
                 output_index: reasoning.output_index,
                 text: reasoning.text.clone(),
                 encrypted_content: reasoning.encrypted_content.clone(),
-                status: response_status.to_string(),
+                status: if self
+                    .completed_reasonings
+                    .iter()
+                    .any(|closed| closed.id == reasoning.id)
+                {
+                    "completed".to_string()
+                } else {
+                    item_status.to_string()
+                },
             });
         }
         if let Some(message) = &self.message {
@@ -712,7 +842,7 @@ where
                 output_index: message.output_index,
                 text: message.text.clone(),
                 audio: message.audio.clone(),
-                status: response_status.to_string(),
+                status: item_status.to_string(),
             });
         }
         for call_index in finalizable_calls {
@@ -729,7 +859,7 @@ where
                 } else {
                     call.arguments.clone()
                 },
-                status: response_status.to_string(),
+                status: item_status.to_string(),
                 provider_specific_fields: call.provider_specific_fields.clone(),
             });
         }
@@ -741,7 +871,7 @@ where
 
         let output = snapshots
             .iter()
-            .map(snapshot_to_output_item)
+            .map(|snapshot| self.shell_output_item(snapshot_to_output_item(snapshot)))
             .collect::<Vec<_>>();
         for snapshot in &snapshots {
             self.push_item_done_events(snapshot);
@@ -749,6 +879,10 @@ where
 
         let mut response =
             self.build_response_object(response_status, output, usage, Some(completed_at));
+        if let Some(error) = response_error {
+            response["error"] = error;
+            response["completed_at"] = Value::Null;
+        }
         if let Some(reason) = incomplete_reason {
             if let Some(response) = response.as_object_mut() {
                 response.insert(
@@ -774,13 +908,21 @@ where
                 text,
                 encrypted_content,
                 status,
-            } => self.push_reasoning_done_events(
-                id,
-                *output_index,
-                text,
-                encrypted_content.as_deref(),
-                status,
-            ),
+            } => {
+                if !self
+                    .completed_reasonings
+                    .iter()
+                    .any(|reasoning| reasoning.id == *id)
+                {
+                    self.push_reasoning_done_events(
+                        id,
+                        *output_index,
+                        text,
+                        encrypted_content.as_deref(),
+                        status,
+                    );
+                }
+            }
             OutputItemSnapshot::Message {
                 id,
                 output_index,
@@ -816,16 +958,35 @@ where
         encrypted_content: Option<&str>,
         status: &str,
     ) {
+        if !text.is_empty() {
+            let sequence_number = self.next_sequence_number();
+            self.out.push_back(super::responses_event_sse(json!({
+                "type": "response.reasoning_summary_text.done",
+                "item_id": item_id,
+                "output_index": output_index,
+                "summary_index": 0,
+                "text": text,
+                "sequence_number": sequence_number
+            })));
+            let sequence_number = self.next_sequence_number();
+            let mut event = json!({
+                "type": "response.reasoning_summary_part.done",
+                "item_id": item_id,
+                "output_index": output_index,
+                "summary_index": 0,
+                "part": {"type": "summary_text", "text": text},
+                "sequence_number": sequence_number
+            });
+            if status == "incomplete" {
+                event["status"] = json!("incomplete");
+            }
+            self.out.push_back(super::responses_event_sse(event));
+        }
         let mut item = json!({
             "id": item_id,
             "type": "reasoning",
             "status": status,
-            "summary": [
-                {
-                    "type": "summary_text",
-                    "text": text
-                }
-            ]
+            "summary": if text.is_empty() { vec![] } else { vec![json!({"type":"summary_text", "text":text})] }
         });
         if let Some(item) = item.as_object_mut() {
             if let Some(encrypted_content) = encrypted_content {
@@ -918,6 +1079,18 @@ where
         status: &str,
         provider_specific_fields: Option<&Value>,
     ) {
+        if self.shell_bridge_name.as_deref() == Some(name) {
+            let item = self.shell_output_item(function_call_item(
+                item_id,
+                status,
+                call_id,
+                name,
+                arguments,
+                provider_specific_fields,
+            ));
+            self.push_shell_done_events(item, output_index);
+            return;
+        }
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
             "type": "response.function_call_arguments.done",

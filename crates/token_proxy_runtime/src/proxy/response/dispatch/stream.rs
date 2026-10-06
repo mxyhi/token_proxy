@@ -1597,6 +1597,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_truncation_after_output_stays_in_committed_response_without_retry() {
+        for transform in [FormatTransform::None, FormatTransform::ChatToResponses] {
+            let mut context = test_context();
+            context.provider = PROVIDER_OPENAI.to_string();
+            context.path = if transform == FormatTransform::None {
+                "/v1/chat/completions"
+            } else {
+                "/v1/responses"
+            }
+            .to_string();
+            let upstream = reqwest_response_from_items(vec![Ok(Bytes::from_static(
+                b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n",
+            ))]);
+            let response = build_stream_response(
+                StatusCode::OK,
+                upstream,
+                HeaderMap::new(),
+                context,
+                Arc::new(LogWriter::new(None)),
+                RequestTokenTracker::disabled(),
+                transform,
+                None,
+                None,
+                None,
+                None,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(response
+                .extensions()
+                .get::<RetryableStreamResponse>()
+                .is_none());
+            let body = to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("protocol failure frame");
+            let body = String::from_utf8(body.to_vec()).unwrap();
+            assert!(
+                body.contains("partial") && body.contains("finish_reason"),
+                "{body}"
+            );
+            if transform == FormatTransform::ChatToResponses {
+                assert!(body.contains("response.failed"));
+                assert!(!body.contains("response.completed"));
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn xai_client_tool_stream_wrapper_restores_lifecycle() {
         let mut request = json!({"tools": [{"type": "custom", "name": "exec"}]});
         let (mapping, _) = token_proxy_protocol::xai_client_tools::adapt_request(

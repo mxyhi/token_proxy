@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { ProxyServicePanel, type ProxyServiceViewProps } from "@/features/config/cards/proxy-service-card";
+import { DEFAULT_PROXY_PORT } from "@/features/config/form";
 import { type ConfigForm, type KiroPreferredEndpoint } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
@@ -63,7 +64,7 @@ function ProxyCoreFields({
             id="proxy-port"
             value={form.port}
             onChange={(event) => onChange({ port: event.target.value })}
-            placeholder="9208"
+            placeholder={DEFAULT_PROXY_PORT}
             inputMode="numeric"
           />
         </div>

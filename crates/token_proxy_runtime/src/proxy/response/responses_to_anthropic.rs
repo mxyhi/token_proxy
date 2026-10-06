@@ -497,7 +497,10 @@ where
                 if let Some(item_id) = item.get("id").and_then(Value::as_str) {
                     self.ensure_message_start();
                     self.ensure_web_search(item_id, item);
-                    self.emit_web_search_result(item_id, item.get("results"));
+                    self.emit_web_search_result(
+                        item_id,
+                        web_search::responses_search_results(item),
+                    );
                 }
             }
             _ => {}
@@ -603,7 +606,10 @@ where
                     if let Some(item_id) = item.get("id").and_then(Value::as_str) {
                         self.ensure_message_start();
                         self.ensure_web_search(item_id, item);
-                        self.emit_web_search_result(item_id, item.get("results"));
+                        self.emit_web_search_result(
+                            item_id,
+                            web_search::responses_search_results(item),
+                        );
                     }
                 }
                 _ => {}

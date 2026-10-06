@@ -462,6 +462,7 @@ fn responses_request_to_chat(body: &Bytes) -> Result<Bytes, String> {
     let Some(object) = value.as_object_mut() else {
         return Err("Request body must be a JSON object.".to_string());
     };
+    token_proxy_protocol::tool_identity::local_shell::prepare_request(object)?;
     token_proxy_protocol::tool_identity::normalize_responses_tool_names(object, &[])?;
     tools::restrict_allowed_tools_for_chat(object)?;
 
@@ -574,6 +575,7 @@ fn restore_response_tool_names(output: Bytes, request_body: Option<&str>) -> Res
     let mut value: Value = serde_json::from_slice(&output)
         .map_err(|_| "Converted Responses response must be JSON.".to_string())?;
     token_proxy_protocol::tool_identity::restore_responses_tool_identities(&mut value, &request);
+    token_proxy_protocol::tool_identity::local_shell::restore_output(&mut value, &request)?;
     serde_json::to_vec(&value)
         .map(Bytes::from)
         .map_err(|err| format!("Failed to serialize restored Responses response: {err}"))

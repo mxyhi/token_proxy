@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 const RESPONSES_TOOL_CALL_ID_PREFIXES: &[&str] = &["fc_", "ctc_", "tsc_"];
 
+pub mod local_shell;
 mod names;
 mod namespaces;
 pub use namespaces::flatten_responses_namespaces;

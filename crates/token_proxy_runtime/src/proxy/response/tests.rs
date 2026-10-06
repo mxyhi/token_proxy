@@ -70,6 +70,12 @@ mod part2;
 #[path = "tests_compat_updates.rs"]
 mod compat_updates;
 
+#[path = "tests_stream_contract.rs"]
+mod stream_contract;
+
+#[path = "tests_local_shell.rs"]
+mod local_shell;
+
 async fn setup_responses_stream() -> (Arc<LogWriter>, LogContext, SqlitePool) {
     let sqlite_pool = create_test_sqlite_pool().await;
     let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));
@@ -537,6 +543,9 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
             Ok(Bytes::from(
                 "data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3,\"completion_tokens_details\":{\"reasoning_tokens\":9}}}\n\n",
             )),
+            Ok(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
 
@@ -671,6 +680,9 @@ fn stream_chat_to_responses_preserves_reasoning_and_audio_in_completed_response(
             Ok(Bytes::from(
                 "data: {\"choices\":[{\"delta\":{\"content\":\"final answer\"}}]}\n\n",
             )),
+            Ok(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
 
@@ -749,6 +761,9 @@ fn stream_chat_to_responses_preserves_thinking_blocks_with_encrypted_content() {
             Ok::<Bytes, reqwest::Error>(Bytes::from(
                 "data: {\"choices\":[{\"delta\":{\"thinking_blocks\":[{\"type\":\"thinking\",\"thinking\":\"analyze first\"},{\"type\":\"redacted_thinking\",\"data\":\"ENC_STREAM\"}]}}]}\n\n",
             )),
+            Ok(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
 
@@ -824,6 +839,9 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
             // Chat usage format.
             Ok(Bytes::from(
                 "data: {\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":2,\"total_tokens\":3,\"completion_tokens_details\":{\"reasoning_tokens\":4}}}\n\n",
+            )),
+            Ok(Bytes::from(
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n",
             )),
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);

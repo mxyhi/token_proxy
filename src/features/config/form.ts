@@ -130,9 +130,11 @@ const REMOVED_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "openai_response_header_timeout_secs",
 ]);
 
+export const DEFAULT_PROXY_PORT = import.meta.env.DEV ? "19208" : "9208";
+
 export const EMPTY_FORM: ConfigForm = {
   host: "127.0.0.1",
-  port: "9208",
+  port: DEFAULT_PROXY_PORT,
   localApiKeys: [],
   localApiKeysMigrated: false,
   appProxyUrl: "",

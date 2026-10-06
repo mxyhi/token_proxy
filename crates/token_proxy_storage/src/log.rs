@@ -96,6 +96,8 @@ pub struct LogEntry {
     pub pricing_context_tier: Option<String>,
     pub client_request_id: Option<String>,
     pub attempt_index: Option<u64>,
+    /// 鉴权通过的本地 API Key ID；未启用本地鉴权或鉴权前失败时为空。
+    pub local_api_key_id: Option<String>,
 }
 
 pub struct LogWriter {
@@ -211,8 +213,9 @@ INSERT INTO request_logs (
   pricing_context_tier,
   client_request_id,
   attempt_index,
+  local_api_key_id,
   is_billable
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
 "#,
     )
     .bind(to_i64_u128(entry.ts_ms))
@@ -255,6 +258,7 @@ INSERT INTO request_logs (
     .bind(pricing_context_tier)
     .bind(entry.client_request_id.as_deref())
     .bind(entry.attempt_index.map(to_i64_u64))
+    .bind(entry.local_api_key_id.as_deref())
     .execute(&mut *transaction)
     .await?;
 
@@ -349,6 +353,7 @@ mod tests {
             pricing_context_tier: None,
             client_request_id: Some("request-1".to_string()),
             attempt_index: Some(attempt_index),
+            local_api_key_id: None,
         }
     }
 
@@ -402,19 +407,29 @@ mod tests {
         let mut entry = sample_entry(200, 1, 0);
         entry.model = Some("gpt-6-astra".to_string());
         entry.upstream_response_model = Some("gpt-5.6-luna".to_string());
+        entry.local_api_key_id = Some("key-1".to_string());
 
         writer.write(&entry).await;
 
-        let row = sqlx::query("SELECT upstream_response_model FROM request_logs LIMIT 1;")
-            .fetch_one(&pool)
-            .await
-            .expect("query response model");
+        let row = sqlx::query(
+            "SELECT upstream_response_model, local_api_key_id FROM request_logs LIMIT 1;",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("query response model");
         assert_eq!(
             row.try_get::<Option<String>, _>("upstream_response_model")
                 .ok()
                 .flatten()
                 .as_deref(),
             Some("gpt-5.6-luna")
+        );
+        assert_eq!(
+            row.try_get::<Option<String>, _>("local_api_key_id")
+                .ok()
+                .flatten()
+                .as_deref(),
+            Some("key-1")
         );
     }
 }

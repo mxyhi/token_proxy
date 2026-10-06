@@ -225,7 +225,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
   pricing_context_tier TEXT,
   client_request_id TEXT,
   attempt_index INTEGER,
-  is_billable INTEGER NOT NULL DEFAULT 1
+  is_billable INTEGER NOT NULL DEFAULT 1,
+  local_api_key_id TEXT
 );
 "#,
     )
@@ -262,7 +263,42 @@ CREATE TABLE IF NOT EXISTS request_logs (
     .await
     .map_err(|err| format!("Failed to create idx_request_logs_client_attempt: {err}"))?;
 
-    ensure_dashboard_index(pool).await
+    ensure_dashboard_index(pool).await?;
+    ensure_local_api_key_usage_index(pool).await
+}
+
+/// 按本地 API Key 汇总用量的部分覆盖索引。
+///
+/// 只收录带 Key 的计费行，升级前的历史日志不进入索引；聚合只扫描索引，不回表读大字段。
+async fn ensure_local_api_key_usage_index(pool: &SqlitePool) -> Result<(), String> {
+    let exists = sqlx::query(
+        "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_request_logs_local_api_key';",
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(|err| format!("Failed to inspect idx_request_logs_local_api_key: {err}"))?
+    .is_some();
+    if exists {
+        return Ok(());
+    }
+
+    // 首次构建同样需要扫描整张日志表，记录耗时便于排查升级后的启动变慢。
+    let started_at = Instant::now();
+    sqlx::query(
+        r#"
+CREATE INDEX IF NOT EXISTS idx_request_logs_local_api_key ON request_logs(
+  local_api_key_id, ts_ms, input_tokens, output_tokens, total_tokens, cost_nano_usd
+) WHERE is_billable = 1 AND local_api_key_id IS NOT NULL;
+"#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|err| format!("Failed to create idx_request_logs_local_api_key: {err}"))?;
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "local api key usage index built"
+    );
+    Ok(())
 }
 
 /// Dashboard 聚合的部分覆盖索引。
@@ -525,6 +561,13 @@ async fn ensure_request_logs_columns(pool: &SqlitePool) -> Result<(), String> {
             .execute(pool)
             .await
             .map_err(|err| format!("Failed to add upstream_response_model column: {err}"))?;
+    }
+
+    if !columns.contains("local_api_key_id") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN local_api_key_id TEXT;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add local_api_key_id column: {err}"))?;
     }
 
     Ok(())

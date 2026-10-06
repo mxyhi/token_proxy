@@ -263,7 +263,8 @@ SELECT
   COALESCE(upstream_first_body_chunk_ms, upstream_first_byte_ms) AS upstream_first_body_chunk_ms,
   first_client_flush_ms,
   first_output_ms,
-  upstream_request_id
+  upstream_request_id,
+  local_api_key_id
 FROM billable_request_logs
 WHERE ts_ms >= ?1
   AND ts_ms <= ?2

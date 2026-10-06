@@ -22,7 +22,9 @@ pub use config::{
     preview_client_setup, read_data_storage_usage, read_default_hot_model_mappings,
     read_proxy_config, save_proxy_config, write_claude_code_settings, write_codex_config,
 };
-pub use dashboard::{read_dashboard_snapshot, refresh_dashboard_model_discovery};
+pub use dashboard::{
+    read_dashboard_snapshot, read_local_api_key_usage, refresh_dashboard_model_discovery,
+};
 pub use kiro::{
     kiro_fetch_quotas, kiro_handle_callback, kiro_import_ide, kiro_import_kam, kiro_list_accounts,
     kiro_poll_login, kiro_refresh_quota_cache, kiro_refresh_quota_now, kiro_start_login,

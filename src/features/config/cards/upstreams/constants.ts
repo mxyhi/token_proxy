@@ -1,5 +1,6 @@
 import type { ColumnVisibility, UpstreamColumnDefinition } from "@/features/config/cards/upstreams/types";
 import { isAccountProviderKind } from "@/features/config/cards/upstreams/upstream-editor-helpers";
+import type { UpstreamForm } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
 export const UPSTREAM_COLUMNS: readonly UpstreamColumnDefinition[] = [
@@ -114,4 +115,35 @@ export function toStatusLabel(enabled: boolean) {
 
 export function getUpstreamLabel(index: number) {
   return m.upstreams_upstream_n({ number: String(index + 1) });
+}
+
+type SortedUpstreamEntry = {
+  upstream: UpstreamForm;
+  upstreamIndex: number;
+  priority: number;
+};
+
+function parsePriorityValue(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  const number = Number.parseInt(trimmed, 10);
+  return Number.isFinite(number) ? number : 0;
+}
+
+export function sortUpstreamsByPriority(upstreams: readonly UpstreamForm[]) {
+  // Display order follows priority descending; ties keep original list order.
+  const entries = upstreams.map((upstream, upstreamIndex): SortedUpstreamEntry => ({
+    upstream,
+    upstreamIndex,
+    priority: parsePriorityValue(upstream.priority),
+  }));
+  entries.sort((left, right) => {
+    if (left.priority !== right.priority) {
+      return right.priority - left.priority;
+    }
+    return left.upstreamIndex - right.upstreamIndex;
+  });
+  return entries;
 }

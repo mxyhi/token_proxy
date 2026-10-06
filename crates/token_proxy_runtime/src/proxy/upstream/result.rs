@@ -625,7 +625,7 @@ fn request_timings_for_upstream(
     billing: &ClientRequestBilling,
 ) -> RequestTimings {
     if upstream_id == LOCAL_UPSTREAM_ID {
-        RequestTimings::default()
+        RequestTimings::without_billing(billing)
     } else {
         RequestTimings::with_billing(billing.clone())
     }

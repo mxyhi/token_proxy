@@ -95,6 +95,9 @@ pub(super) async fn prepare_inbound_request(
     )
     .await;
     meta.client_ip = client_ip.clone();
+    meta.billing.local_api_key_id = local_access
+        .as_ref()
+        .map(|access| access.key_id.as_str().into());
     let request_detail = if capture_request_detail_enabled {
         Some(capture_request_detail(headers, &body, state.config.max_request_body_bytes).await)
     } else {

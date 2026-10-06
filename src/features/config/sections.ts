@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   CircleDollarSign,
+  KeyRound,
   LayoutDashboard,
   Server,
   Shuffle,
@@ -56,7 +57,7 @@ export const CONFIG_SECTIONS: readonly ConfigSection[] = [
     route: "/config/api-keys",
     label: () => m.api_keys_title(),
     description: () => m.api_keys_description(),
-    icon: Server,
+    icon: KeyRound,
   },
   {
     id: "pricing",

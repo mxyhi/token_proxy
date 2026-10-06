@@ -7,7 +7,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { useState } from "react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { ApiKeysCard } from "./api-keys-card";
 import {
@@ -19,18 +20,19 @@ import {
 } from "../form";
 import { createLocalApiKey } from "../local-api-keys";
 import type { ConfigForm, LocalApiKey } from "../types";
+import { I18nProvider } from "@/lib/i18n";
 import { m } from "@/paraglide/messages.js";
 
 function Harness({ initial = EMPTY_FORM }: { initial?: ConfigForm }) {
   const [form, setForm] = useState(initial);
   return (
-    <>
+    <I18nProvider>
       <ApiKeysCard
         form={form}
         onChange={(patch) => setForm({ ...form, ...patch })}
       />
       <output data-testid="payload">{JSON.stringify(toPayload(form))}</output>
-    </>
+    </I18nProvider>
   );
 }
 
@@ -46,7 +48,9 @@ describe("API Key management", () => {
 
   it("creates, edits, copies, shows, disables, reloads and confirms deletion of the final key", async () => {
     const view = render(<Harness />);
-    fireEvent.click(screen.getByText(m.api_keys_add()));
+    expect(screen.getByText(m.api_keys_empty())).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: m.api_keys_add() }));
+    expect(screen.getByText(m.api_keys_editor_title_add())).toBeInTheDocument();
     const generated = screen.getByLabelText(m.api_keys_value());
     expect(generated.getAttribute("value")).toMatch(/^tp-[a-f0-9]{64}$/);
     fireEvent.change(screen.getByLabelText(m.api_keys_name()), {
@@ -60,20 +64,29 @@ describe("API Key management", () => {
       enabled: true,
       scope: { type: "auto" },
     });
-    fireEvent.click(screen.getByRole("button", { name: m.api_keys_copy() }));
+    fireEvent.click(
+      screen.getByRole("button", { name: m.upstreams_row_copy({ rowLabel: "Laptop" }) }),
+    );
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith("custom-secret"),
     );
-    fireEvent.click(screen.getByRole("button", { name: m.common_show() }));
-    expect(screen.getByText("custom-secret")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: m.common_hide() }));
     expect(screen.queryByText("custom-secret")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: m.common_edit() }));
+    expect(screen.getByText("cus••••cret")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: m.upstreams_show_api_keys() }));
+    expect(screen.getByText("custom-secret")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: m.upstreams_hide_api_keys() }));
+    expect(screen.queryByText("custom-secret")).not.toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: m.upstreams_row_edit({ rowLabel: "Laptop" }) }),
+    );
+    expect(screen.getByText(m.api_keys_editor_title())).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText(m.api_keys_name()), {
       target: { value: "Desktop" },
     });
     fireEvent.click(screen.getByRole("button", { name: m.common_save() }));
-    fireEvent.click(screen.getByRole("switch"));
+    fireEvent.click(
+      screen.getByRole("button", { name: m.upstreams_row_disable({ rowLabel: "Desktop" }) }),
+    );
     expect(savedKeys()[0].enabled).toBe(false);
     const reloaded = toForm({
       ...toPayload(EMPTY_FORM),
@@ -83,7 +96,9 @@ describe("API Key management", () => {
     render(<Harness initial={reloaded} />);
     expect(screen.getByText("Desktop")).toBeInTheDocument();
     expect(screen.getByText(m.api_keys_all_disabled())).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: m.common_delete() }));
+    fireEvent.click(
+      screen.getByRole("button", { name: m.upstreams_row_delete({ rowLabel: "Desktop" }) }),
+    );
     const dialog = screen.getByRole("alertdialog");
     expect(
       within(dialog).getByText(m.api_keys_delete_last()),
@@ -121,7 +136,7 @@ describe("API Key management", () => {
         }}
       />,
     );
-    fireEvent.click(screen.getByText(m.api_keys_add()));
+    fireEvent.click(screen.getByRole("button", { name: m.api_keys_add() }));
     fireEvent.change(screen.getByLabelText(m.api_keys_name()), {
       target: { value: "Restricted" },
     });
@@ -137,12 +152,13 @@ describe("API Key management", () => {
     });
     fireEvent.click(screen.getByRole("switch", { name: "Auto" }));
     expect(screen.getByText(m.api_keys_select_required())).toBeInTheDocument();
-    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    // 表头全选 + 2 个渠道
+    expect(screen.getAllByRole("checkbox")).toHaveLength(3);
     fireEvent.change(screen.getByLabelText(m.api_keys_search()), {
       target: { value: "codex" },
     });
-    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
-    fireEvent.click(screen.getByText(m.api_keys_select_all()));
+    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    fireEvent.click(screen.getByRole("checkbox", { name: m.api_keys_select_all() }));
     fireEvent.click(screen.getByRole("button", { name: m.common_save() }));
     expect(savedKeys()[1].scope).toEqual({
       type: "selected",
@@ -154,7 +170,10 @@ describe("API Key management", () => {
       scope: { type: "selected", upstream_ids: ["deleted"] },
     };
     render(<Harness initial={{ ...EMPTY_FORM, localApiKeys: [stale] }} />);
-    fireEvent.click(screen.getByRole("button", { name: m.common_edit() }));
+    expect(screen.getByText(m.api_keys_expired())).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: m.upstreams_row_edit({ rowLabel: "Existing" }) }),
+    );
     expect(
       within(screen.getByRole("alertdialog")).getByText(/deleted/),
     ).toBeInTheDocument();
@@ -171,7 +190,7 @@ describe("API Key management", () => {
     }));
     const initial = { ...EMPTY_FORM, upstreams };
     const view = render(<Harness initial={initial} />);
-    fireEvent.click(screen.getByText(m.api_keys_add()));
+    fireEvent.click(screen.getByRole("button", { name: m.api_keys_add() }));
     fireEvent.change(screen.getByLabelText(m.api_keys_name()), {
       target: { value: "Two accounts" },
     });
@@ -189,7 +208,9 @@ describe("API Key management", () => {
     });
     view.unmount();
     render(<Harness initial={reloaded} />);
-    fireEvent.click(screen.getByRole("button", { name: m.common_edit() }));
+    fireEvent.click(
+      screen.getByRole("button", { name: m.upstreams_row_edit({ rowLabel: "Two accounts" }) }),
+    );
     expect(screen.getByRole("checkbox", { name: /account-a/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /account-b/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /account-c/ })).not.toBeChecked();
@@ -199,6 +220,57 @@ describe("API Key management", () => {
       type: "selected",
       upstream_ids: ["account-b"],
     });
+  });
+
+  it("lists channels in the picker by priority descending, keeping config order on ties", () => {
+    const upstreams = [
+      { id: "low", priority: "1" },
+      { id: "unset", priority: "" },
+      { id: "high", priority: "10" },
+      { id: "tie", priority: "1" },
+    ].map(({ id, priority }) => ({
+      ...createEmptyUpstream(),
+      id,
+      priority,
+      enabled: true,
+      providers: ["openai"],
+    }));
+    render(<Harness initial={{ ...EMPTY_FORM, upstreams }} />);
+    fireEvent.click(screen.getByRole("button", { name: m.api_keys_add() }));
+    fireEvent.click(screen.getByRole("switch", { name: "Auto" }));
+    const ids = screen
+      .getAllByRole("checkbox")
+      .slice(1)
+      .map((checkbox) => checkbox.closest("label")?.textContent ?? "");
+    expect(ids.map((text) => text.split("openai")[0])).toEqual([
+      "high",
+      "low",
+      "tie",
+      "unset",
+    ]);
+  });
+
+  it("shows per-key cumulative usage and marks unused keys", async () => {
+    vi.mocked(invoke).mockResolvedValueOnce([
+      {
+        keyId: "used",
+        requests: 1234,
+        totalTokens: 126_400,
+        costNanoUsd: 2_130_000_000,
+        lastUsedMs: Date.UTC(2026, 9, 5, 12, 0),
+      },
+    ]);
+    const used = { ...createLocalApiKey(), id: "used", name: "Used" };
+    const idle = { ...createLocalApiKey(), id: "idle", name: "Idle" };
+    render(<Harness initial={{ ...EMPTY_FORM, localApiKeys: [used, idle] }} />);
+
+    expect(invoke).toHaveBeenCalledWith("read_local_api_key_usage");
+    expect(await screen.findByText("126.4K")).toBeInTheDocument();
+    expect(
+      screen.getByText(`$2.13 · ${m.api_keys_usage_requests({ count: "1,234" })}`),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("—")).toHaveLength(1);
+    expect(screen.getByText(m.api_keys_never_used())).toBeInTheDocument();
   });
 
   it("form validation blocks empty selected scope and duplicates before auto save", () => {

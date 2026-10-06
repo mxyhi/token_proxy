@@ -195,6 +195,8 @@ pub struct DashboardRequestItem {
     pub first_client_flush_ms: Option<u64>,
     pub first_output_ms: Option<u64>,
     pub upstream_request_id: Option<String>,
+    /// 鉴权通过的本地 API Key ID；名称由前端按当前配置解析，Key 删除后仍保留 ID。
+    pub local_api_key_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -666,6 +668,7 @@ async fn query_recent(
             let first_client_flush_ms: Option<i64> = row.try_get("first_client_flush_ms").ok()?;
             let first_output_ms: Option<i64> = row.try_get("first_output_ms").ok()?;
             let upstream_request_id: Option<String> = row.try_get("upstream_request_id").ok()?;
+            let local_api_key_id: Option<String> = row.try_get("local_api_key_id").ok()?;
             Some(DashboardRequestItem {
                 id: i64_to_u64(id),
                 ts_ms: i64_to_u64(ts_ms),
@@ -701,6 +704,7 @@ async fn query_recent(
                 first_client_flush_ms: first_client_flush_ms.map(i64_to_u64),
                 first_output_ms: first_output_ms.map(i64_to_u64),
                 upstream_request_id,
+                local_api_key_id,
             })
         })
         .collect::<Vec<_>>();

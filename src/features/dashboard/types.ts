@@ -140,6 +140,8 @@ export type DashboardRequestItem = {
   firstClientFlushMs?: number | null;
   firstOutputMs?: number | null;
   upstreamRequestId: string | null;
+  /** 鉴权通过的本地 API Key ID；名称按当前配置解析。 */
+  localApiKeyId?: string | null;
 };
 
 export type DashboardSnapshot = {

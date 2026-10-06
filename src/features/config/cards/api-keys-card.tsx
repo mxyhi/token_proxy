@@ -1,6 +1,8 @@
 import { ApiKeyEditor } from "./api-key-editor";
-import { useState } from "react";
+import { ApiKeysTable } from "./api-keys-table";
+import { useEffect, useState } from "react";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { Eye, EyeOff, Info, KeyRound, Plus, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -14,18 +16,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Switch } from "@/components/ui/switch";
-import { createLocalApiKey, validateLocalApiKeys } from "../local-api-keys";
-import type { ConfigForm, LocalApiKey } from "../types";
+  createLocalApiKey,
+  readLocalApiKeyUsage,
+  validateLocalApiKeys,
+} from "../local-api-keys";
+import type { ConfigForm, LocalApiKey, LocalApiKeyUsage } from "../types";
 import { parseError } from "@/lib/error";
 import { m } from "@/paraglide/messages.js";
 
@@ -36,10 +34,13 @@ type Props = {
 
 export function ApiKeysCard({ form, onChange }: Props) {
   const [draft, setDraft] = useState<LocalApiKey | null>(null);
-  const [visible, setVisible] = useState<ReadonlySet<string>>(new Set());
+  const [showKeys, setShowKeys] = useState(false);
   const [deleting, setDeleting] = useState<LocalApiKey | null>(null);
+  const [usage, setUsage] = useState<ReadonlyMap<string, LocalApiKeyUsage>>(new Map());
   const keys = form.localApiKeys;
+  const enabledCount = keys.filter((key) => key.enabled).length;
   const upstreamIds = new Set(form.upstreams.map((upstream) => upstream.id));
+  const isNewDraft = draft !== null && !keys.some((key) => key.id === draft.id);
   const error = draft
     ? validateLocalApiKeys([
         ...keys.filter((key) => key.id !== draft.id),
@@ -47,16 +48,27 @@ export function ApiKeysCard({ form, onChange }: Props) {
       ])
     : null;
 
-  function edit(key: LocalApiKey) {
-    setDraft(key);
-  }
+  useEffect(() => {
+    let active = true;
+    readLocalApiKeyUsage()
+      .then((next) => {
+        if (active) setUsage(next);
+      })
+      .catch((error: unknown) => {
+        // 用量只是辅助信息，读取失败不影响 Key 管理，列内显示占位。
+        console.warn("[api-keys-card] failed to read key usage", parseError(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   function save() {
     if (!draft || error) return;
     onChange({
-      localApiKeys: keys.some((key) => key.id === draft.id)
-        ? keys.map((key) => (key.id === draft.id ? draft : key))
-        : [...keys, draft],
+      localApiKeys: isNewDraft
+        ? [...keys, draft]
+        : keys.map((key) => (key.id === draft.id ? draft : key)),
     });
     setDraft(null);
   }
@@ -72,110 +84,83 @@ export function ApiKeysCard({ form, onChange }: Props) {
 
   return (
     <>
-      {form.localApiKeysMigrated && (
-        <Alert>
-          <AlertDescription>{m.api_keys_migrated()}</AlertDescription>
-        </Alert>
-      )}
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
-          <div className="space-y-1.5">
-            <CardTitle>{m.api_keys_title()}</CardTitle>
-            <CardDescription>{m.api_keys_description()}</CardDescription>
-          </div>
-          <Button onClick={() => edit(createLocalApiKey())}>
-            {m.api_keys_add()}
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {!keys.length && (
-            <p className="text-sm text-muted-foreground">
-              {m.api_keys_empty()}
+      <Card data-slot="api-keys-card">
+        <CardContent className="space-y-4">
+          {/* 标题与说明已由页面工具栏展示，这里只保留摘要与操作，对齐渠道页工具栏 */}
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-xs text-muted-foreground">
+              {keys.length
+                ? m.api_keys_summary({ total: keys.length, enabled: enabledCount })
+                : null}
             </p>
-          )}
-          {keys.length > 0 && keys.every((key) => !key.enabled) && (
-            <Alert>
-              <AlertDescription>{m.api_keys_all_disabled()}</AlertDescription>
-            </Alert>
-          )}
-          {keys.map((key) => (
-            <div
-              key={key.id}
-              className="flex flex-wrap items-center gap-3 rounded-lg border p-4"
-            >
-              <div className="min-w-0 flex-1 space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{key.name}</span>
-                  <Badge variant="secondary">
-                    {key.scope.type === "auto"
-                      ? "Auto"
-                      : m.api_keys_selected_count({
-                          count: key.scope.upstream_ids.length,
-                        })}
-                  </Badge>
-                  {key.scope.type === "selected" &&
-                    key.scope.upstream_ids.some(
-                      (id) => !upstreamIds.has(id),
-                    ) && (
-                      <Badge variant="destructive">
-                        {m.api_keys_expired()}
-                      </Badge>
-                    )}
-                </div>
-                <code className="block break-all text-xs text-muted-foreground">
-                  {visible.has(key.id) ? key.key : "••••••••••••••••"}
-                </code>
-              </div>
-              <Switch
-                aria-label={`${key.name} ${m.field_status()}`}
-                checked={key.enabled}
-                onCheckedChange={(enabled) =>
-                  onChange({
-                    localApiKeys: keys.map((item) =>
-                      item.id === key.id ? { ...item, enabled } : item,
-                    ),
-                  })
-                }
-              />
+            <div className="flex shrink-0 items-center gap-2">
+              {keys.length ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => setShowKeys((value) => !value)}
+                  aria-label={showKeys ? m.upstreams_hide_api_keys() : m.upstreams_show_api_keys()}
+                >
+                  {showKeys ? (
+                    <EyeOff className="size-4" aria-hidden="true" />
+                  ) : (
+                    <Eye className="size-4" aria-hidden="true" />
+                  )}
+                </Button>
+              ) : null}
               <Button
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  setVisible((current) => {
-                    const next = new Set(current);
-                    if (next.has(key.id)) next.delete(key.id);
-                    else next.add(key.id);
-                    return next;
-                  })
-                }
+                type="button"
+                onClick={() => setDraft(createLocalApiKey())}
+                aria-label={m.api_keys_add()}
               >
-                {visible.has(key.id) ? m.common_hide() : m.common_show()}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void copy(key)}
-              >
-                {m.api_keys_copy()}
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => edit(key)}>
-                {m.common_edit()}
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setDeleting(key)}
-              >
-                {m.common_delete()}
+                <Plus className="size-4" aria-hidden="true" />
+                {m.common_add()}
               </Button>
             </div>
-          ))}
+          </div>
+          {keys.length > 0 && enabledCount === 0 ? (
+            <Alert variant="destructive">
+              <TriangleAlert className="size-4" aria-hidden="true" />
+              <AlertDescription>{m.api_keys_all_disabled()}</AlertDescription>
+            </Alert>
+          ) : null}
+          {keys.length ? (
+            <ApiKeysTable
+              keys={keys}
+              upstreamIds={upstreamIds}
+              usage={usage}
+              showKeys={showKeys}
+              onCopy={(key) => void copy(key)}
+              onEdit={setDraft}
+              onToggleEnabled={(target) =>
+                onChange({
+                  localApiKeys: keys.map((key) =>
+                    key.id === target.id ? { ...key, enabled: !key.enabled } : key,
+                  ),
+                })
+              }
+              onDelete={setDeleting}
+            />
+          ) : (
+            <div className="flex flex-col items-center gap-2 rounded-md border border-dashed border-border/60 px-4 py-10 text-center">
+              <KeyRound className="size-5 text-muted-foreground" aria-hidden="true" />
+              <p className="text-sm text-muted-foreground">{m.api_keys_empty()}</p>
+            </div>
+          )}
+          {form.localApiKeysMigrated ? (
+            <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+              <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+              {m.api_keys_migrated()}
+            </p>
+          ) : null}
         </CardContent>
       </Card>
       {draft && (
         <ApiKeyEditor
           key={draft.id}
           draft={draft}
+          isNew={isNewDraft}
           upstreams={form.upstreams}
           error={error}
           setDraft={setDraft}

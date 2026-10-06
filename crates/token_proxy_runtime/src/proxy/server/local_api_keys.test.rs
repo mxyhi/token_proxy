@@ -349,3 +349,72 @@ fn local_key_query_is_removed_from_converted_outbound_paths() {
         "/v1/responses?alt=sse"
     );
 }
+
+#[test]
+fn request_logs_attribute_every_attempt_to_the_authenticated_key() {
+    run_async(async {
+        let failed = spawn_mock_upstream(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error": {"message": "retry"}}),
+        )
+        .await;
+        let ok = spawn_mock_upstream(StatusCode::OK, json!({"source": "ok"})).await;
+        let mut config = config_with_runtime_upstreams(&[
+            (
+                PROVIDER_RESPONSES,
+                10,
+                "failed",
+                &failed.base_url,
+                FORMATS_RESPONSES,
+            ),
+            (PROVIDER_RESPONSES, 0, "ok", &ok.base_url, FORMATS_RESPONSES),
+        ]);
+        config.local_api_keys = vec![scoped_key("laptop", &["failed", "ok"])];
+        config.same_upstream_retry_count = 1;
+        let data_dir = next_test_data_dir("local-key-request-log");
+        let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir.clone()).await;
+
+        let (status, body) = keyed_request(
+            state.clone(),
+            "secret-laptop",
+            RESPONSES_PATH,
+            Some("gpt-5"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["source"], "ok");
+        let (status, _) =
+            keyed_request(state.clone(), "invalid", RESPONSES_PATH, Some("gpt-5")).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        wait_for_request_log_count(&pool, 4).await;
+        let mut logged = sqlx::query("SELECT status, local_api_key_id FROM request_logs;")
+            .fetch_all(&pool)
+            .await
+            .expect("query request logs")
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<i64, _>("status"),
+                    row.get::<Option<String>, _>("local_api_key_id"),
+                )
+            })
+            .collect::<Vec<_>>();
+        logged.sort();
+        // 失败重试与最终成功都归属到同一 Key；鉴权失败的请求没有 Key。
+        assert_eq!(
+            logged,
+            vec![
+                (200, Some("laptop".to_string())),
+                (401, None),
+                (503, Some("laptop".to_string())),
+                (503, Some("laptop".to_string())),
+            ]
+        );
+
+        failed.abort();
+        ok.abort();
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(&data_dir);
+    });
+}

@@ -1,5 +1,12 @@
-import type { LocalApiKey } from "./types";
+import { invoke } from "@tauri-apps/api/core";
+
+import type { LocalApiKey, LocalApiKeyUsage } from "./types";
 import { m } from "@/paraglide/messages.js";
+
+export async function readLocalApiKeyUsage(): Promise<ReadonlyMap<string, LocalApiKeyUsage>> {
+  const usage = await invoke<LocalApiKeyUsage[] | null>("read_local_api_key_usage");
+  return new Map((usage ?? []).map((item) => [item.keyId, item]));
+}
 
 export function createLocalApiKey(): LocalApiKey {
   const bytes = crypto.getRandomValues(new Uint8Array(32));

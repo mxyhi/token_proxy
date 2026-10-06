@@ -11,6 +11,12 @@ import { I18nProvider } from "@/lib/i18n";
 import { m } from "@/paraglide/messages.js";
 import { setLocale } from "@/paraglide/runtime.js";
 
+const localApiKeys = [{ id: "key-1", name: "Laptop", key: "secret", enabled: true, scope: { type: "auto" } }];
+
+vi.mock("@/features/config/ConfigScreen", () => ({
+  useConfigLocalApiKeys: () => localApiKeys,
+}));
+
 vi.mock("@tanstack/react-virtual", () => ({
   useVirtualizer: ({ count }: { count: number }) => ({
     getVirtualItems: () =>
@@ -180,6 +186,7 @@ describe("dashboard/RecentRequestsTable", () => {
     expect(Array.from(header?.children ?? []).map((cell) => cell.textContent)).toEqual([
       "Time",
       "IP",
+      "Key",
       "Path",
       "Provider",
       "Model",
@@ -191,7 +198,7 @@ describe("dashboard/RecentRequestsTable", () => {
 
     const rows = table.querySelectorAll('[data-slot="recent-requests-table-row"]');
     expect(rows[0]?.children.item(1)?.textContent).toBe("local");
-    expect(rows[0]?.children.item(2)?.textContent).toBe("/responses");
+    expect(rows[0]?.children.item(3)?.textContent).toBe("/responses");
     expect(rows[1]?.children.item(1)?.textContent).toBe("local");
   });
 
@@ -287,12 +294,12 @@ describe("dashboard/RecentRequestsTable", () => {
     const widthTrack = table.querySelector(
       '[data-slot="recent-requests-table-width-track"]',
     ) as HTMLElement | null;
-    expect(widthTrack?.style.minWidth).toBe("949px");
+    expect(widthTrack?.style.minWidth).toBe("1029px");
     expect(widthTrack?.parentElement).toBe(scrollArea);
 
     const header = table.querySelector('[data-slot="recent-requests-table-header"]');
     expect(header).toHaveClass("sticky", "top-0", "z-10");
-    expect(header?.className).toContain("85px_79px_140px_99px");
+    expect(header?.className).toContain("85px_79px_96px_124px_99px");
 
     const rowsLayer = table.querySelector(
       '[data-slot="recent-requests-table-rows-layer"]',
@@ -579,5 +586,50 @@ describe("dashboard/RecentRequestsTable", () => {
 
     await user.hover(screen.getByText(localProxyLabel));
     expect(await screen.findByRole("tooltip")).toHaveTextContent(localProxyLabel);
+  });
+
+  it("shows the authenticated API key name, a deleted marker, or a placeholder", () => {
+    const base = {
+      tsMs: 100,
+      clientIp: null,
+      path: "/v1/responses",
+      provider: "openai-response",
+      upstreamId: "alpha",
+      accountId: null,
+      model: "gpt-5",
+      mappedModel: null,
+      stream: false,
+      status: 200,
+      totalTokens: 1,
+      outputTokens: 1,
+      cachedTokens: null,
+      costNanoUsd: null,
+      pricingVersion: null,
+      pricingModel: null,
+      pricingContextTier: null,
+      latencyMs: 1,
+      upstreamRequestId: null,
+    };
+    render(
+      <I18nProvider>
+        <RecentRequestsTable
+          scrollKey="test"
+          items={[
+            { ...base, id: 1, localApiKeyId: "key-1" },
+            { ...base, id: 2, localApiKeyId: "removed-key" },
+            { ...base, id: 3, localApiKeyId: null },
+          ]}
+        />
+      </I18nProvider>,
+    );
+
+    const rows = screen
+      .getByTestId("recent-requests-table")
+      .querySelectorAll('[data-slot="recent-requests-table-row"]');
+    expect(Array.from(rows).map((row) => row.children.item(2)?.textContent)).toEqual([
+      "Laptop",
+      m.api_keys_deleted(),
+      "—",
+    ]);
   });
 });

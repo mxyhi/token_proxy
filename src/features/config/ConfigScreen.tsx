@@ -19,7 +19,7 @@ import { useConfigActions } from "@/features/config/config-screen-actions";
 import { createModelMapping } from "@/features/config/form";
 import { useConfigListActions } from "@/features/config/list-actions";
 import type { ConfigEditorSectionId } from "@/features/config/sections";
-import type { ConfigForm } from "@/features/config/types";
+import type { ConfigForm, LocalApiKey } from "@/features/config/types";
 import { useUpdater } from "@/features/update/updater";
 import { parseError } from "@/lib/error";
 
@@ -53,6 +53,7 @@ type AppViewArgs = {
 type ConfigScreenController = Omit<AppViewArgs, "activeSectionId">;
 
 const ConfigScreenControllerContext = createContext<ConfigScreenController | null>(null);
+const NO_LOCAL_API_KEYS: readonly LocalApiKey[] = [];
 
 function buildAppViewProps({
   activeSectionId,
@@ -227,6 +228,11 @@ export function ConfigScreenProvider({ children }: ConfigScreenProviderProps) {
       {children}
     </ConfigScreenControllerContext.Provider>
   );
+}
+
+/** `/config` 下的非配置页（如 Dashboard）读取当前本地 API Key；不在 provider 内时为空。 */
+export function useConfigLocalApiKeys(): readonly LocalApiKey[] {
+  return useContext(ConfigScreenControllerContext)?.state.form.localApiKeys ?? NO_LOCAL_API_KEYS;
 }
 
 function ConfigScreenView({

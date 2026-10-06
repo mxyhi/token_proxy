@@ -17,6 +17,8 @@ pub(crate) struct ClientRequestBilling {
     request_id: Arc<str>,
     next_completion_index: Arc<AtomicU64>,
     pub(crate) lifecycle: Arc<super::client_lifecycle::ClientLifecycle>,
+    /// 计费归属的本地 API Key；鉴权通过后写入，随每次 attempt 落库。
+    pub(crate) local_api_key_id: Option<Arc<str>>,
 }
 
 impl Default for ClientRequestBilling {
@@ -25,6 +27,7 @@ impl Default for ClientRequestBilling {
             request_id: format!("{:032x}", rand::random::<u128>()).into(),
             next_completion_index: Arc::new(AtomicU64::new(0)),
             lifecycle: Arc::default(),
+            local_api_key_id: None,
         }
     }
 }
@@ -59,15 +62,25 @@ pub(crate) struct RequestTimings {
     billing: Option<ClientRequestBilling>,
     billing_attempt: Arc<OnceLock<BillingAttempt>>,
     sent_service_tier: Arc<OnceLock<Option<String>>>,
+    local_api_key_id: Option<Arc<str>>,
 }
 
 impl RequestTimings {
     pub(crate) fn with_billing(billing: ClientRequestBilling) -> Self {
         Self {
             inner: Arc::default(),
+            local_api_key_id: billing.local_api_key_id.clone(),
             billing: Some(billing),
             billing_attempt: Arc::default(),
             sent_service_tier: Arc::default(),
+        }
+    }
+
+    /// 本地诊断不占用计费 attempt，但仍归属到发起请求的 Key。
+    pub(crate) fn without_billing(billing: &ClientRequestBilling) -> Self {
+        Self {
+            local_api_key_id: billing.local_api_key_id.clone(),
+            ..Self::default()
         }
     }
 
@@ -278,6 +291,11 @@ pub(crate) fn build_log_entry(
             .map(|cost| cost.context_tier.as_str().to_string()),
         client_request_id: billing_attempt.map(|attempt| attempt.request_id.clone()),
         attempt_index: billing_attempt.map(|attempt| attempt.index),
+        local_api_key_id: context
+            .timings
+            .local_api_key_id
+            .as_deref()
+            .map(str::to_string),
     }
 }
 

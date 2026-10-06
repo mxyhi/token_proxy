@@ -27,6 +27,7 @@ pub use token_proxy_runtime::proxy::{
 };
 pub use token_proxy_storage::{
     dashboard::{DashboardRange, DashboardSnapshot},
+    local_api_key_usage::LocalApiKeyUsage,
     logs::RequestLogDetail,
     pricing::{ModelPricingSettingsInput, ModelPricingSettingsSnapshot, RemoteCatalogRefresh},
 };
@@ -209,6 +210,13 @@ impl TokenProxyApp {
                 .await?;
         snapshot.model_probes = self.proxy.model_discovery_snapshot().await;
         Ok(snapshot)
+    }
+
+    /// 读取各本地 API Key 的累计用量（仅计费行）。
+    pub async fn read_local_api_key_usage(&self) -> Result<Vec<LocalApiKeyUsage>, String> {
+        let pool =
+            token_proxy_storage::sqlite::open_read_pool(&self.paths.sqlite_db_path()).await?;
+        token_proxy_storage::local_api_key_usage::read_local_api_key_usage(&pool).await
     }
 
     /// 立即刷新所有上游的模型目录探测缓存。

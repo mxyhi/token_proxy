@@ -12,6 +12,7 @@ import {
 } from "@tanstack/react-table";
 
 import { Badge } from "@/components/ui/badge";
+import { useConfigLocalApiKeys } from "@/features/config/ConfigScreen";
 import { TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   createDashboardTimeFormatter,
@@ -35,8 +36,8 @@ const OVERSCAN = 6;
 
 // 固定列宽避免虚拟列表行在状态、费用、延迟文本变化时抖动。
 // 模型列要放下「↳ 上游响应: <model>」和不一致标记，比单行模型名更宽。
-const GRID_COLS = "grid-cols-[85px_79px_140px_99px_236px_64px_82px_60px_104px]";
-const TABLE_MIN_WIDTH_PX = 949;
+const GRID_COLS = "grid-cols-[85px_79px_96px_124px_99px_236px_64px_82px_60px_104px]";
+const TABLE_MIN_WIDTH_PX = 1029;
 const CELL_PLACEHOLDER = "—";
 const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
@@ -89,6 +90,33 @@ function timeColumn(formatter: Intl.DateTimeFormat): ColumnDef<DashboardRequestI
       return (
         <CellTooltip content={timestamp}>
           <span className="block truncate text-xs text-muted-foreground">{clockTime}</span>
+        </CellTooltip>
+      );
+    },
+  };
+}
+
+// Key 名称按当前配置解析：未启用鉴权的请求为空，已删除的 Key 只剩 ID。
+function apiKeyColumn(keyNames: ReadonlyMap<string, string>): ColumnDef<DashboardRequestItem> {
+  return {
+    id: "apiKey",
+    header: m.api_keys_key(),
+    cell: ({ row }) => {
+      const keyId = row.original.localApiKeyId?.trim();
+      if (!keyId) {
+        return <span className="block truncate text-xs text-muted-foreground">{CELL_PLACEHOLDER}</span>;
+      }
+      const name = keyNames.get(keyId);
+      return (
+        <CellTooltip content={name ?? keyId}>
+          <span
+            className={cn(
+              "block truncate text-xs",
+              name ? "font-medium text-foreground" : "text-muted-foreground",
+            )}
+          >
+            {name ?? m.api_keys_deleted()}
+          </span>
         </CellTooltip>
       );
     },
@@ -293,10 +321,11 @@ function formatOptionalLatency(value: number | null | undefined) {
   return value == null ? CELL_PLACEHOLDER : formatInteger(value);
 }
 
-function buildColumns(formatter: Intl.DateTimeFormat) {
+function buildColumns(formatter: Intl.DateTimeFormat, keyNames: ReadonlyMap<string, string>) {
   return [
     timeColumn(formatter),
     ipColumn(),
+    apiKeyColumn(keyNames),
     pathColumn(),
     providerColumn(),
     modelColumn(),
@@ -315,7 +344,7 @@ function rowCellClass(columnId: string) {
   if (columnId === "time") {
     return "min-w-0 px-3 py-2";
   }
-  if (columnId === "ip" || columnId === "path") {
+  if (columnId === "ip" || columnId === "apiKey" || columnId === "path") {
     return "min-w-0 px-3 py-2";
   }
   if (columnId === "provider") {
@@ -481,8 +510,10 @@ export function RecentRequestsTable({ items, scrollKey, onSelectItem }: RecentRe
   "use no memo";
 
   const { locale } = useI18n();
+  const localApiKeys = useConfigLocalApiKeys();
   const formatter = createDashboardTimeFormatter(locale);
-  const columns = buildColumns(formatter);
+  const keyNames = new Map(localApiKeys.map((key) => [key.id, key.name]));
+  const columns = buildColumns(formatter, keyNames);
 
   const table = useReactTable({
     data: items,

@@ -17,6 +17,7 @@ import {
 import { TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   getUpstreamLabel,
+  sortUpstreamsByPriority,
   toMaskedApiKey,
   toMaskedProxyUrl,
   toStatusLabel,
@@ -506,37 +507,6 @@ export type UpstreamsTableProps = {
   onPriorityChange: (index: number, priority: string) => void;
   onDelete: (index: number) => void;
 };
-
-type SortedUpstreamEntry = {
-  upstream: UpstreamForm;
-  upstreamIndex: number;
-  priority: number;
-};
-
-function parsePriorityValue(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return 0;
-  }
-  const number = Number.parseInt(trimmed, 10);
-  return Number.isFinite(number) ? number : 0;
-}
-
-function sortUpstreamsByPriority(upstreams: UpstreamForm[]) {
-  // Display order follows priority descending; ties keep original list order.
-  const entries = upstreams.map((upstream, upstreamIndex): SortedUpstreamEntry => ({
-    upstream,
-    upstreamIndex,
-    priority: parsePriorityValue(upstream.priority),
-  }));
-  entries.sort((left, right) => {
-    if (left.priority !== right.priority) {
-      return right.priority - left.priority;
-    }
-    return left.upstreamIndex - right.upstreamIndex;
-  });
-  return entries;
-}
 
 export function UpstreamsTable({
   upstreams,

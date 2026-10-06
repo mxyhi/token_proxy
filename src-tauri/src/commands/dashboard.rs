@@ -1,4 +1,4 @@
-use token_proxy_app::app::{DashboardRange, DashboardSnapshot, TokenProxyApp};
+use token_proxy_app::app::{DashboardRange, DashboardSnapshot, LocalApiKeyUsage, TokenProxyApp};
 
 #[tauri::command]
 pub async fn read_dashboard_snapshot(
@@ -24,4 +24,11 @@ pub async fn refresh_dashboard_model_discovery(
 ) -> Result<(), String> {
     let _ = token_proxy_app.refresh_model_discovery().await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn read_local_api_key_usage(
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
+) -> Result<Vec<LocalApiKeyUsage>, String> {
+    token_proxy_app.read_local_api_key_usage().await
 }

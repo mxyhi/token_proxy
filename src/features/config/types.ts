@@ -125,6 +125,15 @@ export type LocalApiKey = {
   scope: LocalApiKeyScope;
 };
 
+/** 单个本地 API Key 的累计用量，只统计计费行。 */
+export type LocalApiKeyUsage = {
+  keyId: string;
+  requests: number;
+  totalTokens: number;
+  costNanoUsd: number;
+  lastUsedMs: number;
+};
+
 export type ProxyConfigFileBase = {
   host: string;
   port: number;

@@ -4,6 +4,7 @@
 //! 网络拉取、HTTP 响应处理与请求编排不属于此处。
 
 pub mod dashboard;
+pub mod local_api_key_usage;
 pub mod log;
 pub mod logs;
 pub mod pricing;

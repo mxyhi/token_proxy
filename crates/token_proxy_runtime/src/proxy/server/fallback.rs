@@ -31,8 +31,9 @@ pub(super) async fn forward_with_provider_fallbacks(
         detect_inbound_api_format(&prepared.path),
         headers,
     );
+    let routing_config = prepared.request_auth.routing_config(&state.config);
     let mut current_response = if let Some(plans) =
-        super::routes::compatible_plans(&state.config, &prepared.path, headers)
+        super::routes::compatible_plans(&routing_config, &prepared.path, headers)
     {
         let dispatched: HashSet<_> = plans.iter().map(|plan| plan.provider).collect();
         let mut result = super::priority::forward_by_priority(
@@ -53,7 +54,7 @@ pub(super) async fn forward_with_provider_fallbacks(
             let mut visited = HashSet::new();
             while result.should_fallback {
                 let Some(plan) =
-                    resolve_retry_fallback_plan(&state.config, &prepared.path, provider)
+                    resolve_retry_fallback_plan(&routing_config, &prepared.path, provider)
                 else {
                     break;
                 };
@@ -114,6 +115,7 @@ async fn forward_native_routes(
     request_start: Instant,
     codex_cooldown_scope: &CooldownScope,
 ) -> Response {
+    let routing_config = prepared.request_auth.routing_config(&state.config);
     let outbound = match super::execute::prepare_dispatch_request(
         &state,
         uri,
@@ -153,7 +155,7 @@ async fn forward_native_routes(
 
     while should_fallback {
         let Some(fallback_plan) =
-            resolve_retry_fallback_plan(&state.config, &prepared.path, current_provider)
+            resolve_retry_fallback_plan(&routing_config, &prepared.path, current_provider)
         else {
             tracing::warn!(
                 path = %prepared.path,
@@ -245,8 +247,11 @@ async fn augment_codex_models_manifest(
         .filter_map(|model| model.get("slug").and_then(Value::as_str))
         .map(str::to_string)
         .collect::<std::collections::HashSet<_>>();
-    let entries =
-        super::super::upstream::collect_model_catalog_entries_for_manifest(state.as_ref()).await;
+    let entries = super::super::upstream::collect_model_catalog_entries_for_manifest(
+        state.as_ref(),
+        &prepared.request_auth,
+    )
+    .await;
     let mut added = 0usize;
     for (id, display_name) in entries {
         if !known_ids.insert(id.clone()) {

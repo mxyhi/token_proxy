@@ -126,7 +126,8 @@ mod tests {
         ProxyConfig {
             host: "127.0.0.1".to_string(),
             port: 9208,
-            local_api_key: None,
+            local_api_keys: Vec::new(),
+            upstream_ids: Default::default(),
             cors_enabled: false,
             model_list_prefix: false,
             log_level: LogLevel::Silent,

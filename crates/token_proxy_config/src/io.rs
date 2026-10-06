@@ -17,6 +17,9 @@ thread_local! {
 
 const DEFAULT_CONFIG_HEADER: &str = concat!(
     "// Token Proxy config (JSONC). Comments and trailing commas are supported.\n",
+    "// local_api_keys: [] disables local auth; nonempty lists require an enabled key.\n",
+    "//   Entry: { \"id\": \"client\", \"name\": \"Client\", \"key\": \"secret\", \"enabled\": true, \"scope\": { \"type\": \"auto\" } }\n",
+    "//   Restricted scope: { \"type\": \"selected\", \"upstream_ids\": [\"upstream-id\"] }.\n",
     "// log_level (optional): silent|error|warn|info|debug|trace. Default: silent.\n",
     "// stream_first_output_timeout_secs (optional): stream first client-visible output timeout in seconds. Minimum: 1. Default: 60.\n",
     "// sync_response_timeout_secs (optional): non-stream full response timeout in seconds. Minimum: 1. Default: 300.\n",

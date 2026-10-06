@@ -165,11 +165,11 @@ async fn proxy_request_inner(
         codex_models_manifest::is_request(&method, &path, query.as_deref());
     // OpenAI 兼容模型索引：跨全部 enabled upstream 并集，不按 priority 单选 provider。
     // Codex 带 client_version 的 manifest 仍走后续转发路径。
-    if method == Method::GET
+    if matches!(method, Method::GET | Method::HEAD)
         && !is_codex_models_manifest
         && (is_openai_models_index_path(&path) || is_openai_compatible_models_index_path(&path))
     {
-        let _body = match ensure_local_auth_or_respond(
+        let (_body, local_access) = match ensure_local_auth_or_respond(
             &state.config,
             &state.log,
             &headers,
@@ -201,7 +201,17 @@ async fn proxy_request_inner(
             return http::with_cors_headers(&state.config, &headers, response);
         }
         tracing::debug!(path = %path, "serving cached multi-provider model catalog");
-        let response = aggregate_all_providers_model_catalog(state.clone()).await;
+        let mut response = aggregate_all_providers_model_catalog(
+            state.clone(),
+            &http::RequestAuth {
+                local_access,
+                ..Default::default()
+            },
+        )
+        .await;
+        if method == Method::HEAD {
+            *response.body_mut() = Body::empty();
+        }
         return http::with_cors_headers(&state.config, &headers, response);
     }
 

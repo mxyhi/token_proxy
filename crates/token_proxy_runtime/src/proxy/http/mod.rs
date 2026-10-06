@@ -25,8 +25,6 @@ const X_OPENAI_API_KEY: &str = "x-openai-api-key";
 const X_API_KEY: &str = "x-api-key";
 const X_ANTHROPIC_API_KEY: &str = "x-anthropic-api-key";
 const X_GOOG_API_KEY: &str = "x-goog-api-key";
-const OPENAI_MODELS_INDEX_PATH: &str = "/v1/models";
-const OPENAI_COMPATIBLE_MODELS_INDEX_PATH: &str = "/v1beta/openai/models";
 /// Claude Code 启动探活：`HEAD/GET {ANTHROPIC_BASE_URL}/api/hello`，官方 Anthropic 上无需 key。
 const CLAUDE_CONNECTIVITY_HELLO_PATH: &str = "/api/hello";
 /// Grok CLI 空闲恢复时 `GET {models_base_url}/models-v2` 刷新模型元数据，且只携带 xAI 登录 token。
@@ -55,57 +53,37 @@ const CORS_PREFLIGHT_VARY: HeaderValue = HeaderValue::from_static(
 const CORS_ACTUAL_VARY: HeaderValue = HeaderValue::from_static("origin");
 const CORS_MAX_AGE: HeaderValue = HeaderValue::from_static("86400");
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LocalAccess {
+    pub(crate) key_id: String,
+    pub(crate) scope: token_proxy_config::LocalApiKeyScope,
+}
+
 pub(crate) fn ensure_local_auth(
     config: &ProxyConfig,
     headers: &HeaderMap,
     method: &Method,
     path: &str,
     query: Option<&str>,
-) -> Result<(), String> {
-    let Some(expected) = config.local_api_key.as_ref() else {
-        tracing::debug!("no local_api_key configured, skipping local auth");
-        return Ok(());
-    };
-    if is_public_model_catalog_request(method, path) {
-        tracing::debug!(method = %method, path = %path, "public model catalog request skips local auth");
-        return Ok(());
+) -> Result<Option<LocalAccess>, String> {
+    if config.local_api_keys.is_empty()
+        || is_public_connectivity_hello_request(method, path)
+        || is_allowed_cors_preflight_request(config, headers, method)
+    {
+        return Ok(None);
     }
-    if is_public_connectivity_hello_request(method, path) {
-        tracing::debug!(
-            method = %method,
-            path = %path,
-            "public connectivity hello skips local auth"
-        );
-        return Ok(());
-    }
-    if is_allowed_cors_preflight_request(config, headers, method) {
-        tracing::debug!(method = %method, path = %path, "cors preflight skips local auth");
-        return Ok(());
-    }
-    tracing::debug!(path = %path, "local auth required, resolving local key");
-    let Some(provided) = resolve_local_auth_token(headers, path, query)? else {
-        tracing::warn!(path = %path, "missing local access key");
-        return Err("Missing local access key.".to_string());
-    };
-    if provided != expected.as_str() {
-        tracing::warn!(
-            path = %path,
-            got = %mask_key(&provided),
-            expected = %mask_key(expected),
-            "local auth mismatch"
-        );
-        return Err("Local access key is invalid.".to_string());
-    }
-    tracing::debug!(path = %path, "local auth passed");
-    Ok(())
-}
-
-fn is_public_model_catalog_request(method: &Method, path: &str) -> bool {
-    matches!(method.as_str(), "GET" | "HEAD")
-        && matches!(
-            path,
-            OPENAI_MODELS_INDEX_PATH | OPENAI_COMPATIBLE_MODELS_INDEX_PATH
-        )
+    let provided = resolve_local_auth_token(headers, path, query)?
+        .ok_or_else(|| "Missing local access key.".to_string())?;
+    let key = config
+        .local_api_keys
+        .iter()
+        .find(|key| key.enabled && key.key == provided)
+        .ok_or_else(|| "Local access key is invalid.".to_string())?;
+    tracing::debug!(key_id = %key.id, scope = ?key.scope, decision = "allowed", "local access authenticated");
+    Ok(Some(LocalAccess {
+        key_id: key.id.clone(),
+        scope: key.scope.clone(),
+    }))
 }
 
 /// Claude Code 探活只接受 GET/HEAD；POST 仍走本地 key。
@@ -246,8 +224,14 @@ pub(crate) fn resolve_client_gemini_api_key(
     if !gemini::is_gemini_native_path(path) {
         return Ok(None);
     }
-    if let Some(local_key) = config.local_api_key.as_ref() {
-        return Ok(Some(local_key.clone()));
+    if !config.local_api_keys.is_empty() {
+        let provided = resolve_local_auth_token(headers, path, query)?;
+        return Ok(provided.filter(|provided| {
+            config
+                .local_api_keys
+                .iter()
+                .any(|key| key.enabled && key.key == *provided)
+        }));
     }
     if let Some(value) = parse_raw_header(headers, X_GOOG_API_KEY)? {
         return Ok(Some(value));
@@ -263,14 +247,6 @@ pub(crate) fn local_proxy_base_url(config: &ProxyConfig) -> String {
         host.to_string()
     };
     format!("http://{host}:{}", config.port)
-}
-
-/// 遮蔽敏感 key，仅显示前 8 字符
-fn mask_key(key: &str) -> String {
-    if key.len() <= 8 {
-        return key.to_string();
-    }
-    format!("{}...", &key[..8])
 }
 
 fn resolve_local_auth_token(
@@ -358,10 +334,95 @@ fn parse_query_key(query: Option<&str>) -> Result<Option<String>, String> {
 
 #[derive(Clone, Default)]
 pub(crate) struct RequestAuth {
+    pub(crate) local_access: Option<LocalAccess>,
+    pub(crate) local_auth_enabled: bool,
+    pub(crate) target_upstream_id: Option<String>,
     pub(crate) openai_bearer: Option<HeaderValue>,
     pub(crate) anthropic_request_auth: Option<UpstreamAuthHeader>,
     pub(crate) gemini_api_key: Option<String>,
     pub(crate) authorization_fallback: Option<HeaderValue>,
+}
+
+impl RequestAuth {
+    pub(crate) fn routing_config<'a>(
+        &self,
+        config: &'a ProxyConfig,
+    ) -> std::borrow::Cow<'a, ProxyConfig> {
+        if self.target_upstream_id.is_none()
+            && self.local_access.as_ref().is_none_or(|access| {
+                matches!(access.scope, token_proxy_config::LocalApiKeyScope::Auto)
+            })
+        {
+            return std::borrow::Cow::Borrowed(config);
+        }
+        let mut scoped = config.clone();
+        scoped.upstreams.retain(|_, upstreams| {
+            for group in &mut upstreams.groups {
+                group
+                    .items
+                    .retain(|upstream| self.allows_upstream(&upstream.id));
+            }
+            upstreams.groups.retain(|group| !group.items.is_empty());
+            !upstreams.groups.is_empty()
+        });
+        std::borrow::Cow::Owned(scoped)
+    }
+
+    pub(crate) fn allows_upstream(&self, id: &str) -> bool {
+        self.local_access
+            .as_ref()
+            .is_none_or(|access| access.scope.allows(id))
+            && self
+                .target_upstream_id
+                .as_deref()
+                .is_none_or(|target| target == id)
+    }
+}
+
+pub(crate) fn authorize_target_upstream(
+    config: &ProxyConfig,
+    auth: &RequestAuth,
+    model: Option<&str>,
+) -> Result<Option<String>, String> {
+    let Some((prefix, rest)) = model.and_then(|model| model.trim().split_once('/')) else {
+        return Ok(None);
+    };
+    if rest.trim().is_empty() {
+        return Ok(None);
+    }
+    let bound = auth
+        .local_access
+        .as_ref()
+        .is_some_and(|access| match &access.scope {
+            token_proxy_config::LocalApiKeyScope::Selected { upstream_ids } => {
+                upstream_ids.iter().any(|id| id == prefix)
+            }
+            _ => false,
+        });
+    let known = config.upstream_ids.contains(prefix)
+        || config
+            .upstreams
+            .values()
+            .flat_map(|provider| &provider.groups)
+            .flat_map(|group| &group.items)
+            .any(|upstream| upstream.id == prefix);
+    if !known && !bound {
+        return Ok(None);
+    }
+    if !auth.allows_upstream(prefix) {
+        tracing::warn!(
+            key_id = auth
+                .local_access
+                .as_ref()
+                .map(|access| access.key_id.as_str())
+                .unwrap_or(""),
+            upstream_id = prefix,
+            decision = "denied",
+            "explicit upstream outside local key scope"
+        );
+        return Err("Local access key is not authorized for the requested upstream.".into());
+    }
+    Ok(Some(prefix.to_string()))
 }
 
 #[derive(Clone)]
@@ -375,9 +436,12 @@ pub(crate) fn resolve_request_auth(
     headers: &HeaderMap,
     path: &str,
 ) -> Result<RequestAuth, String> {
-    let mut auth = RequestAuth::default();
+    let mut auth = RequestAuth {
+        local_auth_enabled: !config.local_api_keys.is_empty(),
+        ..RequestAuth::default()
+    };
     // When local auth is enabled, request auth headers are reserved for local access and not used upstream.
-    if config.local_api_key.is_none() {
+    if config.local_api_keys.is_empty() {
         if let Some(value) = headers.get(X_OPENAI_API_KEY) {
             let Ok(value) = value.to_str() else {
                 return Err("Upstream API key is invalid.".to_string());

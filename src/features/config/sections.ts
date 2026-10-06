@@ -16,13 +16,14 @@ export type ConfigSectionId =
   | "logs"
   | "core"
   | "upstreams"
+  | "api-keys"
   | "pricing"
   | "agents"
   | "settings";
 
 export type ConfigEditorSectionId = Extract<
   ConfigSectionId,
-  "core" | "upstreams" | "agents" | "settings"
+  "core" | "upstreams" | "api-keys" | "agents" | "settings"
 >;
 
 export type ConfigSectionRoute = `/config/${ConfigSectionId}`;
@@ -48,6 +49,13 @@ export const CONFIG_SECTIONS: readonly ConfigSection[] = [
     route: "/config/upstreams",
     label: () => m.config_section_upstreams_label(),
     description: () => m.config_section_upstreams_desc(),
+    icon: Server,
+  },
+  {
+    id: "api-keys",
+    route: "/config/api-keys",
+    label: () => m.api_keys_title(),
+    description: () => m.api_keys_description(),
     icon: Server,
   },
   {

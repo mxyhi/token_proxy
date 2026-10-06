@@ -172,14 +172,14 @@ describe("config/form", () => {
     const payload = toPayload({
       ...EMPTY_FORM,
       host: " 127.0.0.1 ",
-      localApiKey: " ",
+      localApiKeys: [],
       corsEnabled: true,
       modelListPrefix: true,
       upstreams: [upstream],
     });
 
     expect(payload.host).toBe("127.0.0.1");
-    expect(payload.local_api_key).toBeNull();
+    expect(payload.local_api_keys).toEqual([]);
     expect(payload.cors_enabled).toBe(true);
     expect(payload.model_list_prefix).toBe(true);
     expect(payload.retryable_failure_cooldown_secs).toBe(0);
@@ -285,7 +285,7 @@ describe("config/form", () => {
     const form = toForm({
       host: "127.0.0.1",
       port: 9208,
-      local_api_key: null,
+      local_api_keys: [],
       app_proxy_url: null,
       upstreams: [],
       tray_token_rate: { enabled: true, format: "split" },
@@ -328,7 +328,7 @@ describe("config/form", () => {
     const form = toForm({
       host: "127.0.0.1",
       port: 9208,
-      local_api_key: null,
+      local_api_keys: [],
       app_proxy_url: null,
       upstreams: [
         {
@@ -372,7 +372,7 @@ describe("config/form", () => {
     const form = toForm({
       host: "127.0.0.1",
       port: 9208,
-      local_api_key: null,
+      local_api_keys: [],
       app_proxy_url: null,
       upstreams: [
         {

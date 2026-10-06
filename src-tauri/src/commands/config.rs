@@ -39,15 +39,17 @@ pub async fn preview_client_setup(
 #[tauri::command]
 pub async fn write_claude_code_settings(
     app: tauri::AppHandle,
+    key_id: Option<String>,
 ) -> Result<client_config::ClientConfigWriteResult, String> {
-    client_config::write_claude_code_settings(app).await
+    client_config::write_claude_code_settings(app, key_id).await
 }
 
 #[tauri::command]
 pub async fn write_codex_config(
     app: tauri::AppHandle,
+    key_id: Option<String>,
 ) -> Result<client_config::ClientConfigWriteResult, String> {
-    client_config::write_codex_config(app).await
+    client_config::write_codex_config(app, key_id).await
 }
 
 #[tauri::command]

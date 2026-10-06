@@ -84,6 +84,10 @@ pub(super) async fn forward_by_priority(
             };
             let upstream = &state.config.upstreams[&address.provider].groups[address.group].items
                 [address.item];
+            if !prepared.request_auth.allows_upstream(&upstream.id) {
+                tracing::debug!(upstream_id = %upstream.id, decision = "excluded", "local key scope excluded routing candidate");
+                continue;
+            }
             if !inbound_format.is_none_or(|format| upstream.supports_inbound(format))
                 || target.is_some_and(|target| target != upstream.id)
             {

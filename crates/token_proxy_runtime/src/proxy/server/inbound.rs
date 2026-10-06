@@ -21,6 +21,7 @@ use super::{
 };
 
 pub(crate) struct InboundRequest {
+    pub(crate) request_auth: http::RequestAuth,
     pub(crate) path: String,
     pub(crate) client_ip: Option<String>,
     pub(crate) plan: DispatchPlan,
@@ -41,7 +42,7 @@ pub(super) async fn prepare_inbound_request(
     request_start: Instant,
     is_debug_log: bool,
 ) -> Result<InboundRequest, Response> {
-    let body = ensure_local_auth_or_respond(
+    let (body, local_access) = ensure_local_auth_or_respond(
         &state.config,
         &state.log,
         headers,
@@ -70,20 +71,6 @@ pub(super) async fn prepare_inbound_request(
         );
         return Err(http::error_response(StatusCode::BAD_REQUEST, message));
     }
-    let (plan, body) = resolve_plan_or_respond(
-        &state.config,
-        &state.log,
-        method,
-        headers,
-        body,
-        capture_request_detail_enabled,
-        client_ip.clone(),
-        &path,
-        query.as_deref(),
-        request_start,
-        state.config.max_request_body_bytes,
-    )
-    .await?;
     let body = read_body_or_respond(
         &state.log,
         headers,
@@ -113,7 +100,66 @@ pub(super) async fn prepare_inbound_request(
     } else {
         None
     };
+    let mut request_auth = super::prepared::resolve_request_auth_or_respond(
+        &state.config,
+        headers,
+        &state.log,
+        request_detail.clone(),
+        client_ip.clone(),
+        &path,
+        PROVIDER_PROXY,
+        request_start,
+    )?;
+    request_auth.local_access = local_access;
+    request_auth.target_upstream_id = http::authorize_target_upstream(
+        &state.config,
+        &request_auth,
+        meta.original_model.as_deref(),
+    )
+    .map_err(|message| {
+        log_request_error(
+            &state.log,
+            request_detail.clone(),
+            client_ip.clone(),
+            &path,
+            PROVIDER_PROXY,
+            LOCAL_UPSTREAM_ID,
+            StatusCode::FORBIDDEN,
+            message.clone(),
+            request_start,
+        );
+        http::error_response(StatusCode::FORBIDDEN, message)
+    })?;
+    // 仅路由规划使用授权后的配置视图；实际调度保留原始索引/轮询状态并再次检查范围。
+    let routing_config = request_auth.routing_config(&state.config);
+    let plan = resolve_dispatch_plan_with_request(
+        &routing_config,
+        method,
+        &path,
+        headers,
+        query.as_deref(),
+    )
+    .map_err(|message| {
+        let status = if openai::is_openai_responses_compact_path(&path) {
+            StatusCode::BAD_REQUEST
+        } else {
+            StatusCode::BAD_GATEWAY
+        };
+        log_request_error(
+            &state.log,
+            request_detail.clone(),
+            client_ip.clone(),
+            &path,
+            PROVIDER_PROXY,
+            LOCAL_UPSTREAM_ID,
+            status,
+            message.clone(),
+            request_start,
+        );
+        http::error_response(status, message)
+    })?;
     Ok(InboundRequest {
+        request_auth,
         path,
         client_ip,
         plan,
@@ -135,56 +181,11 @@ pub(super) async fn ensure_local_auth_or_respond(
     query: Option<&str>,
     request_start: Instant,
     max_body_bytes: usize,
-) -> Result<Body, Response> {
-    if let Err(message) = http::ensure_local_auth(config, headers, method, path, query) {
-        tracing::warn!("local auth failed");
-        let detail = if capture_request_detail_enabled {
-            Some(capture_detail_from_body(headers, body, max_body_bytes).await)
-        } else {
-            None
-        };
-        log_request_error(
-            log,
-            detail,
-            client_ip,
-            path,
-            PROVIDER_PROXY,
-            LOCAL_UPSTREAM_ID,
-            StatusCode::UNAUTHORIZED,
-            message.clone(),
-            request_start,
-        );
-        return Err(http::error_response(StatusCode::UNAUTHORIZED, message));
-    }
-    Ok(body)
-}
-
-pub(super) async fn resolve_plan_or_respond(
-    config: &ProxyConfig,
-    log: &Arc<LogWriter>,
-    method: &Method,
-    headers: &HeaderMap,
-    body: Body,
-    capture_request_detail_enabled: bool,
-    client_ip: Option<String>,
-    path: &str,
-    query: Option<&str>,
-    request_start: Instant,
-    max_body_bytes: usize,
-) -> Result<(DispatchPlan, Body), Response> {
-    match resolve_dispatch_plan_with_request(config, method, path, headers, query) {
-        Ok(plan) => {
-            tracing::debug!(provider = %plan.provider, "dispatch plan resolved");
-            Ok((plan, body))
-        }
+) -> Result<(Body, Option<http::LocalAccess>), Response> {
+    let access = match http::ensure_local_auth(config, headers, method, path, query) {
+        Ok(access) => access,
         Err(message) => {
-            tracing::warn!("no dispatch plan found");
-            // Legacy compact 是已知无效客户端路由；其余 plan 缺失仍表示上游配置失败。
-            let status = if openai::is_openai_responses_compact_path(path) {
-                StatusCode::BAD_REQUEST
-            } else {
-                StatusCode::BAD_GATEWAY
-            };
+            tracing::warn!("local auth failed");
             let detail = if capture_request_detail_enabled {
                 Some(capture_detail_from_body(headers, body, max_body_bytes).await)
             } else {
@@ -197,13 +198,14 @@ pub(super) async fn resolve_plan_or_respond(
                 path,
                 PROVIDER_PROXY,
                 LOCAL_UPSTREAM_ID,
-                status,
+                StatusCode::UNAUTHORIZED,
                 message.clone(),
                 request_start,
             );
-            Err(http::error_response(status, message))
+            return Err(http::error_response(StatusCode::UNAUTHORIZED, message));
         }
-    }
+    };
+    Ok((body, access))
 }
 
 async fn capture_detail_from_body(

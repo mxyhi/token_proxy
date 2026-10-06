@@ -39,7 +39,10 @@ struct ModelDiscoveryJob {
 /// 聚合全部已配置 provider 的模型目录（OpenAI 兼容 `/v1/models` 入口）。
 /// 不再按 priority 只选一个 provider，避免模型选择器只露出 1/3 上游。
 /// 远端目录只读后台探测缓存，请求路径不访问上游（逐个实时拉取会超过网关超时）。
-pub(super) async fn aggregate_all_providers_model_catalog(state: Arc<ProxyState>) -> Response {
+pub(super) async fn aggregate_all_providers_model_catalog(
+    state: Arc<ProxyState>,
+    request_auth: &RequestAuth,
+) -> Response {
     let mut providers: Vec<String> = state.config.upstreams.keys().cloned().collect();
     providers.sort();
     let fetched = state.model_discovery.fetched_catalogs().await;
@@ -54,7 +57,7 @@ pub(super) async fn aggregate_all_providers_model_catalog(state: Arc<ProxyState>
     let mut successful = 0usize;
     for provider in &providers {
         let (count, provider_sources) =
-            collect_provider_model_sources(state.as_ref(), provider, &fetched);
+            collect_provider_model_sources(state.as_ref(), provider, &fetched, request_auth);
         successful += count;
         sources.extend(provider_sources);
     }
@@ -74,6 +77,7 @@ pub(super) async fn aggregate_all_providers_model_catalog(state: Arc<ProxyState>
 /// manifest 只补充本地目录中不存在的模型；原始 Codex manifest 的字段和顺序由调用方保留。
 pub(super) async fn collect_model_catalog_entries_for_manifest(
     state: &ProxyState,
+    request_auth: &RequestAuth,
 ) -> Vec<(String, Option<String>)> {
     let mut providers: Vec<String> = state.config.upstreams.keys().cloned().collect();
     providers.sort();
@@ -85,7 +89,8 @@ pub(super) async fn collect_model_catalog_entries_for_manifest(
         if provider == "codex" {
             continue;
         }
-        let (_, provider_sources) = collect_provider_model_sources(state, &provider, &fetched);
+        let (_, provider_sources) =
+            collect_provider_model_sources(state, &provider, &fetched, request_auth);
         sources.extend(provider_sources);
     }
 
@@ -115,6 +120,7 @@ fn collect_provider_model_sources(
     state: &ProxyState,
     provider: &str,
     fetched: &FetchedModelCatalogs,
+    request_auth: &RequestAuth,
 ) -> (usize, Vec<(String, Vec<ModelCatalogEntry>)>) {
     let Some(provider_upstreams) = state.config.provider_upstreams(provider) else {
         return (0, Vec::new());
@@ -124,6 +130,9 @@ fn collect_provider_model_sources(
     let mut successful = 0usize;
     for group in &provider_upstreams.groups {
         for upstream in &group.items {
+            if !request_auth.allows_upstream(&upstream.id) {
+                continue;
+            }
             let upstream_catalog = fetched.get(&model_catalog_key(provider, upstream));
             let models = resolve_upstream_model_entries(
                 state,

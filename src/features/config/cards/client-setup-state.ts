@@ -6,6 +6,8 @@ import { m } from "@/paraglide/messages.js";
 
 export type ClientSetupInfo = {
   proxy_http_base_url: string;
+  local_auth_required: boolean;
+  enabled_api_keys: { id: string; name: string }[];
   claude_settings_path: string;
   claude_base_url: string;
   claude_model: string;
@@ -88,20 +90,20 @@ export function useClientSetupPreview(savedAt: string) {
   return { previewState, previewMessage, setup, loadPreview };
 }
 
-export function useWriteAction(command: WriteCommand, loadPreview: () => Promise<void>) {
+export function useWriteAction(command: WriteCommand, loadPreview: () => Promise<void>, keyId: string | null) {
   const [action, setAction] = useState<ActionState>(toActionState);
 
   const apply = useCallback(async () => {
     setAction({ state: "working", message: "", lastPath: "" });
     try {
-      const result = await invoke<ClientConfigWriteResult>(command);
+      const result = await invoke<ClientConfigWriteResult>(command, { keyId });
       const path = result.paths.join(", ");
       setAction({ state: "success", message: m.client_setup_apply_success({ path }), lastPath: path });
       await loadPreview();
     } catch (error) {
       setAction({ state: "error", message: parseError(error), lastPath: "" });
     }
-  }, [command, loadPreview]);
+  }, [command, loadPreview, keyId]);
 
   return { action, apply };
 }

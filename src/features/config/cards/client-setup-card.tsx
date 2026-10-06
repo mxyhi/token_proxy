@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 import { m } from "@/paraglide/messages.js";
 
@@ -134,11 +136,17 @@ function ToolCards({ tools }: { tools: readonly ToolListItem[] }) {
 }
 
 export function ClientSetupCard({ savedAt, isDirty }: ClientSetupCardProps) {
-  const canApply = !isDirty;
   const { previewState, previewMessage, setup, loadPreview } = useClientSetupPreview(savedAt);
 
-  const claude = useWriteAction("write_claude_code_settings", loadPreview);
-  const codex = useWriteAction("write_codex_config", loadPreview);
+  const [chosenKeyId, setChosenKeyId] = useState<string | null>(null);
+  const keys = setup?.enabled_api_keys ?? [];
+  // 用户选过的 Key 失效时保留无效选择，不悄悄替换成另一条。
+  const keyId = chosenKeyId ?? (keys.length === 1 ? keys[0].id : null);
+  const validSelection = keyId !== null && keys.some((key) => key.id === keyId);
+  const canApply = !isDirty && (!setup?.local_auth_required || validSelection);
+  const writeKeyId = setup?.local_auth_required ? keyId : null;
+  const claude = useWriteAction("write_claude_code_settings", loadPreview, writeKeyId);
+  const codex = useWriteAction("write_codex_config", loadPreview, writeKeyId);
 
   const isWorking =
     previewState === "working" ||
@@ -160,6 +168,14 @@ export function ClientSetupCard({ savedAt, isDirty }: ClientSetupCardProps) {
 
   return (
     <>
+      {setup?.local_auth_required && <div className="grid gap-2">
+        <Label htmlFor="client-api-key">{m.api_keys_client_select()}</Label>
+        <Select value={validSelection ? keyId ?? "" : ""} onValueChange={setChosenKeyId}>
+          <SelectTrigger id="client-api-key"><SelectValue placeholder={m.api_keys_client_required()} /></SelectTrigger>
+          <SelectContent>{keys.map((key) => <SelectItem key={key.id} value={key.id}>{key.name}</SelectItem>)}</SelectContent>
+        </Select>
+        {keys.length === 0 && <p className="text-sm text-destructive">{m.api_keys_all_disabled()}</p>}
+      </div>}
       <ToolCards tools={tools} />
       <PlaintextWarning />
     </>

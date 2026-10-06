@@ -23,6 +23,8 @@ const CODEX_PROVIDER_WIRE_API: &str = "responses";
 #[derive(Clone, Serialize)]
 pub(crate) struct ClientSetupInfo {
     pub(crate) proxy_http_base_url: String,
+    pub(crate) local_auth_required: bool,
+    pub(crate) enabled_api_keys: Vec<ClientKeyOption>,
 
     pub(crate) claude_settings_path: String,
     pub(crate) claude_base_url: String,
@@ -46,6 +48,38 @@ pub(crate) struct ClientSetupInfo {
 }
 
 #[derive(Clone, Serialize)]
+pub(crate) struct ClientKeyOption {
+    pub(crate) id: String,
+    pub(crate) name: String,
+}
+
+/// 先校验 Key，再触碰客户端文件。多 Key 禁止默认取第一条，禁用/失效 ID 禁止替换。
+fn selected_local_key(
+    config: &ProxyConfigFile,
+    key_id: Option<&str>,
+) -> Result<Option<String>, String> {
+    if let Some(id) = key_id {
+        return config
+            .local_api_keys
+            .iter()
+            .find(|key| key.id == id && key.enabled)
+            .map(|key| Some(key.key.clone()))
+            .ok_or_else(|| "所选 API Key 已删除或禁用，请重新选择。".to_string());
+    }
+    if config.local_api_keys.is_empty() {
+        return Ok(None);
+    }
+    let mut enabled = config.local_api_keys.iter().filter(|key| key.enabled);
+    let first = enabled
+        .next()
+        .ok_or_else(|| "所有 API Key 均已禁用。".to_string())?;
+    if enabled.next().is_some() {
+        return Err("存在多个启用的 API Key，请明确选择。".to_string());
+    }
+    Ok(Some(first.key.clone()))
+}
+
+#[derive(Clone, Serialize)]
 pub(crate) struct ClientConfigWriteResult {
     pub(crate) paths: Vec<String>,
 }
@@ -59,14 +93,21 @@ pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
     let codex_config_input = read_text_or_empty(&codex_config_path).await?;
     let (codex_model_provider, codex_provider_name) =
         resolve_codex_target_provider_and_name(&codex_config_input);
-    let has_local_key = config
-        .local_api_key
-        .as_ref()
-        .is_some_and(|key| !key.trim().is_empty());
+    let has_local_key = config.local_api_keys.iter().any(|key| key.enabled);
     let openai_compat_base_url = build_openai_compat_base_url(&proxy_http_base_url);
 
     Ok(ClientSetupInfo {
         proxy_http_base_url: proxy_http_base_url.clone(),
+        local_auth_required: !config.local_api_keys.is_empty(),
+        enabled_api_keys: config
+            .local_api_keys
+            .iter()
+            .filter(|key| key.enabled)
+            .map(|key| ClientKeyOption {
+                id: key.id.clone(),
+                name: key.name.clone(),
+            })
+            .collect(),
         claude_settings_path: claude_settings_path.to_string_lossy().to_string(),
         claude_base_url: proxy_http_base_url.clone(),
         claude_model: CLAUDE_MODEL.to_string(),
@@ -89,8 +130,10 @@ pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
 
 pub(crate) async fn write_claude_code_settings(
     app: AppHandle,
+    key_id: Option<String>,
 ) -> Result<ClientConfigWriteResult, String> {
     let config = load_proxy_config(&app).await?;
+    let selected_key = selected_local_key(&config, key_id.as_deref())?;
     let proxy_http_base_url = build_proxy_http_base_url(&config)?;
     let settings_path = resolve_claude_settings_path(&app)?;
 
@@ -99,7 +142,7 @@ pub(crate) async fn write_claude_code_settings(
     //
     // - ANTHROPIC_BASE_URL: 指向本地代理（不带 /v1）
     // - ANTHROPIC_MODEL: 固定 Claude Code 默认编码模型，避免依赖客户端账号档位推断
-    // - ANTHROPIC_AUTH_TOKEN: 用于 Authorization: Bearer <token>，与 Token Proxy 的 local_api_key 匹配
+    // - ANTHROPIC_AUTH_TOKEN: 用于 Authorization: Bearer <token>，与 Token Proxy 的所选本地访问 Key 匹配
     let mut root = read_json_object_or_default(&settings_path).await?;
     let env = ensure_json_object_field(&mut root, "env")?;
     env.insert(
@@ -110,12 +153,7 @@ pub(crate) async fn write_claude_code_settings(
         "ANTHROPIC_MODEL".to_string(),
         serde_json::Value::String(CLAUDE_MODEL.to_string()),
     );
-    match config
-        .local_api_key
-        .as_ref()
-        .map(|key| key.trim())
-        .filter(|key| !key.is_empty())
-    {
+    match selected_key.as_deref() {
         Some(token) => {
             env.insert(
                 "ANTHROPIC_AUTH_TOKEN".to_string(),
@@ -134,8 +172,12 @@ pub(crate) async fn write_claude_code_settings(
     })
 }
 
-pub(crate) async fn write_codex_config(app: AppHandle) -> Result<ClientConfigWriteResult, String> {
+pub(crate) async fn write_codex_config(
+    app: AppHandle,
+    key_id: Option<String>,
+) -> Result<ClientConfigWriteResult, String> {
     let config = load_proxy_config(&app).await?;
+    let selected_key = selected_local_key(&config, key_id.as_deref())?;
     let proxy_http_base_url = build_proxy_http_base_url(&config)?;
     let config_path = resolve_codex_config_path(&app)?;
     let auth_path = resolve_codex_auth_path(&app)?;
@@ -162,12 +204,7 @@ pub(crate) async fn write_codex_config(app: AppHandle) -> Result<ClientConfigWri
     write_text_with_backup(&config_path, doc.to_string()).await?;
 
     let mut auth_root = read_json_object_or_default(&auth_path).await?;
-    match config
-        .local_api_key
-        .as_ref()
-        .map(|key| key.trim())
-        .filter(|key| !key.is_empty())
-    {
+    match selected_key.as_deref() {
         Some(token) => {
             auth_root.insert(
                 "OPENAI_API_KEY".to_string(),
@@ -520,4 +557,39 @@ fn ensure_toml_table_path(doc: &mut toml_edit::DocumentMut, path: &[&str]) -> Re
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod local_key_tests {
+    use super::*;
+    use token_proxy_config::{LocalApiKey, LocalApiKeyScope};
+
+    #[test]
+    fn client_key_selection_requires_explicit_choice_and_never_substitutes() {
+        let mut config = ProxyConfigFile::default();
+        assert_eq!(selected_local_key(&config, None).unwrap(), None);
+        assert!(selected_local_key(&config, Some("missing")).is_err());
+        let key = |id: &str| LocalApiKey {
+            id: id.into(),
+            name: id.into(),
+            key: format!("secret-{id}"),
+            enabled: true,
+            scope: LocalApiKeyScope::Auto,
+        };
+        config.local_api_keys = vec![key("a")];
+        assert_eq!(
+            selected_local_key(&config, None).unwrap().as_deref(),
+            Some("secret-a")
+        );
+        config.local_api_keys.push(key("b"));
+        assert!(selected_local_key(&config, None).is_err());
+        assert_eq!(
+            selected_local_key(&config, Some("b")).unwrap().as_deref(),
+            Some("secret-b")
+        );
+        config.local_api_keys[1].enabled = false;
+        assert!(selected_local_key(&config, Some("b")).is_err());
+        config.local_api_keys[0].enabled = false;
+        assert!(selected_local_key(&config, None).is_err());
+    }
 }

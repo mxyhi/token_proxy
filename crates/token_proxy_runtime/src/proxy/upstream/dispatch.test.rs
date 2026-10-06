@@ -32,7 +32,14 @@ fn runtime(id: &str, available_models: &[&str]) -> UpstreamRuntime {
 fn empty_available_models_keeps_upstream_eligible() {
     let items = vec![runtime("all", &[])];
 
-    let eligible = filter_eligible_upstreams(vec![0], &items, None, None, Some("unlisted-model"));
+    let eligible = filter_eligible_upstreams(
+        vec![0],
+        &items,
+        None,
+        None,
+        Some("unlisted-model"),
+        &RequestAuth::default(),
+    );
 
     assert_eq!(eligible, vec![0]);
 }
@@ -44,8 +51,14 @@ fn available_models_filter_upstreams_before_dispatch() {
         runtime("claude", &["claude-sonnet-4.6"]),
     ];
 
-    let eligible =
-        filter_eligible_upstreams(vec![0, 1], &items, None, None, Some("claude-sonnet-4.6"));
+    let eligible = filter_eligible_upstreams(
+        vec![0, 1],
+        &items,
+        None,
+        None,
+        Some("claude-sonnet-4.6"),
+        &RequestAuth::default(),
+    );
 
     assert_eq!(eligible, vec![1]);
 }
@@ -57,8 +70,14 @@ fn prefixed_model_matches_target_upstream_available_models() {
         runtime("beta", &["gpt-5.4"]),
     ];
 
-    let eligible =
-        filter_eligible_upstreams(vec![0, 1], &items, None, Some("beta"), Some("beta/gpt-5.4"));
+    let eligible = filter_eligible_upstreams(
+        vec![0, 1],
+        &items,
+        None,
+        Some("beta"),
+        Some("beta/gpt-5.4"),
+        &RequestAuth::default(),
+    );
 
     assert_eq!(eligible, vec![1]);
 }

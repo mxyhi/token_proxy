@@ -78,7 +78,6 @@ export function useConfigState() {
   const [status, setStatus] = useState<StatusState>("idle");
   const [statusMessage, setStatusMessage] = useState("");
   const [savedAt, setSavedAt] = useState("");
-  const [showLocalKey, setShowLocalKey] = useState(false);
   const [showUpstreamKeys, setShowUpstreamKeys] = useState(false);
   const [autoStartEnabled, setAutoStartEnabled] = useState(false);
   const [autoStartBaseline, setAutoStartBaseline] = useState(false);
@@ -95,7 +94,6 @@ export function useConfigState() {
     lastConfig,
     configExtras,
     savedAt,
-    showLocalKey,
     showUpstreamKeys,
     status,
     statusMessage,
@@ -108,7 +106,6 @@ export function useConfigState() {
     setLastConfig,
     setConfigExtras,
     setSavedAt,
-    setShowLocalKey,
     setShowUpstreamKeys,
     setAutoStartEnabled,
     setAutoStartBaseline,

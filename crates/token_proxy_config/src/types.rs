@@ -1,3 +1,4 @@
+use crate::LocalApiKey;
 use axum::http::header::{HeaderName, HeaderValue};
 use serde::{de, Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
@@ -317,10 +318,14 @@ pub struct UpstreamOverrides {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(remote = "Self")]
 pub struct ProxyConfigFile {
     pub host: String,
     pub port: u16,
-    pub local_api_key: Option<String>,
+    #[serde(default)]
+    pub local_api_keys: Vec<LocalApiKey>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub local_api_keys_migrated: bool,
     pub app_proxy_url: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub cors_enabled: bool,
@@ -385,7 +390,8 @@ impl Default for ProxyConfigFile {
         Self {
             host: "127.0.0.1".to_string(),
             port: default_proxy_port(),
-            local_api_key: None,
+            local_api_keys: Vec::new(),
+            local_api_keys_migrated: false,
             app_proxy_url: None,
             cors_enabled: false,
             model_list_prefix: default_model_list_prefix(),
@@ -431,7 +437,9 @@ pub enum UpstreamDispatchRuntime {
 pub struct ProxyConfig {
     pub host: String,
     pub port: u16,
-    pub local_api_key: Option<String>,
+    pub local_api_keys: Vec<LocalApiKey>,
+    /// 包含禁用上游，供显式前缀授权判定使用。
+    pub upstream_ids: std::collections::HashSet<String>,
     pub cors_enabled: bool,
     pub model_list_prefix: bool,
     pub log_level: LogLevel,

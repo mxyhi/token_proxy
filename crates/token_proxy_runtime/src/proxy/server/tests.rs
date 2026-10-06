@@ -1,3 +1,6 @@
+#[path = "local_api_keys.test.rs"]
+mod local_api_keys_tests;
+
 use super::*;
 
 #[path = "global_priority.test.rs"]
@@ -140,7 +143,8 @@ fn config_with_runtime_upstreams(
     ProxyConfig {
         host: "127.0.0.1".to_string(),
         port: 9208,
-        local_api_key: None,
+        local_api_keys: Vec::new(),
+        upstream_ids: Default::default(),
         cors_enabled: false,
         model_list_prefix: false,
         log_level: LogLevel::Silent,
@@ -4641,7 +4645,7 @@ fn models_index_applies_upstream_available_models() {
 }
 
 #[test]
-fn models_index_allows_missing_local_key_when_local_auth_enabled() {
+fn models_index_rejects_missing_local_key_when_local_auth_enabled() {
     run_async(async {
         let upstream = spawn_model_catalog_upstream(json!({
             "object": "list",
@@ -4651,7 +4655,7 @@ fn models_index_allows_missing_local_key_when_local_auth_enabled() {
         }))
         .await;
         let data_dir =
-            next_test_data_dir("models_index_allows_missing_local_key_when_local_auth_enabled");
+            next_test_data_dir("models_index_rejects_missing_local_key_when_local_auth_enabled");
         let mut config = config_with_runtime_upstreams(&[(
             PROVIDER_RESPONSES,
             0,
@@ -4659,13 +4663,19 @@ fn models_index_allows_missing_local_key_when_local_auth_enabled() {
             upstream.base_url.as_str(),
             FORMATS_RESPONSES,
         )]);
-        config.local_api_key = Some("local-key".to_string());
+        config.local_api_keys = vec![token_proxy_config::LocalApiKey {
+            id: "test-key".into(),
+            name: "Test".into(),
+            key: "local-key".into(),
+            enabled: true,
+            scope: token_proxy_config::LocalApiKeyScope::Auto,
+        }];
         let state = build_test_state_handle(config, data_dir).await;
 
         refresh_model_catalog(&state).await;
         let (status, body) = send_models_request(state).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["data"][0]["id"].as_str(), Some("gpt-5"));
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(body["error"].is_object());
         let requests = upstream.requests();
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].path, "/v1/models");
@@ -4694,7 +4704,13 @@ fn grok_models_v2_probe_returns_local_not_found_without_upstream_or_request_log(
             upstream.base_url.as_str(),
             FORMATS_RESPONSES,
         )]);
-        config.local_api_key = Some("local-key".to_string());
+        config.local_api_keys = vec![token_proxy_config::LocalApiKey {
+            id: "test-key".into(),
+            name: "Test".into(),
+            key: "local-key".into(),
+            enabled: true,
+            scope: token_proxy_config::LocalApiKeyScope::Auto,
+        }];
         let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir).await;
         // Grok 带的是 xAI 登录 token，不是本地 key。
         let mut headers = HeaderMap::new();
@@ -4746,7 +4762,13 @@ fn connectivity_hello_allows_missing_local_key_and_skips_request_log() {
             "https://example.com",
             FORMATS_RESPONSES,
         )]);
-        config.local_api_key = Some("local-key".to_string());
+        config.local_api_keys = vec![token_proxy_config::LocalApiKey {
+            id: "test-key".into(),
+            name: "Test".into(),
+            key: "local-key".into(),
+            enabled: true,
+            scope: token_proxy_config::LocalApiKeyScope::Auto,
+        }];
         let (state, pool) = build_test_state_handle_with_sqlite_log(config, data_dir).await;
 
         let get = proxy_request(

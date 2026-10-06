@@ -7,7 +7,14 @@ fn config_with_local(key: &str) -> ProxyConfig {
     ProxyConfig {
         host: "127.0.0.1".to_string(),
         port: 9208,
-        local_api_key: Some(key.to_string()),
+        local_api_keys: vec![token_proxy_config::LocalApiKey {
+            id: "test-key".into(),
+            name: "Test".into(),
+            key: key.to_string(),
+            enabled: true,
+            scope: token_proxy_config::LocalApiKeyScope::Auto,
+        }],
+        upstream_ids: Default::default(),
         cors_enabled: true,
         model_list_prefix: false,
         log_level: LogLevel::Silent,
@@ -29,7 +36,8 @@ fn config_without_local() -> ProxyConfig {
     ProxyConfig {
         host: "127.0.0.1".to_string(),
         port: 9208,
-        local_api_key: None,
+        local_api_keys: Vec::new(),
+        upstream_ids: Default::default(),
         cors_enabled: true,
         model_list_prefix: false,
         log_level: LogLevel::Silent,
@@ -202,15 +210,15 @@ fn local_auth_accepts_lowercase_bearer_authorization() {
 }
 
 #[test]
-fn local_auth_allows_openai_models_index_without_key() {
+fn local_auth_rejects_openai_models_index_without_key() {
     let config = config_with_local("local-key");
     let headers = HeaderMap::new();
     let result = ensure_local_auth(&config, &headers, &Method::GET, "/v1/models", None);
-    assert!(result.is_ok());
+    assert!(result.is_err());
 }
 
 #[test]
-fn local_auth_allows_openai_compatible_models_index_without_key() {
+fn local_auth_rejects_openai_compatible_models_index_without_key() {
     let config = config_with_local("local-key");
     let headers = HeaderMap::new();
     let result = ensure_local_auth(
@@ -220,7 +228,7 @@ fn local_auth_allows_openai_compatible_models_index_without_key() {
         "/v1beta/openai/models",
         None,
     );
-    assert!(result.is_ok());
+    assert!(result.is_err());
 }
 
 #[test]
@@ -485,4 +493,66 @@ fn anthropic_upstream_auth_reuses_x_api_key_header_name_with_upstream_key() {
 
     assert_eq!(auth.name.as_str(), "x-api-key");
     assert_eq!(auth.value.to_str().ok(), Some("upstream-anthropic-key"));
+}
+
+#[test]
+fn local_key_identity_disabled_and_gemini_resume_key_are_request_specific() {
+    let mut config = config_with_local("first-secret");
+    let mut second = config.local_api_keys[0].clone();
+    second.id = "second".into();
+    second.key = "second-secret".into();
+    second.scope = token_proxy_config::LocalApiKeyScope::Selected {
+        upstream_ids: vec!["only-second".into()],
+    };
+    config.local_api_keys.push(second);
+    for (path, header) in [
+        ("/v1/responses", "authorization"),
+        ("/v1/messages", "x-api-key"),
+        ("/v1beta/models", "x-goog-api-key"),
+    ] {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header,
+            HeaderValue::from_static(if header == "authorization" {
+                "Bearer second-secret"
+            } else {
+                "second-secret"
+            }),
+        );
+        let access = ensure_local_auth(&config, &headers, &Method::GET, path, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(access.key_id, "second");
+        assert!(access.scope.allows("only-second"));
+        assert!(!access.scope.allows("other"));
+        let auth = resolve_request_auth(&config, &headers, path).unwrap();
+        assert!(auth.authorization_fallback.is_none());
+        assert!(auth.anthropic_request_auth.is_none());
+        assert!(auth.gemini_api_key.is_none());
+    }
+    let headers = HeaderMap::new();
+    let path = "/upload/v1beta/files";
+    assert_eq!(
+        resolve_client_gemini_api_key(&config, &headers, path, Some("key=second-secret"))
+            .unwrap()
+            .as_deref(),
+        Some("second-secret")
+    );
+    for key in &mut config.local_api_keys {
+        key.enabled = false;
+    }
+    assert!(ensure_local_auth(
+        &config,
+        &headers,
+        &Method::POST,
+        path,
+        Some("key=second-secret")
+    )
+    .is_err());
+    config.local_api_keys.clear();
+    assert!(
+        ensure_local_auth(&config, &headers, &Method::POST, path, None)
+            .unwrap()
+            .is_none()
+    );
 }

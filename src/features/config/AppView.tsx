@@ -1,3 +1,4 @@
+import { ApiKeysCard } from "./cards/api-keys-card";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { useMemo } from "react";
 
@@ -44,7 +45,6 @@ type AppViewProps = {
   activeSectionId: ConfigEditorSectionId;
   form: ConfigForm;
   statusBadge: StatusBadge;
-  showLocalKey: boolean;
   showUpstreamKeys: boolean;
   providerOptions: string[];
   configPath: string;
@@ -60,7 +60,6 @@ type AppViewProps = {
   canSave: boolean;
   isDirty: boolean;
   validation: { valid: boolean; message: string };
-  onToggleLocalKey: () => void;
   onToggleUpstreamKeys: () => void;
   onFormChange: (patch: Partial<ConfigForm>) => void;
   onResetHotModelMappings: () => void;
@@ -239,8 +238,6 @@ function ConfigSectionBody({
       return (
         <ProxyCoreCard
           form={props.form}
-          showLocalKey={props.showLocalKey}
-          onToggleLocalKey={props.onToggleLocalKey}
           onChange={props.onFormChange}
           onResetHotModelMappings={props.onResetHotModelMappings}
           proxyService={proxyService}
@@ -264,6 +261,8 @@ function ConfigSectionBody({
           />
         </div>
       );
+    case "api-keys":
+      return <ApiKeysCard form={props.form} onChange={props.onFormChange} />;
     case "settings":
       return (
         <div className="flex flex-col gap-4">

@@ -521,3 +521,22 @@ fn anthropic_stainless_headers_are_preserved_for_native_anthropic() {
         Some("1.2.3")
     );
 }
+
+#[test]
+fn gemini_local_query_key_is_never_used_as_upstream_credential() {
+    let mut upstream = gemini_upstream();
+    upstream.api_key = None;
+    let auth = RequestAuth {
+        local_auth_enabled: true,
+        ..Default::default()
+    };
+    assert!(matches!(
+        resolve_gemini_upstream(
+            &upstream,
+            &auth,
+            "/v1beta/models?key=local-secret",
+            "https://generativelanguage.googleapis.com/v1beta/models?key=local-secret"
+        ),
+        Err(AttemptOutcome::SkippedAuth)
+    ));
+}

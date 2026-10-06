@@ -11,6 +11,7 @@ import { Route as ConfigIndexRouteImport } from "./routes/config/index"
 
 const AgentNodeLazyRouteImport = createFileRoute("/agent-node")()
 const ConfigAgentsLazyRouteImport = createFileRoute("/config/agents")()
+const ConfigApiKeysLazyRouteImport = createFileRoute("/config/api-keys")()
 const ConfigCoreLazyRouteImport = createFileRoute("/config/core")()
 const ConfigDashboardLazyRouteImport = createFileRoute("/config/dashboard")()
 const ConfigLogsLazyRouteImport = createFileRoute("/config/logs")()
@@ -43,6 +44,13 @@ const ConfigAgentsLazyRoute = ConfigAgentsLazyRouteImport.update({
   path: "/agents",
   getParentRoute: () => ConfigRouteRoute,
 } as any).lazy(() => import("./routes/config/agents.lazy").then((d) => d.Route))
+const ConfigApiKeysLazyRoute = ConfigApiKeysLazyRouteImport.update({
+  id: "/api-keys",
+  path: "/api-keys",
+  getParentRoute: () => ConfigRouteRoute,
+} as any).lazy(() =>
+  import("./routes/config/api-keys.lazy").then((d) => d.Route),
+)
 const ConfigCoreLazyRoute = ConfigCoreLazyRouteImport.update({
   id: "/core",
   path: "/core",
@@ -87,6 +95,7 @@ export interface FileRoutesByFullPath {
   "/config": typeof ConfigRouteRouteWithChildren
   "/agent-node": typeof AgentNodeLazyRoute
   "/config/agents": typeof ConfigAgentsLazyRoute
+  "/config/api-keys": typeof ConfigApiKeysLazyRoute
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
@@ -99,6 +108,7 @@ export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/agent-node": typeof AgentNodeLazyRoute
   "/config/agents": typeof ConfigAgentsLazyRoute
+  "/config/api-keys": typeof ConfigApiKeysLazyRoute
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
@@ -113,6 +123,7 @@ export interface FileRoutesById {
   "/config": typeof ConfigRouteRouteWithChildren
   "/agent-node": typeof AgentNodeLazyRoute
   "/config/agents": typeof ConfigAgentsLazyRoute
+  "/config/api-keys": typeof ConfigApiKeysLazyRoute
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
@@ -128,6 +139,7 @@ export interface FileRouteTypes {
     | "/config"
     | "/agent-node"
     | "/config/agents"
+    | "/config/api-keys"
     | "/config/core"
     | "/config/dashboard"
     | "/config/logs"
@@ -140,6 +152,7 @@ export interface FileRouteTypes {
     | "/"
     | "/agent-node"
     | "/config/agents"
+    | "/config/api-keys"
     | "/config/core"
     | "/config/dashboard"
     | "/config/logs"
@@ -153,6 +166,7 @@ export interface FileRouteTypes {
     | "/config"
     | "/agent-node"
     | "/config/agents"
+    | "/config/api-keys"
     | "/config/core"
     | "/config/dashboard"
     | "/config/logs"
@@ -205,6 +219,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ConfigAgentsLazyRouteImport
       parentRoute: typeof ConfigRouteRoute
     }
+    "/config/api-keys": {
+      id: "/config/api-keys"
+      path: "/api-keys"
+      fullPath: "/config/api-keys"
+      preLoaderRoute: typeof ConfigApiKeysLazyRouteImport
+      parentRoute: typeof ConfigRouteRoute
+    }
     "/config/core": {
       id: "/config/core"
       path: "/core"
@@ -252,6 +273,7 @@ declare module "@tanstack/react-router" {
 
 interface ConfigRouteRouteChildren {
   ConfigAgentsLazyRoute: typeof ConfigAgentsLazyRoute
+  ConfigApiKeysLazyRoute: typeof ConfigApiKeysLazyRoute
   ConfigCoreLazyRoute: typeof ConfigCoreLazyRoute
   ConfigDashboardLazyRoute: typeof ConfigDashboardLazyRoute
   ConfigLogsLazyRoute: typeof ConfigLogsLazyRoute
@@ -263,6 +285,7 @@ interface ConfigRouteRouteChildren {
 
 const ConfigRouteRouteChildren: ConfigRouteRouteChildren = {
   ConfigAgentsLazyRoute: ConfigAgentsLazyRoute,
+  ConfigApiKeysLazyRoute: ConfigApiKeysLazyRoute,
   ConfigCoreLazyRoute: ConfigCoreLazyRoute,
   ConfigDashboardLazyRoute: ConfigDashboardLazyRoute,
   ConfigLogsLazyRoute: ConfigLogsLazyRoute,

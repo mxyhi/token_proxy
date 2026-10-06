@@ -228,3 +228,37 @@ async fn atomic_write_rename_failure_preserves_existing_config_bytes() {
 
     let _ = tokio::fs::remove_dir_all(&data_dir).await;
 }
+
+#[tokio::test]
+async fn local_key_migration_writes_backup_and_conflict_leaves_file_unchanged() {
+    let data_dir = test_data_dir("local-key-migration");
+    tokio::fs::create_dir_all(&data_dir).await.unwrap();
+    let paths = TokenProxyPaths::from_app_data_dir(data_dir.clone()).unwrap();
+    let original = "{\"host\":\"127.0.0.1\",\"port\":9208,\"local_api_key\":\"original-secret\"}";
+    tokio::fs::write(paths.config_file(), original)
+        .await
+        .unwrap();
+    let loaded = load_config_file(&paths).await.unwrap();
+    assert_eq!(loaded.local_api_keys[0].key, "original-secret");
+    assert!(loaded.local_api_keys_migrated);
+    assert_eq!(
+        tokio::fs::read_to_string(build_backup_path(paths.config_file()))
+            .await
+            .unwrap(),
+        original
+    );
+    let reloaded = load_config_file(&paths).await.unwrap();
+    assert_eq!(reloaded.local_api_keys[0].id, loaded.local_api_keys[0].id);
+    let conflict = "{\"host\":\"127.0.0.1\",\"port\":9208,\"local_api_key\":\"original-secret\",\"local_api_keys\":[]}";
+    tokio::fs::write(paths.config_file(), conflict)
+        .await
+        .unwrap();
+    assert!(load_config_file(&paths).await.is_err());
+    assert_eq!(
+        tokio::fs::read_to_string(paths.config_file())
+            .await
+            .unwrap(),
+        conflict
+    );
+    tokio::fs::remove_dir_all(data_dir).await.unwrap();
+}

@@ -110,6 +110,7 @@ pub(super) async fn handle_upstream_result(
     xai_client_tools: Option<XaiClientToolMapping>,
     request_detail: Option<RequestDetailSnapshot>,
     cooldown_scope: &CooldownScope,
+    account_access_token: Option<&str>,
 ) -> AttemptOutcome {
     let account_id_value = account_id.as_deref().map(str::to_string);
     let proxy_base_url = http::local_proxy_base_url(&state.config);
@@ -147,15 +148,26 @@ pub(super) async fn handle_upstream_result(
                     account_id_value.as_deref(),
                 ));
             }
-            update_account_cooldown_from_response(
-                &state.account_selector,
+            let cooldown_hint = response.extensions().get::<AccountCooldownHint>().cloned();
+            let credential_current = with_current_account_result(
+                state,
                 provider,
                 account_id_value.as_deref(),
-                status,
-                &response_headers,
-                &response,
-                cooldown_scope,
-            );
+                account_access_token,
+                || {
+                    update_account_cooldown_from_response(
+                        &state.account_selector,
+                        provider,
+                        account_id_value.as_deref(),
+                        status,
+                        &response_headers,
+                        cooldown_hint.as_ref(),
+                        cooldown_scope,
+                    );
+                },
+            )
+            .await
+            .is_some();
             let mut response = response;
             // 固定账户 401/403/400 等：同 Upstream 再打无意义，直接跨 Upstream。
             // API-key upstream 不进此分支，保留 same_upstream_retry_count。
@@ -184,7 +196,7 @@ pub(super) async fn handle_upstream_result(
                 message: format!("Upstream responded with {}", response.status()),
                 response: Some(response),
                 is_timeout: false,
-                should_cooldown,
+                should_cooldown: should_cooldown && credential_current,
             }
         }
         Ok(res) => {
@@ -215,34 +227,55 @@ pub(super) async fn handle_upstream_result(
                 .get::<RetryableStreamResponse>()
                 .cloned()
             {
+                let mut credential_current = true;
                 if retryable.should_cooldown
                     || response.extensions().get::<AccountCooldownHint>().is_some()
                 {
-                    update_account_cooldown_from_response(
-                        &state.account_selector,
+                    let cooldown_hint = response.extensions().get::<AccountCooldownHint>().cloned();
+                    credential_current = with_current_account_result(
+                        state,
                         provider,
                         account_id_value.as_deref(),
-                        retryable.status,
-                        &response_headers,
-                        &response,
-                        cooldown_scope,
-                    );
+                        account_access_token,
+                        || {
+                            update_account_cooldown_from_response(
+                                &state.account_selector,
+                                provider,
+                                account_id_value.as_deref(),
+                                retryable.status,
+                                &response_headers,
+                                cooldown_hint.as_ref(),
+                                cooldown_scope,
+                            );
+                        },
+                    )
+                    .await
+                    .is_some();
                 }
                 return AttemptOutcome::Retryable {
                     message: retryable.message,
                     response: Some(response),
                     is_timeout: false,
-                    should_cooldown: retryable.should_cooldown,
+                    should_cooldown: retryable.should_cooldown && credential_current,
                 };
             }
-            update_account_cooldown_from_status(
+            with_current_account_result(
                 state,
                 provider,
                 account_id_value.as_deref(),
-                status,
-                &response_headers,
-                cooldown_scope,
-            );
+                account_access_token,
+                || {
+                    update_account_cooldown_from_status(
+                        state,
+                        provider,
+                        account_id_value.as_deref(),
+                        status,
+                        &response_headers,
+                        cooldown_scope,
+                    );
+                },
+            )
+            .await;
             AttemptOutcome::Success(attach_codex_response_identity(
                 response,
                 provider,
@@ -253,13 +286,23 @@ pub(super) async fn handle_upstream_result(
             // 无 response body 可统计，释放发送前 register 的窗口。
             drop(request_tracker);
             let message = sanitize_upstream_error(provider, &err);
-            mark_retryable_account_failure(
+            let credential_current = with_current_account_result(
                 state,
                 provider,
                 account_id_value.as_deref(),
-                Some(message.clone()),
-                cooldown_scope,
-            );
+                account_access_token,
+                || {
+                    mark_retryable_account_failure(
+                        state,
+                        provider,
+                        account_id_value.as_deref(),
+                        Some(message.clone()),
+                        cooldown_scope,
+                    );
+                },
+            )
+            .await
+            .is_some();
             // 每次真实上游失败都落库；错误请求由 SQLite retention 在 7 天后清理。
             log_upstream_error_if_needed(
                 &log,
@@ -281,7 +324,7 @@ pub(super) async fn handle_upstream_result(
                 message: message.clone(),
                 response: None,
                 is_timeout: err.is_timeout(),
-                should_cooldown: true,
+                should_cooldown: credential_current,
             }
         }
         Err(err) => {
@@ -501,6 +544,55 @@ fn finalize_forward_response(
     http::error_response(StatusCode::BAD_GATEWAY, "No available upstream configured.")
 }
 
+pub(super) async fn with_current_account_result<T>(
+    state: &ProxyState,
+    provider: &str,
+    account_id: Option<&str>,
+    token: Option<&str>,
+    apply: impl FnOnce() -> T,
+) -> Option<T> {
+    let Some(account_id) = account_id else {
+        return Some(apply());
+    };
+    let Some(token) = token else {
+        tracing::debug!(
+            provider,
+            account_id,
+            "account result has no credential proof; skipping availability update"
+        );
+        return None;
+    };
+    let result = match provider {
+        "codex" => {
+            state
+                .codex_accounts
+                .with_current_access_token(account_id, token, apply)
+                .await
+        }
+        "kiro" => {
+            state
+                .kiro_accounts
+                .with_current_access_token(account_id, token, apply)
+                .await
+        }
+        "xai" => {
+            state
+                .xai_accounts
+                .with_current_access_token(account_id, token, apply)
+                .await
+        }
+        _ => Some(apply()),
+    };
+    if result.is_none() {
+        tracing::info!(
+            provider,
+            account_id,
+            "ignoring availability update from superseded account credentials"
+        );
+    }
+    result
+}
+
 fn update_account_cooldown_from_status(
     state: &ProxyState,
     provider: &str,
@@ -513,9 +605,7 @@ fn update_account_cooldown_from_status(
         return;
     };
     if status.is_success() {
-        state
-            .account_selector
-            .clear_cooldown_scoped(provider, account_id, cooldown_scope);
+        // 并发成功属于另一次请求，不能提前解除当前已生效的等待窗口。
         return;
     }
     let _ = state.account_selector.mark_response_status_scoped(
@@ -533,13 +623,13 @@ fn update_account_cooldown_from_response(
     account_id: Option<&str>,
     status: StatusCode,
     headers: &reqwest::header::HeaderMap,
-    response: &Response,
+    cooldown_hint: Option<&AccountCooldownHint>,
     cooldown_scope: &CooldownScope,
 ) {
     let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
     };
-    if let Some(hint) = response.extensions().get::<AccountCooldownHint>() {
+    if let Some(hint) = cooldown_hint {
         let until = account_selector.mark_explicit_cooldown_scoped(
             provider,
             account_id,

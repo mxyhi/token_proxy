@@ -51,6 +51,9 @@ pub struct RequestLogDetail {
     pub request_headers: Option<String>,
     pub request_body: Option<String>,
     pub response_body: Option<String>,
+    pub response_body_bytes: u64,
+    pub response_body_next_offset: Option<u64>,
+    pub response_capture_error: Option<String>,
     pub response_error: Option<String>,
 }
 
@@ -58,6 +61,7 @@ pub async fn read_request_log_detail(
     pool: &sqlx::SqlitePool,
     id: u64,
 ) -> Result<RequestLogDetail, String> {
+    let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
     let row = sqlx::query(
         r#"
 SELECT
@@ -101,7 +105,9 @@ SELECT
   usage_json,
   request_headers,
   request_body,
-  response_body,
+  (response_body IS NOT NULL OR response_body_chunked != 0) AS has_response_body,
+  response_capture_error,
+  COALESCE(response_body_bytes, length(CAST(response_body AS BLOB)), 0) AS response_body_bytes,
   response_error
 FROM request_logs
 WHERE id = ?
@@ -109,7 +115,7 @@ LIMIT 1;
 "#,
     )
     .bind(id as i64)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *transaction)
     .await
     .map_err(|err| format!("Failed to query request log detail: {err}"))?;
 
@@ -159,6 +165,24 @@ LIMIT 1;
         .any(Option::is_some)
         .then(|| cache_components.iter().flatten().copied().sum());
 
+    let mut capture_error = row
+        .try_get::<Option<String>, _>("response_capture_error")
+        .ok()
+        .flatten();
+    let body_page = match read_body_page_in_transaction(&mut transaction, id, 0).await {
+        Ok(page) => Some(page),
+        Err(error) => {
+            capture_error = Some(match capture_error {
+                Some(previous) => format!("{previous}; {error}"),
+                None => error,
+            });
+            None
+        }
+    };
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())?;
     Ok(RequestLogDetail {
         id: row.try_get::<i64, _>("id").unwrap_or_default().max(0) as u64,
         ts_ms: row.try_get::<i64, _>("ts_ms").unwrap_or_default(),
@@ -264,14 +288,147 @@ LIMIT 1;
             .try_get::<Option<String>, _>("request_body")
             .ok()
             .flatten(),
-        response_body: row
-            .try_get::<Option<String>, _>("response_body")
-            .ok()
-            .flatten(),
+        response_body: body_page
+            .as_ref()
+            .filter(|_| row.try_get::<bool, _>("has_response_body").unwrap_or(false))
+            .map(|page| page.text.clone()),
+        response_body_bytes: row
+            .try_get::<i64, _>("response_body_bytes")
+            .unwrap_or_default()
+            .max(0) as u64,
+        response_body_next_offset: body_page.and_then(|page| page.next_offset),
+        response_capture_error: capture_error,
         response_error: row
             .try_get::<Option<String>, _>("response_error")
             .ok()
             .flatten(),
+    })
+}
+
+/// 字节偏移分页；调用者应原样使用 next_offset，避免落在 UTF-8 字符中间。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RequestLogBodyPage {
+    pub text: String,
+    pub offset: u64,
+    pub next_offset: Option<u64>,
+    pub total_bytes: u64,
+}
+
+pub async fn read_request_log_body_page(
+    pool: &sqlx::SqlitePool,
+    id: u64,
+    offset: u64,
+) -> Result<RequestLogBodyPage, String> {
+    let mut transaction = pool.begin().await.map_err(|error| error.to_string())?;
+    let page = read_body_page_in_transaction(&mut transaction, id, offset).await?;
+    transaction
+        .commit()
+        .await
+        .map_err(|error| error.to_string())?;
+    Ok(page)
+}
+
+async fn read_body_page_in_transaction(
+    connection: &mut sqlx::SqliteConnection,
+    id: u64,
+    offset: u64,
+) -> Result<RequestLogBodyPage, String> {
+    use crate::body_capture::BODY_PAGE_BYTES;
+    let id = i64::try_from(id).map_err(|_| "Invalid request log ID")?;
+    let row = sqlx::query("SELECT response_body_chunked, COALESCE(response_body_bytes, length(CAST(response_body AS BLOB)), 0) AS total FROM request_logs WHERE id = ?;")
+        .bind(id).fetch_optional(&mut *connection).await.map_err(|error| error.to_string())?
+        .ok_or("Request log not found.")?;
+    let total = row
+        .try_get::<i64, _>("total")
+        .map_err(|error| error.to_string())?
+        .max(0) as u64;
+    if offset > total {
+        return Err("Response body offset is out of range.".to_owned());
+    }
+    let wanted = (total - offset).min(BODY_PAGE_BYTES as u64) as usize;
+    if wanted == 0 {
+        return Ok(RequestLogBodyPage {
+            text: String::new(),
+            offset,
+            next_offset: None,
+            total_bytes: total,
+        });
+    }
+    let chunked = row
+        .try_get::<bool, _>("response_body_chunked")
+        .map_err(|error| error.to_string())?;
+    let mut bytes = Vec::with_capacity(wanted);
+    if chunked {
+        let first = offset / BODY_PAGE_BYTES as u64;
+        let last = (offset + wanted as u64 - 1) / BODY_PAGE_BYTES as u64;
+        let chunks = sqlx::query("SELECT ordinal, data FROM response_body_chunks WHERE log_id = ? AND ordinal >= ? AND ordinal <= ? ORDER BY ordinal;")
+            .bind(id).bind(first as i64).bind(last as i64)
+            .fetch_all(&mut *connection).await.map_err(|error| error.to_string())?;
+        if chunks.len() != (last - first + 1) as usize {
+            return Err("Stored response body has missing chunks.".to_owned());
+        }
+        for (index, chunk) in chunks.iter().enumerate() {
+            let ordinal = chunk
+                .try_get::<i64, _>("ordinal")
+                .map_err(|error| error.to_string())?;
+            if ordinal != (first + index as u64) as i64 {
+                return Err("Stored response body has missing chunks.".to_owned());
+            }
+            let data = chunk
+                .try_get::<Vec<u8>, _>("data")
+                .map_err(|error| error.to_string())?;
+            let expected = (total - ordinal as u64 * BODY_PAGE_BYTES as u64)
+                .min(BODY_PAGE_BYTES as u64) as usize;
+            if data.len() != expected {
+                return Err("Stored response body has an invalid chunk length.".to_owned());
+            }
+            let start = if index == 0 {
+                (offset % BODY_PAGE_BYTES as u64) as usize
+            } else {
+                0
+            };
+            let length = (wanted - bytes.len()).min(data.len() - start);
+            bytes.extend_from_slice(&data[start..start + length]);
+        }
+    } else {
+        // 历史 TEXT 由 SQLite 加载原值；应用层只接收有界 BLOB 子串。
+        let sql_offset = i64::try_from(offset)
+            .ok()
+            .and_then(|value| value.checked_add(1))
+            .ok_or("Response body offset is out of range.")?;
+        bytes = sqlx::query_scalar::<_, Option<Vec<u8>>>(
+            "SELECT substr(CAST(response_body AS BLOB), ?, ?) FROM request_logs WHERE id = ?;",
+        )
+        .bind(sql_offset)
+        .bind(wanted as i64)
+        .bind(id)
+        .fetch_one(&mut *connection)
+        .await
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    }
+    if bytes.len() != wanted {
+        return Err("Stored response body is incomplete.".to_owned());
+    }
+    match std::str::from_utf8(&bytes) {
+        Ok(_) => {},
+        Err(error) if error.error_len().is_none() && offset + (bytes.len() as u64) < total => {
+            // 页尾只截去合法但尚未完整的字符，下一页从其起始字节继续。
+            bytes.truncate(error.valid_up_to());
+        }
+        Err(_) => return Err("Stored response body contains invalid UTF-8 or the offset is not a character boundary.".to_owned()),
+    }
+    let next = offset + bytes.len() as u64;
+    if next == offset && next < total {
+        return Err("Stored response body is incomplete.".to_owned());
+    }
+    Ok(RequestLogBodyPage {
+        text: String::from_utf8(bytes)
+            .map_err(|_| "Stored response body contains invalid UTF-8.")?,
+        offset,
+        next_offset: (next < total).then_some(next),
+        total_bytes: total,
     })
 }
 

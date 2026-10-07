@@ -25,12 +25,12 @@ use commands::{
     proxy_restart, proxy_start, proxy_status, proxy_stop, read_dashboard_snapshot,
     read_data_storage_usage, read_default_hot_model_mappings, read_local_api_key_usage,
     read_model_pricing_settings, read_proxy_config, read_request_detail_capture,
-    read_request_log_detail, refresh_dashboard_model_discovery, reset_model_pricing_settings,
-    save_model_pricing_settings, save_proxy_config, set_request_detail_capture,
-    write_claude_code_settings, write_codex_config, xai_cancel_login, xai_fetch_quotas,
-    xai_import_file, xai_import_refresh_tokens, xai_import_text, xai_list_accounts, xai_poll_login,
-    xai_refresh_account, xai_refresh_quota_cache, xai_refresh_quota_now, xai_set_auto_refresh,
-    xai_start_login,
+    read_request_log_body_page, read_request_log_detail, refresh_dashboard_model_discovery,
+    reset_model_pricing_settings, save_model_pricing_settings, save_proxy_config,
+    set_request_detail_capture, write_claude_code_settings, write_codex_config, xai_cancel_login,
+    xai_fetch_quotas, xai_import_file, xai_import_refresh_tokens, xai_import_text,
+    xai_list_accounts, xai_poll_login, xai_refresh_account, xai_refresh_quota_cache,
+    xai_refresh_quota_now, xai_set_auto_refresh, xai_start_login,
 };
 
 type LogLevel = logging::LogLevel;
@@ -268,6 +268,7 @@ pub fn run() {
             read_local_api_key_usage,
             refresh_dashboard_model_discovery,
             read_request_log_detail,
+            read_request_log_body_page,
             read_request_detail_capture,
             set_request_detail_capture,
             kiro_list_accounts,

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { AlertCircle, Check, Copy } from "lucide-react";
@@ -31,7 +31,6 @@ import {
 } from "@/features/dashboard/format";
 import {
   readRequestDetailCapture,
-  readRequestLogDetail,
   setRequestDetailCapture,
 } from "@/features/logs/api";
 import {
@@ -43,7 +42,7 @@ import type {
   RequestLogDetail,
 } from "@/features/logs/types";
 import { useI18n } from "@/lib/i18n";
-import { parseError } from "@/lib/error";
+import { useRequestLogDetail, type DetailStatus } from "./use-request-log-detail";
 import { m } from "@/paraglide/messages.js";
 
 const DETAIL_PLACEHOLDER = "—";
@@ -56,8 +55,6 @@ const IDLE_CAPTURE_STATE: RequestDetailCaptureState = {
   enabled: false,
   expiresAtMs: null,
 };
-
-type DetailStatus = "idle" | "loading" | "error";
 
 type RequestDetailCaptureEvent = RequestDetailCaptureState;
 
@@ -335,6 +332,7 @@ type RequestDetailSheetProps = {
   statusMessage: string;
   detail: RequestLogDetail | null;
   formatter: Intl.DateTimeFormat;
+  pagination: ReturnType<typeof useRequestLogDetail>;
 };
 
 function RequestDetailSheet({
@@ -344,12 +342,25 @@ function RequestDetailSheet({
   statusMessage,
   detail,
   formatter,
+  pagination,
 }: RequestDetailSheetProps) {
   const [copied, setCopied] = useState(false);
+  const isPaged = detail != null && (pagination.offset > 0 || detail.responseBodyNextOffset != null);
+  const pageRange = detail ? m.logs_response_page_range({
+    start: detail.responseBodyBytes > 0 ? pagination.offset + 1 : 0,
+    end: detail.responseBodyNextOffset ?? detail.responseBodyBytes,
+    total: detail.responseBodyBytes,
+  }) : "";
 
   const handleCopy = useCallback(async () => {
     if (!detail) return;
-    const text = formatDetailAsText(detail, formatter);
+    const pageNotice = isPaged
+      ? `${pageRange}\n${m.logs_response_page_notice()}\n\n`
+      : "";
+    const captureError = detail.responseCaptureError
+      ? `\n\n${m.logs_response_capture_error()}: ${detail.responseCaptureError}`
+      : "";
+    const text = pageNotice + formatDetailAsText(detail, formatter) + captureError;
     try {
       await writeText(text);
       setCopied(true);
@@ -357,7 +368,7 @@ function RequestDetailSheet({
     } catch {
       toast.error(m.logs_detail_copy_failed());
     }
-  }, [detail, formatter]);
+  }, [detail, formatter, isPaged, pageRange]);
 
   // 重置复制状态当 sheet 关闭时，并清理 timeout
   useEffect(() => {
@@ -387,6 +398,8 @@ function RequestDetailSheet({
                 variant="outline"
                 size="icon"
                 onClick={handleCopy}
+                disabled={pagination.pageLoading}
+                title={isPaged ? m.logs_response_copy_page() : m.logs_detail_copy()}
                 className="size-7"
               >
                 {copied ? (
@@ -395,7 +408,7 @@ function RequestDetailSheet({
                   <Copy className="size-3.5" aria-hidden="true" />
                 )}
                 <span className="sr-only">
-                  {copied ? m.logs_detail_copied() : m.logs_detail_copy()}
+                  {copied ? m.logs_detail_copied() : isPaged ? m.logs_response_copy_page() : m.logs_detail_copy()}
                 </span>
               </Button>
             ) : null}
@@ -431,10 +444,44 @@ function RequestDetailSheet({
                   title={m.logs_detail_body()}
                   value={detail.requestBody}
                 />
-                <DetailSection
-                  title={m.logs_detail_response()}
-                  value={getResponseDetailValue(detail)}
-                />
+                {detail.responseCaptureError ? (
+                  <Alert variant="destructive">
+                    <AlertTitle>{m.logs_response_capture_error()}</AlertTitle>
+                    <AlertDescription>{detail.responseCaptureError}</AlertDescription>
+                  </Alert>
+                ) : null}
+                <section aria-busy={pagination.pageLoading} className="space-y-2">
+                  <DetailSection
+                    title={m.logs_detail_response()}
+                    value={getResponseDetailValue(detail)}
+                  />
+                  {isPaged ? (
+                    <>
+                      <p className="text-xs text-muted-foreground">{pageRange}</p>
+                      <p className="text-xs text-muted-foreground">{m.logs_response_page_notice()}</p>
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" disabled={pagination.pageLoading || !pagination.hasPreviousPage} onClick={pagination.previousPage}>
+                          {m.logs_response_page_previous()}
+                        </Button>
+                        <Button variant="outline" size="sm" disabled={pagination.pageLoading || detail.responseBodyNextOffset == null} onClick={pagination.nextPage}>
+                          {m.logs_response_page_next()}
+                        </Button>
+                      </div>
+                    </>
+                  ) : null}
+                  {pagination.pageLoading ? <p role="status" className="text-xs">{m.logs_detail_loading()}</p> : null}
+                  {pagination.pageError ? (
+                    <Alert variant="destructive">
+                      <AlertTitle>{m.logs_detail_error()}</AlertTitle>
+                      <AlertDescription>
+                        <p>{pagination.pageError}</p>
+                        <Button variant="outline" size="sm" onClick={pagination.retryPage}>
+                          {m.logs_response_page_retry()}
+                        </Button>
+                      </AlertDescription>
+                    </Alert>
+                  ) : null}
+                </section>
               </div>
             ) : null}
           </div>
@@ -471,11 +518,7 @@ export function LogsPanel() {
   const [captureState, setCaptureState] = useState<RequestDetailCaptureState>(IDLE_CAPTURE_STATE);
   const [captureLoading, setCaptureLoading] = useState(false);
   const [captureNowMs, setCaptureNowMs] = useState(() => Date.now());
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [detailStatus, setDetailStatus] = useState<DetailStatus>("idle");
-  const [detailMessage, setDetailMessage] = useState("");
-  const [detail, setDetail] = useState<RequestLogDetail | null>(null);
-  const detailRequestSeq = useRef(0);
+  const requestDetail = useRequestLogDetail();
 
   const isLoading = status === "loading";
   const captureEnabled = isCaptureWindowActive(captureState, captureNowMs);
@@ -575,46 +618,6 @@ export function LogsPanel() {
     }
   }, [updateCaptureState]);
 
-  const handleSelectItem = useCallback(async (itemId: number) => {
-    const requestId = detailRequestSeq.current + 1;
-    detailRequestSeq.current = requestId;
-    setDetailOpen(true);
-    setDetail(null);
-    setDetailStatus("loading");
-    setDetailMessage("");
-
-    try {
-      const data = await readRequestLogDetail(itemId);
-      if (detailRequestSeq.current === requestId) {
-        setDetail(data);
-        setDetailStatus("idle");
-      }
-    } catch (error) {
-      if (detailRequestSeq.current === requestId) {
-        setDetailMessage(parseError(error));
-        setDetailStatus("error");
-      }
-    }
-  }, []);
-
-  const handleDetailOpenChange = useCallback((nextOpen: boolean) => {
-    if (nextOpen) {
-      setDetailOpen(true);
-      return;
-    }
-
-    detailRequestSeq.current += 1;
-    setDetailOpen(false);
-    setDetail(null);
-    setDetailStatus("idle");
-    setDetailMessage("");
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      detailRequestSeq.current += 1;
-    };
-  }, []);
 
   return (
     <div data-testid="logs-panel" className="flex min-h-0 flex-1 flex-col gap-4">
@@ -659,16 +662,17 @@ export function LogsPanel() {
         scrollKey={`${rangePreset}-${pagination.page}`}
         onPrevPage={onPrevPage}
         onNextPage={onNextPage}
-        onSelectItem={(item) => handleSelectItem(item.id)}
+        onSelectItem={(item) => void requestDetail.select(item.id)}
       />
 
       <RequestDetailSheet
-        open={detailOpen}
-        onOpenChange={handleDetailOpenChange}
-        status={detailStatus}
-        statusMessage={detailMessage}
-        detail={detail}
+        open={requestDetail.open}
+        onOpenChange={requestDetail.onOpenChange}
+        status={requestDetail.status}
+        statusMessage={requestDetail.message}
+        detail={requestDetail.detail}
         formatter={formatter}
+        pagination={requestDetail}
       />
     </div>
   );

@@ -23,7 +23,7 @@ pub(crate) fn build_router(
 ) -> Router<ProxyStateHandle> {
     Router::new()
         .route("/{*path}", any(proxy_request_with_connect_info))
-        // 限制入站请求体，避免超大请求占用内存/临时盘并拖慢首字节。
+        // 保留提取器的默认预算；Body 手动读取的硬上限由 ReplayableBody 执行。
         .layer(DefaultBodyLimit::max(max_request_body_bytes))
         .with_state(state)
 }

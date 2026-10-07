@@ -80,8 +80,21 @@ fn normalize_raw_chat_tool_deltas(upstream: UpstreamBytesStream) -> UpstreamByte
                 }
                 match state.upstream.next().await {
                     Some(Ok(chunk)) => {
-                        state.pending.extend_from_slice(&chunk);
-                        state.drain_complete_frames();
+                        // 按行推进帧缓冲，避免一个含很多小事件的 transport chunk 被误判超限。
+                        for part in chunk.split_inclusive(|byte| *byte == b'\n') {
+                            if state.pending.len().saturating_add(part.len())
+                                > token_proxy_protocol::sse::MAX_SSE_EVENT_BYTES
+                            {
+                                return Err(upstream_stream::UpstreamStreamError::Protocol(
+                                    std::io::Error::new(
+                                        std::io::ErrorKind::InvalidData,
+                                        "Upstream Chat SSE frame exceeds 50 MiB limit.",
+                                    ),
+                                ));
+                            }
+                            state.pending.extend_from_slice(part);
+                            state.drain_complete_frames();
+                        }
                     }
                     Some(Err(error)) => {
                         // 已接收的非完整帧仍属于客户端可见原始流，先发送后再报告错误。
@@ -248,7 +261,7 @@ fn restore_xai_client_tool_stream(
                 match state.upstream.next().await {
                     Some(Ok(chunk)) => {
                         let mut events = Vec::new();
-                        state.parser.push_chunk(&chunk, |event| events.push(event));
+                        state.parser.push_chunk(&chunk, |event| events.push(event)).map_err(|error| upstream_stream::UpstreamStreamError::Protocol(error.into()))?;
                         for event in events {
                             state.push_event(&event);
                         }
@@ -257,7 +270,7 @@ fn restore_xai_client_tool_stream(
                     None => {
                         state.ended = true;
                         let mut events = Vec::new();
-                        state.parser.finish(|event| events.push(event));
+                        state.parser.finish(|event| events.push(event)).map_err(|error| upstream_stream::UpstreamStreamError::Protocol(error.into()))?;
                         for event in events {
                             state.push_event(&event);
                         }
@@ -308,6 +321,9 @@ pub(super) async fn build_stream_response(
     stream_first_output_timeout: Duration,
     sync_response_timeout: Duration,
 ) -> Response {
+    // 即使协议不变，终态补齐、模型映射和工具身份修正也会改变 SSE 字节数。
+    let mut headers = headers;
+    headers.remove(axum::http::header::CONTENT_LENGTH);
     let mut context = context;
     let upstream = match prepare_upstream_stream(
         status,
@@ -640,7 +656,7 @@ impl ImageGenerationStreamState {
             match self.upstream.next().await {
                 Some(Ok(chunk)) => {
                     let mut events = Vec::new();
-                    self.parser.push_chunk(&chunk, |data| events.push(data));
+                    self.parser.push_chunk(&chunk, |data| events.push(data))?;
                     for data in events {
                         self.process_data(&data);
                     }
@@ -651,7 +667,7 @@ impl ImageGenerationStreamState {
                 None => {
                     self.upstream_ended = true;
                     let mut events = Vec::new();
-                    self.parser.finish(|data| events.push(data));
+                    self.parser.finish(|data| events.push(data))?;
                     for data in events {
                         self.process_data(&data);
                     }
@@ -1455,6 +1471,10 @@ fn stream_error_response(
                 "Upstream response timed out after {}s.",
                 sync_response_timeout.as_secs()
             ),
+        ),
+        upstream_stream::UpstreamStreamError::Protocol(err) => (
+            StatusCode::BAD_GATEWAY,
+            format!("Failed to parse upstream SSE: {err}"),
         ),
         upstream_stream::UpstreamStreamError::Upstream(err) => {
             let raw = err.to_string();

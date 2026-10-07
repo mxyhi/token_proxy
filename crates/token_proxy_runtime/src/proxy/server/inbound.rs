@@ -10,7 +10,7 @@ use super::super::{
     http,
     log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     openai, path_guard,
-    request_body::ReplayableBody,
+    request_body::{ReplayableBody, RequestBodyError},
     request_detail::{capture_request_detail, serialize_request_headers, RequestDetailSnapshot},
     server_helpers::{log_debug_request, parse_request_meta_best_effort},
     RequestMeta,
@@ -79,6 +79,7 @@ pub(super) async fn prepare_inbound_request(
         client_ip.clone(),
         &path,
         request_start,
+        state.config.max_request_body_bytes,
     )
     .await?;
     if is_debug_log {
@@ -216,7 +217,7 @@ async fn capture_detail_from_body(
     body: Body,
     max_body_bytes: usize,
 ) -> RequestDetailSnapshot {
-    match ReplayableBody::from_body(body).await {
+    match ReplayableBody::from_body(body, max_body_bytes).await {
         Ok(replayable) => capture_request_detail(headers, &replayable, max_body_bytes).await,
         Err(err) => RequestDetailSnapshot {
             request_headers: serialize_request_headers(headers),
@@ -270,10 +271,15 @@ async fn read_body_or_respond(
     client_ip: Option<String>,
     path: &str,
     request_start: Instant,
+    max_body_bytes: usize,
 ) -> Result<ReplayableBody, Response> {
-    match ReplayableBody::from_body(body).await {
+    match ReplayableBody::from_body(body, max_body_bytes).await {
         Ok(body) => Ok(body),
         Err(err) => {
+            let status = match &err {
+                RequestBodyError::TooLarge { .. } => StatusCode::PAYLOAD_TOO_LARGE,
+                RequestBodyError::Read(_) => StatusCode::BAD_REQUEST,
+            };
             let message = format!("Failed to read request body: {err}");
             let detail = if capture_request_detail_enabled {
                 Some(RequestDetailSnapshot {
@@ -290,11 +296,11 @@ async fn read_body_or_respond(
                 path,
                 PROVIDER_PROXY,
                 LOCAL_UPSTREAM_ID,
-                StatusCode::BAD_REQUEST,
+                status,
                 message.clone(),
                 request_start,
             );
-            Err(http::error_response(StatusCode::BAD_REQUEST, message))
+            Err(http::error_response(status, message))
         }
     }
 }

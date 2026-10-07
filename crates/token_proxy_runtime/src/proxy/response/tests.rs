@@ -1002,3 +1002,6 @@ fn stream_chat_to_responses_normalizes_empty_function_arguments() {
         assert_eq!(completed["response"]["output"][0]["arguments"], "{}");
     });
 }
+
+#[path = "tests_forwarding_contract.rs"]
+mod forwarding_contract;

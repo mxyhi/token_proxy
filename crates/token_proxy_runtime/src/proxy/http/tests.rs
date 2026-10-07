@@ -556,3 +556,32 @@ fn local_key_identity_disabled_and_gemini_resume_key_are_request_specific() {
             .is_none()
     );
 }
+
+#[test]
+fn forwarding_removes_all_connection_nominated_headers() {
+    let mut headers = HeaderMap::new();
+    headers.append(
+        CONNECTION,
+        HeaderValue::from_static("keep-alive, X-Hop-Token"),
+    );
+    headers.append(CONNECTION, HeaderValue::from_static(" x-second-hop "));
+    headers.insert("x-hop-token", HeaderValue::from_static("connection-only"));
+    headers.insert("x-second-hop", HeaderValue::from_static("connection-only"));
+    headers.append("x-end-to-end", HeaderValue::from_static("one"));
+    headers.append("x-end-to-end", HeaderValue::from_static("two"));
+    let request = build_upstream_headers(
+        &headers,
+        UpstreamAuthHeader {
+            name: AUTHORIZATION,
+            value: HeaderValue::from_static("Bearer upstream"),
+        },
+    );
+    let response = filter_response_headers(&headers);
+    for filtered in [&request, &response] {
+        assert!(!filtered.contains_key(CONNECTION));
+        assert!(!filtered.contains_key("x-hop-token"));
+        assert!(!filtered.contains_key("x-second-hop"));
+        assert_eq!(filtered.get_all("x-end-to-end").iter().count(), 2);
+    }
+    assert_eq!(request[AUTHORIZATION], "Bearer upstream");
+}

@@ -5996,7 +5996,7 @@ fn responses_codex_session_scoped_cooldown_clears_after_successful_failover() {
     run_async(async {
         // Phase B: 成功 failover 后 session 内不应长期冷却失败 account。
         let codex =
-            spawn_auth_switch_mock_upstream_with_primary_status(StatusCode::UNAUTHORIZED).await;
+            spawn_auth_switch_mock_upstream_with_primary_status(StatusCode::FORBIDDEN).await;
 
         let mut config = config_with_runtime_upstreams(&[
             (
@@ -6092,12 +6092,12 @@ fn responses_codex_session_scoped_cooldown_isolates_failed_sessions() {
     run_async(async {
         // Phase B: session-a 冷却不得污染 session-b 的两固定 Upstream 尝试。
         let codex = spawn_mock_upstream(
-            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
             json!({
                 "error": {
-                    "message": "codex account unauthorized",
+                    "message": "codex account policy denied",
                     "type": "invalid_request_error",
-                    "code": "token_invalidated"
+                    "code": "policy_denied"
                 }
             }),
         )
@@ -6188,12 +6188,12 @@ fn responses_codex_session_scoped_cooldown_does_not_share_missing_session() {
     run_async(async {
         // Phase B: 无 session_id 时各请求独立尝试两固定 Upstream。
         let codex = spawn_mock_upstream(
-            StatusCode::UNAUTHORIZED,
+            StatusCode::FORBIDDEN,
             json!({
                 "error": {
-                    "message": "codex account unauthorized",
+                    "message": "codex account policy denied",
                     "type": "invalid_request_error",
-                    "code": "token_invalidated"
+                    "code": "policy_denied"
                 }
             }),
         )
@@ -11452,3 +11452,9 @@ data: [DONE]\n\n",
         assert_eq!(done["item"]["namespace"], json!("mcp__docs"));
     });
 }
+
+#[path = "body_limit.test.rs"]
+mod body_limit;
+
+#[path = "credential_results.test.rs"]
+mod credential_results;

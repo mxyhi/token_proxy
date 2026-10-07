@@ -10,5 +10,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11"
 sqlx = { version = "0.9", features = ["runtime-tokio", "sqlite"] }
-tokio = { version = "1.53", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+tempfile = "3.27"
+tokio = { version = "1.53", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
 tracing = { version = "0.1.44", features = ["release_max_level_off"] }

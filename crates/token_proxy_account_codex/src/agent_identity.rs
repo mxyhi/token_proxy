@@ -147,6 +147,26 @@ fn authorization_header_at(
     Ok(format!("AgentAssertion {encoded}"))
 }
 
+/// 比较实际发送的 assertion 与当前身份，使用原 timestamp，避免把旧任务结果写入新身份。
+pub(crate) fn authorization_matches(identity: CodexAgentIdentityRef<'_>, header: &str) -> bool {
+    let Some(encoded) = header.strip_prefix("AgentAssertion ") else {
+        return false;
+    };
+    let Ok(bytes) = URL_SAFE_NO_PAD.decode(encoded) else {
+        return false;
+    };
+    let Ok(envelope) = serde_json::from_slice::<Value>(&bytes) else {
+        return false;
+    };
+    let Some(timestamp) = envelope.get("timestamp").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(task_id) = identity.task_id else {
+        return false;
+    };
+    authorization_header_at(identity, task_id, timestamp).is_ok_and(|current| current == header)
+}
+
 pub(crate) async fn register_task(
     client: &reqwest::Client,
     auth_base_url: &str,
@@ -341,6 +361,18 @@ mod tests {
                 chatgpt_account_is_fedramp: false,
             },
         )
+    }
+
+    #[test]
+    fn availability_result_assertion_must_match_current_task_and_key() {
+        let (_, identity) = test_identity(Some("task-a"));
+        let header = authorization_header_at(identity, "task-a", "2026-07-22T12:00:00Z").unwrap();
+        let (_, current) = test_identity(Some("task-a"));
+        assert!(authorization_matches(current, &header));
+        let (_, replaced) = test_identity(Some("task-b"));
+        assert!(!authorization_matches(replaced, &header));
+        let (_, current) = test_identity(Some("task-a"));
+        assert!(!authorization_matches(current, "AgentAssertion invalid"));
     }
 
     #[test]

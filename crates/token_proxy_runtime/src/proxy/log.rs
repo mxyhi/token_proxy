@@ -7,9 +7,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-pub(crate) use token_proxy_storage::log::{
-    attach_response_body, LogEntry, LogWriter, TokenUsage, UsageSnapshot,
-};
+pub(crate) use token_proxy_storage::log::{LogEntry, LogWriter, TokenUsage, UsageSnapshot};
 use token_proxy_storage::pricing::{calculate_request_cost, default_model_pricing_settings};
 
 #[derive(Clone)]

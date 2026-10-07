@@ -62,10 +62,27 @@ where
             }
             match state.upstream.next().await {
                 Some(Ok(chunk)) => {
-                    state.pending.extend_from_slice(&chunk);
-                    while let Some(end) = frame_end(&state.pending) {
-                        let frame = state.pending.drain(..end).collect();
-                        state.push_frame(frame);
+                    // 原始帧缓冲也需有界，不能等完整空行后才交给 SSE parser 检查。
+                    for part in chunk.split_inclusive(|byte| *byte == b'\n') {
+                        if state.pending.len().saturating_add(part.len())
+                            > token_proxy_protocol::sse::MAX_SSE_EVENT_BYTES
+                        {
+                            state.pending = Vec::new();
+                            state.ended = true;
+                            state.error = Some(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "Upstream Chat SSE frame exceeds 50 MiB limit.",
+                            ));
+                            break;
+                        }
+                        state.pending.extend_from_slice(part);
+                        while let Some(end) = frame_end(&state.pending) {
+                            let frame = state.pending.drain(..end).collect();
+                            state.push_frame(frame);
+                            if state.ended {
+                                break;
+                            }
+                        }
                         if state.ended {
                             break;
                         }
@@ -113,8 +130,14 @@ impl<S> ChatStreamState<S> {
     fn push_frame(&mut self, frame: Vec<u8>) {
         let mut parser = SseEventParser::new();
         let mut events = Vec::new();
-        parser.push_chunk(&frame, |data| events.push(data));
-        parser.finish(|data| events.push(data));
+        if let Err(error) = parser
+            .push_chunk(&frame, |data| events.push(data))
+            .and_then(|()| parser.finish(|data| events.push(data)))
+        {
+            self.ended = true;
+            self.error = Some(error.into());
+            return;
+        }
         for data in events {
             if data.trim() == "[DONE]" {
                 self.ended = true;

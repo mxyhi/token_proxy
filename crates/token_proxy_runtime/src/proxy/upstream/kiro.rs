@@ -127,6 +127,7 @@ async fn attempt_endpoint(
                         start_time,
                         timings,
                         token_tracker,
+                        &context.record.access_token,
                     )
                     .await,
                 );
@@ -205,6 +206,7 @@ async fn send_endpoint_request(
                 context.request_detail.clone(),
                 err,
                 start_time,
+                &context.record.access_token,
             )
             .await;
             return Err(outcome);

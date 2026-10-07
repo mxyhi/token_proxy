@@ -28,7 +28,7 @@ pub use token_proxy_runtime::proxy::{
 pub use token_proxy_storage::{
     dashboard::{DashboardRange, DashboardSnapshot},
     local_api_key_usage::LocalApiKeyUsage,
-    logs::RequestLogDetail,
+    logs::{RequestLogBodyPage, RequestLogDetail},
     pricing::{ModelPricingSettingsInput, ModelPricingSettingsSnapshot, RemoteCatalogRefresh},
 };
 
@@ -229,6 +229,17 @@ impl TokenProxyApp {
         let pool =
             token_proxy_storage::sqlite::open_read_pool(&self.paths.sqlite_db_path()).await?;
         token_proxy_storage::logs::read_request_log_detail(&pool, id).await
+    }
+
+    /// 分页读取响应正文，避免通过 IPC 传递完整长流。
+    pub async fn read_request_log_body_page(
+        &self,
+        id: u64,
+        offset: u64,
+    ) -> Result<RequestLogBodyPage, String> {
+        let pool =
+            token_proxy_storage::sqlite::open_read_pool(&self.paths.sqlite_db_path()).await?;
+        token_proxy_storage::logs::read_request_log_body_page(&pool, id, offset).await
     }
 
     /// 读取当前临时请求详情捕获状态。

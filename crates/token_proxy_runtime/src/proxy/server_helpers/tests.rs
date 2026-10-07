@@ -111,7 +111,7 @@ fn meta_parses_large_request_body_for_stream_and_model() {
         let padding = "x".repeat((2 * 1024 * 1024) + 128);
         let request =
             format!(r#"{{"model":"gpt-5.4","stream":true,"input":"hello","padding":"{padding}"}}"#);
-        let body = ReplayableBody::from_body(Body::from(request))
+        let body = ReplayableBody::from_body(Body::from(request), TEST_MAX_REQUEST_BODY_BYTES)
             .await
             .expect("body");
 

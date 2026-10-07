@@ -8,11 +8,13 @@ fn payloads(chunks: Vec<Bytes>) -> Vec<Value> {
     let mut parser = crate::proxy::sse::SseEventParser::new();
     let mut values = Vec::new();
     for chunk in chunks {
-        parser.push_chunk(&chunk, |data| {
-            if let Ok(value) = serde_json::from_str(&data) {
-                values.push(value);
-            }
-        });
+        parser
+            .push_chunk(&chunk, |data| {
+                if let Ok(value) = serde_json::from_str(&data) {
+                    values.push(value);
+                }
+            })
+            .expect("parse fixture SSE");
     }
     values
 }

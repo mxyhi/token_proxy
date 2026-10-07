@@ -15,7 +15,7 @@ use std::{
 
 use super::super::super::{
     codex_compat, http,
-    log::{attach_response_body, build_log_entry, LogContext, LogWriter, UsageSnapshot},
+    log::{build_log_entry, LogContext, LogWriter, UsageSnapshot},
     model,
     openai_compat::{
         transform_response_body, transform_response_body_with_request_body, FormatTransform,
@@ -230,15 +230,17 @@ pub(super) async fn build_buffered_response(
         return response;
     }
 
-    let mut entry = build_log_entry(&context, usage, response_error);
+    let entry = build_log_entry(&context, usage, response_error);
     let response_text = String::from_utf8_lossy(output.as_ref());
     let is_capacity_retry_error =
         !status.is_success() && is_capacity_retry_error(response_text.as_ref(), &response_text);
     let capacity_retry_message = is_capacity_retry_error.then(|| response_text.to_string());
+    let mut response_body =
+        crate::proxy::response::body_capture::ResponseBodyCapture::new(&context);
     if !is_request_policy_rejection {
-        attach_response_body(&mut entry, response_text.as_ref());
+        response_body.push(output.as_ref()).await;
     }
-    log.clone().write_detached(entry);
+    response_body.write_log(log.clone(), entry);
 
     let output = maybe_override_response_model(output, model_override);
     log_debug_headers_body(
@@ -326,8 +328,12 @@ fn buffer_event_stream_response_impl(
 ) -> Result<BufferedEventStreamBody, responses_error::ResponsesStreamError> {
     let mut parser = SseEventParser::new();
     let mut events = Vec::new();
-    parser.push_chunk(bytes.as_ref(), |event| events.push(event));
-    parser.finish(|event| events.push(event));
+    parser
+        .push_chunk(bytes.as_ref(), |event| events.push(event))
+        .map_err(|error| codex_protocol_error(error.to_string()))?;
+    parser
+        .finish(|event| events.push(event))
+        .map_err(|error| codex_protocol_error(error.to_string()))?;
 
     let mut chat_buffer = ChatCompletionBuffer::default();
     let mut responses_buffer = ResponsesStreamBuffer::default();
@@ -1407,6 +1413,10 @@ async fn read_upstream_bytes(
                         "Upstream synchronous response timed out after {}s.",
                         sync_response_timeout.as_secs()
                     ),
+                ),
+                upstream_stream::UpstreamStreamError::Protocol(err) => (
+                    StatusCode::BAD_GATEWAY,
+                    format!("Failed to parse upstream SSE: {err}"),
                 ),
                 upstream_stream::UpstreamStreamError::Upstream(err) => {
                     let raw = err.to_string();

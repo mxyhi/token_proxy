@@ -1,10 +1,11 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LogsPanel } from "@/features/logs/LogsPanel";
 import type { DashboardSnapshotQuery } from "@/features/dashboard/types";
-import type { RequestLogDetail } from "@/features/logs/types";
+import type { RequestLogBodyPage, RequestLogDetail } from "@/features/logs/types";
 import { I18nProvider } from "@/lib/i18n";
 import { m } from "@/paraglide/messages.js";
 
@@ -41,12 +42,14 @@ const {
   readRequestDetailCaptureMock,
   setRequestDetailCaptureMock,
   readRequestLogDetailMock,
+  readRequestLogBodyPageMock,
 } = vi.hoisted(() => ({
   readDashboardSnapshotMock: vi.fn(),
   refreshDashboardModelDiscoveryMock: vi.fn(),
   readRequestDetailCaptureMock: vi.fn(),
   setRequestDetailCaptureMock: vi.fn(),
   readRequestLogDetailMock: vi.fn(),
+  readRequestLogBodyPageMock: vi.fn(),
 }));
 
 vi.mock("@/features/dashboard/api", () => ({
@@ -58,6 +61,7 @@ vi.mock("@/features/logs/api", () => ({
   readRequestDetailCapture: readRequestDetailCaptureMock,
   setRequestDetailCapture: setRequestDetailCaptureMock,
   readRequestLogDetail: readRequestLogDetailMock,
+  readRequestLogBodyPage: readRequestLogBodyPageMock,
 }));
 
 function renderPanel() {
@@ -99,6 +103,9 @@ function createRequestLogDetail(patch: Partial<RequestLogDetail> = {}): RequestL
     requestHeaders: null,
     requestBody: null,
     responseBody: null,
+    responseBodyBytes: 0,
+    responseBodyNextOffset: null,
+    responseCaptureError: null,
     responseError: null,
     ...patch,
   };
@@ -115,6 +122,8 @@ describe("logs/LogsPanel", () => {
     readRequestDetailCaptureMock.mockReset();
     setRequestDetailCaptureMock.mockReset();
     readRequestLogDetailMock.mockReset();
+    readRequestLogBodyPageMock.mockReset();
+    vi.mocked(writeText).mockClear();
 
     refreshDashboardModelDiscoveryMock.mockResolvedValue(undefined);
     readRequestDetailCaptureMock.mockResolvedValue({
@@ -689,6 +698,82 @@ describe("logs/LogsPanel", () => {
     });
 
     expect(await screen.findByText("HTTP 502: upstream quota denied")).toBeInTheDocument();
+  });
+
+  it("replaces response pages and copies only the identified current range", async () => {
+    const user = userEvent.setup();
+    readRequestLogDetailMock.mockResolvedValue(createRequestLogDetail({
+      responseBody: "first", responseBodyBytes: 11, responseBodyNextOffset: 5,
+      responseCaptureError: "capture disk unavailable",
+    }));
+    readRequestLogBodyPageMock.mockResolvedValueOnce({
+      text: "second", offset: 5, nextOffset: null, totalBytes: 11,
+    }).mockResolvedValueOnce({ text: "first", offset: 0, nextOffset: 5, totalBytes: 11 });
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "alpha · openai · codex-a.json" }));
+    expect(await screen.findByText("first")).toBeInTheDocument();
+    expect(screen.getByText("capture disk unavailable")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: m.logs_detail_copy() })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: m.logs_response_page_next() }));
+    expect(await screen.findByText("second")).toBeInTheDocument();
+    expect(screen.queryByText("first")).not.toBeInTheDocument();
+    expect(readRequestLogBodyPageMock).toHaveBeenCalledWith(1, 5);
+    expect(screen.getByText(m.logs_response_page_range({ start: 6, end: 11, total: 11 }))).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: m.logs_response_copy_page() }));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining(m.logs_response_page_notice()));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining(m.logs_response_page_range({ start: 6, end: 11, total: 11 })));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("second"));
+    expect(writeText).toHaveBeenCalledWith(expect.stringContaining("capture disk unavailable"));
+    expect(vi.mocked(writeText).mock.calls[0][0]).not.toContain("\nfirst\n");
+    await user.click(screen.getByRole("button", { name: m.logs_response_page_previous() }));
+    expect(await screen.findByText("first")).toBeInTheDocument();
+    expect(screen.queryByText("second")).not.toBeInTheDocument();
+    expect(readRequestLogBodyPageMock).toHaveBeenLastCalledWith(1, 0);
+  });
+
+  it("keeps the current page on failure and retries the failed offset", async () => {
+    const user = userEvent.setup();
+    readRequestLogDetailMock.mockResolvedValue(createRequestLogDetail({
+      responseBody: "first", responseBodyBytes: 11, responseBodyNextOffset: 5,
+    }));
+    readRequestLogBodyPageMock.mockRejectedValueOnce(new Error("page read failed"))
+      .mockResolvedValueOnce({ text: "second", offset: 5, nextOffset: null, totalBytes: 11 });
+    renderPanel();
+    await user.click(await screen.findByRole("button", { name: "alpha · openai · codex-a.json" }));
+    await user.click(await screen.findByRole("button", { name: m.logs_response_page_next() }));
+    expect(await screen.findByText("page read failed")).toBeInTheDocument();
+    expect(screen.getByText("first")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: m.logs_response_page_retry() }));
+    expect(await screen.findByText("second")).toBeInTheDocument();
+    expect(screen.queryByText("page read failed")).not.toBeInTheDocument();
+    expect(readRequestLogBodyPageMock.mock.calls).toEqual([[1, 5], [1, 5]]);
+  });
+
+  it("ignores a pending body page after closing and selecting another request", async () => {
+    const user = userEvent.setup();
+    let resolvePage!: (page: RequestLogBodyPage) => void;
+    const pending = new Promise<RequestLogBodyPage>((resolve) => { resolvePage = resolve; });
+    readRequestLogDetailMock.mockResolvedValueOnce(createRequestLogDetail({
+      responseBody: "first request page", responseBodyBytes: 100, responseBodyNextOffset: 18,
+    })).mockResolvedValueOnce(createRequestLogDetail({ id: 3, responseBody: "new request body" }));
+    readRequestLogBodyPageMock.mockReturnValueOnce(pending);
+    renderPanel();
+    const firstRow = await screen.findByRole("button", { name: "alpha · openai · codex-a.json" });
+    const otherRow = await screen.findByRole("button", { name: "alpha · openai-response" });
+    await user.click(firstRow);
+    await user.click(await screen.findByRole("button", { name: m.logs_response_page_next() }));
+    expect(screen.getByRole("button", { name: m.logs_response_page_next() })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent(m.logs_detail_loading());
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await user.click(otherRow);
+    expect(await screen.findByText("new request body")).toBeInTheDocument();
+    await act(async () => {
+      resolvePage({ text: "stale request body", offset: 18, nextOffset: null, totalBytes: 100 });
+      await pending;
+    });
+    expect(screen.getByText("new request body")).toBeInTheDocument();
+    expect(screen.queryByText("stale request body")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: m.logs_response_page_next() })).not.toBeInTheDocument();
   });
 
 });

@@ -112,6 +112,12 @@ async fn retain_request_logs(
         .await
         .map_err(|error| format!("Failed to begin request log retention: {error}"))?;
 
+    // 明确删除块，不依赖连接的 foreign_keys 设置；成功日志只清详情也要清块。
+    sqlx::query("DELETE FROM response_body_chunks WHERE log_id IN (SELECT id FROM request_logs WHERE ts_ms < ?);")
+        .bind(detail_cutoff_ms)
+        .execute(&mut *transaction).await
+        .map_err(|error| format!("Failed to clear expired response chunks: {error}"))?;
+
     // 错误请求只保留七天，超过保留期后整行删除，不参与长期统计。
     let deleted_error_requests =
         sqlx::query("DELETE FROM request_logs WHERE status >= 400 AND ts_ms < ?;")
@@ -129,6 +135,9 @@ UPDATE request_logs
 SET request_headers = NULL,
     request_body = NULL,
     response_body = NULL,
+    response_body_bytes = NULL,
+    response_body_chunked = 0,
+    response_capture_error = NULL,
     client_ip = NULL
 WHERE status < 400
   AND ts_ms < ?
@@ -136,6 +145,8 @@ WHERE status < 400
     request_headers IS NOT NULL
     OR request_body IS NOT NULL
     OR response_body IS NOT NULL
+    OR response_body_bytes IS NOT NULL
+    OR response_capture_error IS NOT NULL
     OR client_ip IS NOT NULL
   );
 "#,
@@ -458,6 +469,30 @@ async fn ensure_request_logs_columns(pool: &SqlitePool) -> Result<(), String> {
             .map_err(|err| format!("Failed to add response_error column: {err}"))?;
     }
 
+    for (name, statement) in [
+        (
+            "response_body_bytes",
+            "ALTER TABLE request_logs ADD COLUMN response_body_bytes INTEGER;",
+        ),
+        (
+            "response_body_chunked",
+            "ALTER TABLE request_logs ADD COLUMN response_body_chunked INTEGER NOT NULL DEFAULT 0;",
+        ),
+        (
+            "response_capture_error",
+            "ALTER TABLE request_logs ADD COLUMN response_capture_error TEXT;",
+        ),
+    ] {
+        if !columns.contains(name) {
+            sqlx::query(statement)
+                .execute(pool)
+                .await
+                .map_err(|err| format!("Failed to add {name}: {err}"))?;
+        }
+    }
+    sqlx::query("CREATE TABLE IF NOT EXISTS response_body_chunks (log_id INTEGER NOT NULL REFERENCES request_logs(id) ON DELETE CASCADE, ordinal INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY (log_id, ordinal));")
+        .execute(pool).await.map_err(|err| format!("Failed to create response chunks: {err}"))?;
+
     if !columns.contains("response_body") {
         sqlx::query("ALTER TABLE request_logs ADD COLUMN response_body TEXT;")
             .execute(pool)
@@ -664,9 +699,33 @@ INSERT INTO request_logs (
         )
         .await;
 
+        for id in [
+            old_error_id,
+            recent_error_id,
+            old_success_id,
+            ancient_success_id,
+        ] {
+            sqlx::query(
+                "INSERT INTO response_body_chunks (log_id, ordinal, data) VALUES (?, 0, X'6162');",
+            )
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+            sqlx::query("UPDATE request_logs SET response_body = NULL, response_body_bytes = 2, response_body_chunked = 1 WHERE id = ?;")
+                .bind(id).execute(&pool).await.unwrap();
+        }
+
         let stats = retain_request_logs(&pool, now_ms)
             .await
             .expect("retain request logs");
+
+        let remaining_chunk_ids: Vec<i64> =
+            sqlx::query_scalar("SELECT log_id FROM response_body_chunks ORDER BY log_id;")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(remaining_chunk_ids, vec![recent_error_id]);
 
         assert_eq!(
             stats,

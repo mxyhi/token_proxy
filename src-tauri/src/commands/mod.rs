@@ -29,7 +29,10 @@ pub use kiro::{
     kiro_fetch_quotas, kiro_handle_callback, kiro_import_ide, kiro_import_kam, kiro_list_accounts,
     kiro_poll_login, kiro_refresh_quota_cache, kiro_refresh_quota_now, kiro_start_login,
 };
-pub use logs::{read_request_detail_capture, read_request_log_detail, set_request_detail_capture};
+pub use logs::{
+    read_request_detail_capture, read_request_log_body_page, read_request_log_detail,
+    set_request_detail_capture,
+};
 pub use pricing::{
     read_model_pricing_settings, reset_model_pricing_settings, save_model_pricing_settings,
 };

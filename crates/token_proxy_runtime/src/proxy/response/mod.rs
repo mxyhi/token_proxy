@@ -423,6 +423,7 @@ fn now_ms() -> u64 {
 }
 
 mod anthropic_to_responses;
+pub(crate) mod body_capture;
 mod chat_to_responses;
 mod dispatch;
 mod kiro_to_anthropic;

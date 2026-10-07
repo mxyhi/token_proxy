@@ -109,6 +109,7 @@ pub(super) async fn handle_send_error(
     request_detail: Option<RequestDetailSnapshot>,
     err: KiroSendError,
     start_time: std::time::Instant,
+    account_access_token: &str,
 ) -> AttemptOutcome {
     match err {
         KiroSendError::Upstream(err) => {
@@ -130,6 +131,7 @@ pub(super) async fn handle_send_error(
                 None,
                 request_detail,
                 &crate::proxy::cooldown_scope::CooldownScope::Global,
+                Some(account_access_token),
             )
             .await
         }

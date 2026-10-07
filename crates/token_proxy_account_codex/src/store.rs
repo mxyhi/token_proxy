@@ -29,6 +29,8 @@ pub struct CodexAccountStore {
     quota_refreshing: StdMutex<HashSet<String>>,
     token_refreshing: StdMutex<HashSet<String>>,
     token_refresh_cooldowns: Mutex<HashMap<String, TokenRefreshCooldown>>,
+    /// 已被上游拒绝的凭据仅用于内存内比较，禁止记录 token 内容。
+    rejected_access_tokens: StdMutex<HashMap<String, String>>,
     agent_task_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Provider 级 mutation gate：所有持久化写、cache 更新、snapshot/restore 共享。
     provider_mutation: Mutex<()>,
@@ -133,6 +135,7 @@ impl CodexAccountStore {
             quota_refreshing: StdMutex::new(HashSet::new()),
             token_refreshing: StdMutex::new(HashSet::new()),
             token_refresh_cooldowns: Mutex::new(HashMap::new()),
+            rejected_access_tokens: StdMutex::new(HashMap::new()),
             agent_task_locks: Mutex::new(HashMap::new()),
             provider_mutation: Mutex::new(()),
             #[cfg(any(test, feature = "test-support"))]
@@ -276,6 +279,25 @@ impl CodexAccountStore {
         self.import_refresh_tokens_unlocked(contents, client).await
     }
 
+    /// 在当前缓存读锁内处理此凭据的结果，不读取数据库或触发刷新。
+    /// 回调必须是短小的同步状态更新，不得打印凭据或执行 IO。
+    pub async fn with_current_access_token<T>(
+        &self,
+        account_id: &str,
+        expected_token: &str,
+        apply: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let cache = self.cache.read().await;
+        let record = cache.get(account_id)?;
+        let matches = match record.oauth() {
+            Some(oauth) => oauth.access_token == expected_token,
+            None => record.agent_identity().is_some_and(|identity| {
+                super::agent_identity::authorization_matches(identity, expected_token)
+            }),
+        };
+        matches.then(apply)
+    }
+
     pub async fn get_account_record(&self, account_id: &str) -> Result<CodexTokenRecord, String> {
         let record = self.load_account(account_id).await?;
         self.refresh_if_needed(account_id, record).await
@@ -285,6 +307,14 @@ impl CodexAccountStore {
     pub async fn authorization_header(&self, account_id: &str) -> Result<String, String> {
         let record = self.ensure_agent_identity_task(account_id, None).await?;
         if let Some(oauth) = record.oauth() {
+            // Header 构造也供只读额度探测使用，不能隐式触发 OAuth refresh。
+            // prepare 后新收到的 401 在此拒绝；刷新仍由账户读取/鉴权恢复路径负责。
+            if self.access_token_was_rejected(account_id, &record) {
+                return Err(
+                    "Codex access token was rejected; credential replacement is required."
+                        .to_string(),
+                );
+            }
             if oauth.access_token.trim().is_empty() {
                 return Err("Codex OAuth access token is missing.".to_string());
             }
@@ -406,16 +436,29 @@ impl CodexAccountStore {
         account_id: &str,
         failed_access_token: &str,
     ) -> Result<(), String> {
-        let record = self.load_account(account_id).await?;
-        if record.status == CodexAccountStatus::Invalid {
-            return Err("Codex 登录已失效，请重新登录该账户。".to_string());
-        }
-        let oauth = record
-            .oauth()
-            .ok_or_else(|| "Agent Identity accounts do not use OAuth token refresh.".to_string())?;
-        if oauth.access_token != failed_access_token {
-            return Ok(());
-        }
+        let record = {
+            // 与登录/刷新提交同步比较，迟到 401 不能覆盖新 token 的拒绝标记。
+            let _gate = self.acquire_provider_mutation().await;
+            let record = self.cached_account(account_id).await?;
+            if record.status == CodexAccountStatus::Invalid {
+                return Err("Codex 登录已失效，请重新登录该账户。".to_string());
+            }
+            let oauth = record.oauth().ok_or_else(|| {
+                "Agent Identity accounts do not use OAuth token refresh.".to_string()
+            })?;
+            if oauth.access_token != failed_access_token {
+                return Ok(());
+            }
+            self.rejected_access_tokens
+                .lock()
+                .expect("codex rejected token lock poisoned")
+                .insert(account_id.to_string(), failed_access_token.to_string());
+            tracing::info!(
+                account_id,
+                "codex access token rejected; suppressing reuse until replacement"
+            );
+            record
+        };
         if !record_can_auto_refresh(&record) {
             return Err("Codex automatic token refresh is disabled or unavailable.".to_string());
         }
@@ -524,6 +567,17 @@ impl CodexAccountStore {
     ) -> Result<CodexAccountSummary, String> {
         provider_accounts::upsert_codex_account(&self.paths, &account_id, &record).await?;
         let mut cache = self.cache.write().await;
+        let mut rejected = self
+            .rejected_access_tokens
+            .lock()
+            .expect("codex rejected token lock poisoned");
+        if rejected.get(&account_id).is_some_and(|token| {
+            record
+                .oauth()
+                .is_none_or(|oauth| oauth.access_token != token)
+        }) {
+            rejected.remove(&account_id);
+        }
         cache.insert(account_id.clone(), record.clone());
         Ok(account_summary(account_id, &record))
     }
@@ -702,6 +756,10 @@ impl CodexAccountStore {
         provider_accounts::delete_account(&self.paths, account_id).await?;
         let mut cache = self.cache.write().await;
         cache.remove(account_id);
+        self.rejected_access_tokens
+            .lock()
+            .expect("codex rejected token lock poisoned")
+            .remove(account_id);
         tracing::debug!(account_id, "codex account deleted for orchestration");
         Ok(())
     }
@@ -810,6 +868,17 @@ impl CodexAccountStore {
         *self.agent_jwks_url_override.write().await = Some(jwks_url.to_string());
     }
 
+    fn access_token_was_rejected(&self, account_id: &str, record: &CodexTokenRecord) -> bool {
+        let Some(oauth) = record.oauth() else {
+            return false;
+        };
+        self.rejected_access_tokens
+            .lock()
+            .expect("codex rejected token lock poisoned")
+            .get(account_id)
+            .is_some_and(|token| token == oauth.access_token)
+    }
+
     async fn refresh_if_needed(
         &self,
         account_id: &str,
@@ -820,26 +889,39 @@ impl CodexAccountStore {
             tracing::debug!(account_id, "skip codex token refresh for disabled account");
             return Ok(record);
         }
-        if !record_needs_refresh(&record) {
+        let rejected = self.access_token_was_rejected(account_id, &record);
+        if !record_needs_refresh(&record) && !rejected {
             return Ok(record);
         }
         let Some(oauth) = record.oauth() else {
             return Ok(record);
         };
         if !oauth.auto_refresh_enabled {
+            if rejected {
+                return Err(
+                    "Codex access token was rejected and automatic refresh is disabled."
+                        .to_string(),
+                );
+            }
             return Ok(record);
         }
         // Allow imported access-token-only records to stay usable until expiry.
         // When refresh_token is missing we should not fail reads/listing by forcing refresh.
         if oauth.refresh_token.trim().is_empty() {
+            if rejected {
+                return Err("Codex access token was rejected; please sign in again.".to_string());
+            }
             return Ok(record);
         }
         match self.refresh_record_guarded(account_id, record, false).await {
+            Ok(record) if self.access_token_was_rejected(account_id, &record) => {
+                Err("Codex refresh did not replace the rejected access token.".to_string())
+            }
             Ok(record) => Ok(record),
             Err(error) => {
                 let current = self.load_account(account_id).await?;
                 // Proactive refresh failure must not discard an access token still valid upstream.
-                if current.is_usable() {
+                if current.is_usable() && !self.access_token_was_rejected(account_id, &current) {
                     return Ok(current);
                 }
                 Err(error)
@@ -918,7 +1000,7 @@ impl CodexAccountStore {
             if let Some(error) = error {
                 return Err(error);
             }
-            if !manual {
+            if !manual && !self.access_token_was_rejected(account_id, &current) {
                 return Ok(current);
             }
         }
@@ -1245,8 +1327,9 @@ impl CodexAccountStore {
         loop {
             if !self.token_refresh_in_progress(account_id) {
                 let record = self.load_account(account_id).await?;
-                if token_record_was_refreshed(previous, &record)
-                    || matches!(self.token_refresh_cooldown(account_id).await, Some(None))
+                if !self.access_token_was_rejected(account_id, &record)
+                    && (token_record_was_refreshed(previous, &record)
+                        || matches!(self.token_refresh_cooldown(account_id).await, Some(None)))
                 {
                     return Ok(record);
                 }

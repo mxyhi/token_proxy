@@ -11,6 +11,7 @@ pub(super) use chat::{
 pub(crate) enum UpstreamStreamError<E> {
     IdleTimeout(Duration),
     Upstream(E),
+    Protocol(std::io::Error),
 }
 
 impl<E: fmt::Display> fmt::Display for UpstreamStreamError<E> {
@@ -24,6 +25,7 @@ impl<E: fmt::Display> fmt::Display for UpstreamStreamError<E> {
                 )
             }
             Self::Upstream(err) => write!(f, "{err}"),
+            Self::Protocol(err) => write!(f, "{err}"),
         }
     }
 }
@@ -33,6 +35,7 @@ impl<E: Error + 'static> Error for UpstreamStreamError<E> {
         match self {
             Self::IdleTimeout(_) => None,
             Self::Upstream(err) => Some(err),
+            Self::Protocol(err) => Some(err),
         }
     }
 }

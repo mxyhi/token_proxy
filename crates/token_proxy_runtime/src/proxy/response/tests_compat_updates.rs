@@ -66,11 +66,13 @@ async fn convert(events: Vec<Value>, route: Route) -> Vec<Value> {
     let mut parser = crate::proxy::sse::SseEventParser::new();
     let mut result = Vec::new();
     for chunk in converted.collect::<Vec<_>>().await {
-        parser.push_chunk(&chunk.expect("converted stream"), |data| {
-            if data != "[DONE]" {
-                result.push(serde_json::from_str::<Value>(&data).unwrap());
-            }
-        });
+        parser
+            .push_chunk(&chunk.expect("converted stream"), |data| {
+                if data != "[DONE]" {
+                    result.push(serde_json::from_str::<Value>(&data).unwrap());
+                }
+            })
+            .expect("parse fixture SSE");
     }
     result
 }

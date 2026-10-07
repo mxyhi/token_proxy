@@ -539,7 +539,7 @@ fn stream_with_logging_normalizes_split_upstream_response_failed() {
 }
 
 #[test]
-fn stream_with_logging_preserves_non_sse_responses_body() {
+fn stream_with_logging_reports_non_sse_responses_body() {
     super::run_async(async {
         let (log, context, _sqlite_pool) = super::setup_responses_stream().await;
         let upstream = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
@@ -555,10 +555,9 @@ fn stream_with_logging_preserves_non_sse_responses_body() {
                 .await;
 
         assert_eq!(chunks.len(), 1);
-        assert_eq!(
-            chunks[0].as_ref(),
-            br#"{"error":{"message":"unexpected JSON body"}}"#
-        );
+        let body = String::from_utf8_lossy(&chunks[0]);
+        assert!(body.contains("response.failed"));
+        assert!(body.contains("unexpected JSON body"));
     });
 }
 

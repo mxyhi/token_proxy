@@ -701,5 +701,12 @@
   "api_keys_usage_hint": "仅统计计费请求；升级前的请求未记录 Key，不计入。",
   "api_keys_usage_requests": "{count} 次",
   "api_keys_last_used": "最近使用",
-  "api_keys_never_used": "未使用"
+  "api_keys_never_used": "未使用",
+  "logs_response_page_range": "响应正文第 {start}–{end} 字节，共 {total} 字节",
+  "logs_response_copy_page": "复制详情及当前响应页",
+  "logs_response_page_notice": "仅包含当前页响应正文。",
+  "logs_response_page_previous": "响应正文上一页",
+  "logs_response_page_next": "响应正文下一页",
+  "logs_response_page_retry": "重试加载响应正文",
+  "logs_response_capture_error": "响应正文捕获不完整"
 }

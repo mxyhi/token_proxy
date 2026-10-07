@@ -5,7 +5,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use super::super::log::{attach_response_body, build_log_entry, LogContext, LogWriter};
+use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::response::{
     responses_error::{responses_stream_error, ResponsesStreamError},
     responses_failure,
@@ -50,7 +50,7 @@ struct CodexToChatState<S> {
     logged: bool,
     upstream_ended: bool,
     tool_name_map: HashMap<String, RestoredToolName>,
-    response_body_buf: String,
+    response_body_buf: crate::proxy::response::body_capture::ResponseBodyCapture,
 }
 
 impl<S> CodexToChatState<S> {
@@ -59,9 +59,8 @@ impl<S> CodexToChatState<S> {
             return;
         }
         self.logged = true;
-        let mut entry = build_log_entry(&self.context, self.collector.finish(), response_error);
-        attach_response_body(&mut entry, &self.response_body_buf);
-        self.log.clone().write_detached(entry);
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.response_body_buf.write_log(self.log.clone(), entry);
     }
 }
 
@@ -91,6 +90,8 @@ where
         let tool_name_map =
             extract_tool_name_map_from_request_body(context.tool_identity_request_body());
 
+        let response_body_buf =
+            crate::proxy::response::body_capture::ResponseBodyCapture::new(&context);
         Self {
             upstream,
             parser: SseEventParser::new(),
@@ -109,7 +110,7 @@ where
             logged: false,
             upstream_ended: false,
             tool_name_map,
-            response_body_buf: String::new(),
+            response_body_buf,
         }
     }
 
@@ -126,11 +127,18 @@ where
             match self.upstream.next().await {
                 Some(Ok(chunk)) => {
                     self.context.mark_upstream_first_byte();
-                    self.collector.push_chunk(&chunk);
-                    self.response_body_buf
-                        .push_str(&String::from_utf8_lossy(chunk.as_ref()));
+                    if let Err(error) = self.collector.push_chunk(&chunk) {
+                        self.context.status = 502;
+                        self.write_log_once(Some(error.to_string()));
+                        return Err(error);
+                    }
+                    self.response_body_buf.push(&chunk).await;
                     let mut events = Vec::new();
-                    self.parser.push_chunk(&chunk, |data| events.push(data));
+                    if let Err(error) = self.parser.push_chunk(&chunk, |data| events.push(data)) {
+                        self.context.status = 502;
+                        self.write_log_once(Some(error.to_string()));
+                        return Err(error);
+                    }
                     let mut texts = Vec::new();
                     for data in events {
                         self.handle_event(&data, &mut texts);
@@ -146,7 +154,11 @@ where
                 None => {
                     self.upstream_ended = true;
                     let mut events = Vec::new();
-                    self.parser.finish(|data| events.push(data));
+                    if let Err(error) = self.parser.finish(|data| events.push(data)) {
+                        self.context.status = 502;
+                        self.write_log_once(Some(error.to_string()));
+                        return Err(error);
+                    }
                     let mut texts = Vec::new();
                     for data in events {
                         self.handle_event(&data, &mut texts);
@@ -411,7 +423,7 @@ struct CodexToResponsesState<S> {
     model: String,
     saw_terminal_event: bool,
     response_error_override: Option<String>,
-    response_body_buf: String,
+    response_body_buf: crate::proxy::response::body_capture::ResponseBodyCapture,
     semantic_timeout: Option<Duration>,
     last_semantic_event_at: Instant,
     sequence: ResponsesEventSequence,
@@ -423,9 +435,8 @@ impl<S> CodexToResponsesState<S> {
             return;
         }
         self.logged = true;
-        let mut entry = build_log_entry(&self.context, self.collector.finish(), response_error);
-        attach_response_body(&mut entry, &self.response_body_buf);
-        self.log.clone().write_detached(entry);
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.response_body_buf.write_log(self.log.clone(), entry);
     }
 }
 
@@ -454,6 +465,8 @@ where
             .model
             .clone()
             .unwrap_or_else(|| "unknown".to_string());
+        let response_body_buf =
+            crate::proxy::response::body_capture::ResponseBodyCapture::new(&context);
         Self {
             upstream,
             parser: SseEventParser::new(),
@@ -471,7 +484,7 @@ where
             model,
             saw_terminal_event: false,
             response_error_override: None,
-            response_body_buf: String::new(),
+            response_body_buf,
             semantic_timeout,
             last_semantic_event_at: Instant::now(),
             sequence: ResponsesEventSequence::default(),
@@ -495,11 +508,18 @@ where
             match self.next_upstream_item().await? {
                 Some(Ok(chunk)) => {
                     self.context.mark_upstream_first_byte();
-                    self.collector.push_chunk(&chunk);
-                    self.response_body_buf
-                        .push_str(&String::from_utf8_lossy(chunk.as_ref()));
+                    if let Err(error) = self.collector.push_chunk(&chunk) {
+                        self.context.status = 502;
+                        self.write_log_once(Some(error.to_string()));
+                        return Err(error);
+                    }
+                    self.response_body_buf.push(&chunk).await;
                     let mut events = Vec::new();
-                    self.parser.push_chunk(&chunk, |data| events.push(data));
+                    if let Err(error) = self.parser.push_chunk(&chunk, |data| events.push(data)) {
+                        self.context.status = 502;
+                        self.write_log_once(Some(error.to_string()));
+                        return Err(error);
+                    }
                     let had_events = !events.is_empty();
                     let mut texts = Vec::new();
                     for data in events {
@@ -520,7 +540,11 @@ where
                 None => {
                     self.upstream_ended = true;
                     let mut events = Vec::new();
-                    self.parser.finish(|data| events.push(data));
+                    if let Err(error) = self.parser.finish(|data| events.push(data)) {
+                        self.context.status = 502;
+                        self.write_log_once(Some(error.to_string()));
+                        return Err(error);
+                    }
                     let mut texts = Vec::new();
                     for data in events {
                         self.handle_event(&data, &mut texts);

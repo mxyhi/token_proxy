@@ -49,7 +49,13 @@ fn cooldown_query_prunes_expired_entries_from_other_scopes() {
         .cooldowns
         .lock()
         .expect("account selector cooldown lock poisoned")
-        .insert(AccountCooldownKey::new("codex", "a", &expired_scope), past);
+        .insert(
+            AccountCooldownKey::new("codex", "a", &expired_scope),
+            AccountCooldown {
+                until: past,
+                mandatory: false,
+            },
+        );
 
     // 查询会 prune 过期项；其它 scope 的过期 cooldown 不应污染当前判断。
     assert!(!selector.is_cooling_down_scoped("codex", "a", &next_scope));
@@ -102,4 +108,34 @@ fn payment_required_cools_account_for_later_requests() {
 
     assert!(marked.is_some());
     assert!(selector.is_cooling_down_scoped("xai", "xai-a", &CooldownScope::Global));
+}
+
+#[test]
+fn mandatory_wait_survives_success_retry_and_scope_cleanup() {
+    for scope in [
+        CooldownScope::Global,
+        CooldownScope::CodexSession("session".into()),
+    ] {
+        let selector = AccountSelectorRuntime::new_with_cooldown(Duration::ZERO);
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, "120".parse().unwrap());
+        selector.mark_response_status_scoped(
+            "codex",
+            "a",
+            StatusCode::TOO_MANY_REQUESTS,
+            &headers,
+            &scope,
+        );
+        assert!(selector.is_cooling_down_scoped("codex", "a", &scope));
+        selector.mark_response_status_scoped(
+            "codex",
+            "a",
+            StatusCode::OK,
+            &HeaderMap::new(),
+            &scope,
+        );
+        assert!(!selector.clear_cooldown_scoped("codex", "a", &scope));
+        selector.clear_provider_scope("codex", &scope);
+        assert!(selector.is_cooling_down_scoped("codex", "a", &scope));
+    }
 }

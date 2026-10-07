@@ -1,6 +1,23 @@
 use axum::body::{Body, Bytes};
 use futures_util::StreamExt;
 
+#[derive(Debug)]
+pub(crate) enum RequestBodyError {
+    TooLarge { limit: usize },
+    Read(axum::Error),
+}
+
+impl std::fmt::Display for RequestBodyError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge { limit } => {
+                write!(formatter, "Request body exceeds the {limit} byte limit.")
+            }
+            Self::Read(error) => write!(formatter, "Read request body failed: {error}"),
+        }
+    }
+}
+
 // 将入站请求体缓存为“可重放”形式，便于上游重试/降级时重复发送同一份请求体。
 #[derive(Clone)]
 pub(crate) struct ReplayableBody {
@@ -16,17 +33,23 @@ impl ReplayableBody {
         &self.bytes
     }
 
-    pub(crate) async fn from_body(body: Body) -> Result<Self, std::io::Error> {
+    pub(crate) async fn from_body(body: Body, limit: usize) -> Result<Self, RequestBodyError> {
         let mut stream = body.into_data_stream();
         let mut buffer: Vec<u8> = Vec::new();
 
         while let Some(next) = stream.next().await {
-            let chunk = next.map_err(|err| {
-                std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("Read request body failed: {err}"),
-                )
-            })?;
+            let chunk = next.map_err(RequestBodyError::Read)?;
+            // Body 直接提取不受 Axum DefaultBodyLimit 约束；必须在分配前检查，
+            // 同时覆盖缺失或虚假的 Content-Length 与 chunked 上传。
+            if chunk.len() > limit.saturating_sub(buffer.len()) {
+                tracing::warn!(
+                    limit,
+                    buffered_bytes = buffer.len(),
+                    chunk_bytes = chunk.len(),
+                    "request body limit exceeded"
+                );
+                return Err(RequestBodyError::TooLarge { limit });
+            }
             buffer.extend_from_slice(&chunk);
         }
 

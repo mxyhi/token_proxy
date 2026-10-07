@@ -9,7 +9,7 @@ use super::{
     ActiveBlock, KiroToAnthropicState, ToolUseState, USAGE_UPDATE_CHAR_THRESHOLD,
     USAGE_UPDATE_TIME_INTERVAL, USAGE_UPDATE_TOKEN_DELTA,
 };
-use crate::proxy::log::{attach_response_body, build_log_entry, UsageSnapshot};
+use crate::proxy::log::{build_log_entry, UsageSnapshot};
 use crate::proxy::token_estimator;
 
 impl<S, E> KiroToAnthropicState<S>
@@ -366,16 +366,21 @@ impl<S> KiroToAnthropicState<S> {
             usage_from_kiro(&self.usage),
             usage_json_from_kiro(&self.usage),
         );
-        let mut entry = build_log_entry(&self.context, usage_snapshot, response_error);
-        let mut response_body = String::new();
-        if !self.reasoning.is_empty() {
-            response_body.push_str(&self.reasoning);
-        }
-        if !self.content.is_empty() {
-            response_body.push_str(&self.content);
-        }
-        attach_response_body(&mut entry, &response_body);
-        self.log.clone().write_detached(entry);
+        let entry = build_log_entry(&self.context, usage_snapshot, response_error);
+        let mut response_body =
+            crate::proxy::response::body_capture::ResponseBodyCapture::new(&self.context);
+        // Kiro 结束时才确定回退用量。移交已有文本，避免再次克隆完整响应；
+        // 取消同样走此路径，异步任务负责正文刷盘与日志提交。
+        let reasoning = std::mem::take(&mut self.reasoning);
+        let content = std::mem::take(&mut self.content);
+        let log = self.log.clone();
+        tokio::spawn(async move {
+            response_body.push(reasoning.as_bytes()).await;
+            drop(reasoning);
+            response_body.push(content.as_bytes()).await;
+            drop(content);
+            response_body.write_log(log, entry);
+        });
     }
 
     pub(super) fn log_usage_once(&mut self) {

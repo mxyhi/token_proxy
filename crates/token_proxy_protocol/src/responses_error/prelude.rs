@@ -41,7 +41,9 @@ impl ResponsesPreludeInspector {
             return self.release_budget();
         }
         let mut events = Vec::new();
-        self.parser.push_chunk(chunk, |data| events.push(data));
+        if let Err(error) = self.parser.push_chunk(chunk, |data| events.push(data)) {
+            return ResponsesPreludeDecision::RetryableError(protocol_error(error.to_string()));
+        }
         for data in events {
             self.events += 1;
             if self.events > MAX_PRELUDE_EVENTS {

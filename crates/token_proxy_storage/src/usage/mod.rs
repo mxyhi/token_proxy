@@ -20,18 +20,24 @@ impl SseUsageCollector {
         }
     }
 
-    pub fn push_chunk(&mut self, chunk: &[u8]) {
+    pub fn push_chunk(&mut self, chunk: &[u8]) -> std::io::Result<()> {
         let snapshot = &mut self.snapshot;
         let gemini_usage = &mut self.gemini_usage;
         self.parser
-            .push_chunk(chunk, |data| update_usage(snapshot, gemini_usage, &data));
+            .push_chunk(chunk, |data| update_usage(snapshot, gemini_usage, &data))
     }
 
     pub fn finish(&mut self) -> UsageSnapshot {
         let snapshot = &mut self.snapshot;
         let gemini_usage = &mut self.gemini_usage;
-        self.parser
-            .finish(|data| update_usage(snapshot, gemini_usage, &data));
+        // 这是计费观察器：主转发 parser 负责向客户端传播相同错误。
+        // Drop/失败日志仍需返回错误之前已有的真实 usage，不能凭空清零。
+        if let Err(error) = self
+            .parser
+            .finish(|data| update_usage(snapshot, gemini_usage, &data))
+        {
+            tracing::warn!(%error, "returning partial usage after SSE parser failure");
+        }
         self.snapshot.clone()
     }
 }

@@ -233,6 +233,19 @@ impl XaiAccountStore {
         self.import_refresh_tokens_unlocked(contents).await
     }
 
+    /// 在当前缓存读锁内处理此凭据的结果，不读取数据库或触发刷新。
+    /// 回调必须是短小的同步状态更新，不得打印凭据或执行 IO。
+    pub async fn with_current_access_token<T>(
+        &self,
+        account_id: &str,
+        expected_token: &str,
+        apply: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let cache = self.cache.read().await;
+        let record = cache.get(account_id)?;
+        (record.access_token == expected_token).then(apply)
+    }
+
     pub async fn get_account_record(&self, account_id: &str) -> Result<XaiTokenRecord, String> {
         let record = self.load_account(account_id).await?;
         self.refresh_if_needed(account_id, record).await
@@ -330,8 +343,12 @@ impl XaiAccountStore {
         account_id: &str,
         headers: &HeaderMap,
         status: u16,
+        expected_access_token: &str,
     ) -> Result<(), String> {
         let record = self.load_account(account_id).await?;
+        if record.access_token != expected_access_token {
+            return Ok(());
+        }
         if quota::observe_quota_headers(&record.quota, headers, status).is_none() {
             return Ok(());
         }
@@ -355,6 +372,13 @@ impl XaiAccountStore {
         let mutation = self.account_mutation_lock(account_id)?;
         let _mutation_guard = mutation.lock().await;
         let mut latest = self.load_account(account_id).await?;
+        if latest.access_token != expected_access_token {
+            tracing::info!(
+                account_id,
+                "ignoring quota headers from superseded xai credentials"
+            );
+            return Ok(());
+        }
         if !quota_persist_is_due(latest.quota.checked_at.as_deref()) {
             return Ok(());
         }
@@ -1459,6 +1483,41 @@ mod tests {
         let store = XaiAccountStore::new(&paths, token_proxy_account_store::app_proxy::new_state())
             .expect("xai store");
         (store, paths, data_dir)
+    }
+
+    #[tokio::test]
+    async fn old_token_quota_headers_do_not_overwrite_reimported_account() {
+        let (store, _, dir) = test_store("stale-quota-result");
+        store
+            .save_record("account".into(), test_record("new-token", None))
+            .await
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("x-ratelimit-limit-requests", "100".parse().unwrap());
+        headers.insert("x-ratelimit-remaining-requests", "0".parse().unwrap());
+        store
+            .record_quota_headers("account", &headers, 429, "old-token")
+            .await
+            .unwrap();
+        assert!(store
+            .load_account("account")
+            .await
+            .unwrap()
+            .quota
+            .checked_at
+            .is_none());
+        store
+            .record_quota_headers("account", &headers, 429, "new-token")
+            .await
+            .unwrap();
+        assert!(store
+            .load_account("account")
+            .await
+            .unwrap()
+            .quota
+            .checked_at
+            .is_some());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     fn test_record(access_token: &str, email: Option<&str>) -> XaiTokenRecord {

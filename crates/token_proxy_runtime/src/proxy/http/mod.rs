@@ -630,8 +630,9 @@ pub(crate) fn build_upstream_headers(
     auth: UpstreamAuthHeader,
 ) -> ReqwestHeaderMap {
     let mut output = ReqwestHeaderMap::new();
+    let connection_headers = connection_nominated_headers(headers);
     for (name, value) in headers.iter() {
-        if should_skip_request_header(name) {
+        if should_skip_request_header(name) || connection_headers.contains(name) {
             continue;
         }
         if name == AUTHORIZATION
@@ -666,13 +667,24 @@ pub(crate) fn is_hop_header(name: &HeaderName) -> bool {
 
 pub(crate) fn filter_response_headers(headers: &ReqwestHeaderMap) -> HeaderMap {
     let mut output = HeaderMap::new();
+    let connection_headers = connection_nominated_headers(headers);
     for (name, value) in headers.iter() {
-        if is_hop_header(name) {
+        if is_hop_header(name) || connection_headers.contains(name) {
             continue;
         }
         output.append(name.clone(), value.clone());
     }
     output
+}
+
+fn connection_nominated_headers(headers: &HeaderMap) -> Vec<HeaderName> {
+    // Connection 可以有多行、多字段；这些名字声明的字段只对当前一跳有效。
+    headers
+        .get_all(CONNECTION)
+        .iter()
+        .flat_map(|value| value.as_bytes().split(|byte| *byte == b','))
+        .filter_map(|name| HeaderName::from_bytes(name.trim_ascii()).ok())
+        .collect()
 }
 
 pub(crate) fn build_response(status: StatusCode, headers: HeaderMap, body: Body) -> Response {

@@ -213,7 +213,9 @@ async fn send_upstream_request_once(
                     response_header_timeout,
                     cooldown_scope,
                     TransportRecovery::SameUpstreamOnce,
-                ));
+                    request_headers,
+                )
+                .await);
             }
             Err(SendFailure::Transport(err)) => {
                 let stale = super::utils::is_stale_connection_transport_error(&err);
@@ -252,7 +254,9 @@ async fn send_upstream_request_once(
                     start_time,
                     cooldown_scope,
                     TransportRecovery::SameUpstreamOnce,
-                ));
+                    request_headers,
+                )
+                .await);
             }
         }
     }
@@ -376,7 +380,9 @@ async fn send_codex_with_fallback(
         start_time,
         last_error,
         cooldown_scope,
-    ))
+        request_headers,
+    )
+    .await)
 }
 
 async fn send_codex_attempt(
@@ -442,24 +448,8 @@ async fn send_codex_attempt(
     .await
     {
         Ok(response) => Ok(response),
-        Err(SendFailure::Timeout) => Err(CodexAttemptError::Fatal(handle_upstream_timeout(
-            state,
-            provider,
-            upstream,
-            inbound_path,
-            meta,
-            selected_account_id,
-            request_detail,
-            start_time,
-            response_header_timeout,
-            cooldown_scope,
-            TransportRecovery::NextUpstream,
-        ))),
-        Err(SendFailure::Transport(err)) => {
-            if should_retry_codex_send(&err) {
-                return Err(CodexAttemptError::Retry(err));
-            }
-            Err(CodexAttemptError::Fatal(map_upstream_error(
+        Err(SendFailure::Timeout) => Err(CodexAttemptError::Fatal(
+            handle_upstream_timeout(
                 state,
                 provider,
                 upstream,
@@ -467,16 +457,40 @@ async fn send_codex_attempt(
                 meta,
                 selected_account_id,
                 request_detail,
-                err,
                 start_time,
+                response_header_timeout,
                 cooldown_scope,
                 TransportRecovery::NextUpstream,
-            )))
+                request_headers,
+            )
+            .await,
+        )),
+        Err(SendFailure::Transport(err)) => {
+            if should_retry_codex_send(&err) {
+                return Err(CodexAttemptError::Retry(err));
+            }
+            Err(CodexAttemptError::Fatal(
+                map_upstream_error(
+                    state,
+                    provider,
+                    upstream,
+                    inbound_path,
+                    meta,
+                    selected_account_id,
+                    request_detail,
+                    err,
+                    start_time,
+                    cooldown_scope,
+                    TransportRecovery::NextUpstream,
+                    request_headers,
+                )
+                .await,
+            ))
         }
     }
 }
 
-fn finalize_codex_fallback(
+async fn finalize_codex_fallback(
     state: &ProxyState,
     provider: &str,
     upstream: &UpstreamRuntime,
@@ -487,6 +501,7 @@ fn finalize_codex_fallback(
     start_time: Instant,
     last_error: Option<reqwest::Error>,
     cooldown_scope: &CooldownScope,
+    request_headers: &HeaderMap,
 ) -> AttemptOutcome {
     let Some(err) = last_error else {
         return AttemptOutcome::Fatal(http::error_response(
@@ -507,7 +522,9 @@ fn finalize_codex_fallback(
         start_time,
         cooldown_scope,
         TransportRecovery::NextUpstream,
+        request_headers,
     )
+    .await
 }
 
 async fn send_request_once(
@@ -605,7 +622,7 @@ fn should_retry_codex_send(err: &reqwest::Error) -> bool {
     err.is_connect() || err.is_request()
 }
 
-fn handle_upstream_timeout(
+async fn handle_upstream_timeout(
     state: &ProxyState,
     provider: &str,
     upstream: &UpstreamRuntime,
@@ -617,6 +634,7 @@ fn handle_upstream_timeout(
     response_header_timeout: Option<Duration>,
     cooldown_scope: &CooldownScope,
     request_recovery: TransportRecovery,
+    request_headers: &HeaderMap,
 ) -> AttemptOutcome {
     let timeout_secs = response_header_timeout
         .unwrap_or(state.config.sync_response_timeout)
@@ -630,13 +648,27 @@ fn handle_upstream_timeout(
         timeout_secs,
         "upstream request timed out before response headers"
     );
-    mark_account_retryable_failure(
+    let sent_token = request_headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.strip_prefix("Bearer ").unwrap_or(value));
+    let credential_current = result::with_current_account_result(
         state,
         provider,
         selected_account_id,
-        Some(message.clone()),
-        cooldown_scope,
-    );
+        sent_token,
+        || {
+            mark_account_retryable_failure(
+                state,
+                provider,
+                selected_account_id,
+                Some(message.clone()),
+                cooldown_scope,
+            );
+        },
+    )
+    .await
+    .is_some();
     // 每次真实上游失败都落库；错误请求由 SQLite retention 在 7 天后清理。
     result::log_upstream_error_if_needed(
         &state.log,
@@ -654,11 +686,11 @@ fn handle_upstream_timeout(
         message,
         response: None,
         is_timeout: true,
-        should_cooldown: true,
+        should_cooldown: credential_current,
     }
 }
 
-fn map_upstream_error(
+async fn map_upstream_error(
     state: &ProxyState,
     provider: &str,
     upstream: &UpstreamRuntime,
@@ -670,6 +702,7 @@ fn map_upstream_error(
     start_time: Instant,
     cooldown_scope: &CooldownScope,
     request_recovery: TransportRecovery,
+    request_headers: &HeaderMap,
 ) -> AttemptOutcome {
     let failure = log_transport_error(
         state,
@@ -689,18 +722,32 @@ fn map_upstream_error(
         return AttemptOutcome::Fatal(http::error_response(failure.status, client_message));
     }
 
-    mark_account_retryable_failure(
+    let sent_token = request_headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.strip_prefix("Bearer ").unwrap_or(value));
+    let credential_current = result::with_current_account_result(
         state,
         provider,
         selected_account_id,
-        Some(failure.client_message.clone()),
-        cooldown_scope,
-    );
+        sent_token,
+        || {
+            mark_account_retryable_failure(
+                state,
+                provider,
+                selected_account_id,
+                Some(failure.client_message.clone()),
+                cooldown_scope,
+            );
+        },
+    )
+    .await
+    .is_some();
     AttemptOutcome::Retryable {
         message: failure.client_message,
         response: None,
         is_timeout: failure.is_timeout,
-        should_cooldown: true,
+        should_cooldown: credential_current,
     }
 }
 

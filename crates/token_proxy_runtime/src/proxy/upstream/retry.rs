@@ -15,8 +15,8 @@ use token_proxy_protocol::xai_client_tools::XaiClientToolMapping;
 pub(super) struct UpstreamAttempt {
     pub(super) response: reqwest::Response,
     pub(super) selected_account_id: Option<String>,
-    /// 仅用于 401 锁内版本比较，禁止写入日志或响应。
-    pub(super) codex_access_token: Option<String>,
+    /// 实际发送的凭据，用于 401 恢复及迟到结果比较，禁止写入日志或响应。
+    pub(super) account_access_token: Option<String>,
     pub(super) meta: RequestMeta,
     pub(super) start_time: std::time::Instant,
     pub(super) timings: RequestTimings,
@@ -113,6 +113,7 @@ pub(super) async fn finalize_attempt(
         provider,
         attempt.selected_account_id.as_deref(),
         &attempt.response,
+        attempt.account_access_token.clone(),
     );
     let mut outcome = result::handle_upstream_result(
         state,
@@ -131,6 +132,7 @@ pub(super) async fn finalize_attempt(
         attempt.xai_client_tools,
         request_detail,
         cooldown_scope,
+        attempt.account_access_token.as_deref(),
     )
     .await;
     if skip_same_upstream_retry {
@@ -293,7 +295,7 @@ async fn retry_after_account_refresh(
         state,
         provider,
         &account_id,
-        first.codex_access_token.as_deref(),
+        first.account_access_token.as_deref(),
     )
     .await
     {
@@ -358,7 +360,7 @@ async fn retry_after_agent_identity_task_recovery(
     let UpstreamAttempt {
         response,
         selected_account_id,
-        codex_access_token,
+        account_access_token,
         meta: attempt_meta,
         start_time,
         timings,
@@ -395,7 +397,7 @@ async fn retry_after_agent_identity_task_recovery(
         return Ok(UpstreamAttempt {
             response: reqwest::Response::from(rebuilt),
             selected_account_id,
-            codex_access_token,
+            account_access_token,
             meta: attempt_meta,
             start_time,
             timings,
@@ -491,6 +493,7 @@ fn schedule_account_response_tasks(
     provider: &str,
     account_id: Option<&str>,
     response: &reqwest::Response,
+    account_access_token: Option<String>,
 ) {
     let Some(account_id) = account_id.map(str::trim).filter(|value| !value.is_empty()) else {
         return;
@@ -504,12 +507,15 @@ fn schedule_account_response_tasks(
             });
         }
         "xai" => {
+            let Some(account_access_token) = account_access_token else {
+                return;
+            };
             let store = state.xai_accounts.clone();
             let headers = response.headers().clone();
             let status = response.status().as_u16();
             tokio::spawn(async move {
                 if let Err(error) = store
-                    .record_quota_headers(&account_id, &headers, status)
+                    .record_quota_headers(&account_id, &headers, status, &account_access_token)
                     .await
                 {
                     tracing::warn!(
@@ -539,12 +545,12 @@ async fn refresh_account(
     state: &ProxyState,
     provider: &str,
     account_id: &str,
-    failed_codex_access_token: Option<&str>,
+    failed_account_access_token: Option<&str>,
 ) -> Result<(), String> {
     match provider {
         "codex" => {
             let token =
-                failed_codex_access_token.ok_or("Codex failed request token unavailable.")?;
+                failed_account_access_token.ok_or("Codex failed request token unavailable.")?;
             state
                 .codex_accounts
                 .refresh_account_after_unauthorized(account_id, token)

@@ -701,5 +701,12 @@
   "api_keys_usage_hint": "Billable requests only. Requests logged before this version have no key and are not counted.",
   "api_keys_usage_requests": "{count} req",
   "api_keys_last_used": "Last used",
-  "api_keys_never_used": "Never"
+  "api_keys_never_used": "Never",
+  "logs_response_page_range": "Response bytes {start}–{end} of {total}",
+  "logs_response_copy_page": "Copy details with current response page",
+  "logs_response_page_notice": "Only the current response page is included.",
+  "logs_response_page_previous": "Previous response page",
+  "logs_response_page_next": "Next response page",
+  "logs_response_page_retry": "Retry loading response page",
+  "logs_response_capture_error": "Response capture incomplete"
 }

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   RequestDetailCaptureState,
   RequestLogDetail,
+  RequestLogBodyPage,
 } from "@/features/logs/types";
 
 export async function readRequestDetailCapture() {
@@ -15,4 +16,8 @@ export async function setRequestDetailCapture(enabled: boolean) {
 
 export async function readRequestLogDetail(id: number) {
   return await invoke<RequestLogDetail>("read_request_log_detail", { id });
+}
+
+export async function readRequestLogBodyPage(id: number, offset: number) {
+  return await invoke<RequestLogBodyPage>("read_request_log_body_page", { id, offset });
 }

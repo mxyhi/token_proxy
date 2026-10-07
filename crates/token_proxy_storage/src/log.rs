@@ -5,17 +5,7 @@ use std::sync::Arc;
 
 use super::pricing::{calculate_request_cost, default_model_pricing_settings, BillableUsage};
 
-#[cfg(debug_assertions)]
-macro_rules! debug_log_error {
-    ($($arg:tt)*) => {
-        eprintln!($($arg)*);
-    };
-}
-
-#[cfg(not(debug_assertions))]
-macro_rules! debug_log_error {
-    ($($arg:tt)*) => {};
-}
+use crate::body_capture::{CapturedBody, ResponseBodyCapture, BODY_PAGE_BYTES};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct TokenUsage {
@@ -116,12 +106,32 @@ impl LogWriter {
         });
     }
 
+    pub fn write_detached_with_body(self: Arc<Self>, entry: LogEntry, body: ResponseBodyCapture) {
+        tokio::spawn(async move {
+            if let Err(error) = self.write_with_body(&entry, body).await {
+                // release 构建禁用了 tracing，落库失败仍必须可见。
+                eprintln!("proxy sqlite response detail write failed: {error}");
+            }
+        });
+    }
+
+    pub async fn write_with_body(
+        &self,
+        entry: &LogEntry,
+        body: ResponseBodyCapture,
+    ) -> Result<(), sqlx::Error> {
+        let Some(pool) = self.sqlite.as_ref() else {
+            return Ok(());
+        };
+        insert_log_entry_with_body(pool, entry, Some(body.finish().await)).await
+    }
+
     pub async fn write(&self, entry: &LogEntry) {
         let Some(pool) = self.sqlite.as_ref() else {
             return;
         };
         if let Err(_err) = insert_log_entry(pool, entry).await {
-            debug_log_error!("proxy sqlite write failed: {_err}");
+            eprintln!("proxy sqlite write failed: {_err}");
         }
     }
 }
@@ -144,6 +154,14 @@ fn captures_request_detail(
 }
 
 async fn insert_log_entry(pool: &SqlitePool, entry: &LogEntry) -> Result<(), sqlx::Error> {
+    insert_log_entry_with_body(pool, entry, None).await
+}
+
+async fn insert_log_entry_with_body(
+    pool: &SqlitePool,
+    entry: &LogEntry,
+    mut body: Option<CapturedBody>,
+) -> Result<(), sqlx::Error> {
     let usage = entry.usage.as_ref();
     let input_tokens = usage.and_then(|usage| usage.input_tokens).map(to_i64_u64);
     let output_tokens = usage.and_then(|usage| usage.output_tokens).map(to_i64_u64);
@@ -170,7 +188,7 @@ async fn insert_log_entry(pool: &SqlitePool, entry: &LogEntry) -> Result<(), sql
     let usage_json = entry.usage_json.as_ref().map(Value::to_string);
 
     let mut transaction = pool.begin().await?;
-    sqlx::query(
+    let inserted = sqlx::query(
         r#"
 INSERT INTO request_logs (
   ts_ms,
@@ -261,6 +279,54 @@ INSERT INTO request_logs (
     .bind(entry.local_api_key_id.as_deref())
     .execute(&mut *transaction)
     .await?;
+
+    if let Some(body) = body.as_mut() {
+        let id = inserted.last_insert_rowid();
+        // 非 UTF-8 小正文也用 BLOB，避免 lossy 转换改变正文与分页字节偏移。
+        let invalid_inline = std::str::from_utf8(&body.memory).is_err();
+        let chunked = body.file.is_some() || invalid_inline;
+        let mut length = body.memory.len() as u64;
+        if invalid_inline {
+            body.error.get_or_insert_with(|| "Response detail contains invalid UTF-8; original bytes are preserved but cannot be displayed as text".to_owned());
+            for (ordinal, chunk) in body.memory.chunks(BODY_PAGE_BYTES).enumerate() {
+                sqlx::query(
+                    "INSERT INTO response_body_chunks (log_id, ordinal, data) VALUES (?, ?, ?);",
+                )
+                .bind(id)
+                .bind(ordinal as i64)
+                .bind(chunk)
+                .execute(&mut *transaction)
+                .await?;
+            }
+        } else if chunked {
+            length = 0;
+            let mut buffer = vec![0; BODY_PAGE_BYTES];
+            let mut ordinal = 0i64;
+            loop {
+                match body.read_chunk(&mut buffer).await {
+                    Ok(0) => break,
+                    Ok(count) => {
+                        sqlx::query("INSERT INTO response_body_chunks (log_id, ordinal, data) VALUES (?, ?, ?);")
+                            .bind(id).bind(ordinal).bind(&buffer[..count])
+                            .execute(&mut *transaction).await?;
+                        length += count as u64;
+                        ordinal += 1;
+                    }
+                    Err(_) => {
+                        body.error.get_or_insert_with(|| {
+                            "Failed to read response detail temporary file".to_owned()
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+        let text = (!chunked && !body.memory.is_empty())
+            .then(|| std::str::from_utf8(&body.memory).expect("inline body validated above"));
+        sqlx::query("UPDATE request_logs SET response_body = ?, response_body_bytes = ?, response_body_chunked = ?, response_capture_error = ? WHERE id = ?;")
+            .bind(text).bind(to_i64_u64(length)).bind(chunked).bind(body.error.as_deref()).bind(id)
+            .execute(&mut *transaction).await?;
+    }
 
     if let Some(client_request_id) = entry.client_request_id.as_deref() {
         // attempt 完成顺序与异步落库顺序都可能不同；按完成序号重算唯一账单记录。
@@ -355,6 +421,240 @@ mod tests {
             attempt_index: Some(attempt_index),
             local_api_key_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn invalid_utf8_preserves_original_bytes_and_surfaces_detail_error() {
+        use crate::body_capture::ResponseBodyCapture;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlite::init_schema(&pool).await.unwrap();
+        let original = [b'a', 0xff, b'z'];
+        let mut capture = ResponseBodyCapture::new(true);
+        capture.push(&original).await;
+        LogWriter::new(Some(pool.clone()))
+            .write_with_body(&sample_entry(200, 1, 0), capture)
+            .await
+            .unwrap();
+        let stored: Vec<u8> = sqlx::query_scalar(
+            "SELECT data FROM response_body_chunks WHERE log_id = 1 AND ordinal = 0",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stored, original);
+        let detail = crate::logs::read_request_log_detail(&pool, 1)
+            .await
+            .unwrap();
+        assert_eq!(detail.response_body_bytes, 3);
+        assert!(detail.response_body.is_none());
+        assert!(detail
+            .response_capture_error
+            .unwrap()
+            .contains("invalid UTF-8"));
+        assert!(crate::logs::read_request_log_body_page(&pool, 1, 0)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn missing_short_or_invalid_chunks_are_reported_without_shifting_offsets() {
+        use crate::body_capture::{ResponseBodyCapture, BODY_MEMORY_LIMIT, BODY_PAGE_BYTES};
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlite::init_schema(&pool).await.unwrap();
+        let mut capture = ResponseBodyCapture::new(true);
+        capture.push(&vec![b'a'; BODY_MEMORY_LIMIT + 1]).await;
+        LogWriter::new(Some(pool.clone()))
+            .write_with_body(&sample_entry(200, 1, 0), capture)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM response_body_chunks WHERE log_id = 1 AND ordinal = 0")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(crate::logs::read_request_log_body_page(&pool, 1, 0)
+            .await
+            .unwrap_err()
+            .contains("missing chunks"));
+        let detail = crate::logs::read_request_log_detail(&pool, 1)
+            .await
+            .unwrap();
+        assert!(detail
+            .response_capture_error
+            .unwrap()
+            .contains("missing chunks"));
+        sqlx::query(
+            "UPDATE response_body_chunks SET data = X'61' WHERE log_id = 1 AND ordinal = 1",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            crate::logs::read_request_log_body_page(&pool, 1, BODY_PAGE_BYTES as u64)
+                .await
+                .unwrap_err()
+                .contains("invalid chunk length")
+        );
+        let mut invalid = vec![b'a'; BODY_PAGE_BYTES];
+        invalid[12] = 0xff;
+        sqlx::query("UPDATE response_body_chunks SET data = ? WHERE log_id = 1 AND ordinal = 2")
+            .bind(invalid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(
+            crate::logs::read_request_log_body_page(&pool, 1, 2 * BODY_PAGE_BYTES as u64)
+                .await
+                .unwrap_err()
+                .contains("invalid UTF-8")
+        );
+    }
+
+    #[tokio::test]
+    async fn cancelled_capture_error_and_prefix_are_visible_in_detail() {
+        use crate::body_capture::{ResponseBodyCapture, BODY_MEMORY_LIMIT};
+        use std::future::Future;
+        use std::task::Poll;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlite::init_schema(&pool).await.unwrap();
+        let mut capture = ResponseBodyCapture::new(true);
+        capture.push(&vec![b'p'; BODY_MEMORY_LIMIT]).await;
+        let mut push = Box::pin(capture.push(b"new"));
+        let pending =
+            std::future::poll_fn(|cx| Poll::Ready(push.as_mut().poll(cx).is_pending())).await;
+        drop(push);
+        let writer = LogWriter::new(Some(pool.clone()));
+        writer
+            .write_with_body(&sample_entry(200, 1, 0), capture)
+            .await
+            .unwrap();
+        let detail = crate::logs::read_request_log_detail(&pool, 1)
+            .await
+            .unwrap();
+        assert_eq!(detail.status, 200);
+        assert!(detail.response_body_bytes >= BODY_MEMORY_LIMIT as u64);
+        assert!(detail
+            .response_body
+            .unwrap()
+            .bytes()
+            .all(|byte| byte == b'p'));
+        if pending {
+            assert!(detail
+                .response_capture_error
+                .unwrap()
+                .contains("interrupted"));
+        }
+    }
+
+    #[tokio::test]
+    async fn chunk_insert_failure_rolls_back_parent_log_and_chunks() {
+        use crate::body_capture::{ResponseBodyCapture, BODY_MEMORY_LIMIT};
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlite::init_schema(&pool).await.unwrap();
+        sqlx::query("CREATE TRIGGER fail_chunk BEFORE INSERT ON response_body_chunks WHEN NEW.ordinal = 1 BEGIN SELECT RAISE(ABORT, 'injected chunk failure'); END;").execute(&pool).await.unwrap();
+        let mut capture = ResponseBodyCapture::new(true);
+        capture.push(&vec![b'a'; BODY_MEMORY_LIMIT + 1]).await;
+        let writer = LogWriter::new(Some(pool.clone()));
+        assert!(writer
+            .write_with_body(&sample_entry(200, 1, 0), capture)
+            .await
+            .is_err());
+        let rows: i64 = sqlx::query_scalar("SELECT count(*) FROM request_logs")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let chunks: i64 = sqlx::query_scalar("SELECT count(*) FROM response_body_chunks")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!((rows, chunks), (0, 0));
+    }
+
+    #[tokio::test]
+    async fn legacy_text_is_paginated_without_losing_utf8() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlite::init_schema(&pool).await.unwrap();
+        let writer = LogWriter::new(Some(pool.clone()));
+        let mut entry = sample_entry(200, 1, 0);
+        let content = "中🙂a".repeat(20000);
+        entry.response_body = Some(content.clone());
+        writer.write(&entry).await;
+        let mut actual = String::new();
+        let mut offset = 0;
+        loop {
+            let page = crate::logs::read_request_log_body_page(&pool, 1, offset)
+                .await
+                .unwrap();
+            actual.push_str(&page.text);
+            match page.next_offset {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        assert_eq!(actual, content);
+        assert!(crate::logs::read_request_log_body_page(&pool, 1, 1)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn chunked_body_round_trips_with_bounded_utf8_pages() {
+        use crate::body_capture::{ResponseBodyCapture, BODY_MEMORY_LIMIT, BODY_PAGE_BYTES};
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlite::init_schema(&pool).await.unwrap();
+        let mut capture = ResponseBodyCapture::new(true);
+        let content = "中🙂a".repeat(BODY_MEMORY_LIMIT / 4);
+        capture.push(content.as_bytes()).await;
+        let writer = LogWriter::new(Some(pool.clone()));
+        writer
+            .write_with_body(&sample_entry(200, 1, 0), capture)
+            .await
+            .unwrap();
+        let detail = crate::logs::read_request_log_detail(&pool, 1)
+            .await
+            .unwrap();
+        assert_eq!(detail.response_body_bytes, content.len() as u64);
+        assert!(detail.response_body.as_ref().unwrap().len() <= BODY_PAGE_BYTES);
+        let mut actual = detail.response_body.unwrap();
+        let mut offset = detail.response_body_next_offset;
+        while let Some(next) = offset {
+            let page = crate::logs::read_request_log_body_page(&pool, 1, next)
+                .await
+                .unwrap();
+            assert!(page.text.len() <= BODY_PAGE_BYTES);
+            actual.push_str(&page.text);
+            offset = page.next_offset;
+        }
+        assert_eq!(actual, content);
+        let sizes: Vec<i64> = sqlx::query_scalar("SELECT length(data) FROM response_body_chunks")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(sizes.len() > 1);
+        assert!(sizes.iter().all(|size| *size <= BODY_PAGE_BYTES as i64));
     }
 
     #[tokio::test]

@@ -8,7 +8,7 @@ use std::{
 
 use super::super::compat_content;
 use super::super::compat_reason;
-use super::super::log::{attach_response_body, build_log_entry, LogContext, LogWriter};
+use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::openai_compat::map_usage_responses_to_chat;
 use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
@@ -54,7 +54,7 @@ struct ResponsesToChatState<S> {
     saw_reasoning_delta: bool,
     sent_redacted_thinking: bool,
     final_usage: Option<Value>,
-    response_body_buf: String,
+    response_body_buf: super::body_capture::ResponseBodyCapture,
 }
 
 struct ToolCallState {
@@ -72,9 +72,8 @@ impl<S> ResponsesToChatState<S> {
             return;
         }
         self.logged = true;
-        let mut entry = build_log_entry(&self.context, self.collector.finish(), response_error);
-        attach_response_body(&mut entry, &self.response_body_buf);
-        self.log.clone().write_detached(entry);
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.response_body_buf.write_log(self.log.clone(), entry);
     }
 }
 
@@ -97,6 +96,7 @@ where
         token_tracker: RequestTokenTracker,
     ) -> Self {
         let now_ms = super::now_ms();
+        let response_body_buf = super::body_capture::ResponseBodyCapture::new(&context);
         Self {
             upstream,
             parser: SseEventParser::new(),
@@ -124,7 +124,7 @@ where
             saw_reasoning_delta: false,
             sent_redacted_thinking: false,
             final_usage: None,
-            response_body_buf: String::new(),
+            response_body_buf,
         }
     }
 
@@ -142,11 +142,24 @@ where
             match self.upstream.next().await {
                 Some(Ok(chunk)) => {
                     self.context.mark_upstream_first_byte();
-                    self.collector.push_chunk(&chunk);
-                    self.response_body_buf
-                        .push_str(&String::from_utf8_lossy(chunk.as_ref()));
+                    self.collector.push_chunk(&chunk).map_err(|error| {
+                        let message = format!("Failed to parse upstream SSE: {error}");
+                        tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                            "upstream SSE parser rejected oversized data");
+                        self.context.status = 502;
+                        self.write_log_once(Some(message));
+                        error
+                    })?;
+                    self.response_body_buf.push(&chunk).await;
                     let mut events = Vec::new();
-                    self.parser.push_chunk(&chunk, |data| events.push(data));
+                    self.parser.push_chunk(&chunk, |data| events.push(data)).map_err(|error| {
+                        let message = format!("Failed to parse upstream SSE: {error}");
+                        tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                            "upstream SSE parser rejected oversized data");
+                        self.context.status = 502;
+                        self.write_log_once(Some(message));
+                        error
+                    })?;
                     let mut texts = Vec::new();
                     for data in events {
                         self.handle_event(&data, &mut texts);
@@ -165,7 +178,14 @@ where
                 None => {
                     self.upstream_ended = true;
                     let mut events = Vec::new();
-                    self.parser.finish(|data| events.push(data));
+                    self.parser.finish(|data| events.push(data)).map_err(|error| {
+                        let message = format!("Failed to parse upstream SSE: {error}");
+                        tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                            "upstream SSE parser rejected oversized data");
+                        self.context.status = 502;
+                        self.write_log_once(Some(message));
+                        error
+                    })?;
                     let mut texts = Vec::new();
                     for data in events {
                         self.handle_event(&data, &mut texts);

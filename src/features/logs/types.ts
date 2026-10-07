@@ -49,5 +49,15 @@ export type RequestLogDetail = {
   requestHeaders: string | null;
   requestBody: string | null;
   responseBody: string | null;
+  responseBodyBytes: number;
+  responseBodyNextOffset: number | null;
+  responseCaptureError: string | null;
   responseError: string | null;
+};
+
+export type RequestLogBodyPage = {
+  text: string;
+  offset: number;
+  nextOffset: number | null;
+  totalBytes: number;
 };

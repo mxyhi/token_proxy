@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 #[cfg(any(test, feature = "test-support"))]
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
 
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
@@ -27,12 +28,38 @@ pub struct KiroAccountStore {
     cache: RwLock<HashMap<String, KiroTokenRecord>>,
     app_proxy: AppProxyState,
     quota_refreshing: Mutex<HashSet<String>>,
+    token_refreshing: StdMutex<HashSet<String>>,
     /// Provider 级 mutation gate：所有持久化写、cache 更新、snapshot/restore 共享。
     /// 阻止 lifecycle 全量 restore 与并发 refresh/save 互相覆盖。
     provider_mutation: Mutex<()>,
     /// 测试探针：即将 acquire provider_mutation 时通知（不含 secret）。
     #[cfg(any(test, feature = "test-support"))]
     gate_probe: StdMutex<Option<Arc<ProviderGateProbe>>>,
+}
+
+struct TokenRefreshPermit<'a> {
+    refreshing: &'a StdMutex<HashSet<String>>,
+    account_id: String,
+}
+
+impl Drop for TokenRefreshPermit<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut refreshing) = self.refreshing.lock() {
+            refreshing.remove(&self.account_id);
+        }
+    }
+}
+
+fn kiro_credentials_changed(previous: &KiroTokenRecord, current: &KiroTokenRecord) -> bool {
+    previous.access_token != current.access_token
+        || previous.refresh_token != current.refresh_token
+        || previous.auth_method != current.auth_method
+        || previous.provider != current.provider
+        || previous.profile_arn != current.profile_arn
+        || previous.client_id != current.client_id
+        || previous.client_secret != current.client_secret
+        || previous.region != current.region
+        || previous.start_url != current.start_url
 }
 
 /// provider gate 测试探针：about_to_lock 在阻塞前，acquired 在拿到锁后。
@@ -97,6 +124,7 @@ impl KiroAccountStore {
             cache: RwLock::new(HashMap::new()),
             app_proxy,
             quota_refreshing: Mutex::new(HashSet::new()),
+            token_refreshing: StdMutex::new(HashSet::new()),
             provider_mutation: Mutex::new(()),
             #[cfg(any(test, feature = "test-support"))]
             gate_probe: StdMutex::new(None),
@@ -199,6 +227,19 @@ impl KiroAccountStore {
         Ok(items)
     }
 
+    /// 在当前缓存读锁内处理此凭据的结果，不读取数据库或触发刷新。
+    /// 回调必须是短小的同步状态更新，不得打印凭据或执行 IO。
+    pub async fn with_current_access_token<T>(
+        &self,
+        account_id: &str,
+        expected_token: &str,
+        apply: impl FnOnce() -> T,
+    ) -> Option<T> {
+        let cache = self.cache.read().await;
+        let record = cache.get(account_id)?;
+        (record.access_token == expected_token).then(apply)
+    }
+
     pub async fn get_account_record(&self, account_id: &str) -> Result<KiroTokenRecord, String> {
         let record = self.load_account(account_id).await?;
         self.refresh_if_needed(account_id, record).await
@@ -206,11 +247,7 @@ impl KiroAccountStore {
 
     pub async fn refresh_account(&self, account_id: &str) -> Result<(), String> {
         let record = self.load_account(account_id).await?;
-        let refreshed = self.refresh_record(account_id, record).await?;
-        let summary = self.save_record(account_id.to_string(), refreshed).await?;
-        if matches!(summary.status, KiroAccountStatus::Expired) {
-            return Err("Kiro token refresh failed.".to_string());
-        }
+        self.refresh_record(account_id, record).await?;
         Ok(())
     }
 
@@ -418,24 +455,94 @@ impl KiroAccountStore {
         account_id: &str,
         record: KiroTokenRecord,
     ) -> Result<KiroTokenRecord, String> {
-        // OAuth/refresh 网络走 app 级 proxy，账户不再持有 proxy_url。
-        let proxy_url = self.app_proxy_url().await;
-        let refreshed = match record.auth_method.as_str() {
-            "builder-id" => sso_oidc::refresh_builder_token(&record, proxy_url.as_deref()).await?,
-            "idc" => sso_oidc::refresh_idc_token(&record, proxy_url.as_deref()).await?,
-            "social" => oauth::refresh_social_token(&record, proxy_url.as_deref()).await?,
-            _ => return Err("Unsupported Kiro auth method.".to_string()),
+        self.refresh_record_with(account_id, record, |record| async move {
+            let proxy_url = self.app_proxy_url().await;
+            match record.auth_method.as_str() {
+                "builder-id" => {
+                    sso_oidc::refresh_builder_token(&record, proxy_url.as_deref()).await
+                }
+                "idc" => sso_oidc::refresh_idc_token(&record, proxy_url.as_deref()).await,
+                "social" => oauth::refresh_social_token(&record, proxy_url.as_deref()).await,
+                _ => Err("Unsupported Kiro auth method.".to_string()),
+            }
+        })
+        .await
+    }
+
+    async fn refresh_record_with<F, Fut>(
+        &self,
+        account_id: &str,
+        record: KiroTokenRecord,
+        exchange: F,
+    ) -> Result<KiroTokenRecord, String>
+    where
+        F: FnOnce(KiroTokenRecord) -> Fut,
+        Fut: std::future::Future<Output = Result<KiroTokenRecord, String>>,
+    {
+        let permit = {
+            let mut refreshing = self
+                .token_refreshing
+                .lock()
+                .expect("kiro refresh lock poisoned");
+            refreshing
+                .insert(account_id.to_string())
+                .then(|| TokenRefreshPermit {
+                    refreshing: &self.token_refreshing,
+                    account_id: account_id.to_string(),
+                })
         };
-        // 保留本地邮箱与 quota 缓存，避免 refresh 响应丢失元数据。
-        let refreshed = KiroTokenRecord {
-            email: record.email.clone().or(refreshed.email),
-            quota: record.quota.clone(),
-            ..refreshed
+        let Some(_permit) = permit else {
+            // 同一账户只发一个 OAuth 请求；drop permit 同时覆盖成功、错误与取消。
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(35);
+            while self
+                .token_refreshing
+                .lock()
+                .expect("kiro refresh lock poisoned")
+                .contains(account_id)
+            {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err("Kiro token refresh is still in progress.".to_string());
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            let current = self.load_account(account_id).await?;
+            return if kiro_credentials_changed(&record, &current)
+                || (!current.is_expired()
+                    && (current.expires_at != record.expires_at
+                        || current.last_refresh != record.last_refresh))
+            {
+                Ok(current)
+            } else {
+                Err("Kiro token refresh did not update credentials.".to_string())
+            };
         };
-        let summary = self
-            .save_record(account_id.to_string(), refreshed.clone())
+        let current = self.load_account(account_id).await?;
+        if kiro_credentials_changed(&record, &current) {
+            return Ok(current);
+        }
+        let result = exchange(current.clone()).await;
+        // 网络期间不持 provider 锁。提交时必须仍存在同一凭据，避免恢复已删账户。
+        let _gate = self.acquire_provider_mutation().await;
+        let latest = self
+            .cache
+            .read()
+            .await
+            .get(account_id)
+            .cloned()
+            .ok_or_else(|| format!("Kiro account no longer exists: {account_id}"))?;
+        if kiro_credentials_changed(&current, &latest) {
+            tracing::info!(
+                account_id,
+                "kiro credentials changed during refresh; ignoring stale result"
+            );
+            return Ok(latest);
+        }
+        let mut refreshed = result?;
+        refreshed.email = latest.email.or(refreshed.email);
+        refreshed.quota = latest.quota;
+        self.save_record_unlocked(account_id.to_string(), refreshed.clone())
             .await?;
-        if matches!(summary.status, KiroAccountStatus::Expired) {
+        if refreshed.is_expired() {
             return Err("Kiro token refresh failed.".to_string());
         }
         Ok(refreshed)
@@ -928,6 +1035,7 @@ impl KiroIdeTokenFile {
 mod tests {
     use super::*;
     use rand::random;
+    include!("refresh_tests.rs");
     use serde_json::json;
     use std::future::Future;
     use time::Duration;

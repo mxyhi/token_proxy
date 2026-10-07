@@ -18,7 +18,7 @@ fn xai_free_usage_hint_applies_explicit_cooldown_when_default_is_disabled() {
         Some("xai-a"),
         StatusCode::TOO_MANY_REQUESTS,
         &reqwest::header::HeaderMap::new(),
-        &response,
+        response.extensions().get::<AccountCooldownHint>(),
         &CooldownScope::Global,
     );
 

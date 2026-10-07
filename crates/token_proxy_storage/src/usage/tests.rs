@@ -16,7 +16,9 @@ fn gemini_usage_merges_partial_snapshots_without_adding_duplicates() {
             } else {
                 json!({"usageMetadata":metadata})
             };
-            collector.push_chunk(format!("data: {envelope}\n\n").as_bytes());
+            collector
+                .push_chunk(format!("data: {envelope}\n\n").as_bytes())
+                .unwrap();
         }
         let snapshot = collector.finish();
         let usage = snapshot.usage.expect("usage");
@@ -50,7 +52,9 @@ fn gemini_thinking_is_billable_output_in_json_and_usage_only_sse() {
         assert_eq!(snapshot.billable_usage.uncached_input_tokens, 12);
         assert_eq!(snapshot.usage.unwrap().total_tokens, Some(16 + expected));
         let mut collector = SseUsageCollector::new();
-        collector.push_chunk(format!("data: {body}\n\n").as_bytes());
+        collector
+            .push_chunk(format!("data: {body}\n\n").as_bytes())
+            .unwrap();
         assert_eq!(collector.finish().billable_usage.output_tokens, expected);
     }
 }
@@ -147,10 +151,10 @@ fn sse_collector_uses_latest_anthropic_usage_event() {
     let mut collector = SseUsageCollector::new();
     collector.push_chunk(
         b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":0,\"cache_read_input_tokens\":4,\"cache_creation_input_tokens\":5}}}\n\n",
-    );
+    ).unwrap();
     collector.push_chunk(
         b"data: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":10,\"output_tokens\":2,\"cache_read_input_tokens\":4,\"cache_creation_input_tokens\":5}}\n\n",
-    );
+    ).unwrap();
     let snapshot = collector.finish();
 
     assert_eq!(snapshot.billable_usage.cache_read_tokens, 4);
@@ -181,12 +185,14 @@ fn response_model_comes_from_chat_responses_and_gemini_envelopes() {
 #[test]
 fn sse_response_model_keeps_the_latest_event_and_does_not_drop_usage() {
     let mut collector = SseUsageCollector::new();
-    collector.push_chunk(
-        b"data: {\"type\":\"response.created\",\"response\":{\"model\":\"gpt-6-astra\"}}\n\n",
-    );
+    collector
+        .push_chunk(
+            b"data: {\"type\":\"response.created\",\"response\":{\"model\":\"gpt-6-astra\"}}\n\n",
+        )
+        .unwrap();
     collector.push_chunk(
         b"data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5.6-luna\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}}\n\n",
-    );
+    ).unwrap();
     let snapshot = collector.finish();
 
     assert_eq!(snapshot.response_model.as_deref(), Some("gpt-5.6-luna"));

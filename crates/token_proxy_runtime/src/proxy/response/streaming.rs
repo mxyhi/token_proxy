@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::super::log::{attach_response_body, build_log_entry, LogContext, LogWriter};
+use super::super::log::{build_log_entry, LogContext, LogWriter};
 use super::super::model;
 use super::super::sse::SseEventParser;
 use super::super::token_rate::RequestTokenTracker;
@@ -75,7 +75,7 @@ struct LoggingStreamState<S> {
     terminal_error: Option<String>,
     semantic_timeout: Option<Duration>,
     last_semantic_event_at: Instant,
-    response_body_buf: String,
+    response_body_buf: super::body_capture::ResponseBodyCapture,
     sequence: ResponsesEventSequence,
 }
 
@@ -95,9 +95,8 @@ impl<S> LoggingStreamState<S> {
         if self.logged {
             return;
         }
-        let mut entry = build_log_entry(&self.context, self.collector.finish(), response_error);
-        attach_response_body(&mut entry, &self.response_body_buf);
-        self.log.clone().write_detached(entry);
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.response_body_buf.write_log(self.log.clone(), entry);
         self.logged = true;
     }
 
@@ -130,6 +129,7 @@ where
         token_tracker: RequestTokenTracker,
         semantic_timeout: Option<Duration>,
     ) -> Self {
+        let response_body_buf = super::body_capture::ResponseBodyCapture::new(&context);
         Self {
             upstream,
             collector: SseUsageCollector::new(),
@@ -142,7 +142,7 @@ where
             terminal_error: None,
             semantic_timeout,
             last_semantic_event_at: Instant::now(),
-            response_body_buf: String::new(),
+            response_body_buf,
             sequence: ResponsesEventSequence::default(),
         }
     }
@@ -160,7 +160,16 @@ where
                 let semantics = self.openai_stream_semantics();
                 let mut observation = StreamObservation::default();
                 let mut events = Vec::new();
-                self.parser.push_chunk(&out_chunk, |data| events.push(data));
+                self.parser
+                    .push_chunk(&out_chunk, |data| events.push(data))
+                    .map_err(|error| {
+                        let message = format!("Failed to parse upstream SSE: {error}");
+                        tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                            "upstream SSE parser rejected oversized data");
+                        self.context.status = 502;
+                        self.write_log_once(Some(message));
+                        error
+                    })?;
                 let done_index = semantics
                     .done_sentinel
                     .then(|| events.iter().position(|data| data.trim() == "[DONE]"))
@@ -192,9 +201,15 @@ where
                         "dropping OpenAI SSE data after [DONE]"
                     );
                 }
-                self.collector.push_chunk(&out_chunk);
-                self.response_body_buf
-                    .push_str(&String::from_utf8_lossy(out_chunk.as_ref()));
+                self.collector.push_chunk(&out_chunk).map_err(|error| {
+                    let message = format!("Failed to parse upstream SSE: {error}");
+                    tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                            "upstream SSE parser rejected oversized data");
+                    self.context.status = 502;
+                    self.write_log_once(Some(message));
+                    error
+                })?;
+                self.response_body_buf.push(&out_chunk).await;
                 if self.terminal_error.is_some() {
                     self.write_terminal_log_once();
                 }
@@ -211,7 +226,16 @@ where
                 let semantics = self.openai_stream_semantics();
                 let mut observation = StreamObservation::default();
                 let mut events = Vec::new();
-                self.parser.finish(|data| events.push(data));
+                self.parser
+                    .finish(|data| events.push(data))
+                    .map_err(|error| {
+                        let message = format!("Failed to parse upstream SSE: {error}");
+                        tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                            "upstream SSE parser rejected oversized data");
+                        self.context.status = 502;
+                        self.write_log_once(Some(message));
+                        error
+                    })?;
                 for data in events {
                     self.sequence.observe_data(&data);
                     observe_stream_data(semantics, &self.context.provider, &data, &mut observation);
@@ -246,26 +270,31 @@ where
                         self.context.model.as_deref(),
                         sequence_number,
                     );
-                    self.response_body_buf
-                        .push_str(&String::from_utf8_lossy(out_chunk.as_ref()));
+                    self.response_body_buf.push(&out_chunk).await;
                     self.terminal_seen = true;
                     self.terminal_error = Some(message);
                     self.context.status = 502;
                     self.context.mark_first_client_flush();
                     return Ok(Some((out_chunk, self)));
                 }
-                if self.terminal_seen {
-                    self.write_terminal_log_once();
-                } else {
-                    self.write_log_once(None);
-                }
+                self.context.status = 502;
+                self.write_log_once(Some(message));
                 Err(std::io::Error::new(std::io::ErrorKind::Other, err))
             }
             None => {
                 let semantics = self.openai_stream_semantics();
                 let mut observation = StreamObservation::default();
                 let mut events = Vec::new();
-                self.parser.finish(|data| events.push(data));
+                self.parser
+                    .finish(|data| events.push(data))
+                    .map_err(|error| {
+                        let message = format!("Failed to parse upstream SSE: {error}");
+                        tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                            "upstream SSE parser rejected oversized data");
+                        self.context.status = 502;
+                        self.write_log_once(Some(message));
+                        error
+                    })?;
                 for data in events {
                     self.sequence.observe_data(&data);
                     observe_stream_data(semantics, &self.context.provider, &data, &mut observation);
@@ -374,9 +403,10 @@ struct ModelOverrideStreamState<S> {
     terminal_error: Option<String>,
     semantic_timeout: Option<Duration>,
     last_semantic_event_at: Instant,
-    response_body_buf: String,
+    response_body_buf: super::body_capture::ResponseBodyCapture,
     sequence: ResponsesEventSequence,
     saw_sse_event: bool,
+    diagnostic: Option<super::body_capture::StreamDiagnostic>,
     output_item_ids: BTreeMap<i64, String>,
 }
 
@@ -385,9 +415,8 @@ impl<S> ModelOverrideStreamState<S> {
         if self.logged {
             return;
         }
-        let mut entry = build_log_entry(&self.context, self.collector.finish(), response_error);
-        attach_response_body(&mut entry, &self.response_body_buf);
-        self.log.clone().write_detached(entry);
+        let entry = build_log_entry(&self.context, self.collector.finish(), response_error);
+        self.response_body_buf.write_log(self.log.clone(), entry);
         self.logged = true;
     }
 
@@ -421,6 +450,7 @@ where
         token_tracker: RequestTokenTracker,
         semantic_timeout: Option<Duration>,
     ) -> Self {
+        let response_body_buf = super::body_capture::ResponseBodyCapture::new(&context);
         Self {
             upstream,
             parser: SseEventParser::new(),
@@ -436,9 +466,10 @@ where
             terminal_error: None,
             semantic_timeout,
             last_semantic_event_at: Instant::now(),
-            response_body_buf: String::new(),
+            response_body_buf,
             sequence: ResponsesEventSequence::default(),
             saw_sse_event: false,
+            diagnostic: Some(super::body_capture::StreamDiagnostic::new()),
             output_item_ids: BTreeMap::new(),
         }
     }
@@ -454,6 +485,32 @@ where
                 return Ok(None);
             }
             if self.upstream_ended {
+                if self.openai_stream_semantics().responses_events {
+                    // 正常 transport EOF 并不代表 Responses 请求完成，必须见到协议终态。
+                    let message = self
+                        .diagnostic
+                        .as_ref()
+                        .and_then(|value| value.message())
+                        .unwrap_or_else(|| {
+                            "Upstream Responses stream truncated before a terminal event."
+                                .to_string()
+                        });
+                    tracing::warn!(provider = %self.context.provider, upstream_id = %self.context.upstream_id,
+                        error = %message, "Responses stream ended without terminal event");
+                    self.context.status = 502;
+                    self.terminal_seen = true;
+                    self.terminal_error = Some(message.clone());
+                    let sequence_number = self.sequence.take_next();
+                    let chunk = openai_response_failed_done_chunk(
+                        &message,
+                        self.failure_model(),
+                        sequence_number,
+                    );
+                    self.response_body_buf.push(&chunk).await;
+                    self.write_terminal_log_once();
+                    self.context.mark_first_client_flush();
+                    return Ok(Some((chunk, self)));
+                }
                 self.write_log_once(None);
                 return Ok(None);
             }
@@ -461,12 +518,31 @@ where
             match self.next_upstream_item().await? {
                 Some(Ok(chunk)) => {
                     self.context.mark_upstream_first_byte();
-                    self.collector.push_chunk(&chunk);
-                    self.response_body_buf
-                        .push_str(&String::from_utf8_lossy(chunk.as_ref()));
+                    self.collector.push_chunk(&chunk).map_err(|error| {
+                        let message = format!("Failed to parse upstream SSE: {error}");
+                        tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                            "upstream SSE parser rejected oversized data");
+                        self.context.status = 502;
+                        self.write_log_once(Some(message));
+                        error
+                    })?;
+                    self.response_body_buf.push(&chunk).await;
+                    if let Some(diagnostic) = &mut self.diagnostic {
+                        diagnostic.push(&chunk);
+                    }
                     let mut events = Vec::new();
-                    self.parser.push_chunk(&chunk, |data| events.push(data));
+                    self.parser.push_chunk(&chunk, |data| events.push(data)).map_err(|error| {
+                        let message = format!("Failed to parse upstream SSE: {error}");
+                        tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                            "upstream SSE parser rejected oversized data");
+                        self.context.status = 502;
+                        self.write_log_once(Some(message));
+                        error
+                    })?;
                     self.saw_sse_event |= !events.is_empty();
+                    if self.saw_sse_event {
+                        self.diagnostic = None;
+                    }
                     let mut observation = StreamObservation::default();
                     let saw_done = events.iter().any(|data| data.trim() == "[DONE]");
                     let semantics = self.openai_stream_semantics();
@@ -529,31 +605,32 @@ where
                             self.failure_model(),
                             sequence_number,
                         );
-                        self.response_body_buf
-                            .push_str(&String::from_utf8_lossy(out_chunk.as_ref()));
+                        self.response_body_buf.push(&out_chunk).await;
                         self.terminal_seen = true;
                         self.terminal_error = Some(message);
                         self.context.status = 502;
                         self.context.mark_first_client_flush();
                         return Ok(Some((out_chunk, self)));
                     }
-                    self.write_log_once(None);
+                    self.context.status = 502;
+                    self.write_log_once(Some(format!("Failed to read upstream response: {err}")));
                     return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
                 }
                 None => {
                     self.upstream_ended = true;
                     let mut events = Vec::new();
-                    self.parser.finish(|data| events.push(data));
-                    if events.is_empty()
-                        && !self.saw_sse_event
-                        && !self.response_body_buf.is_empty()
-                    {
-                        // A non-SSE HTTP 200 body is invalid for a stream, but preserving it keeps
-                        // the upstream diagnostic visible instead of turning it into an empty body.
-                        self.out
-                            .push_back(Bytes::from(self.response_body_buf.clone()));
-                    }
+                    self.parser.finish(|data| events.push(data)).map_err(|error| {
+                        let message = format!("Failed to parse upstream SSE: {error}");
+                        tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
+                            "upstream SSE parser rejected oversized data");
+                        self.context.status = 502;
+                        self.write_log_once(Some(message));
+                        error
+                    })?;
                     self.saw_sse_event |= !events.is_empty();
+                    if self.saw_sse_event {
+                        self.diagnostic = None;
+                    }
                     let mut observation = StreamObservation::default();
                     let saw_done = events.iter().any(|data| data.trim() == "[DONE]");
                     let semantics = self.openai_stream_semantics();

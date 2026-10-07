@@ -1,4 +1,6 @@
-use token_proxy_app::app::{RequestDetailCaptureState, RequestLogDetail, TokenProxyApp};
+use token_proxy_app::app::{
+    RequestDetailCaptureState, RequestLogBodyPage, RequestLogDetail, TokenProxyApp,
+};
 
 #[tauri::command]
 pub async fn read_request_log_detail(
@@ -21,4 +23,13 @@ pub fn set_request_detail_capture(
     enabled: bool,
 ) -> RequestDetailCaptureState {
     token_proxy_app.set_request_detail_capture(enabled)
+}
+
+#[tauri::command]
+pub async fn read_request_log_body_page(
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
+    id: u64,
+    offset: u64,
+) -> Result<RequestLogBodyPage, String> {
+    token_proxy_app.read_request_log_body_page(id, offset).await
 }

@@ -71,6 +71,7 @@ pub(super) async fn finalize_response(
     start_time: Instant,
     timings: RequestTimings,
     request_tracker: RequestTokenTracker,
+    account_access_token: &str,
 ) -> AttemptOutcome {
     if force_success {
         let proxy_base_url = crate::proxy::http::local_proxy_base_url(&state.config);
@@ -113,6 +114,7 @@ pub(super) async fn finalize_response(
         None,
         request_detail,
         &crate::proxy::cooldown_scope::CooldownScope::Global,
+        Some(account_access_token),
     )
     .await
 }
@@ -138,7 +140,7 @@ async fn handle_forbidden_response(
     let body_text = String::from_utf8_lossy(&body);
 
     if contains_suspended_flag(&body_text) {
-        let outcome = build_error_outcome(context, status, &headers, body, start_time);
+        let outcome = build_error_outcome(context, status, &headers, body, start_time).await;
         return ResponseAction::Return(outcome);
     }
 
@@ -146,7 +148,7 @@ async fn handle_forbidden_response(
         return ResponseAction::RefreshAndRetry;
     }
 
-    let outcome = build_error_outcome(context, status, &headers, body, start_time);
+    let outcome = build_error_outcome(context, status, &headers, body, start_time).await;
     ResponseAction::Return(outcome)
 }
 
@@ -168,7 +170,7 @@ fn contains_token_error(body: &str) -> bool {
         || lower.contains("unauthorized")
 }
 
-fn build_error_outcome(
+async fn build_error_outcome(
     context: &KiroContext<'_>,
     status: StatusCode,
     headers: &reqwest::header::HeaderMap,
@@ -190,15 +192,25 @@ fn build_error_outcome(
     );
     // 固定账户终态失败必须可跨 Upstream failover；Success 会短路 dispatch。
     // token refresh 已在 endpoint 内穷尽，同 upstream 再原地重放无意义 → NextOnly。
-    let should_cooldown = result::should_cooldown_retryable_status(status);
+    let mut should_cooldown = result::should_cooldown_retryable_status(status);
     if should_cooldown {
-        super::retry::mark_account_retryable_failure(
+        should_cooldown = result::with_current_account_result(
             context.state,
             "kiro",
-            Some(context.account_id.as_str()),
-            Some(message.clone()),
-            &crate::proxy::cooldown_scope::CooldownScope::Global,
-        );
+            Some(&context.account_id),
+            Some(&context.record.access_token),
+            || {
+                super::retry::mark_account_retryable_failure(
+                    context.state,
+                    "kiro",
+                    Some(&context.account_id),
+                    Some(message.clone()),
+                    &crate::proxy::cooldown_scope::CooldownScope::Global,
+                );
+            },
+        )
+        .await
+        .is_some();
     }
     tracing::warn!(
         account_id = context.account_id.as_str(),

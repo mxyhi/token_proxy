@@ -498,16 +498,8 @@ pub(super) fn resolve_retry_fallback_plan(
 ) -> Option<DispatchPlan> {
     let (fallback_provider, inbound_format) =
         resolve_retry_fallback_provider(path, primary_provider)?;
-    let is_available = match (inbound_format, fallback_provider) {
-        (
-            Some(InboundApiFormat::OpenaiChat),
-            PROVIDER_RESPONSES | PROVIDER_CODEX | PROVIDER_XAI,
-        ) => config.provider_upstreams(fallback_provider).is_some(),
-        _ => provider_rank_for_inbound(config, fallback_provider, inbound_format).is_some(),
-    };
-    if !is_available {
-        return None;
-    }
+    // 回退同样遵守 convert_from_map：未授权的入站格式不会因主路失败而被强制转换。
+    provider_rank_for_inbound(config, fallback_provider, inbound_format)?;
     build_retry_fallback_plan(path, fallback_provider)
 }
 

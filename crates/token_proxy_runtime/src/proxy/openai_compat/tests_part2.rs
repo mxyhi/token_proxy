@@ -238,7 +238,8 @@ fn chat_request_to_responses_maps_advanced_optional_params() {
     assert_eq!(value["max_tool_calls"], json!(3));
     assert_eq!(value["prompt_cache_key"], json!("cache-key"));
     assert_eq!(value["prompt_cache_retention"], json!("24h"));
-    assert_eq!(value["stream_options"]["include_usage"], json!(true));
+    // Chat-only include_usage is not a Responses stream option.
+    assert!(value.get("stream_options").is_none());
     assert_eq!(value["top_logprobs"], json!(5));
     assert_eq!(value["partial_images"], json!(2));
     assert_eq!(
@@ -642,9 +643,10 @@ fn chat_request_to_responses_preserves_structured_tool_output() {
     assert_eq!(value["input"][1]["output"][0]["text"], json!("done"));
     assert_eq!(value["input"][1]["output"][1]["type"], json!("input_image"));
     assert_eq!(
-        value["input"][1]["output"][1]["image_url"]["url"],
+        value["input"][1]["output"][1]["image_url"],
         json!("https://example.com/result.png")
     );
+    assert_eq!(value["input"][1]["output"][1]["detail"], json!("auto"));
 }
 
 #[test]
@@ -673,7 +675,7 @@ fn chat_request_to_responses_restores_stringified_multimodal_tool_output() {
     assert_eq!(value["input"][0]["output"][0]["text"], json!("done"));
     assert_eq!(value["input"][0]["output"][1]["type"], json!("input_image"));
     assert_eq!(
-        value["input"][0]["output"][1]["image_url"]["url"],
+        value["input"][0]["output"][1]["image_url"],
         json!("https://example.com/result.png")
     );
     assert_eq!(value["input"][0]["output"][2]["type"], json!("input_image"));
@@ -1033,5 +1035,39 @@ fn responses_and_anthropic_tool_schemas_normalize_true_subschemas_for_chat() {
     assert_eq!(
         chat["tools"][0]["function"]["parameters"]["properties"]["patch"]["items"],
         json!({})
+    );
+}
+
+#[test]
+fn chat_request_to_responses_flattens_image_url_and_drops_chat_stream_options() {
+    let http_clients = ProxyHttpClients::new().expect("http clients");
+    let value = transform_request_value(
+        FormatTransform::ChatToResponses,
+        json!({
+            "model": "qwen3.8-27b-uncensored",
+            "stream": true,
+            "stream_options": { "include_usage": true, "include_obfuscation": false },
+            "messages": [{
+                "role": "user",
+                "content": [
+                    { "type": "text", "text": "Attached image(s) from tool result:" },
+                    { "type": "image_url", "image_url": { "url": "data:image/png;base64,AA==", "detail": "high" } },
+                    { "type": "image_url", "image_url": { "url": "" } }
+                ]
+            }]
+        }),
+        &http_clients,
+        None,
+    );
+
+    let content = value["input"][0]["content"].as_array().expect("content");
+    assert_eq!(content.len(), 2);
+    assert_eq!(
+        content[1],
+        json!({ "type": "input_image", "image_url": "data:image/png;base64,AA==", "detail": "high" })
+    );
+    assert_eq!(
+        value["stream_options"],
+        json!({ "include_obfuscation": false })
     );
 }

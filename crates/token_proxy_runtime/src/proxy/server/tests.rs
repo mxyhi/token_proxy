@@ -5833,7 +5833,7 @@ fn chat_request_failovers_to_next_codex_upstream_after_empty_2xx_response() {
 }
 
 #[test]
-fn chat_request_retries_empty_choices_event_stream_on_responses_provider() {
+fn chat_request_empty_choices_does_not_bridge_to_unauthorized_responses_provider() {
     run_async(async {
         let primary = spawn_mock_raw_upstream(
             StatusCode::OK,
@@ -5870,7 +5870,7 @@ data: [DONE]\n\n",
                 FORMATS_RESPONSES,
             ),
         ]);
-        let data_dir = next_test_data_dir("chat_empty_choices_stream_responses_fallback");
+        let data_dir = next_test_data_dir("chat_empty_choices_no_responses_bridge");
         let state = build_test_state_handle(config, data_dir.clone()).await;
 
         let (status, json) = send_chat_request(state).await;
@@ -5881,23 +5881,18 @@ data: [DONE]\n\n",
         fallback.abort();
         let _ = std::fs::remove_dir_all(&data_dir);
 
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(
-            json["choices"][0]["message"]["content"].as_str(),
-            Some("from responses fallback")
-        );
+        // Responses 上游未在 convert_from_map 授权 Chat 入站，失败后直接返回让客户端重试。
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(json.get("choices").is_none());
         assert_eq!(
             primary_requests.len(),
             2,
             "empty choices retryable response is same-upstream retried once"
         );
         assert_eq!(primary_requests[0].path, "/v1/chat/completions");
-        assert_eq!(fallback_requests.len(), 1);
-        assert_eq!(fallback_requests[0].path, RESPONSES_PATH);
-        assert_eq!(fallback_requests[0].body["model"].as_str(), Some("gpt-5"));
-        assert_eq!(
-            fallback_requests[0].body["input"][0]["content"][0]["text"].as_str(),
-            Some("hi")
+        assert!(
+            fallback_requests.is_empty(),
+            "unauthorized responses provider must not receive converted chat"
         );
     });
 }
@@ -10100,17 +10095,12 @@ fn retry_fallback_plan_switches_chat_between_responses_family_providers() {
 }
 
 #[test]
-fn retry_fallback_plan_allows_openai_response_chat_to_native_codex_provider() {
+fn retry_fallback_plan_skips_codex_without_chat_conversion() {
     let config = config_with_providers(&[
         (PROVIDER_RESPONSES, FORMATS_RESPONSES),
         (PROVIDER_CODEX, FORMATS_RESPONSES),
     ]);
-    let plan = resolve_retry_fallback_plan(&config, CHAT_PATH, PROVIDER_RESPONSES)
-        .expect("should fallback to native codex provider");
-    assert_eq!(plan.provider, PROVIDER_CODEX);
-    assert_eq!(plan.outbound_path, Some(CODEX_RESPONSES_PATH));
-    assert_eq!(plan.request_transform, FormatTransform::ChatToCodex);
-    assert_eq!(plan.response_transform, FormatTransform::CodexToChat);
+    assert!(resolve_retry_fallback_plan(&config, CHAT_PATH, PROVIDER_RESPONSES).is_none());
 }
 
 #[test]
@@ -10128,17 +10118,13 @@ fn retry_fallback_plan_switches_chat_from_openai_to_responses() {
 }
 
 #[test]
-fn retry_fallback_plan_allows_openai_to_native_responses_provider() {
+fn retry_fallback_plan_skips_responses_without_chat_conversion() {
+    // 渠道未在 convert_from_map 授权 Chat 入站时，Chat 失败也不能被强制转成 Responses。
     let config = config_with_providers(&[
         (PROVIDER_CHAT, FORMATS_CHAT),
         (PROVIDER_RESPONSES, FORMATS_RESPONSES),
     ]);
-    let plan = resolve_retry_fallback_plan(&config, CHAT_PATH, PROVIDER_CHAT)
-        .expect("should fallback to native responses provider");
-    assert_eq!(plan.provider, PROVIDER_RESPONSES);
-    assert_eq!(plan.outbound_path, Some(RESPONSES_PATH));
-    assert_eq!(plan.request_transform, FormatTransform::ChatToResponses);
-    assert_eq!(plan.response_transform, FormatTransform::ResponsesToChat);
+    assert!(resolve_retry_fallback_plan(&config, CHAT_PATH, PROVIDER_CHAT).is_none());
 }
 
 #[test]

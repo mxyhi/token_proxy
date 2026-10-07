@@ -76,24 +76,9 @@ pub(super) fn chat_content_to_responses_message_parts(
                             out.push(json!({ "type": text_part_type, "text": text }));
                         }
                     }
-                    "image_url" => {
-                        let url = match part.get("image_url") {
-                            Some(Value::String(url)) => Some(json!({ "url": url })),
-                            Some(Value::Object(object)) => object
-                                .get("url")
-                                .and_then(Value::as_str)
-                                .map(|url| json!({ "url": url })),
-                            _ => None,
-                        };
-                        if let Some(image_url) = url {
-                            out.push(json!({ "type": "input_image", "image_url": image_url }));
-                        }
-                    }
-                    "input_image" => {
-                        if let Some(image_url) = part.get("image_url") {
-                            out.push(
-                                json!({ "type": "input_image", "image_url": image_url.clone() }),
-                            );
+                    "image_url" | "input_image" => {
+                        if let Some(image) = chat_image_part_to_responses_input_image(part) {
+                            out.push(image);
                         }
                     }
                     "input_file" => {
@@ -115,6 +100,29 @@ pub(super) fn chat_content_to_responses_message_parts(
         }
         _ => Ok(Vec::new()),
     }
+}
+
+// Responses `input_image` takes `image_url` as a plain string plus a required
+// `detail`; Chat nests both under `image_url: {url, detail}`. Strict upstreams
+// (e.g. NInfer) treat the nested object as an empty image_url and return 400.
+fn chat_image_part_to_responses_input_image(part: &Map<String, Value>) -> Option<Value> {
+    let (url, nested_detail) = match part.get("image_url") {
+        Some(Value::String(url)) => (url.as_str(), None),
+        Some(Value::Object(image)) => (
+            image.get("url").and_then(Value::as_str)?,
+            image.get("detail").and_then(Value::as_str),
+        ),
+        _ => return None,
+    };
+    if url.trim().is_empty() {
+        return None;
+    }
+    let detail = part
+        .get("detail")
+        .and_then(Value::as_str)
+        .or(nested_detail)
+        .unwrap_or("auto");
+    Some(json!({ "type": "input_image", "image_url": url, "detail": detail }))
 }
 
 pub(super) fn chat_tool_calls_to_responses_items(value: Option<&Value>) -> Vec<Value> {

@@ -329,12 +329,14 @@ fn chat_request_to_responses_with_prompt_cache_key(
             "max_tool_calls",
             "prompt_cache_key",
             "prompt_cache_retention",
-            "stream_options",
             "top_logprobs",
             "partial_images",
             "context_management",
         ],
     );
+    if let Some(stream_options) = chat_stream_options_to_responses(object.get("stream_options")) {
+        output.insert("stream_options".to_string(), stream_options);
+    }
     ensure_prompt_cache_key(&mut output, prompt_cache_key);
     copy_key(object, &mut output, "text");
 
@@ -381,6 +383,13 @@ fn chat_request_to_responses_with_prompt_cache_key(
     serde_json::to_vec(&Value::Object(output))
         .map(Bytes::from)
         .map_err(|err| format!("Failed to serialize request: {err}"))
+}
+
+// Chat-only `include_usage` is rejected by strict Responses upstreams (usage always
+// arrives in `response.completed`), so keep only Responses-native members.
+fn chat_stream_options_to_responses(value: Option<&Value>) -> Option<Value> {
+    let include_obfuscation = value?.get("include_obfuscation")?;
+    Some(json!({ "include_obfuscation": include_obfuscation }))
 }
 
 fn ensure_prompt_cache_key(output: &mut Map<String, Value>, prompt_cache_key: Option<&str>) {

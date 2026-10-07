@@ -32,11 +32,12 @@ pub(super) async fn forward_with_provider_fallbacks(
         headers,
     );
     let routing_config = prepared.request_auth.routing_config(&state.config);
+    // 兼容候选已覆盖所有按 convert_from_map 授权的 Provider；全部失败即返回，
+    // 不再对未授权的上游做 Chat→Responses/Codex 应急转换。
     let mut current_response = if let Some(plans) =
         super::routes::compatible_plans(&routing_config, &prepared.path, headers)
     {
-        let dispatched: HashSet<_> = plans.iter().map(|plan| plan.provider).collect();
-        let mut result = super::priority::forward_by_priority(
+        super::priority::forward_by_priority(
             &state,
             &method,
             uri,
@@ -46,43 +47,8 @@ pub(super) async fn forward_with_provider_fallbacks(
             plans,
             &codex_cooldown_scope,
         )
-        .await;
-        // 保留 Chat 已有的应急 Responses/Codex 桥接：仅在所有显式兼容候选耗尽后启用，
-        // 不让关闭入站转换的上游参与首选排序，也不重复已执行过的 Provider。
-        if prepared.path == super::super::openai_compat::CHAT_PATH {
-            let mut provider = super::super::openai_compat::PROVIDER_CHAT;
-            let mut visited = HashSet::new();
-            while result.should_fallback {
-                let Some(plan) =
-                    resolve_retry_fallback_plan(&routing_config, &prepared.path, provider)
-                else {
-                    break;
-                };
-                if !visited.insert(plan.provider) {
-                    break;
-                }
-                provider = plan.provider;
-                if dispatched.contains(provider) {
-                    continue;
-                }
-                match forward_retry_fallback_request(
-                    state.clone(),
-                    method.clone(),
-                    uri,
-                    headers,
-                    prepared,
-                    request_start,
-                    &plan,
-                    &codex_cooldown_scope,
-                )
-                .await
-                {
-                    Ok(fallback) => result = fallback,
-                    Err(response) => return response,
-                }
-            }
-        }
-        result.response
+        .await
+        .response
     } else {
         forward_native_routes(
             state.clone(),

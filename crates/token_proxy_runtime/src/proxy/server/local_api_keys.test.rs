@@ -109,7 +109,7 @@ fn local_key_scope_survives_retries_race_hedging_and_provider_fallback() {
             let mut config = config_with_runtime_upstreams(&[
                 (PROVIDER_CHAT, 0, "allowed", &failed.base_url, FORMATS_CHAT),
                 (PROVIDER_CHAT, 0, "denied", &denied.base_url, FORMATS_CHAT),
-                // 关闭跨格式首选转换，强制走 Chat 应急 Responses 回退分支。
+                // 未授权 Chat 入站的 Responses 上游不得作为回退候选。
                 (
                     PROVIDER_RESPONSES,
                     0,

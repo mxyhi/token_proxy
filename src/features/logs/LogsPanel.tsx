@@ -6,7 +6,6 @@ import { toast } from "sonner";
 
 import { DataTable } from "@/features/dashboard/components/data-table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -33,6 +32,7 @@ import {
   readRequestDetailCapture,
   setRequestDetailCapture,
 } from "@/features/logs/api";
+import { HttpStatusBadge } from "@/features/logs/HttpStatusBadge";
 import {
   UpstreamResponseModelLine,
   describeUpstreamResponseModel,
@@ -57,15 +57,6 @@ const IDLE_CAPTURE_STATE: RequestDetailCaptureState = {
 };
 
 type RequestDetailCaptureEvent = RequestDetailCaptureState;
-
-type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
-
-function statusToVariant(status: number): BadgeVariant {
-  if (status >= 200 && status < 300) return "default";
-  if (status >= 400) return "destructive";
-  if (status >= 300) return "secondary";
-  return "outline";
-}
 
 function isCaptureWindowActive(state: RequestDetailCaptureState, nowMs: number) {
   if (!state.enabled) {
@@ -162,9 +153,7 @@ function BasicInfoSection({ detail, formatter }: BasicInfoSectionProps) {
         </div>
         <div className={DETAIL_FIELD_ROW_CLASS}>
           <span className={DETAIL_FIELD_LABEL_CLASS}>{m.dashboard_table_status()}</span>
-          <Badge variant={statusToVariant(detail.status)} className="justify-self-start">
-            {detail.status}
-          </Badge>
+          <HttpStatusBadge status={detail.status} className="justify-self-start" />
         </div>
         <DetailField label={m.logs_detail_stream()} value={streamText} />
         <DetailField

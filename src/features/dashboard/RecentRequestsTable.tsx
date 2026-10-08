@@ -11,7 +11,6 @@ import {
   type Table,
 } from "@tanstack/react-table";
 
-import { Badge } from "@/components/ui/badge";
 import { useConfigLocalApiKeys } from "@/features/config/ConfigScreen";
 import { TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -25,6 +24,7 @@ import {
   formatNanoUsdCost,
 } from "@/features/dashboard/format";
 import type { DashboardRequestItem } from "@/features/dashboard/types";
+import { HttpStatusBadge } from "@/features/logs/HttpStatusBadge";
 import { UpstreamResponseModelLine, describeUpstreamResponseModel } from "@/features/logs/UpstreamResponseModelLine";
 import { useI18n } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
@@ -40,21 +40,6 @@ const GRID_COLS = "grid-cols-[85px_79px_96px_124px_99px_236px_64px_82px_60px_104
 const TABLE_MIN_WIDTH_PX = 1029;
 const CELL_PLACEHOLDER = "—";
 const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
-type BadgeVariant = "default" | "secondary" | "destructive" | "outline";
-
-function statusToVariant(status: number): BadgeVariant {
-  if (status >= 200 && status < 300) {
-    return "default";
-  }
-  if (status >= 400) {
-    return "destructive";
-  }
-  if (status >= 300) {
-    return "secondary";
-  }
-  return "outline";
-}
-
 type CellTooltipProps = {
   content: string;
   disabled?: boolean;
@@ -209,7 +194,7 @@ function statusColumn(): ColumnDef<DashboardRequestItem> {
   return {
     id: "status",
     header: m.dashboard_table_status(),
-    cell: ({ row }) => <Badge variant={statusToVariant(row.original.status)}>{row.original.status}</Badge>,
+    cell: ({ row }) => <HttpStatusBadge status={row.original.status} />,
   };
 }
 

@@ -31,7 +31,7 @@ async fn collect_chat_to_responses_payloads(events: Vec<String>) -> Vec<Value> {
             .map(|event| Ok::<Bytes, std::io::Error>(Bytes::from(format!("data: {event}\n\n")))),
     );
     let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-        .register(None, None)
+        .register(None)
         .await;
     super::super::chat_to_responses::stream_chat_to_responses(
         upstream,
@@ -157,7 +157,7 @@ fn stream_with_logging_marks_first_output_on_responses_non_preamble_event() {
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks: Vec<Bytes> =
             super::super::streaming::stream_with_logging(upstream, context, log, token_tracker)
@@ -182,7 +182,7 @@ fn stream_with_logging_marks_first_output_on_responses_non_preamble_event() {
 }
 
 #[test]
-fn stream_with_logging_does_not_count_responses_final_snapshot_text_for_token_rate() {
+fn stream_with_logging_preserves_snapshot_and_tracks_connection_until_end() {
     super::run_async(async {
         let (log, context, _sqlite_pool) = super::setup_responses_stream().await;
         let upstream = futures_util::stream::iter(vec![
@@ -192,7 +192,7 @@ fn stream_with_logging_does_not_count_responses_final_snapshot_text_for_token_ra
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_rate = crate::proxy::token_rate::TokenRateTracker::new();
-        let token_tracker = token_rate.register(None, None).await;
+        let token_tracker = token_rate.register(None).await;
         let stream =
             super::super::streaming::stream_with_logging(upstream, context, log, token_tracker);
         futures_util::pin_mut!(stream);
@@ -207,7 +207,11 @@ fn stream_with_logging_does_not_count_responses_final_snapshot_text_for_token_ra
             String::from_utf8_lossy(&first_chunk).contains("response.output_text.done"),
             "chunk: {first_chunk:?}"
         );
-        assert_eq!(snapshot.output, 0, "snapshot: {snapshot:?}");
+        assert_eq!(snapshot.connections, 1, "snapshot: {snapshot:?}");
+        while let Some(chunk) = stream.next().await {
+            chunk.expect("remaining stream chunk");
+        }
+        assert_eq!(token_rate.snapshot().await.connections, 0);
     });
 }
 
@@ -228,7 +232,7 @@ fn stream_with_logging_closes_after_responses_terminal_without_upstream_close() 
         })
         .boxed();
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let stream =
             super::super::streaming::stream_with_logging(upstream, context, log, token_tracker);
@@ -264,7 +268,7 @@ fn stream_with_logging_hydrates_missing_completed_output_item_ids() {
             ),
         ))]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks =
             super::super::streaming::stream_with_logging(upstream, context, log, token_tracker)
@@ -305,7 +309,7 @@ fn stream_with_logging_drops_events_after_done() {
             )),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks =
             super::super::streaming::stream_with_logging(upstream, context, log, token_tracker)
@@ -341,7 +345,7 @@ fn stream_with_logging_drops_chat_events_after_done() {
             )),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks =
             super::super::streaming::stream_with_logging(upstream, context, log, token_tracker)
@@ -379,7 +383,7 @@ fn stream_with_logging_semantic_timeout_emits_response_failed_and_done() {
         })
         .boxed();
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let stream = super::super::streaming::stream_with_logging_and_semantic_timeout(
             upstream,
@@ -454,7 +458,7 @@ fn stream_with_logging_upstream_error_emits_response_failed_after_stream_started
             )),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let stream = super::super::streaming::stream_with_logging_and_semantic_timeout(
             upstream,
@@ -501,7 +505,7 @@ fn stream_with_logging_normalizes_split_upstream_response_failed() {
             )),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let stream = super::super::streaming::stream_with_logging_and_semantic_timeout(
             upstream,
@@ -546,7 +550,7 @@ fn stream_with_logging_reports_non_sse_responses_body() {
             r#"{"error":{"message":"unexpected JSON body"}}"#,
         ))]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks =
             super::super::streaming::stream_with_logging(upstream, context, log, token_tracker)
@@ -578,7 +582,7 @@ fn stream_with_model_override_closes_after_responses_terminal_without_upstream_c
         })
         .boxed();
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let stream =
             super::super::streaming::stream_with_logging_and_model_override_semantic_timeout(
@@ -620,7 +624,7 @@ fn native_codex_stream_keeps_metadata_but_filters_private_rate_limits() {
             "data: {\"type\":\"codex.response.metadata\",\"metadata\":{\"x\":1}}\n\ndata: {\"type\":\"codex.rate_limits\",\"limits\":{}}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"actual-model\"}}\n\n",
         ))]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let stream =
             super::super::streaming::stream_with_logging_and_model_override_semantic_timeout(
@@ -664,7 +668,7 @@ fn stream_with_model_override_semantic_timeout_emits_response_failed_and_done() 
         })
         .boxed();
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let stream =
             super::super::streaming::stream_with_logging_and_model_override_semantic_timeout(
@@ -760,7 +764,7 @@ fn stream_gemini_to_anthropic_emits_single_input_json_delta_for_tool_calls() {
         ]);
 
         let token_tracker_1 = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chat_stream = crate::proxy::gemini_compat::stream_gemini_to_chat(
             upstream,
@@ -771,7 +775,7 @@ fn stream_gemini_to_anthropic_emits_single_input_json_delta_for_tool_calls() {
         .boxed();
 
         let token_tracker_2 = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let responses_stream = super::super::chat_to_responses::stream_chat_to_responses(
             chat_stream,
@@ -782,7 +786,7 @@ fn stream_gemini_to_anthropic_emits_single_input_json_delta_for_tool_calls() {
         .boxed();
 
         let token_tracker_3 = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let anthropic_stream = super::super::responses_to_anthropic::stream_responses_to_anthropic(
             responses_stream,
@@ -864,7 +868,7 @@ fn stream_responses_to_chat_persists_log_when_client_drops_stream_early() {
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         {
             let stream = super::super::responses_to_chat::stream_responses_to_chat(
@@ -945,7 +949,7 @@ fn stream_responses_to_anthropic_emits_thinking_from_reasoning_summary_events() 
         ]);
 
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let anthropic_stream = super::super::responses_to_anthropic::stream_responses_to_anthropic(
             upstream,
@@ -1015,7 +1019,7 @@ fn stream_responses_to_anthropic_falls_back_to_reasoning_content_text() {
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks = super::super::responses_to_anthropic::stream_responses_to_anthropic(
             upstream,
@@ -1074,7 +1078,7 @@ fn stream_responses_to_anthropic_emits_signature_from_output_item_done() {
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks = super::super::responses_to_anthropic::stream_responses_to_anthropic(
             upstream,
@@ -1113,7 +1117,7 @@ fn stream_responses_to_anthropic_preserves_legacy_signature_for_claude_model() {
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks = super::super::responses_to_anthropic::stream_responses_to_anthropic(
             upstream,
@@ -1166,7 +1170,7 @@ fn stream_responses_to_anthropic_emits_redacted_thinking_from_encrypted_reasonin
         ]);
 
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let anthropic_stream = super::super::responses_to_anthropic::stream_responses_to_anthropic(
             upstream,
@@ -1205,7 +1209,7 @@ fn stream_responses_to_anthropic_subtracts_cached_input_from_input_usage() {
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks = super::super::responses_to_anthropic::stream_responses_to_anthropic(
             upstream,
@@ -1521,7 +1525,7 @@ fn stream_responses_to_anthropic_emits_error_without_message_stop() {
             let upstream =
                 futures_util::stream::iter(vec![Ok::<Bytes, reqwest::Error>(Bytes::from(event))]);
             let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-                .register(None, None)
+                .register(None)
                 .await;
             let anthropic_stream =
                 super::super::responses_to_anthropic::stream_responses_to_anthropic(
@@ -1622,7 +1626,7 @@ fn stream_responses_to_gemini_emits_error_without_stop_candidate() {
             )
             .boxed();
             let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-                .register(None, None)
+                .register(None)
                 .await;
             let gemini_stream = crate::proxy::gemini_compat::stream_chat_to_gemini(
                 chat_stream,
@@ -1731,7 +1735,7 @@ fn stream_anthropic_to_responses_emits_reasoning_summary_events_and_snapshot() {
         ]);
 
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let responses_stream = super::super::anthropic_to_responses::stream_anthropic_to_responses(
             upstream,
@@ -1827,7 +1831,7 @@ fn stream_anthropic_to_responses_preserves_ordered_blocks_and_empty_arguments() 
             Ok(Bytes::from("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks = super::super::anthropic_to_responses::stream_anthropic_to_responses(
             upstream,
@@ -1929,7 +1933,7 @@ fn stream_anthropic_to_responses_preserves_inline_tool_input() {
                 Ok::<Bytes, std::io::Error>(Bytes::from(format!("data: {event}\n\n")))
             }));
             let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-                .register(None, None)
+                .register(None)
                 .await;
             let payloads = super::super::anthropic_to_responses::stream_anthropic_to_responses(
                 upstream,
@@ -2044,7 +2048,7 @@ fn stream_anthropic_to_responses_maps_split_web_search_queries_and_results() {
             )),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks = super::super::anthropic_to_responses::stream_anthropic_to_responses(
             upstream,
@@ -2145,7 +2149,7 @@ fn stream_anthropic_to_responses_adds_cache_tokens_to_openai_input_usage() {
         ]);
 
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let responses_stream = super::super::anthropic_to_responses::stream_anthropic_to_responses(
             upstream,
@@ -2222,7 +2226,7 @@ fn stream_anthropic_to_responses_does_not_double_count_cumulative_delta_cache_us
         ]);
 
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let responses_stream = super::super::anthropic_to_responses::stream_anthropic_to_responses(
             upstream,
@@ -2296,7 +2300,7 @@ fn stream_anthropic_to_responses_maps_redacted_thinking_to_encrypted_reasoning()
         ]);
 
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let responses_stream = super::super::anthropic_to_responses::stream_anthropic_to_responses(
             upstream,
@@ -2349,7 +2353,7 @@ fn stream_anthropic_to_responses_preserves_thinking_signature_delta() {
             )),
         ]);
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks = super::super::anthropic_to_responses::stream_anthropic_to_responses(
             upstream,
@@ -2416,7 +2420,7 @@ fn stream_anthropic_to_responses_maps_max_tokens_to_incomplete_event() {
         ]);
 
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let responses_stream = super::super::anthropic_to_responses::stream_anthropic_to_responses(
             upstream,
@@ -2492,7 +2496,7 @@ fn stream_chat_to_gemini_waits_for_complete_tool_call_arguments() {
         ]);
 
         let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let gemini_stream = crate::proxy::gemini_compat::stream_chat_to_gemini(
             upstream,
@@ -2562,7 +2566,7 @@ fn stream_with_logging_records_terminal_error_flushed_only_at_eof() {
             let upstream =
                 futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(event))]);
             let token_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-                .register(None, None)
+                .register(None)
                 .await;
             let chunks =
                 super::super::streaming::stream_with_logging(upstream, context, log, token_tracker)

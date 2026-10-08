@@ -67,7 +67,7 @@ async fn buffered_xai_forbidden(body: &'static str) -> Response {
     context.path = "/v1/responses".to_string();
     context.provider = "xai".to_string();
     context.status = StatusCode::FORBIDDEN.as_u16();
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
 
     build_buffered_response(
         StatusCode::FORBIDDEN,
@@ -131,7 +131,7 @@ async fn buffered_xai_json_restores_custom_tool_call() {
     let mut context = test_context();
     context.path = "/v1/responses".to_string();
     context.provider = "xai".to_string();
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
 
     let response = build_buffered_response(
         StatusCode::OK,
@@ -175,7 +175,7 @@ async fn buffered_xai_mislabeled_sse_restores_custom_tool_call() {
     let mut context = test_context();
     context.path = "/v1/responses".to_string();
     context.provider = "xai".to_string();
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
 
     let response = build_buffered_response(
         StatusCode::OK,
@@ -274,7 +274,7 @@ async fn buffered_responses_502_normalizes_complete_error_contract() {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(CONTENT_LENGTH, HeaderValue::from_static("999"));
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let mut context = test_context();
     context.path = "/v1/responses".to_string();
     context.model = Some("grok-4.5-high".to_string());
@@ -324,7 +324,7 @@ async fn buffered_responses_complete_error_preserves_body_and_content_length() {
         CONTENT_LENGTH,
         HeaderValue::from_str(&expected_content_length).expect("content length"),
     );
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let mut context = test_context();
     context.path = "/v1/responses".to_string();
 
@@ -373,7 +373,7 @@ async fn xai_video_content_preserves_binary_body_and_content_type() {
         CONTENT_LENGTH,
         HeaderValue::from_str(&binary.len().to_string()).expect("content length"),
     );
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let mut context = test_context();
     context.path = "/v1/videos/video-123/content".to_string();
     context.provider = "xai".to_string();
@@ -590,7 +590,7 @@ async fn buffered_non_stream_event_stream_chat_completion_returns_json() {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
     headers.insert(CONTENT_LENGTH, HeaderValue::from_static("999"));
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
 
     let response = build_buffered_response(
         StatusCode::OK,
@@ -623,7 +623,7 @@ async fn buffered_non_stream_total_body_timeout_returns_retryable_504() {
         (Duration::ZERO, "{\"id\":\"chatcmpl_1\","),
         (Duration::from_millis(80), "\"choices\":[]}"),
     ]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
 
     let response = build_buffered_response(
         StatusCode::OK,
@@ -671,7 +671,7 @@ async fn buffered_non_stream_responses_event_stream_chat_request_returns_json() 
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
     headers.insert(CONTENT_LENGTH, HeaderValue::from_static("999"));
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
 
     let response = build_buffered_response(
         StatusCode::OK,
@@ -720,7 +720,7 @@ async fn buffered_json_response_with_responses_sse_body_returns_json() {
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     headers.insert(CONTENT_LENGTH, HeaderValue::from_static("999"));
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
 
     let response = build_buffered_response(
         StatusCode::OK,
@@ -911,7 +911,7 @@ async fn buffered_codex_response(
         .into();
     let mut context = test_context();
     context.provider = "codex".into();
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     build_buffered_response(
         StatusCode::OK,
         upstream,

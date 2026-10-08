@@ -16,7 +16,7 @@ enum Route {
 
 async fn convert(events: Vec<Value>, route: Route) -> Vec<Value> {
     let (log, context, _) = setup_responses_stream().await;
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     // 将 UTF-8 和 SSE 边界分散到网络 chunk，避免回归只覆盖整帧输入。
     let bytes = events
         .iter()

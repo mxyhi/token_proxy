@@ -158,17 +158,11 @@ async fn send_endpoint_request(
     ),
     AttemptOutcome,
 > {
-    let model_for_tokens = context
-        .mapped_meta
-        .mapped_model
-        .as_deref()
-        .or(context.mapped_meta.original_model.as_deref())
-        .map(|value| value.to_string());
-    // 发送前 register，保证 Kiro TTFB 期间托盘 connections 可见。
+    // 发送时展示输入 token；等待响应和流式传输期间保留连接计数。
     let token_tracker = context
         .state
         .token_rate
-        .register(model_for_tokens, None)
+        .register(context.mapped_meta.estimated_input_tokens)
         .await;
     tracing::debug!(
         account_id = %context.account_id,

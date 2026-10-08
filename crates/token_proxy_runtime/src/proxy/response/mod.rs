@@ -157,8 +157,6 @@ pub(super) async fn build_proxy_response(
         // The body will change; let hyper recalculate the content length.
         response_headers.remove(axum::http::header::CONTENT_LENGTH);
     }
-    // tracker 在上游发送前已 register（计 connections）；此处再写入 input 估计。
-    apply_estimated_input_tokens(&request_tracker, meta.estimated_input_tokens).await;
     let should_stream = meta.stream
         && !status.is_client_error()
         && !status.is_server_error()
@@ -252,7 +250,6 @@ pub(super) async fn build_proxy_response_buffered(
     if response_transform != FormatTransform::None {
         response_headers.remove(axum::http::header::CONTENT_LENGTH);
     }
-    apply_estimated_input_tokens(&request_tracker, meta.estimated_input_tokens).await;
     dispatch::build_buffered_response(
         status,
         upstream_res,
@@ -268,15 +265,6 @@ pub(super) async fn build_proxy_response_buffered(
         sync_response_timeout,
     )
     .await
-}
-
-/// 响应阶段写入 prompt 估计；发送前 register 时不写，保证 TTFB 期间 ↑ 能显示 connections。
-async fn apply_estimated_input_tokens(tracker: &RequestTokenTracker, estimated: Option<u64>) {
-    let Some(tokens) = estimated.filter(|value| *value > 0) else {
-        return;
-    };
-    tracing::debug!(tokens, "token_rate apply estimated input tokens");
-    tracker.add_input_tokens(tokens).await;
 }
 
 fn maybe_rewrite_gemini_upload_url(
@@ -432,7 +420,6 @@ mod kiro_to_responses_helpers;
 mod responses_to_anthropic;
 mod responses_to_chat;
 mod streaming;
-mod token_count;
 mod upstream_read;
 mod upstream_stream;
 

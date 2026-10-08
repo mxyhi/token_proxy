@@ -38,7 +38,7 @@ struct CodexToChatState<S> {
     collector: SseUsageCollector,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     out: VecDeque<Bytes>,
     response_id: String,
     created: i64,
@@ -97,7 +97,7 @@ where
             parser: SseEventParser::new(),
             collector: SseUsageCollector::new(),
             log,
-            token_tracker,
+            _token_tracker: token_tracker,
             context,
             out: VecDeque::new(),
             response_id,
@@ -139,12 +139,9 @@ where
                         self.write_log_once(Some(error.to_string()));
                         return Err(error);
                     }
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
-                    }
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
+                        self.handle_event(&data);
                     }
                 }
                 Some(Err(err)) => {
@@ -159,13 +156,11 @@ where
                         self.write_log_once(Some(error.to_string()));
                         return Err(error);
                     }
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
-                    }
+
                     if !self.sent_done {
                         self.push_done();
                     }
@@ -178,7 +173,7 @@ where
         }
     }
 
-    fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
+    fn handle_event(&mut self, data: &str) {
         if self.sent_done {
             return;
         }
@@ -198,7 +193,7 @@ where
         let (texts, annotations) = self.text_recovery.process(&value);
         for text in texts {
             self.context.mark_first_output();
-            token_texts.push(text.clone());
+
             self.push_chunk(json!({"role":"assistant","content":text}));
         }
 
@@ -219,7 +214,7 @@ where
                     if !delta.is_empty() {
                         self.context.mark_first_output();
                     }
-                    token_texts.push(delta.to_string());
+
                     self.push_chunk(json!({ "role": "assistant", "reasoning_content": delta }));
                 }
             }
@@ -227,7 +222,7 @@ where
                 self.push_chunk(json!({ "role": "assistant", "reasoning_content": "\n\n" }));
             }
             "response.output_item.done" => {
-                self.handle_output_item_done(&value, token_texts);
+                self.handle_output_item_done(&value);
             }
             "response.completed" => {
                 self.finish_reason = Some(self.resolve_finish_reason());
@@ -252,9 +247,9 @@ where
         }
     }
 
-    fn handle_output_item_done(&mut self, value: &Value, token_texts: &mut Vec<String>) {
+    fn handle_output_item_done(&mut self, value: &Value) {
         self.handle_tool_call_item(value);
-        self.handle_image_generation_item(value, token_texts);
+        self.handle_image_generation_item(value);
     }
 
     fn update_from_created(&mut self, value: &Value) {
@@ -311,7 +306,7 @@ where
         self.push_chunk(json!({ "role": "assistant", "tool_calls": [tool_call] }));
     }
 
-    fn handle_image_generation_item(&mut self, value: &Value, token_texts: &mut Vec<String>) {
+    fn handle_image_generation_item(&mut self, value: &Value) {
         let Some(item) = value.get("item").and_then(Value::as_object) else {
             return;
         };
@@ -322,7 +317,7 @@ where
             return;
         };
         self.context.mark_first_output();
-        token_texts.push(text.clone());
+
         self.push_chunk(json!({ "role": "assistant", "content": text }));
     }
 
@@ -412,7 +407,7 @@ struct CodexToResponsesState<S> {
     collector: SseUsageCollector,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     out: VecDeque<Bytes>,
     sent_done: bool,
     logged: bool,
@@ -472,7 +467,7 @@ where
             parser: SseEventParser::new(),
             collector: SseUsageCollector::new(),
             log,
-            token_tracker,
+            _token_tracker: token_tracker,
             context,
             out: VecDeque::new(),
             sent_done: false,
@@ -521,15 +516,12 @@ where
                         return Err(error);
                     }
                     let had_events = !events.is_empty();
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
                     if !had_events {
                         self.push_semantic_timeout_if_due();
-                    }
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
                     }
                 }
                 Some(Err(err)) => {
@@ -545,13 +537,11 @@ where
                         self.write_log_once(Some(error.to_string()));
                         return Err(error);
                     }
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
-                    }
+
                     if !self.sent_done {
                         self.push_compatible_incomplete_terminal();
                         self.out.push_back(Bytes::from("data: [DONE]\n\n"));
@@ -566,7 +556,7 @@ where
         }
     }
 
-    fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
+    fn handle_event(&mut self, data: &str) {
         if self.sent_done {
             return;
         }
@@ -632,9 +622,6 @@ where
         restore_tool_names_in_event(&mut value, &self.tool_name_map);
         if is_codex_business_output_event(&value) {
             self.context.mark_first_output();
-        }
-        if let Some(delta) = extract_output_token_delta(&value) {
-            token_texts.push(delta.to_string());
         }
         if event_type == "response.failed" {
             self.out.push_back(Bytes::from(format!(
@@ -935,35 +922,6 @@ fn restore_tool_names_in_item(
     if let Some(namespace) = restored.namespace.as_ref() {
         item.insert("namespace".to_string(), Value::String(namespace.clone()));
     }
-}
-
-fn extract_output_token_delta(value: &Value) -> Option<&str> {
-    // Realtime token rate only counts incremental Responses events. Final snapshot
-    // events may also carry text/arguments/code and would double-count prior deltas.
-    let event_type = value.get("type").and_then(Value::as_str)?;
-    if !is_realtime_output_delta_event(event_type) {
-        return None;
-    }
-    value.get("delta").and_then(Value::as_str)
-}
-
-fn is_realtime_output_delta_event(event_type: &str) -> bool {
-    event_type.ends_with(".delta")
-        && matches!(
-            event_type
-                .strip_prefix("response.")
-                .unwrap_or(event_type)
-                .strip_suffix(".delta")
-                .unwrap_or(event_type),
-            "output_text"
-                | "reasoning_text"
-                | "reasoning_summary_text"
-                | "refusal"
-                | "function_call_arguments"
-                | "mcp_call_arguments"
-                | "custom_tool_call_input"
-                | "code_interpreter_call_code"
-        )
 }
 
 pub(super) fn is_codex_business_output_event(value: &Value) -> bool {

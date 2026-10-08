@@ -37,7 +37,7 @@ struct ChatToResponsesState<S> {
     collector: SseUsageCollector,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     out: VecDeque<Bytes>,
     id_seed: u64,
     response_id: String,
@@ -109,7 +109,7 @@ where
             collector: SseUsageCollector::new(),
             log,
             context,
-            token_tracker,
+            _token_tracker: token_tracker,
             out: VecDeque::new(),
             id_seed: now_ms,
             response_id: format!("resp_{now_ms}"),
@@ -170,17 +170,11 @@ where
                         self.write_log_once(Some(message));
                         error
                     })?;
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
                     self.restore_queued_tool_identities();
-                    for text in texts {
-                        if !text.is_empty() {
-                            self.context.mark_first_output();
-                        }
-                        self.token_tracker.add_output_text(&text).await;
-                    }
                 }
                 Some(Err(err)) => {
                     self.push_failed(format!("Failed to read upstream response: {err}"));
@@ -197,13 +191,11 @@ where
                         self.write_log_once(Some(message));
                         error
                     })?;
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
-                    }
+
                     if !self.sent_done {
                         self.push_done();
                     }
@@ -225,7 +217,7 @@ where
         );
     }
 
-    fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
+    fn handle_event(&mut self, data: &str) {
         if self.sent_done {
             return;
         }
@@ -263,13 +255,13 @@ where
         // 同一事件先交付推理，避免正文块先于其推理块启动。
         let reasoning = token_proxy_protocol::compat_reason::chat_reasoning_text(delta);
         if !reasoning.is_empty() {
-            self.handle_reasoning_delta(&reasoning, token_texts);
+            self.handle_reasoning_delta(&reasoning);
         }
         if let Some(thinking_blocks) = delta.get("thinking_blocks").and_then(Value::as_array) {
-            self.handle_thinking_blocks_delta(thinking_blocks, token_texts);
+            self.handle_thinking_blocks_delta(thinking_blocks);
         }
         if let Some(content) = delta.get("content").and_then(Value::as_str) {
-            self.handle_text_delta(content, token_texts);
+            self.handle_text_delta(content);
         }
         if let Some(audio) = delta.get("audio") {
             self.handle_audio_delta(audio);
@@ -284,8 +276,9 @@ where
         }
     }
 
-    fn handle_text_delta(&mut self, delta: &str, token_texts: &mut Vec<String>) {
+    fn handle_text_delta(&mut self, delta: &str) {
         if !delta.is_empty() {
+            self.context.mark_first_output();
             self.close_reasoning_output();
         }
         self.ensure_message_output();
@@ -295,7 +288,6 @@ where
             message.text.push_str(delta);
             (message.id.clone(), message.output_index)
         };
-        token_texts.push(delta.to_string());
 
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
@@ -308,10 +300,11 @@ where
         })));
     }
 
-    fn handle_reasoning_delta(&mut self, delta: &str, token_texts: &mut Vec<String>) {
+    fn handle_reasoning_delta(&mut self, delta: &str) {
         if delta.is_empty() {
             return;
         }
+        self.context.mark_first_output();
         let (item_id, output_index, start_part) = {
             let reasoning = self.ensure_reasoning_output();
             let start_part = reasoning.text.is_empty();
@@ -329,7 +322,6 @@ where
                 "sequence_number": sequence_number
             })));
         }
-        token_texts.push(delta.to_string());
 
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
@@ -342,11 +334,7 @@ where
         })));
     }
 
-    fn handle_thinking_blocks_delta(
-        &mut self,
-        thinking_blocks: &[Value],
-        token_texts: &mut Vec<String>,
-    ) {
+    fn handle_thinking_blocks_delta(&mut self, thinking_blocks: &[Value]) {
         for block in thinking_blocks {
             let Some(block) = block.as_object() else {
                 continue;
@@ -358,7 +346,7 @@ where
                         .and_then(Value::as_str)
                         .filter(|value| !value.is_empty())
                     {
-                        self.handle_reasoning_delta(text, token_texts);
+                        self.handle_reasoning_delta(text);
                     }
                 }
                 Some("redacted_thinking") => {

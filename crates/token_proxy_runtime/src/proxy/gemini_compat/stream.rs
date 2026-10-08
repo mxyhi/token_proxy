@@ -47,7 +47,7 @@ struct GeminiToChatState<S> {
     collector: SseUsageCollector,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     out: VecDeque<Bytes>,
     chat_id: String,
     created: i64,
@@ -73,7 +73,7 @@ struct ChatToGeminiState<S> {
     collector: SseUsageCollector,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     out: VecDeque<Bytes>,
     sent_done: bool,
     logged: bool,
@@ -143,7 +143,7 @@ where
                 .clone()
                 .unwrap_or_else(|| "gemini".to_string()),
             context,
-            token_tracker,
+            _token_tracker: token_tracker,
             out: VecDeque::new(),
             chat_id: format!("chatcmpl_gemini_{now_ms}"),
             created: (now_ms / 1000) as i64,
@@ -184,15 +184,9 @@ where
                         self.write_log_once(Some(error.to_string()));
                         return Err(error);
                     }
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
-                    }
-                    for text in texts {
-                        if !text.is_empty() {
-                            self.context.mark_first_output();
-                        }
-                        self.token_tracker.add_output_text(&text).await;
+                        self.handle_event(&data);
                     }
                 }
                 Some(Err(err)) => {
@@ -207,13 +201,11 @@ where
                         self.write_log_once(Some(error.to_string()));
                         return Err(error);
                     }
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
-                    }
+
                     if !self.sent_done {
                         self.push_done("stop");
                     }
@@ -226,7 +218,7 @@ where
         }
     }
 
-    fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
+    fn handle_event(&mut self, data: &str) {
         if self.sent_done {
             return;
         }
@@ -248,11 +240,11 @@ where
         };
 
         for candidate in candidates {
-            self.handle_candidate(candidate, token_texts);
+            self.handle_candidate(candidate);
         }
     }
 
-    fn handle_candidate(&mut self, candidate: &Value, token_texts: &mut Vec<String>) {
+    fn handle_candidate(&mut self, candidate: &Value) {
         let Some(candidate) = candidate.as_object() else {
             return;
         };
@@ -286,7 +278,7 @@ where
             if part.get("thought").and_then(Value::as_bool) == Some(true) {
                 if let Some(text) = part.get("text").and_then(Value::as_str) {
                     if !text.is_empty() {
-                        token_texts.push(text.to_string());
+                        self.context.mark_first_output();
                         self.ensure_role_sent();
                         self.out.push_back(chat_chunk_sse(
                             &self.chat_id,
@@ -303,7 +295,7 @@ where
             // 文本内容
             if let Some(text) = part.get("text").and_then(Value::as_str) {
                 if !text.is_empty() {
-                    token_texts.push(text.to_string());
+                    self.context.mark_first_output();
                     self.ensure_role_sent();
                     self.out.push_back(chat_chunk_sse(
                         &self.chat_id,
@@ -412,7 +404,7 @@ where
             collector: SseUsageCollector::new(),
             log,
             context,
-            token_tracker,
+            _token_tracker: token_tracker,
             out: VecDeque::new(),
             sent_done: false,
             logged: false,
@@ -448,15 +440,9 @@ where
                         self.write_log_once(Some(error.to_string()));
                         return Err(error);
                     }
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
-                    }
-                    for text in texts {
-                        if !text.is_empty() {
-                            self.context.mark_first_output();
-                        }
-                        self.token_tracker.add_output_text(&text).await;
+                        self.handle_event(&data);
                     }
                 }
                 Some(Err(err)) => {
@@ -471,13 +457,11 @@ where
                         self.write_log_once(Some(error.to_string()));
                         return Err(error);
                     }
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
-                    }
+
                     if !self.sent_done {
                         self.push_finish_reason("STOP", None);
                     }
@@ -490,7 +474,7 @@ where
         }
     }
 
-    fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
+    fn handle_event(&mut self, data: &str) {
         if self.sent_done {
             return;
         }
@@ -519,7 +503,9 @@ where
 
         if let Some(delta) = delta.as_ref() {
             if let Some(content) = delta.get("content").and_then(Value::as_str) {
-                token_texts.push(content.to_string());
+                if !content.is_empty() {
+                    self.context.mark_first_output();
+                }
                 self.push_text_delta(content, usage.clone());
             }
             if let Some(tool_calls) = delta.get("tool_calls").and_then(Value::as_array) {

@@ -109,7 +109,7 @@ async fn collect_responses_to_chat_chunks(
     log: Arc<LogWriter>,
 ) -> Vec<Bytes> {
     let token_tracker = super::super::token_rate::TokenRateTracker::new()
-        .register(None, None)
+        .register(None)
         .await;
     super::responses_to_chat::stream_responses_to_chat(upstream, context, log, token_tracker)
         .map(|item| item.expect("stream item"))
@@ -275,7 +275,7 @@ fn stream_with_logging_does_not_record_response_body_when_detail_capture_is_off(
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_tracker = super::super::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks: Vec<Bytes> =
             super::streaming::stream_with_logging(upstream, context, log.clone(), token_tracker)
@@ -322,7 +322,7 @@ fn stream_with_logging_persists_log_when_client_drops_stream_early() {
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_tracker = super::super::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         {
             let stream = super::streaming::stream_with_logging(
@@ -550,7 +550,7 @@ fn stream_chat_to_responses_handles_chunk_boundaries_and_emits_created_delta_don
         ]);
 
         let token_tracker = super::super::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks: Vec<Bytes> =
             stream_chat_to_responses(upstream, context, log.clone(), token_tracker)
@@ -687,7 +687,7 @@ fn stream_chat_to_responses_preserves_reasoning_and_audio_in_completed_response(
         ]);
 
         let token_tracker = super::super::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks: Vec<Bytes> =
             stream_chat_to_responses(upstream, context, log.clone(), token_tracker)
@@ -768,7 +768,7 @@ fn stream_chat_to_responses_preserves_thinking_blocks_with_encrypted_content() {
         ]);
 
         let token_tracker = super::super::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks: Vec<Bytes> =
             stream_chat_to_responses(upstream, context, log.clone(), token_tracker)
@@ -847,7 +847,7 @@ fn stream_chat_to_responses_emits_function_call_events_and_includes_them_in_comp
         ]);
 
         let token_tracker = super::super::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunks: Vec<Bytes> =
             stream_chat_to_responses(upstream, context, log.clone(), token_tracker)
@@ -983,7 +983,7 @@ fn stream_chat_to_responses_normalizes_empty_function_arguments() {
             Ok(Bytes::from("data: [DONE]\n\n")),
         ]);
         let token_tracker = super::super::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let payloads = stream_chat_to_responses(upstream, context, log, token_tracker)
             .filter_map(|item| async move { parse_sse_json(&item.expect("stream item")) })

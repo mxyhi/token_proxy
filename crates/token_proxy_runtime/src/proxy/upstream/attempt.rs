@@ -20,21 +20,16 @@ use crate::proxy::{
     config::UpstreamRuntime, cooldown_scope::CooldownScope, ProxyState, RequestMeta,
 };
 
-/// 发送前注册 token rate 窗口：先只计 connections，input 等响应阶段再写。
+/// 发送时记录一次输入 token，并用守卫跟踪整个请求生命周期。
 async fn register_token_tracker_for_attempt(
     state: &ProxyState,
     meta: &RequestMeta,
 ) -> crate::proxy::token_rate::RequestTokenTracker {
-    let model_for_tokens = meta
-        .mapped_model
-        .as_deref()
-        .or(meta.original_model.as_deref())
-        .map(|value| value.to_string());
     tracing::debug!(
-        model = model_for_tokens.as_deref().unwrap_or(""),
+        input_tokens = ?meta.estimated_input_tokens,
         "token_rate register before upstream send"
     );
-    state.token_rate.register(model_for_tokens, None).await
+    state.token_rate.register(meta.estimated_input_tokens).await
 }
 
 pub(super) async fn attempt_upstream(
@@ -359,7 +354,7 @@ pub(super) async fn attempt_send(
         codex_openai_device_id,
         meta,
     } = prepared;
-    // 在真正发上游前 register，TTFB 期间托盘也能显示 connections（↑ fallback）。
+    // 发送时展示输入 token，展示到期后回到活跃请求数。
     let token_tracker = register_token_tracker_for_attempt(state, &meta).await;
     let start_time = Instant::now();
     let timings = RequestTimings::with_billing(meta.billing.clone());

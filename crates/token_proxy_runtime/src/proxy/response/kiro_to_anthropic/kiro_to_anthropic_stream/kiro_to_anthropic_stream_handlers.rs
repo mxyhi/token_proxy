@@ -12,7 +12,7 @@ where
     S: futures_util::stream::Stream<Item = Result<axum::body::Bytes, E>> + Unpin + Send + 'static,
     E: std::error::Error + Send + Sync + 'static,
 {
-    pub(super) async fn handle_message(&mut self, payload: &[u8], event_type: &str) {
+    pub(super) fn handle_message(&mut self, payload: &[u8], event_type: &str) {
         if self.sent_message_stop || payload.is_empty() {
             return;
         }
@@ -42,9 +42,9 @@ where
         };
 
         match event_type {
-            "assistantResponseEvent" => self.handle_assistant_response(event_obj).await,
-            "toolUseEvent" => self.handle_tool_use_event(event_obj).await,
-            "reasoningContentEvent" => self.handle_reasoning_content(event_obj).await,
+            "assistantResponseEvent" => self.handle_assistant_response(event_obj),
+            "toolUseEvent" => self.handle_tool_use_event(event_obj),
+            "reasoningContentEvent" => self.handle_reasoning_content(event_obj),
             "messageStopEvent" | "message_stop" => {
                 update_stop_reason(event_obj, &mut self.stop_reason);
             }
@@ -52,10 +52,10 @@ where
         }
     }
 
-    async fn handle_assistant_response(&mut self, event: &Map<String, Value>) {
+    fn handle_assistant_response(&mut self, event: &Map<String, Value>) {
         if let Some(Value::Object(assistant)) = event.get("assistantResponseEvent") {
             if let Some(text) = assistant.get("content").and_then(Value::as_str) {
-                self.handle_text_delta(text).await;
+                self.handle_text_delta(text);
             }
             if let Some(items) = assistant.get("toolUses").and_then(Value::as_array) {
                 self.handle_tool_uses(items);
@@ -63,30 +63,30 @@ where
             update_stop_reason(assistant, &mut self.stop_reason);
         }
         if let Some(text) = event.get("content").and_then(Value::as_str) {
-            self.handle_text_delta(text).await;
+            self.handle_text_delta(text);
         }
         if let Some(items) = event.get("toolUses").and_then(Value::as_array) {
             self.handle_tool_uses(items);
         }
     }
 
-    async fn handle_reasoning_content(&mut self, event: &Map<String, Value>) {
+    fn handle_reasoning_content(&mut self, event: &Map<String, Value>) {
         if let Some(Value::Object(reasoning)) = event.get("reasoningContentEvent") {
             if let Some(text) = reasoning.get("thinkingText").and_then(Value::as_str) {
-                self.emit_thinking_delta(text).await;
+                self.emit_thinking_delta(text);
             }
             if let Some(text) = reasoning.get("text").and_then(Value::as_str) {
-                self.emit_thinking_delta(text).await;
+                self.emit_thinking_delta(text);
             }
             return;
         }
 
         if let Some(text) = event.get("text").and_then(Value::as_str) {
-            self.emit_thinking_delta(text).await;
+            self.emit_thinking_delta(text);
         }
     }
 
-    async fn handle_text_delta(&mut self, delta: &str) {
+    fn handle_text_delta(&mut self, delta: &str) {
         if delta.is_empty() {
             return;
         }
@@ -98,11 +98,11 @@ where
             self.thinking_state.pending.clear();
         }
         combined.push_str(delta);
-        self.process_thinking_delta(&combined).await;
+        self.process_thinking_delta(&combined);
         self.maybe_emit_usage_ping();
     }
 
-    async fn process_thinking_delta(&mut self, input: &str) {
+    fn process_thinking_delta(&mut self, input: &str) {
         const START: &str = "<thinking>";
         const END: &str = "</thinking>";
 
@@ -112,7 +112,7 @@ where
                 if let Some(pos) = input[cursor..].find(END) {
                     let end = cursor + pos;
                     if end > cursor {
-                        self.emit_thinking_delta(&input[cursor..end]).await;
+                        self.emit_thinking_delta(&input[cursor..end]);
                     }
                     cursor = end + END.len();
                     self.thinking_state.in_thinking = false;
@@ -120,7 +120,7 @@ where
                 }
                 let (emit, pending) = split_partial_tag(&input[cursor..], END);
                 if !emit.is_empty() {
-                    self.emit_thinking_delta(&emit).await;
+                    self.emit_thinking_delta(&emit);
                 }
                 self.thinking_state.pending = pending;
                 break;
@@ -129,7 +129,7 @@ where
             if let Some(pos) = input[cursor..].find(START) {
                 let end = cursor + pos;
                 if end > cursor {
-                    self.emit_text_delta(&input[cursor..end]).await;
+                    self.emit_text_delta(&input[cursor..end]);
                 }
                 cursor = end + START.len();
                 self.thinking_state.in_thinking = true;
@@ -137,26 +137,26 @@ where
             }
             let (emit, pending) = split_partial_tag(&input[cursor..], START);
             if !emit.is_empty() {
-                self.emit_text_delta(&emit).await;
+                self.emit_text_delta(&emit);
             }
             self.thinking_state.pending = pending;
             break;
         }
     }
 
-    pub(super) async fn flush_thinking_pending(&mut self) {
+    pub(super) fn flush_thinking_pending(&mut self) {
         if self.thinking_state.pending.is_empty() {
             return;
         }
         let pending = std::mem::take(&mut self.thinking_state.pending);
         if self.thinking_state.in_thinking {
-            self.emit_thinking_delta(&pending).await;
+            self.emit_thinking_delta(&pending);
         } else {
-            self.emit_text_delta(&pending).await;
+            self.emit_text_delta(&pending);
         }
     }
 
-    async fn handle_tool_use_event(&mut self, event: &Map<String, Value>) {
+    fn handle_tool_use_event(&mut self, event: &Map<String, Value>) {
         let (completed, next_state) =
             process_tool_use_event(event, self.tool_state.take(), &mut self.processed_tool_keys);
         self.tool_state = next_state;

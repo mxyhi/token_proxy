@@ -75,7 +75,7 @@ struct ResponsesToAnthropicState<S> {
     collector: SseUsageCollector,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     out: VecDeque<Bytes>,
     message_id: String,
     model: String,
@@ -140,7 +140,7 @@ where
             collector: SseUsageCollector::new(),
             log,
             context,
-            token_tracker,
+            _token_tracker: token_tracker,
             out: VecDeque::new(),
             message_id: format!("msg_proxy_{now_ms}"),
             model,
@@ -196,12 +196,9 @@ where
                         self.write_log_once(Some(message));
                         error
                     })?;
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
-                    }
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
+                        self.handle_event(&data);
                     }
                 }
                 Some(Err(err)) => {
@@ -219,14 +216,12 @@ where
                         self.write_log_once(Some(message));
                         error
                     })?;
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
-                    self.flush_tool_events(&mut texts);
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
-                    }
+                    self.flush_tool_events();
+
                     self.finish_message_if_needed();
                     if self.out.is_empty() {
                         self.log_usage_once();
@@ -237,12 +232,12 @@ where
         }
     }
 
-    fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
+    fn handle_event(&mut self, data: &str) {
         if self.sent_message_stop || self.stream_failed {
             return;
         }
         if data == "[DONE]" {
-            self.flush_tool_events(token_texts);
+            self.flush_tool_events();
             self.finish_message_if_needed();
             return;
         }
@@ -257,16 +252,16 @@ where
         match self.tool_order.push(value) {
             Ok(events) => {
                 for event in events {
-                    self.handle_response_event(&event, token_texts);
+                    self.handle_response_event(&event);
                 }
             }
             Err(()) => self.fail_tool_buffer(),
         }
     }
 
-    fn flush_tool_events(&mut self, token_texts: &mut Vec<String>) {
+    fn flush_tool_events(&mut self) {
         for event in self.tool_order.finish() {
-            self.handle_response_event(&event, token_texts);
+            self.handle_response_event(&event);
         }
     }
 
@@ -280,7 +275,7 @@ where
         });
     }
 
-    fn handle_response_event(&mut self, value: &Value, token_texts: &mut Vec<String>) {
+    fn handle_response_event(&mut self, value: &Value) {
         if self.stream_failed {
             return;
         }
@@ -288,12 +283,12 @@ where
             return;
         };
         for text in self.text_recovery.process(value) {
-            self.emit_output_text(&text, token_texts);
+            self.emit_output_text(&text);
         }
         if event_type.ends_with("reasoning_text.delta")
             || event_type.ends_with("reasoning_summary_text.delta")
         {
-            self.handle_reasoning_text_delta(value, token_texts);
+            self.handle_reasoning_text_delta(value);
             return;
         }
         if event_type.ends_with("output_item.added") {
@@ -322,8 +317,7 @@ where
         }
     }
 
-    fn emit_output_text(&mut self, delta: &str, token_texts: &mut Vec<String>) {
-        token_texts.push(delta.to_string());
+    fn emit_output_text(&mut self, delta: &str) {
         self.ensure_message_start();
         let index = self.ensure_text_block();
         self.out.push_back(super::anthropic_event_sse(
@@ -336,12 +330,12 @@ where
         ));
     }
 
-    fn handle_reasoning_text_delta(&mut self, value: &Value, token_texts: &mut Vec<String>) {
+    fn handle_reasoning_text_delta(&mut self, value: &Value) {
         let Some(delta) = value.get("delta").and_then(Value::as_str) else {
             return;
         };
         self.saw_reasoning_delta = true;
-        token_texts.push(delta.to_string());
+
         self.ensure_message_start();
         let index = match value.get("item_id").and_then(Value::as_str) {
             Some(item_id) if !item_id.is_empty() => {

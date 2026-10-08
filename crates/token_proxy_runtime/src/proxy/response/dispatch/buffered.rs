@@ -28,9 +28,9 @@ use super::super::super::{
     usage::extract_usage_from_response,
 };
 use super::super::{
-    kiro_to_anthropic, kiro_to_responses, responses_error, responses_failure, token_count,
-    upstream_read, upstream_stream, AccountCooldownHint, NonRetryableSemanticResponse,
-    RetryableStreamResponse, PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
+    kiro_to_anthropic, kiro_to_responses, responses_error, responses_failure, upstream_read,
+    upstream_stream, AccountCooldownHint, NonRetryableSemanticResponse, RetryableStreamResponse,
+    PROVIDER_GEMINI, RESPONSE_ERROR_LIMIT_BYTES,
 };
 use token_proxy_protocol::xai_forbidden::{
     classify_http_forbidden, payload_error_code, XaiForbiddenScope,
@@ -45,7 +45,7 @@ pub(super) async fn build_buffered_response(
     mut headers: HeaderMap,
     context: LogContext,
     log: Arc<LogWriter>,
-    request_tracker: RequestTokenTracker,
+    _request_tracker: RequestTokenTracker,
     response_transform: FormatTransform,
     xai_client_tools: Option<token_proxy_protocol::xai_client_tools::XaiClientToolMapping>,
     model_override: Option<&str>,
@@ -250,9 +250,6 @@ pub(super) async fn build_buffered_response(
         DEBUG_BODY_LOG_LIMIT_BYTES,
     )
     .await;
-    let provider_for_tokens = provider_for_tokens(response_transform, context.provider.as_str());
-    token_count::apply_output_tokens_from_response(&request_tracker, provider_for_tokens, &output)
-        .await;
 
     let mut response = http::build_response(status, headers, Body::from(output));
     if let Some(hint) = account_cooldown_hint {
@@ -1620,15 +1617,4 @@ pub(super) fn is_capacity_retry_error(response_error: &str, body: &str) -> bool 
         }
     }
     false
-}
-
-fn provider_for_tokens(transform: FormatTransform, provider: &str) -> &str {
-    match transform {
-        FormatTransform::KiroToAnthropic => "anthropic",
-        FormatTransform::CodexToChat => "openai",
-        FormatTransform::CodexToResponses => "openai-response",
-        FormatTransform::CodexToImagesGenerations => "openai",
-        FormatTransform::CodexToAnthropic => "anthropic",
-        _ => provider,
-    }
 }

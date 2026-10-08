@@ -57,7 +57,7 @@ struct KiroToAnthropicState<S> {
     decoder: EventStreamDecoder,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     estimated_input_tokens: Option<u64>,
     out: VecDeque<Bytes>,
     message_id: String,
@@ -111,7 +111,7 @@ where
             decoder: EventStreamDecoder::new(),
             log,
             context,
-            token_tracker,
+            _token_tracker: token_tracker,
             estimated_input_tokens,
             out: VecDeque::new(),
             message_id: format!("msg_proxy_{now_ms}"),
@@ -153,7 +153,7 @@ where
 
             match self.upstream.next().await {
                 Some(Ok(chunk)) => {
-                    self.handle_chunk(&chunk).await?;
+                    self.handle_chunk(&chunk)?;
                 }
                 Some(Err(err)) => {
                     self.log_usage_once();
@@ -161,7 +161,7 @@ where
                 }
                 None => {
                     self.upstream_ended = true;
-                    self.finish_stream().await?;
+                    self.finish_stream()?;
                     if self.out.is_empty() {
                         return Ok(None);
                     }
@@ -170,28 +170,26 @@ where
         }
     }
 
-    async fn handle_chunk(&mut self, chunk: &Bytes) -> Result<(), std::io::Error> {
+    fn handle_chunk(&mut self, chunk: &Bytes) -> Result<(), std::io::Error> {
         let messages = self
             .decoder
             .push(chunk)
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err.message))?;
         for message in messages {
-            self.handle_message(&message.payload, &message.event_type)
-                .await;
+            self.handle_message(&message.payload, &message.event_type);
         }
         Ok(())
     }
 
-    async fn finish_stream(&mut self) -> Result<(), std::io::Error> {
+    fn finish_stream(&mut self) -> Result<(), std::io::Error> {
         let messages = self
             .decoder
             .finish()
             .map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err.message))?;
         for message in messages {
-            self.handle_message(&message.payload, &message.event_type)
-                .await;
+            self.handle_message(&message.payload, &message.event_type);
         }
-        self.flush_thinking_pending().await;
+        self.flush_thinking_pending();
         self.finish_message_if_needed();
         self.log_usage_once();
         Ok(())

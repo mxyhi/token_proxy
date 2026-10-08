@@ -157,7 +157,7 @@ impl TrayState {
     }
 
     #[cfg(target_os = "macos")]
-    async fn update_token_rate_title(&self) {
+    async fn update_token_rate_title(&self) -> Option<Duration> {
         let config = {
             self.inner
                 .token_rate_config
@@ -167,12 +167,13 @@ impl TrayState {
         };
         if !config.enabled {
             self.clear_title();
-            return;
+            return None;
         }
-        // 启用后始终显示速率；无 token 时展示并发请求数。
+        // 输入只在发送时短暂展示；下行只显示活跃连接数。
         let snapshot = self.inner.token_proxy_app.token_rate_snapshot().await;
         let title = format_rate_title(snapshot, config.format);
         self.set_title(Some(title));
+        snapshot.refresh_after
     }
 
     #[cfg(target_os = "macos")]
@@ -365,51 +366,28 @@ fn start_token_rate_loop(tray_state: TrayState, loop_id: u64) {
     let token_proxy_app = tray_state.inner.token_proxy_app.clone();
     tauri::async_runtime::spawn(async move {
         let mut activity_rx = token_proxy_app.subscribe_token_rate_activity();
-        // 与 TokenRateTracker 的 RATE_WINDOW 对齐：请求结束后再刷约 1s，避免标题卡在残留速率。
-        const RATE_WINDOW_DRAIN: Duration = Duration::from_millis(1100);
-        const TICK: Duration = Duration::from_millis(333);
-        'main: loop {
+        loop {
             if !tray_state.should_keep_token_rate_loop(loop_id) {
-                break 'main;
+                break;
             }
-            if token_proxy_app.has_active_proxy_requests() {
-                let mut interval = tokio::time::interval(TICK);
-                loop {
-                    interval.tick().await;
-                    if !tray_state.should_keep_token_rate_loop(loop_id) {
-                        break 'main;
-                    }
-                    tray_state.update_token_rate_title().await;
-                    if !token_proxy_app.has_active_proxy_requests() {
-                        break;
-                    }
-                }
-                // 活跃请求刚结束：继续刷满滑动窗口，把残留 token 速率归零。
-                tracing::debug!("tray token rate drain residual window after active requests end");
-                let drain_deadline = tokio::time::Instant::now() + RATE_WINDOW_DRAIN;
-                let mut drain_interval = tokio::time::interval(TICK);
-                loop {
-                    if !tray_state.should_keep_token_rate_loop(loop_id) {
-                        break 'main;
-                    }
-                    if token_proxy_app.has_active_proxy_requests() {
-                        // 新请求进来，回到主循环继续高频刷新。
-                        continue 'main;
-                    }
-                    if tokio::time::Instant::now() >= drain_deadline {
-                        break;
-                    }
-                    drain_interval.tick().await;
-                    tray_state.update_token_rate_title().await;
-                }
-                tray_state.update_token_rate_title().await;
-                continue;
+            // 先消费通知再读快照，避免刷新期间的新请求被漏掉。
+            activity_rx.borrow_and_update();
+            let refresh_after = tray_state.update_token_rate_title().await;
+            if !tray_state.should_keep_token_rate_loop(loop_id) {
+                break;
             }
-
-            tray_state.update_token_rate_title().await;
-            // 空闲时不轮询，等待新请求或配置变化唤醒。
-            if activity_rx.changed().await.is_err() {
-                break 'main;
+            if let Some(delay) = refresh_after {
+                tokio::select! {
+                    result = activity_rx.changed() => {
+                        if result.is_err() {
+                            break;
+                        }
+                    }
+                    _ = tokio::time::sleep(delay) => {}
+                }
+            } else if activity_rx.changed().await.is_err() {
+                // 只有连接数时无需轮询，开始/结束/配置变化都会通知。
+                break;
             }
         }
         tray_state.finish_token_rate_loop(loop_id);
@@ -419,27 +397,25 @@ fn start_token_rate_loop(tray_state: TrayState, loop_id: u64) {
 #[cfg(target_os = "macos")]
 fn format_rate_title(snapshot: TokenRateSnapshot, format: TrayTokenRateFormat) -> String {
     let has_input = snapshot.input > 0;
-    let has_output = snapshot.output > 0;
-    let has_tokens = has_input || has_output;
     // ↑ 显示 input（有 input 时）或连接数（无 input 时）
     let input_display = if has_input {
         snapshot.input
     } else {
         snapshot.connections
     };
-    // ↓ 始终显示 output
-    let output_display = snapshot.output;
-    // total 显示总 token 数（有 token 时）或连接数（无 token 时）
-    let total_display = if has_tokens {
-        snapshot.total
+    // ↓ 只显示活跃连接数（并发请求数），空闲时隐藏。
+    let connections_display = if snapshot.connections > 0 {
+        format!(" ↓{}", snapshot.connections)
     } else {
-        snapshot.connections
+        String::new()
     };
+    // 合并模式沿用上传 token / 活跃请求数的切换，不再采集输出 token。
+    let total_display = input_display;
     match format {
         TrayTokenRateFormat::Combined => format!("{total_display}"),
-        TrayTokenRateFormat::Split => format!("↑{input_display} ↓{output_display}"),
+        TrayTokenRateFormat::Split => format!("↑{input_display}{connections_display}"),
         TrayTokenRateFormat::Both => {
-            format!("{total_display} | ↑{input_display} ↓{output_display}")
+            format!("{total_display} | ↑{input_display}{connections_display}")
         }
     }
 }
@@ -500,6 +476,34 @@ fn load_tray_icon() -> Result<Image<'static>, Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn activity_title_switches_from_upload_tokens_to_connections() {
+        use super::{format_rate_title, TokenRateSnapshot, TrayTokenRateFormat};
+
+        for (input, connections, split, combined, both) in [
+            (42, 2, "↑42 ↓2", "42", "42 | ↑42 ↓2"),
+            (0, 2, "↑2 ↓2", "2", "2 | ↑2 ↓2"),
+            (42, 0, "↑42", "42", "42 | ↑42"),
+            (0, 0, "↑0", "0", "0 | ↑0"),
+        ] {
+            let snapshot = TokenRateSnapshot {
+                input,
+                connections,
+                refresh_after: None,
+            };
+            assert_eq!(
+                format_rate_title(snapshot, TrayTokenRateFormat::Split),
+                split
+            );
+            assert_eq!(
+                format_rate_title(snapshot, TrayTokenRateFormat::Combined),
+                combined
+            );
+            assert_eq!(format_rate_title(snapshot, TrayTokenRateFormat::Both), both);
+        }
+    }
+
     #[test]
     fn main_window_menu_text_reflects_visibility() {
         assert_eq!(super::main_window_menu_text(false), "显示主窗口");

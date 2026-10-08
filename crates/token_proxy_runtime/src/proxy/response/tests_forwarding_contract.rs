@@ -7,7 +7,7 @@ fn native_responses_eof_must_fail_and_log() {
             let (log, mut context, pool) = setup_responses_stream().await;
             context.provider = provider.to_string();
             let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-                .register(None, None)
+                .register(None)
                 .await;
             let chunk = Bytes::from_static(
                 b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\n",
@@ -68,7 +68,7 @@ fn native_stream_rewrite_must_remove_content_length() {
             .unwrap();
         let (log, _, _) = setup_responses_stream().await;
         let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let meta = super::super::RequestMeta {
             client_ip: None,
@@ -193,7 +193,7 @@ fn native_non_sse_diagnostic_is_bounded_and_reports_truncation() {
     run_async(async {
         let (log, context, pool) = setup_responses_stream().await;
         let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunk = Bytes::from(vec![b'x'; 96 * 1024]);
         let upstream = futures_util::stream::iter(vec![Ok::<_, std::io::Error>(chunk)]);
@@ -222,7 +222,7 @@ fn oversized_native_sse_persists_parser_failure_instead_of_generic_drop() {
     run_async(async {
         let (log, context, pool) = setup_responses_stream().await;
         let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let chunk = Bytes::from(vec![
             b'x';
@@ -255,7 +255,7 @@ fn response_detail_switch_controls_persisted_stream_body() {
                 context.request_headers = Some("{}".to_string());
             }
             let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-                .register(None, None)
+                .register(None)
                 .await;
             let delta = format!(
                 "data: {}\n\n",
@@ -289,7 +289,7 @@ fn cancelled_stream_flushes_spooled_detail_without_losing_forwarded_prefix() {
         let (log, mut context, pool) = setup_responses_stream().await;
         context.request_headers = Some("{}".into());
         let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let delta = Bytes::from(format!(
             "data: {}\n\n",

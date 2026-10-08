@@ -69,7 +69,7 @@ struct LoggingStreamState<S> {
     parser: SseEventParser,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     logged: bool,
     terminal_seen: bool,
     terminal_error: Option<String>,
@@ -87,7 +87,6 @@ struct StreamObservation {
     terminal_json: bool,
     saw_done: bool,
     terminal_error: Option<ResponsesStreamError>,
-    texts: Vec<String>,
 }
 
 impl<S> LoggingStreamState<S> {
@@ -136,7 +135,7 @@ where
             parser: SseEventParser::new(),
             log,
             context,
-            token_tracker,
+            _token_tracker: token_tracker,
             logged: false,
             terminal_seen: false,
             terminal_error: None,
@@ -216,9 +215,7 @@ where
                 if observation.starts_client_output {
                     self.context.mark_first_output();
                 }
-                for text in observation.texts {
-                    self.token_tracker.add_output_text(&text).await;
-                }
+
                 self.context.mark_first_client_flush();
                 Ok(Some((out_chunk, self)))
             }
@@ -252,9 +249,7 @@ where
                     self.write_terminal_log_once();
                     return Ok(None);
                 }
-                for text in observation.texts {
-                    self.token_tracker.add_output_text(&text).await;
-                }
+
                 let message = format!("Failed to read upstream response: {err}");
                 if is_chat_stream(&self.context.provider, &self.context.path) {
                     self.context.status = 502;
@@ -309,9 +304,7 @@ where
                 if observation.starts_client_output {
                     self.context.mark_first_output();
                 }
-                for text in observation.texts {
-                    self.token_tracker.add_output_text(&text).await;
-                }
+
                 // 无尾部空行的 terminal event 只会在 finish 时出现，不能按正常 EOF 丢掉错误。
                 if self.terminal_seen {
                     self.write_terminal_log_once();
@@ -394,7 +387,7 @@ struct ModelOverrideStreamState<S> {
     collector: SseUsageCollector,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     out: VecDeque<Bytes>,
     model_override: Option<String>,
     upstream_ended: bool,
@@ -457,7 +450,7 @@ where
             collector: SseUsageCollector::new(),
             log,
             context,
-            token_tracker,
+            _token_tracker: token_tracker,
             out: VecDeque::new(),
             model_override,
             upstream_ended: false,
@@ -583,9 +576,6 @@ where
                     if observation.starts_client_output {
                         self.context.mark_first_output();
                     }
-                    for text in observation.texts {
-                        self.token_tracker.add_output_text(&text).await;
-                    }
                 }
                 Some(Err(err)) => {
                     let semantics = self.openai_stream_semantics();
@@ -667,9 +657,6 @@ where
                     apply_observed_error(&mut self.context, &mut self.terminal_error, &observation);
                     if observation.starts_client_output {
                         self.context.mark_first_output();
-                    }
-                    for text in observation.texts {
-                        self.token_tracker.add_output_text(&text).await;
                     }
                 }
             }
@@ -862,7 +849,6 @@ fn observe_stream_data(
         if !text.is_empty() {
             observation.starts_client_output = true;
         }
-        observation.texts.push(text);
     }
 }
 
@@ -875,7 +861,6 @@ impl StreamObservation {
             terminal_json,
             saw_done,
             terminal_error,
-            texts,
         } = next;
         self.starts_client_output |= starts_client_output;
         self.semantic_event |= semantic_event;
@@ -885,7 +870,6 @@ impl StreamObservation {
         if self.terminal_error.is_none() {
             self.terminal_error = terminal_error;
         }
-        self.texts.extend(texts);
     }
 
     fn should_synthesize_done(&self) -> bool {
@@ -1023,7 +1007,7 @@ fn openai_stream_value_is_terminal(value: &Value) -> bool {
     )
 }
 
-fn extract_stream_text_from_value(provider: &str, value: &Value) -> Option<String> {
+fn extract_stream_text_from_value<'a>(provider: &str, value: &'a Value) -> Option<&'a str> {
     match provider {
         PROVIDER_OPENAI | PROVIDER_OPENAI_RESPONSES | PROVIDER_CODEX | PROVIDER_XAI => {
             extract_openai_stream_text(value)
@@ -1062,7 +1046,7 @@ fn openai_responses_data_starts_client_output(provider: &str, value: &Value) -> 
     )
 }
 
-fn extract_openai_stream_text(value: &Value) -> Option<String> {
+fn extract_openai_stream_text(value: &Value) -> Option<&str> {
     let delta = value
         .get("choices")
         .and_then(Value::as_array)
@@ -1071,29 +1055,22 @@ fn extract_openai_stream_text(value: &Value) -> Option<String> {
         .and_then(|delta| delta.get("content"))
         .and_then(Value::as_str);
     if let Some(delta) = delta {
-        return Some(delta.to_string());
+        return Some(delta);
     }
     let event_type = value.get("type").and_then(Value::as_str)?;
     if event_type.ends_with("output_text.delta") {
-        return value
-            .get("delta")
-            .and_then(Value::as_str)
-            .map(|text| text.to_string());
+        return value.get("delta").and_then(Value::as_str);
     }
     None
 }
 
-fn extract_openai_responses_delta_text(value: &Value) -> Option<String> {
-    // Responses final snapshot events can carry full text/arguments/code. Realtime
-    // rate only counts incremental deltas to avoid double-counting completed frames.
+fn extract_openai_responses_delta_text(value: &Value) -> Option<&str> {
+    // 首输出识别只借用增量文本，完整事件的业务语义由上方独立判断。
     let event_type = value.get("type").and_then(Value::as_str)?;
     if !is_openai_responses_realtime_output_delta(event_type) {
         return None;
     }
-    value
-        .get("delta")
-        .and_then(Value::as_str)
-        .map(|text| text.to_string())
+    value.get("delta").and_then(Value::as_str)
 }
 
 fn is_openai_responses_realtime_output_delta(event_type: &str) -> bool {
@@ -1115,30 +1092,29 @@ fn is_openai_responses_realtime_output_delta(event_type: &str) -> bool {
         )
 }
 
-fn extract_anthropic_stream_text(value: &Value) -> Option<String> {
+fn extract_anthropic_stream_text(value: &Value) -> Option<&str> {
     if let Some(delta) = value.get("delta") {
         if let Some(text) = delta.get("text").and_then(Value::as_str) {
-            return Some(text.to_string());
+            return Some(text);
         }
         if let Some(text) = delta.as_str() {
-            return Some(text.to_string());
+            return Some(text);
         }
     }
     value
         .get("content_block")
         .and_then(|block| block.get("text"))
         .and_then(Value::as_str)
-        .map(|text| text.to_string())
 }
 
-fn extract_gemini_stream_text(value: &Value) -> Option<String> {
+fn extract_gemini_stream_text(value: &Value) -> Option<&str> {
     let candidates = value.get("candidates").and_then(Value::as_array)?;
     for candidate in candidates {
         if let Some(content) = candidate.get("content") {
             if let Some(parts) = content.get("parts").and_then(Value::as_array) {
                 for part in parts {
                     if let Some(text) = part.get("text").and_then(Value::as_str) {
-                        return Some(text.to_string());
+                        return Some(text);
                     }
                 }
             }
@@ -1147,12 +1123,11 @@ fn extract_gemini_stream_text(value: &Value) -> Option<String> {
     None
 }
 
-fn extract_fallback_stream_text(value: &Value) -> Option<String> {
+fn extract_fallback_stream_text(value: &Value) -> Option<&str> {
     value
         .get("delta")
         .and_then(Value::as_str)
         .or_else(|| value.get("text").and_then(Value::as_str))
-        .map(|text| text.to_string())
 }
 
 #[cfg(test)]
@@ -1174,7 +1149,7 @@ mod tests {
             &delta
         ));
         assert_eq!(
-            extract_stream_text_from_value(PROVIDER_XAI, &delta).as_deref(),
+            extract_stream_text_from_value(PROVIDER_XAI, &delta),
             Some("hello")
         );
     }

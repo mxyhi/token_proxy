@@ -17,14 +17,14 @@ where
     S: futures_util::stream::Stream<Item = Result<Bytes, E>> + Unpin + Send + 'static,
     E: std::error::Error + Send + Sync + 'static,
 {
-    pub(super) async fn emit_text_delta(&mut self, delta: &str) {
+    pub(super) fn emit_text_delta(&mut self, delta: &str) {
         if delta.is_empty() {
             return;
         }
         self.ensure_message_start();
         let index = self.ensure_text_block();
         self.content.push_str(delta);
-        self.token_tracker.add_output_text(delta).await;
+
         self.out.push_back(super::super::super::anthropic_event_sse(
             "content_block_delta",
             json!({
@@ -35,14 +35,14 @@ where
         ));
     }
 
-    pub(super) async fn emit_thinking_delta(&mut self, delta: &str) {
+    pub(super) fn emit_thinking_delta(&mut self, delta: &str) {
         if delta.is_empty() {
             return;
         }
         self.ensure_message_start();
         let index = self.ensure_thinking_block();
         self.reasoning.push_str(delta);
-        self.token_tracker.add_output_text(delta).await;
+
         self.out.push_back(super::super::super::anthropic_event_sse(
             "content_block_delta",
             json!({

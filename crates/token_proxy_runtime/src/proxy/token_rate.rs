@@ -1,78 +1,55 @@
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tokio::{
-    sync::{watch, Mutex, RwLock},
-    time::{interval, MissedTickBehavior},
-};
+use tokio::sync::watch;
 
-const RATE_WINDOW: Duration = Duration::from_secs(1);
-const CLEANUP_INTERVAL: Duration = Duration::from_secs(60);
-// 超过该时长未记录 token 的请求窗口视为过期，避免 HashMap 无界增长。
-const REQUEST_TTL: Duration = Duration::from_secs(300);
+const INPUT_DISPLAY_WINDOW: Duration = Duration::from_secs(1);
 
 #[derive(Clone)]
 pub struct TokenRateTracker {
-    inner: Arc<TrackerInner>,
+    inner: Arc<Mutex<TrackerState>>,
     activity_tx: watch::Sender<u64>,
 }
 
-struct TrackerInner {
-    next_id: AtomicU64,
-    active: AtomicUsize,
-    enabled: AtomicBool,
-    generation: AtomicU64,
-    cleanup_started: AtomicBool,
-    last_cleanup: Mutex<Instant>,
-    requests: RwLock<HashMap<u64, Arc<Mutex<RequestWindow>>>>,
+struct TrackerState {
+    enabled: bool,
+    generation: u64,
+    connections: u64,
+    inputs: VecDeque<InputEvent>,
 }
 
-struct RequestWindow {
-    events: VecDeque<TokenEvent>,
-    last_seen: Instant,
-}
-
-struct TokenEvent {
-    ts: Instant,
-    input: u64,
-    output: u64,
+struct InputEvent {
+    expires_at: Instant,
+    tokens: u64,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct TokenRateSnapshot {
     pub input: u64,
-    pub output: u64,
-    pub total: u64,
+    /// 活跃代理请求数，包含等待响应头及正在传输响应的请求。
     pub connections: u64,
+    /// 下一次输入 token 展示到期；无输入时只需等待请求生命周期事件。
+    pub refresh_after: Option<Duration>,
 }
 
 pub struct RequestTokenTracker {
-    id: Option<u64>,
-    window: Option<Arc<Mutex<RequestWindow>>>,
-    tracker: TokenRateTracker,
-    model: Option<String>,
-    generation: Option<u64>,
+    tracker: Option<TokenRateTracker>,
+    generation: u64,
 }
 
 impl TokenRateTracker {
     pub fn new() -> Arc<Self> {
-        let (activity_tx, _activity_rx) = watch::channel(0u64);
-        let tracker = Arc::new(Self {
-            inner: Arc::new(TrackerInner {
-                next_id: AtomicU64::new(1),
-                active: AtomicUsize::new(0),
-                enabled: AtomicBool::new(true),
-                generation: AtomicU64::new(1),
-                cleanup_started: AtomicBool::new(false),
-                last_cleanup: Mutex::new(Instant::now()),
-                requests: RwLock::new(HashMap::new()),
-            }),
+        let (activity_tx, _) = watch::channel(0u64);
+        Arc::new(Self {
+            inner: Arc::new(Mutex::new(TrackerState {
+                enabled: true,
+                generation: 0,
+                connections: 0,
+                inputs: VecDeque::new(),
+            })),
             activity_tx,
-        });
-        tracker.try_start_cleanup();
-        tracker
+        })
     }
 
     pub fn subscribe_activity(&self) -> watch::Receiver<u64> {
@@ -80,368 +57,105 @@ impl TokenRateTracker {
     }
 
     pub fn notify_activity(&self) {
-        let next = self.activity_tx.borrow().wrapping_add(1);
-        let _ = self.activity_tx.send(next);
+        self.activity_tx
+            .send_modify(|version| *version = version.wrapping_add(1));
     }
 
     pub async fn set_enabled(&self, enabled: bool) {
-        self.try_start_cleanup();
-        tracing::debug!(enabled, "token_rate set_enabled start");
-        let previous = self.inner.enabled.swap(enabled, Ordering::SeqCst);
-        if previous == enabled {
-            tracing::debug!(enabled, "token_rate set_enabled noop");
-            return;
+        {
+            let mut state = self.inner.lock().expect("tray activity lock poisoned");
+            if state.enabled == enabled {
+                return;
+            }
+            state.enabled = enabled;
+            // 开关切换后，旧请求的 Drop 不能扣减新一代请求的连接数。
+            state.generation = state.generation.wrapping_add(1);
+            state.connections = 0;
+            state.inputs.clear();
         }
-        // 每次开关切换递增 generation，确保旧请求不会在重新开启后继续计数。
-        self.inner.generation.fetch_add(1, Ordering::SeqCst);
-        if !enabled {
-            tracing::debug!("token_rate set_enabled clearing requests start");
-            let mut guard = self.inner.requests.write().await;
-            guard.clear();
-            self.inner.active.store(0, Ordering::SeqCst);
-            tracing::debug!("token_rate set_enabled clearing requests done");
-        }
-        tracing::debug!(enabled, "token_rate set_enabled done");
+        tracing::debug!(enabled, "tray activity tracking changed");
+        self.notify_activity();
     }
 
-    pub async fn register(
-        &self,
-        model: Option<String>,
-        input_tokens: Option<u64>,
-    ) -> RequestTokenTracker {
-        self.try_start_cleanup();
-        self.maybe_cleanup(Instant::now()).await;
-        let enabled = self.inner.enabled.load(Ordering::SeqCst);
-        let generation = self.inner.generation.load(Ordering::SeqCst);
-        let (mut id, mut window) = if enabled {
-            let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
-            let window = Arc::new(Mutex::new(RequestWindow::new()));
-            let mut guard = self.inner.requests.write().await;
-            guard.insert(id, window.clone());
-            self.inner.active.fetch_add(1, Ordering::SeqCst);
-            (Some(id), Some(window))
-        } else {
-            (None, None)
-        };
-        let mut effective_generation = if enabled { Some(generation) } else { None };
-        if let Some(current_id) = id {
-            let still_enabled = self.inner.enabled.load(Ordering::SeqCst);
-            let current_generation = self.inner.generation.load(Ordering::SeqCst);
-            if !still_enabled || current_generation != generation {
-                // 开关状态变更后不再追踪该请求，避免重新开启时继续计数。
-                self.unregister(current_id).await;
-                id = None;
-                window = None;
-                effective_generation = None;
+    pub async fn register(&self, input_tokens: Option<u64>) -> RequestTokenTracker {
+        let generation = {
+            // 锁内只有计数及输入事件操作，不做 IO、分词或 await。
+            let mut state = self.inner.lock().expect("tray activity lock poisoned");
+            if !state.enabled {
+                return RequestTokenTracker::disabled();
             }
-        }
-
-        let tracker = RequestTokenTracker {
-            id,
-            window,
-            tracker: self.clone(),
-            model,
-            generation: effective_generation,
+            let now = Instant::now();
+            state.prune_inputs(now);
+            if let Some(tokens) = input_tokens.filter(|tokens| *tokens > 0) {
+                state.inputs.push_back(InputEvent {
+                    expires_at: now + INPUT_DISPLAY_WINDOW,
+                    tokens,
+                });
+            }
+            state.connections += 1;
+            state.generation
         };
-        if let Some(tokens) = input_tokens {
-            tracker.add_input_tokens(tokens).await;
+        self.notify_activity();
+        RequestTokenTracker {
+            tracker: Some(self.clone()),
+            generation,
         }
-        if enabled {
-            self.notify_activity();
-        }
-        tracker
     }
 
     pub async fn snapshot(&self) -> TokenRateSnapshot {
-        self.try_start_cleanup();
-        if !self.inner.enabled.load(Ordering::SeqCst) {
-            return TokenRateSnapshot {
-                input: 0,
-                output: 0,
-                total: 0,
-                connections: 0,
-            };
-        }
-        self.maybe_cleanup(Instant::now()).await;
+        let mut state = self.inner.lock().expect("tray activity lock poisoned");
         let now = Instant::now();
-        let windows: Vec<Arc<Mutex<RequestWindow>>> =
-            self.inner.requests.read().await.values().cloned().collect();
-        let mut input = 0u64;
-        let mut output = 0u64;
-        for window in windows {
-            let mut guard = window.lock().await;
-            guard.prune(now);
-            let (i, o) = guard.sum();
-            input = input.saturating_add(i);
-            output = output.saturating_add(o);
-        }
+        state.prune_inputs(now);
         TokenRateSnapshot {
-            input,
-            output,
-            total: input.saturating_add(output),
-            connections: self.inner.active.load(Ordering::SeqCst) as u64,
+            input: state
+                .inputs
+                .iter()
+                .fold(0u64, |sum, event| sum.saturating_add(event.tokens)),
+            connections: state.connections,
+            refresh_after: state
+                .inputs
+                .front()
+                .map(|event| event.expires_at.saturating_duration_since(now)),
         }
-    }
-
-    pub fn has_active_requests(&self) -> bool {
-        if !self.inner.enabled.load(Ordering::SeqCst) {
-            return false;
-        }
-        self.inner.active.load(Ordering::SeqCst) > 0
-    }
-
-    async fn record(&self, window: &Arc<Mutex<RequestWindow>>, input: u64, output: u64) {
-        if input == 0 && output == 0 {
-            return;
-        }
-        let now = Instant::now();
-        {
-            let mut guard = window.lock().await;
-            guard.push(TokenEvent {
-                ts: now,
-                input,
-                output,
-            });
-        }
-        self.maybe_cleanup(now).await;
-    }
-
-    async fn unregister(&self, id: u64) {
-        let removed = self.inner.requests.write().await.remove(&id).is_some();
-        if removed {
-            self.inner.active.fetch_sub(1, Ordering::SeqCst);
-            // 请求结束也要唤醒托盘，否则会停在最后一次非零速率。
-            self.notify_activity();
-            tracing::debug!(id, "token_rate unregistered request window");
-        }
-    }
-
-    // 在有 Tokio runtime 时启动清理任务，避免无 reactor 场景崩溃。
-    fn try_start_cleanup(&self) {
-        if self.inner.cleanup_started.load(Ordering::SeqCst) {
-            return;
-        }
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            return;
-        };
-        if self
-            .inner
-            .cleanup_started
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return;
-        }
-        let weak_inner = Arc::downgrade(&self.inner);
-        handle.spawn(async move {
-            let mut ticker = interval(CLEANUP_INTERVAL);
-            ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-            loop {
-                ticker.tick().await;
-                let Some(inner) = weak_inner.upgrade() else {
-                    break;
-                };
-                if !inner.enabled.load(Ordering::SeqCst) {
-                    continue;
-                }
-                cleanup_expired_inner(&inner, Instant::now()).await;
-            }
-        });
-    }
-
-    // 惰性清理：在流量发生时按间隔触发，减少单独后台依赖。
-    async fn maybe_cleanup(&self, now: Instant) {
-        if !self.inner.enabled.load(Ordering::SeqCst) {
-            return;
-        }
-        if !self.should_cleanup(now).await {
-            return;
-        }
-        self.cleanup_expired(now).await;
-    }
-
-    async fn should_cleanup(&self, now: Instant) -> bool {
-        let mut guard = self.inner.last_cleanup.lock().await;
-        if now.duration_since(*guard) < CLEANUP_INTERVAL {
-            return false;
-        }
-        *guard = now;
-        true
-    }
-
-    async fn cleanup_expired(&self, now: Instant) {
-        cleanup_expired_inner(&self.inner, now).await;
     }
 }
 
-async fn cleanup_expired_inner(inner: &TrackerInner, now: Instant) {
-    let windows: Vec<(u64, Arc<Mutex<RequestWindow>>)> = inner
-        .requests
-        .read()
-        .await
-        .iter()
-        .map(|(id, window)| (*id, window.clone()))
-        .collect();
-    if windows.is_empty() {
-        return;
-    }
-    let mut expired = Vec::new();
-    for (id, window) in windows {
-        let guard = window.lock().await;
-        if guard.is_expired(now) {
-            expired.push(id);
+impl TrackerState {
+    fn prune_inputs(&mut self, now: Instant) {
+        while self
+            .inputs
+            .front()
+            .is_some_and(|event| event.expires_at <= now)
+        {
+            self.inputs.pop_front();
         }
-    }
-    if expired.is_empty() {
-        return;
-    }
-    let mut guard = inner.requests.write().await;
-    let mut removed = 0usize;
-    for id in expired {
-        if guard.remove(&id).is_some() {
-            removed += 1;
-        }
-    }
-    if removed > 0 {
-        inner.active.fetch_sub(removed, Ordering::SeqCst);
-    }
-}
-
-impl RequestWindow {
-    fn new() -> Self {
-        Self {
-            events: VecDeque::new(),
-            last_seen: Instant::now(),
-        }
-    }
-
-    fn push(&mut self, event: TokenEvent) {
-        let now = event.ts;
-        self.events.push_back(event);
-        self.last_seen = now;
-        self.prune(now);
-    }
-
-    fn prune(&mut self, now: Instant) {
-        while let Some(front) = self.events.front() {
-            if now.duration_since(front.ts) <= RATE_WINDOW {
-                break;
-            }
-            self.events.pop_front();
-        }
-    }
-
-    fn sum(&self) -> (u64, u64) {
-        let mut input = 0u64;
-        let mut output = 0u64;
-        for event in &self.events {
-            input = input.saturating_add(event.input);
-            output = output.saturating_add(event.output);
-        }
-        (input, output)
-    }
-
-    fn is_expired(&self, now: Instant) -> bool {
-        now.saturating_duration_since(self.last_seen) > REQUEST_TTL
     }
 }
 
 impl RequestTokenTracker {
     pub(crate) fn disabled() -> Self {
-        // `generation=None` makes `can_record()` return false, so this tracker is a no-op.
         Self {
-            id: None,
-            window: None,
-            // Keep a zero-cost (per call) tracker placeholder, avoiding `TokenRateTracker::new()`.
-            // This is used in composed stream transforms where we need a token tracker but
-            // do not want to pay for allocating a full tracker (watch channel + cleanup task).
-            tracker: disabled_tracker(),
-            model: None,
-            generation: None,
+            tracker: None,
+            generation: 0,
         }
-    }
-
-    pub(crate) async fn add_input_tokens(&self, tokens: u64) {
-        if !self.can_record() {
-            return;
-        }
-        let Some(window) = self.window.as_ref() else {
-            return;
-        };
-        self.tracker.record(window, tokens, 0).await;
-    }
-
-    pub(crate) async fn add_output_text(&self, text: &str) {
-        if !self.can_record() {
-            return;
-        }
-        let tokens = estimate_text_tokens(self.model.as_deref(), text);
-        let Some(window) = self.window.as_ref() else {
-            return;
-        };
-        self.tracker.record(window, 0, tokens).await;
-    }
-
-    fn can_record(&self) -> bool {
-        let Some(generation) = self.generation else {
-            return false;
-        };
-        if !self.tracker.inner.enabled.load(Ordering::SeqCst) {
-            return false;
-        }
-        // generation 不一致说明开关已经切换，旧请求不再计数。
-        self.tracker.inner.generation.load(Ordering::SeqCst) == generation
     }
 }
 
 impl Drop for RequestTokenTracker {
     fn drop(&mut self) {
-        let Some(id) = self.id else {
+        let Some(tracker) = self.tracker.as_ref() else {
             return;
         };
-        if let Ok(mut guard) = self.tracker.inner.requests.try_write() {
-            if guard.remove(&id).is_some() {
-                self.tracker.inner.active.fetch_sub(1, Ordering::SeqCst);
-                // 同步路径也通知托盘刷新，避免 active 归零后标题卡住。
-                self.tracker.notify_activity();
-                tracing::debug!(id, "token_rate drop unregistered request window");
+        {
+            let mut state = tracker.inner.lock().expect("tray activity lock poisoned");
+            if self.generation != state.generation {
+                return;
             }
-            return;
+            // 生命周期守卫同步释放；长时间无输出不会被 TTL 误判为连接结束。
+            state.connections -= 1;
         }
-        // 避免在 Drop 中阻塞异步运行时，使用最佳努力异步清理。
-        if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            let tracker = self.tracker.clone();
-            handle.spawn(async move {
-                tracker.unregister(id).await;
-            });
-        }
+        tracker.notify_activity();
     }
-}
-
-pub(crate) fn estimate_text_tokens(model: Option<&str>, text: &str) -> u64 {
-    super::token_estimator::estimate_text_tokens(model, text)
-}
-
-fn disabled_tracker() -> TokenRateTracker {
-    static DISABLED: OnceLock<TokenRateTracker> = OnceLock::new();
-    DISABLED
-        .get_or_init(|| {
-            let (activity_tx, _activity_rx) = watch::channel(0u64);
-            TokenRateTracker {
-                inner: Arc::new(TrackerInner {
-                    next_id: AtomicU64::new(1),
-                    active: AtomicUsize::new(0),
-                    enabled: AtomicBool::new(false),
-                    generation: AtomicU64::new(1),
-                    // Mark cleanup as started to ensure we never spawn background tasks for a noop tracker.
-                    cleanup_started: AtomicBool::new(true),
-                    last_cleanup: Mutex::new(Instant::now()),
-                    requests: RwLock::new(HashMap::new()),
-                }),
-                activity_tx,
-            }
-        })
-        .clone()
 }
 
 #[cfg(test)]
@@ -449,29 +163,90 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn register_without_input_counts_connection_only() {
+    async fn connections_follow_request_lifetime_and_notify() {
         let rate = TokenRateTracker::new();
-        let tracker = rate.register(Some("gpt-test".to_string()), None).await;
+        let mut activity = rate.subscribe_activity();
+        let first = rate.register(None).await;
+        activity.changed().await.unwrap();
+        let second = rate.register(None).await;
         let snapshot = rate.snapshot().await;
-        assert_eq!(snapshot.connections, 1);
+        assert_eq!(snapshot.connections, 2);
         assert_eq!(snapshot.input, 0);
-        assert_eq!(snapshot.output, 0);
-        assert!(rate.has_active_requests());
-        drop(tracker);
-        // Drop 后 active 归零，托盘可显示 0 connections。
-        let snapshot = rate.snapshot().await;
-        assert_eq!(snapshot.connections, 0);
-        assert!(!rate.has_active_requests());
+        assert_eq!(snapshot.refresh_after, None);
+        activity.borrow_and_update();
+        drop(first);
+        assert!(activity.has_changed().unwrap());
+        assert_eq!(rate.snapshot().await.connections, 1);
+        drop(second);
+        assert_eq!(rate.snapshot().await.connections, 0);
     }
 
     #[tokio::test]
-    async fn add_input_after_register_updates_window() {
+    async fn upload_tokens_expire_without_ending_active_connections() {
         let rate = TokenRateTracker::new();
-        let tracker = rate.register(None, None).await;
-        tracker.add_input_tokens(42).await;
+        let first = rate.register(Some(42)).await;
+        let second = rate.register(Some(8)).await;
         let snapshot = rate.snapshot().await;
-        assert_eq!(snapshot.input, 42);
+        assert_eq!(snapshot.input, 50);
+        assert_eq!(snapshot.connections, 2);
+        assert!(snapshot
+            .refresh_after
+            .is_some_and(|delay| delay <= INPUT_DISPLAY_WINDOW));
+        // 短请求的上传脉冲保留到展示到期，避免请求很快完成而完全不可见。
+        drop(first);
+        assert_eq!(rate.snapshot().await.input, 50);
+        tokio::time::sleep(INPUT_DISPLAY_WINDOW + Duration::from_millis(20)).await;
+        let snapshot = rate.snapshot().await;
+        assert_eq!(snapshot.input, 0);
         assert_eq!(snapshot.connections, 1);
-        drop(tracker);
+        assert_eq!(snapshot.refresh_after, None);
+        drop(second);
+    }
+
+    #[tokio::test]
+    async fn old_requests_cannot_decrement_connections_after_toggle() {
+        let rate = TokenRateTracker::new();
+        let old = rate.register(Some(42)).await;
+        rate.set_enabled(false).await;
+        let disabled = rate.register(Some(100)).await;
+        let snapshot = rate.snapshot().await;
+        assert_eq!(snapshot.input, 0);
+        assert_eq!(snapshot.connections, 0);
+        assert_eq!(snapshot.refresh_after, None);
+        rate.set_enabled(true).await;
+        let current = rate.register(Some(8)).await;
+        drop(old);
+        drop(disabled);
+        assert_eq!(rate.snapshot().await.connections, 1);
+        assert_eq!(rate.snapshot().await.input, 8);
+        drop(current);
+        assert_eq!(rate.snapshot().await.connections, 0);
+    }
+
+    #[tokio::test]
+    async fn cancelled_task_releases_connection() {
+        let rate = TokenRateTracker::new();
+        let task_rate = rate.clone();
+        let (ready, started) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _guard = task_rate.register(None).await;
+            ready.send(()).unwrap();
+            std::future::pending::<()>().await;
+        });
+        started.await.unwrap();
+        assert_eq!(rate.snapshot().await.connections, 1);
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert_eq!(rate.snapshot().await.connections, 0);
+    }
+
+    #[test]
+    fn guard_can_drop_after_runtime_shutdown() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let rate = TokenRateTracker::new();
+        let guard = runtime.block_on(rate.register(None));
+        drop(runtime);
+        drop(guard);
+        assert_eq!(rate.inner.lock().unwrap().connections, 0);
     }
 }

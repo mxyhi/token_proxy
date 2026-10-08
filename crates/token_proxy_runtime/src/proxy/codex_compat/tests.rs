@@ -697,7 +697,7 @@ async fn stream_codex_to_responses_emits_error_event_for_invalid_json_event() {
     let upstream = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
         "data: not-json\n\n",
     ))]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
 
@@ -743,7 +743,7 @@ async fn stream_codex_to_responses_filters_private_events_for_regular_clients() 
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5\",\"output\":[]}}\n\n",
         )),
     ]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
 
@@ -769,7 +769,7 @@ async fn stream_codex_to_responses_emits_compatible_terminal_event_when_upstream
             "data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial output\"}\n\n",
         )),
     ]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
 
@@ -792,8 +792,8 @@ async fn stream_codex_to_responses_emits_compatible_terminal_event_when_upstream
 }
 
 #[tokio::test]
-async fn stream_codex_to_responses_counts_reasoning_summary_delta_for_token_rate() {
-    let (first_chunk, output_tokens) = first_codex_responses_output_tokens(
+async fn stream_codex_to_responses_preserves_reasoning_summary_delta_and_connection() {
+    let first_chunk = first_codex_responses_chunk(
         "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"thinking out loud\"}\n\n",
     )
     .await;
@@ -803,11 +803,11 @@ async fn stream_codex_to_responses_counts_reasoning_summary_delta_for_token_rate
         "chunk: {:?}",
         first_chunk
     );
-    assert!(output_tokens > 0, "output_tokens: {output_tokens}");
+    assert!(String::from_utf8_lossy(&first_chunk).contains("thinking out loud"));
 }
 
 #[tokio::test]
-async fn stream_codex_to_responses_counts_official_output_delta_events_for_token_rate() {
+async fn stream_codex_to_responses_preserves_official_output_delta_events_and_connection() {
     for event in [
         "data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"private reasoning\"}\n\n",
         "data: {\"type\":\"response.refusal.delta\",\"delta\":\"cannot comply\"}\n\n",
@@ -816,14 +816,14 @@ async fn stream_codex_to_responses_counts_official_output_delta_events_for_token
         "data: {\"type\":\"response.custom_tool_call_input.delta\",\"item_id\":\"ctc_1\",\"output_index\":0,\"delta\":\"partial input\"}\n\n",
         "data: {\"type\":\"response.code_interpreter_call_code.delta\",\"item_id\":\"ci_1\",\"output_index\":0,\"delta\":\"print(1)\"}\n\n",
     ] {
-        let (_, output_tokens) = first_codex_responses_output_tokens(event).await;
-
-        assert!(output_tokens > 0, "event should count output tokens: {event}");
+        let first_chunk = first_codex_responses_chunk(event).await;
+        let input: serde_json::Value = serde_json::from_str(event.trim().strip_prefix("data: ").unwrap()).unwrap();
+        assert!(String::from_utf8_lossy(&first_chunk).contains(input["type"].as_str().unwrap()));
     }
 }
 
 #[tokio::test]
-async fn stream_codex_to_responses_does_not_count_final_snapshots_for_token_rate() {
+async fn stream_codex_to_responses_preserves_final_snapshots_and_connection() {
     for event in [
         "data: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"text\":\"final text\"}\n\n",
         "data: {\"type\":\"response.reasoning_text.done\",\"item_id\":\"rs_1\",\"output_index\":0,\"content_index\":0,\"text\":\"final reasoning\"}\n\n",
@@ -832,23 +832,20 @@ async fn stream_codex_to_responses_does_not_count_final_snapshots_for_token_rate
         "data: {\"type\":\"response.mcp_call_arguments.done\",\"item_id\":\"mcp_1\",\"output_index\":0,\"arguments\":\"{\\\"query\\\":\\\"repo\\\"}\"}\n\n",
         "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_done\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"content\":[{\"type\":\"output_text\",\"text\":\"final text\"}]}]}}\n\n",
     ] {
-        let (_, output_tokens) = first_codex_responses_output_tokens(event).await;
-
-        assert_eq!(
-            output_tokens, 0,
-            "final snapshot should not count realtime output tokens: {event}"
-        );
+        let first_chunk = first_codex_responses_chunk(event).await;
+        let input: serde_json::Value = serde_json::from_str(event.trim().strip_prefix("data: ").unwrap()).unwrap();
+        assert!(String::from_utf8_lossy(&first_chunk).contains(input["type"].as_str().unwrap()));
     }
 }
 
 #[tokio::test]
-async fn stream_codex_to_responses_ignores_empty_delta_for_token_rate() {
-    let (_, output_tokens) = first_codex_responses_output_tokens(
+async fn stream_codex_to_responses_preserves_empty_delta_and_connection() {
+    let first_chunk = first_codex_responses_chunk(
         "data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"\"}\n\n",
     )
     .await;
 
-    assert_eq!(output_tokens, 0);
+    assert!(String::from_utf8_lossy(&first_chunk).contains(r#""delta":"""#));
 }
 
 #[tokio::test]
@@ -865,7 +862,7 @@ async fn stream_codex_to_responses_closes_after_terminal_without_upstream_close(
         future::pending::<Option<(Result<Bytes, std::io::Error>, usize)>>().await
     })
     .boxed();
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
 
@@ -899,7 +896,7 @@ async fn stream_codex_to_responses_semantic_timeout_ignores_heartbeat_comments()
         Some((Ok::<Bytes, std::io::Error>(Bytes::from(":\n\n")), index + 1))
     })
     .boxed();
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
 
@@ -939,7 +936,7 @@ async fn stream_codex_to_responses_upstream_error_emits_response_failed_after_st
             "codex stream reset",
         )),
     ]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
 
@@ -971,7 +968,7 @@ async fn stream_codex_to_responses_normalizes_upstream_response_failed() {
             "data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\",\"error\":{\"code\":\"server_error\",\"message\":\"codex overloaded\"}}}\n\n",
         )),
     ]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
 
@@ -1007,7 +1004,7 @@ async fn stream_codex_to_responses_accepts_canceled_terminal_event() {
         )),
         Ok::<Bytes, std::io::Error>(Bytes::from("data: [DONE]\n\n")),
     ]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
 
@@ -1053,7 +1050,7 @@ async fn stream_codex_to_responses_restores_custom_tool_name() {
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_custom\",\"status\":\"completed\"}}\n\n",
         )),
     ]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let mut context = test_log_context();
     context.request_body =
         Some(json!({ "tools": [{ "type": "custom", "name": original }] }).to_string());
@@ -1078,7 +1075,7 @@ async fn stream_codex_to_chat_emits_error_event_for_invalid_json_event() {
     let upstream = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
         "data: not-json\n\n",
     ))]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
 
@@ -1106,7 +1103,7 @@ async fn stream_codex_to_chat_emits_image_generation_call_result() {
         )),
         Ok::<Bytes, std::io::Error>(Bytes::from("data: [DONE]\n\n")),
     ]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
 
@@ -1143,7 +1140,7 @@ async fn stream_codex_to_chat_emits_custom_tool_call() {
             "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_custom\",\"status\":\"completed\"}}\n\n",
         )),
     ]);
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let mut context = test_log_context();
     context.request_body =
         Some(json!({ "tools": [{ "type": "custom", "name": original }] }).to_string());
@@ -1200,20 +1197,21 @@ fn join_stream_chunks(chunks: &[Result<Bytes, std::io::Error>]) -> String {
         .join("")
 }
 
-async fn first_codex_responses_output_tokens(event: &str) -> (Bytes, u64) {
+async fn first_codex_responses_chunk(event: &str) -> Bytes {
     let upstream = futures_util::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
         event.to_string(),
     ))]);
     let token_rate = TokenRateTracker::new();
-    let tracker = token_rate.register(Some("gpt-5.5".to_string()), None).await;
+    let tracker = token_rate.register(None).await;
     let context = test_log_context();
     let log = Arc::new(LogWriter::new(None));
-    let stream = stream_codex_to_responses(upstream, context, log, tracker);
-    futures_util::pin_mut!(stream);
+    let mut stream = Box::pin(stream_codex_to_responses(upstream, context, log, tracker));
     let first_chunk = stream.next().await.expect("stream item").expect("chunk");
-    let snapshot = token_rate.snapshot().await;
-
-    (first_chunk, snapshot.output)
+    assert_eq!(token_rate.snapshot().await.connections, 1);
+    // 客户端提前取消时，流持有的连接 guard 必须立即释放。
+    drop(stream);
+    assert_eq!(token_rate.snapshot().await.connections, 0);
+    first_chunk
 }
 
 #[test]
@@ -2346,7 +2344,7 @@ async fn codex_stream_search_citations_deduplicate_snapshots_by_text_part() {
             .into_iter()
             .map(|event| Ok::<_, std::io::Error>(Bytes::from(format!("data: {event}\n\n")))),
     );
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let converted = stream_codex_to_chat(
         upstream,
         test_log_context(),
@@ -2400,7 +2398,7 @@ async fn codex_stream_search_citations_follow_interleaved_text_positions() {
             .into_iter()
             .map(|event| Ok::<_, std::io::Error>(Bytes::from(format!("data: {event}\n\n")))),
     );
-    let tracker = TokenRateTracker::new().register(None, None).await;
+    let tracker = TokenRateTracker::new().register(None).await;
     let chunks = stream_codex_to_chat(
         upstream,
         test_log_context(),

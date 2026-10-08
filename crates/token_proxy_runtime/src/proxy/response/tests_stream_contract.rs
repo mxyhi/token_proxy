@@ -23,7 +23,7 @@ async fn converted(chunks: Vec<Bytes>, anthropic: bool) -> (Vec<Value>, SqlitePo
     let (log, mut context, pool) = setup_responses_stream().await;
     context.provider = if anthropic { "anthropic" } else { "openai" }.to_string();
     let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-        .register(None, None)
+        .register(None)
         .await;
     let upstream = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, std::io::Error>));
     let stream = if anthropic {
@@ -144,7 +144,7 @@ fn cpa_raw_chat_truncation_is_protocol_error_with_and_without_model_override() {
                 context.path = "/v1/chat/completions".into();
                 context.provider = "openai".into();
                 let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-                    .register(None, None)
+                    .register(None)
                     .await;
                 let mut chunks = vec![event(
                     json!({"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}),
@@ -212,7 +212,7 @@ fn cpa_raw_chat_normal_eof_retains_tail_usage() {
         context.path = "/v1/chat/completions".into();
         context.provider = "openai".into();
         let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let upstream = futures_util::stream::iter(vec![
             Ok::<_, std::io::Error>(event(
@@ -250,7 +250,7 @@ fn cpa_chat_explicit_upstream_error_is_never_replaced_by_truncation() {
             }
             .into();
             let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-                .register(None, None)
+                .register(None)
                 .await;
             let upstream = futures_util::stream::iter(vec![
                 Ok::<_, std::io::Error>(event(
@@ -295,7 +295,7 @@ fn cpa_reasoning_transport_failure_closes_as_interrupted_before_failed() {
         for anthropic in [false, true] {
             let (log, context, _) = setup_responses_stream().await;
             let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-                .register(None, None)
+                .register(None)
                 .await;
             let first = if anthropic {
                 json!({"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"partial"}})
@@ -415,7 +415,7 @@ fn cpa_chat_cancel_is_not_upstream_truncation() {
         let (log, mut context, pool) = setup_responses_stream().await;
         context.provider = "openai".into();
         let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let upstream = futures_util::stream::pending::<Result<Bytes, std::io::Error>>();
         let mut stream = super::super::chat_to_responses::stream_chat_to_responses(

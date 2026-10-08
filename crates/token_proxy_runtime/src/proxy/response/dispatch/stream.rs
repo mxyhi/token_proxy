@@ -2155,7 +2155,7 @@ mod tests {
         context.provider = PROVIDER_OPENAI.to_string();
         let log = Arc::new(LogWriter::new(None));
         let request_tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None, None)
+            .register(None)
             .await;
         let mut stream = stream_for_basic_transform(
             FormatTransform::None,

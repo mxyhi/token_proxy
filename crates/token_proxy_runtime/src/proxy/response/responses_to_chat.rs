@@ -35,7 +35,7 @@ struct ResponsesToChatState<S> {
     collector: SseUsageCollector,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     out: VecDeque<Bytes>,
     chat_id: String,
     created: i64,
@@ -102,7 +102,7 @@ where
             parser: SseEventParser::new(),
             collector: SseUsageCollector::new(),
             log,
-            token_tracker,
+            _token_tracker: token_tracker,
             model: context
                 .model
                 .clone()
@@ -160,15 +160,9 @@ where
                         self.write_log_once(Some(message));
                         error
                     })?;
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
-                    }
-                    for text in texts {
-                        if !text.is_empty() {
-                            self.context.mark_first_output();
-                        }
-                        self.token_tracker.add_output_text(&text).await;
+                        self.handle_event(&data);
                     }
                 }
                 Some(Err(err)) => {
@@ -186,13 +180,11 @@ where
                         self.write_log_once(Some(message));
                         error
                     })?;
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
-                    }
+
                     if !self.sent_done {
                         self.push_done();
                     }
@@ -205,7 +197,7 @@ where
         }
     }
 
-    fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
+    fn handle_event(&mut self, data: &str) {
         if self.sent_done {
             return;
         }
@@ -228,7 +220,7 @@ where
         }
         let (texts, annotations) = self.text_recovery.process(&value);
         for text in texts {
-            self.emit_output_text(&text, token_texts);
+            self.emit_output_text(&text);
         }
         if !annotations.is_empty() {
             self.ensure_role_sent();
@@ -243,7 +235,7 @@ where
         if event_type.ends_with("reasoning_text.delta")
             || event_type.ends_with("reasoning_summary_text.delta")
         {
-            self.handle_reasoning_text_delta(&value, token_texts);
+            self.handle_reasoning_text_delta(&value);
             return;
         }
         if event_type.ends_with("function_call_arguments.delta") {
@@ -285,8 +277,11 @@ where
         }
     }
 
-    fn emit_output_text(&mut self, delta: &str, token_texts: &mut Vec<String>) {
-        token_texts.push(delta.to_string());
+    fn emit_output_text(&mut self, delta: &str) {
+        if !delta.is_empty() {
+            self.context.mark_first_output();
+        }
+
         self.ensure_role_sent();
         self.out.push_back(chat_chunk_sse(
             &self.chat_id,
@@ -297,12 +292,15 @@ where
         ));
     }
 
-    fn handle_reasoning_text_delta(&mut self, value: &Value, token_texts: &mut Vec<String>) {
+    fn handle_reasoning_text_delta(&mut self, value: &Value) {
         let Some(delta) = value.get("delta").and_then(Value::as_str) else {
             return;
         };
+        if !delta.is_empty() {
+            self.context.mark_first_output();
+        }
         self.saw_reasoning_delta = true;
-        token_texts.push(delta.to_string());
+
         self.ensure_role_sent();
         self.out.push_back(chat_chunk_sse(
             &self.chat_id,

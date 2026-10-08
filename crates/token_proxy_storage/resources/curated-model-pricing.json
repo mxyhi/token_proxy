@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "curated.20261003",
+  "version": "curated.20261007",
   "models": [
     {
       "source": {
@@ -628,7 +628,7 @@
     {
       "source": {
         "pricingUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
-        "verifiedAt": "2026-09-28"
+        "verifiedAt": "2026-10-07"
       },
       "model": {
         "modelId": "claude-sonnet-5-5",
@@ -641,10 +641,87 @@
         "standard": {
           "inputNanoUsdPerToken": 2000,
           "outputNanoUsdPerToken": 10000,
-          "cacheReadNanoUsdPerToken": 200,
+          "cacheReadNanoUsdPerToken": 100,
           "cacheWriteNanoUsdPerToken": 2500,
           "cacheWrite5mNanoUsdPerToken": 2500,
           "cacheWrite1hNanoUsdPerToken": 4000
+        },
+        "serviceTierProfiles": {},
+        "longContext": null
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-10-07"
+      },
+      "model": {
+        "modelId": "claude-haiku-5-5",
+        "aliases": [
+          "anthropic/claude-haiku-5-5",
+          "claude-haiku-5.5",
+          "anthropic/claude-haiku-5.5"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 100,
+          "outputNanoUsdPerToken": 500,
+          "cacheReadNanoUsdPerToken": 10,
+          "cacheWriteNanoUsdPerToken": 125,
+          "cacheWrite5mNanoUsdPerToken": 125,
+          "cacheWrite1hNanoUsdPerToken": 200
+        },
+        "serviceTierProfiles": {},
+        "longContext": {
+          "threshold": 100000,
+          "inputMultiplierScaled": 5000000000000,
+          "outputMultiplierScaled": 5000000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-10-07"
+      },
+      "model": {
+        "modelId": "claude-mythos-5-1",
+        "aliases": [
+          "anthropic/claude-mythos-5-1",
+          "claude-mythos-5.1",
+          "anthropic/claude-mythos-5.1"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 10000,
+          "outputNanoUsdPerToken": 50000,
+          "cacheReadNanoUsdPerToken": 250,
+          "cacheWriteNanoUsdPerToken": 12500,
+          "cacheWrite5mNanoUsdPerToken": 12500,
+          "cacheWrite1hNanoUsdPerToken": 20000
+        },
+        "serviceTierProfiles": {},
+        "longContext": null
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+        "verifiedAt": "2026-10-07"
+      },
+      "model": {
+        "modelId": "claude-mythos-5",
+        "aliases": [
+          "anthropic/claude-mythos-5"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 10000,
+          "outputNanoUsdPerToken": 50000,
+          "cacheReadNanoUsdPerToken": 1000,
+          "cacheWriteNanoUsdPerToken": 12500,
+          "cacheWrite5mNanoUsdPerToken": 12500,
+          "cacheWrite1hNanoUsdPerToken": 20000
         },
         "serviceTierProfiles": {},
         "longContext": null

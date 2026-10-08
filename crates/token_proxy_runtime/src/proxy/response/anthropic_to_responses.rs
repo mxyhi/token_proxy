@@ -65,7 +65,7 @@ struct AnthropicToResponsesState<S> {
     collector: SseUsageCollector,
     log: Arc<LogWriter>,
     context: LogContext,
-    token_tracker: RequestTokenTracker,
+    _token_tracker: RequestTokenTracker,
     out: VecDeque<Bytes>,
     id_seed: u64,
     response_id: String,
@@ -141,7 +141,7 @@ where
             collector: SseUsageCollector::new(),
             log,
             context,
-            token_tracker,
+            _token_tracker: token_tracker,
             out: VecDeque::new(),
             id_seed: now_ms,
             response_id: format!("resp_{now_ms}"),
@@ -209,14 +209,11 @@ where
                         self.write_log_once(Some(message));
                         error
                     })?;
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
                     self.restore_queued_tool_identities();
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
-                    }
                 }
                 Some(Err(err)) => {
                     let message = format!("Failed to read upstream response: {err}");
@@ -239,13 +236,11 @@ where
                         self.write_log_once(Some(message));
                         error
                     })?;
-                    let mut texts = Vec::new();
+
                     for data in events {
-                        self.handle_event(&data, &mut texts);
+                        self.handle_event(&data);
                     }
-                    for text in texts {
-                        self.token_tracker.add_output_text(&text).await;
-                    }
+
                     if !self.sent_done {
                         self.push_done();
                     }
@@ -267,7 +262,7 @@ where
         );
     }
 
-    fn handle_event(&mut self, data: &str, token_texts: &mut Vec<String>) {
+    fn handle_event(&mut self, data: &str) {
         if self.sent_done {
             return;
         }
@@ -300,8 +295,8 @@ where
                         .and_then(|message| message.get("usage")),
                 );
             }
-            "content_block_start" => self.handle_content_block_start(&value, token_texts),
-            "content_block_delta" => self.handle_content_block_delta(&value, token_texts),
+            "content_block_start" => self.handle_content_block_start(&value),
+            "content_block_delta" => self.handle_content_block_delta(&value),
             "content_block_stop" => self.handle_content_block_stop(&value),
             "message_delta" => self.handle_message_delta(&value),
             "message_stop" => {
@@ -346,7 +341,7 @@ where
         }
     }
 
-    fn handle_content_block_start(&mut self, value: &Value, token_texts: &mut Vec<String>) {
+    fn handle_content_block_start(&mut self, value: &Value) {
         let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
         let Some(block) = value.get("content_block").and_then(Value::as_object) else {
             return;
@@ -364,7 +359,7 @@ where
                 }
                 self.reasoning_by_block_index.insert(index, reasoning_index);
                 if let Some(text) = block.get("thinking").and_then(Value::as_str) {
-                    self.handle_reasoning_text(reasoning_index, text, token_texts);
+                    self.handle_reasoning_text(reasoning_index, text);
                 }
             }
             "redacted_thinking" => {
@@ -438,7 +433,7 @@ where
         }
     }
 
-    fn handle_content_block_delta(&mut self, value: &Value, token_texts: &mut Vec<String>) {
+    fn handle_content_block_delta(&mut self, value: &Value) {
         let index = value.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
         let Some(delta) = value.get("delta").and_then(Value::as_object) else {
             return;
@@ -457,7 +452,7 @@ where
                         reasoning_index
                     }
                 };
-                self.handle_reasoning_text(reasoning_index, text, token_texts);
+                self.handle_reasoning_text(reasoning_index, text);
             }
             "signature_delta" => {
                 let Some(signature) = delta
@@ -508,7 +503,7 @@ where
                     message.text.push_str(text);
                     (message.id.clone(), message.output_index)
                 };
-                token_texts.push(text.to_string());
+
                 let sequence_number = self.next_sequence_number();
                 self.out.push_back(super::responses_event_sse(json!({
                     "type": "response.output_text.delta",
@@ -575,7 +570,7 @@ where
         self.finish_web_search_query(index);
     }
 
-    fn handle_reasoning_text(&mut self, index: usize, text: &str, token_texts: &mut Vec<String>) {
+    fn handle_reasoning_text(&mut self, index: usize, text: &str) {
         let state = self.reasonings[index]
             .as_mut()
             .expect("reasoning output exists");
@@ -594,7 +589,7 @@ where
                 "part": {"type":"summary_text","text":""}, "sequence_number": sequence_number
             })));
         }
-        token_texts.push(text.to_string());
+
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
             "type":"response.reasoning_summary_text.delta", "item_id":item_id,

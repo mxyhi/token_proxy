@@ -1084,7 +1084,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20261003"
+            "catalog.69854741.b88b66df+curated.20261007"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1215,9 +1215,19 @@ mod tests {
             sources.get("claude-sonnet-5-5"),
             Some(&(
                 "https://platform.claude.com/docs/en/about-claude/pricing",
-                "2026-09-28"
+                "2026-10-07"
             ))
         );
+        for model in ["claude-haiku-5-5", "claude-mythos-5-1", "claude-mythos-5"] {
+            assert_eq!(
+                sources.get(model),
+                Some(&(
+                    "https://platform.claude.com/docs/en/about-claude/pricing",
+                    "2026-10-07"
+                )),
+                "{model}"
+            );
+        }
     }
 
     #[test]
@@ -1286,7 +1296,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20261003"));
+        assert!(settings.version.contains("+curated.20261007"));
     }
 
     #[test]
@@ -1365,7 +1375,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20261003"));
+        assert!(settings.version.contains("+curated.20261007"));
     }
 
     #[test]
@@ -1467,7 +1477,7 @@ mod tests {
             assert_eq!(long_ultrafast.cost_nano_usd, 32_640_570_000, "{model}");
             assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
         }
-        assert!(settings.version.contains("+curated.20261003"));
+        assert!(settings.version.contains("+curated.20261007"));
     }
 
     #[test]
@@ -1583,7 +1593,7 @@ mod tests {
         let settings = default_model_pricing_settings();
 
         // Official Sonnet 5.5 prices apply across the full 1M context window.
-        // https://platform.claude.com/docs/en/about-claude/pricing verified 2026-09-28.
+        // https://platform.claude.com/docs/en/about-claude/pricing verified 2026-10-07.
         for model in [
             "claude-sonnet-5-5",
             "anthropic/claude-sonnet-5-5",
@@ -1609,13 +1619,96 @@ mod tests {
                     input_tokens * 2_000,
                     "{model}"
                 );
-                assert_eq!(cost.breakdown.cache_read_nano_usd, 200, "{model}");
+                assert_eq!(cost.breakdown.cache_read_nano_usd, 100, "{model}");
                 assert_eq!(cost.breakdown.cache_write_nano_usd, 2_500, "{model}");
                 assert_eq!(cost.breakdown.cache_write_5m_nano_usd, 2_500, "{model}");
                 assert_eq!(cost.breakdown.cache_write_1h_nano_usd, 4_000, "{model}");
                 assert_eq!(cost.breakdown.output_nano_usd, 10_000, "{model}");
-                assert_eq!(cost.cost_nano_usd, input_tokens * 2_000 + 19_200, "{model}");
+                assert_eq!(cost.cost_nano_usd, input_tokens * 2_000 + 19_100, "{model}");
             }
+        }
+    }
+
+    #[test]
+    fn claude_haiku_5_5_aliases_apply_prompt_length_prices() {
+        let settings = default_model_pricing_settings();
+
+        // 官方按总输入（含缓存）是否超过 100000 token 对整次请求升档；输出不参与阈值。
+        // https://platform.claude.com/docs/en/about-claude/pricing 核对于 2026-10-07。
+        for model in [
+            "claude-haiku-5-5",
+            "anthropic/claude-haiku-5-5",
+            "claude-haiku-5.5",
+            "anthropic/claude-haiku-5.5",
+        ] {
+            for (input_tokens, multiplier, tier) in [
+                (1, 1, PricingContextTier::Standard),
+                (99_996, 1, PricingContextTier::Standard),
+                (99_997, 5, PricingContextTier::Long),
+                (200_001, 5, PricingContextTier::Long),
+            ] {
+                let usage = BillableUsage {
+                    uncached_input_tokens: input_tokens,
+                    cache_read_tokens: 1,
+                    cache_write_tokens: 1,
+                    cache_write_5m_tokens: 1,
+                    cache_write_1h_tokens: 1,
+                    output_tokens: 10,
+                    ..BillableUsage::default()
+                };
+                let cost = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                    .expect("Haiku 5.5 official price");
+                assert_eq!(cost.pricing_model, "claude-haiku-5-5", "{model}");
+                assert_eq!(cost.context_tier, tier, "{model}, {input_tokens}");
+                assert_eq!(
+                    cost.breakdown.uncached_input_nano_usd,
+                    input_tokens * 100 * multiplier
+                );
+                assert_eq!(cost.breakdown.cache_read_nano_usd, 10 * multiplier);
+                assert_eq!(cost.breakdown.cache_write_nano_usd, 125 * multiplier);
+                assert_eq!(cost.breakdown.cache_write_5m_nano_usd, 125 * multiplier);
+                assert_eq!(cost.breakdown.cache_write_1h_nano_usd, 200 * multiplier);
+                assert_eq!(cost.breakdown.output_nano_usd, 5_000 * multiplier);
+                assert_eq!(
+                    cost.cost_nano_usd,
+                    (input_tokens * 100 + 5_460) * multiplier
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn claude_mythos_aliases_apply_official_prices() {
+        let settings = default_model_pricing_settings();
+        let usage = BillableUsage {
+            uncached_input_tokens: 200_001,
+            cache_read_tokens: 1,
+            cache_write_tokens: 1,
+            cache_write_5m_tokens: 1,
+            cache_write_1h_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+
+        for (model, canonical, cache_read) in [
+            ("claude-mythos-5", "claude-mythos-5", 1_000),
+            ("anthropic/claude-mythos-5", "claude-mythos-5", 1_000),
+            ("claude-mythos-5-1", "claude-mythos-5-1", 250),
+            ("anthropic/claude-mythos-5-1", "claude-mythos-5-1", 250),
+            ("claude-mythos-5.1", "claude-mythos-5-1", 250),
+            ("anthropic/claude-mythos-5.1", "claude-mythos-5-1", 250),
+        ] {
+            let cost = calculate_request_cost(&settings, Some(model), None, None, &usage)
+                .expect("Mythos official price");
+            assert_eq!(cost.pricing_model, canonical, "{model}");
+            assert_eq!(cost.context_tier, PricingContextTier::Standard, "{model}");
+            assert_eq!(cost.breakdown.uncached_input_nano_usd, 2_000_010_000);
+            assert_eq!(cost.breakdown.cache_read_nano_usd, cache_read);
+            assert_eq!(cost.breakdown.cache_write_nano_usd, 12_500);
+            assert_eq!(cost.breakdown.cache_write_5m_nano_usd, 12_500);
+            assert_eq!(cost.breakdown.cache_write_1h_nano_usd, 20_000);
+            assert_eq!(cost.breakdown.output_nano_usd, 50_000);
+            assert_eq!(cost.cost_nano_usd, 2_000_105_000 + cache_read);
         }
     }
 
@@ -1942,7 +2035,7 @@ mod tests {
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20261003");
+        assert_eq!(settings.version, "remote.test+curated.20261007");
     }
 
     #[test]

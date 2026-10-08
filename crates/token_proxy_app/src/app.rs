@@ -308,13 +308,8 @@ impl TokenProxyApp {
         self.token_rate.set_enabled(enabled).await;
     }
 
-    /// 返回最近滑动窗口内的 token-rate 快照。
+    /// 返回上传 token 的短暂展示值、活跃连接数及下次刷新时间。
     pub async fn token_rate_snapshot(&self) -> TokenRateSnapshot {
         self.token_rate.snapshot().await
-    }
-
-    /// 当前是否仍有活跃代理请求。
-    pub fn has_active_proxy_requests(&self) -> bool {
-        self.token_rate.has_active_requests()
     }
 }

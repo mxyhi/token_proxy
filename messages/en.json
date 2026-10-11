@@ -154,7 +154,7 @@
   "upstreams_section_advanced": "Advanced settings",
   "upstreams_section_advanced_summary": "Convert formats, model mappings, compatibility, and headers",
   "field_id": "Id",
-  "field_id_tip": "Unique identifier for this channel, used in logs and debugging.",
+  "field_id_tip": "Unique channel identifier used in logs, stats, and API key bindings. New channels default to the Base URL host and follow it; editing it manually stops following, clearing it restores auto.",
   "field_provider": "Provider",
   "field_provider_tip": "API provider type: openai, openai-response, anthropic, gemini, kiro, codex.",
   "field_status": "Status",

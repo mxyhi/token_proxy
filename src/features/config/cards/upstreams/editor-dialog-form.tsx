@@ -53,6 +53,7 @@ function isKiroPreferredEndpoint(value: string): value is KiroPreferredEndpoint 
 
 export type UpstreamEditorFieldsProps = {
   draft: UpstreamForm;
+  idPlaceholder?: string;
   providerOptions: readonly string[];
   appProxyUrl: string;
   showApiKeys: boolean;
@@ -80,6 +81,8 @@ function EditorSection({ title, description, children }: EditorSectionProps) {
 
 type UpstreamConnectionFieldsProps = {
   draft: UpstreamForm;
+  /** ID 留空时的自动 ID 预览；保存时按该值落盘。 */
+  idPlaceholder?: string;
   providerOptions: readonly string[];
   appProxyUrl: string;
   showApiKeys: boolean;
@@ -89,6 +92,7 @@ type UpstreamConnectionFieldsProps = {
 
 function UpstreamConnectionFields({
   draft,
+  idPlaceholder,
   providerOptions,
   appProxyUrl,
   showApiKeys,
@@ -121,7 +125,7 @@ function UpstreamConnectionFields({
             value={draft.id}
             disabled={identityLocked}
             onChange={(event) => onChangeDraft({ id: event.target.value })}
-            placeholder="openai-default"
+            placeholder={idPlaceholder || "openai-default"}
           />
         </EditorField>
 
@@ -466,6 +470,7 @@ function UpstreamAdvancedFields({
 
 export function UpstreamEditorFields({
   draft,
+  idPlaceholder,
   providerOptions,
   appProxyUrl,
   showApiKeys,
@@ -480,6 +485,7 @@ export function UpstreamEditorFields({
       >
         <UpstreamConnectionFields
           draft={draft}
+          idPlaceholder={idPlaceholder}
           providerOptions={providerOptions}
           appProxyUrl={appProxyUrl}
           showApiKeys={showApiKeys}

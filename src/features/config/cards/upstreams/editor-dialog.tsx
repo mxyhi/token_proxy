@@ -18,6 +18,7 @@ import { m } from "@/paraglide/messages.js";
 
 type UpstreamEditorDialogProps = {
   editor: UpstreamEditorState;
+  idPlaceholder: string;
   providerOptions: readonly string[];
   appProxyUrl: string;
   showApiKeys: boolean;
@@ -29,6 +30,7 @@ type UpstreamEditorDialogProps = {
 
 export function UpstreamEditorDialog({
   editor,
+  idPlaceholder,
   providerOptions,
   appProxyUrl,
   showApiKeys,
@@ -65,6 +67,7 @@ export function UpstreamEditorDialog({
           {editor.open ? (
             <UpstreamEditorFields
               draft={editor.draft}
+              idPlaceholder={idPlaceholder}
               providerOptions={providerOptions}
               appProxyUrl={appProxyUrl}
               showApiKeys={showApiKeys}

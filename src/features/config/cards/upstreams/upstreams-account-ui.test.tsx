@@ -467,3 +467,82 @@ describe("upstreams account UI (Phase D)", () => {
     expect(screen.getByText(new RegExp(usedLabel))).not.toHaveClass("text-destructive");
   });
 });
+
+describe("upstream editor auto id", () => {
+  const label1 = m.upstreams_upstream_n({ number: "1" });
+
+  function getInput(id: string) {
+    const input = document.getElementById(id);
+    if (!(input instanceof HTMLInputElement)) {
+      throw new Error(`missing input #${id}`);
+    }
+    return input;
+  }
+
+  async function replaceValue(user: ReturnType<typeof userEvent.setup>, id: string, value: string) {
+    const input = getInput(id);
+    await user.clear(input);
+    if (value) {
+      await user.type(input, value);
+    }
+  }
+
+  it("follows base url on copy until the id is edited, and restores auto when cleared", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    const source = buildApiKeyUpstream();
+    source.id = "airouter.mxyhi.com";
+    source.baseUrl = "https://airouter.mxyhi.com";
+
+    renderUpstreamsCard({ upstreams: [source], onAdd });
+    await user.click(screen.getByRole("button", { name: m.upstreams_row_copy({ rowLabel: label1 }) }));
+
+    // 同地址复制：域名已被占用，追加序号而非 -copy。
+    expect(getInput("upstream-editor-id")).toHaveValue("airouter.mxyhi.com-2");
+
+    await replaceValue(user, "upstream-editor-baseUrl", "https://sub2api.example.com");
+    expect(getInput("upstream-editor-id")).toHaveValue("sub2api.example.com");
+
+    await replaceValue(user, "upstream-editor-id", "my-sub");
+    await replaceValue(user, "upstream-editor-baseUrl", "https://other.example.com");
+    expect(getInput("upstream-editor-id")).toHaveValue("my-sub");
+
+    // 清空 ID：占位显示自动 ID，保存时按其落盘；之后继续跟随 Base URL。
+    await replaceValue(user, "upstream-editor-id", "");
+    expect(getInput("upstream-editor-id")).toHaveAttribute("placeholder", "other.example.com");
+    await replaceValue(user, "upstream-editor-baseUrl", "https://final.example.com");
+    expect(getInput("upstream-editor-id")).toHaveValue("final.example.com");
+
+    await user.click(screen.getByRole("button", { name: m.common_save() }));
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ id: "final.example.com" }));
+  });
+
+  it("saves the placeholder id when id is left empty", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    const source = buildApiKeyUpstream();
+    source.baseUrl = "https://api.example.com";
+
+    renderUpstreamsCard({ upstreams: [source], onAdd });
+    await user.click(screen.getByRole("button", { name: m.upstreams_row_copy({ rowLabel: label1 }) }));
+    await replaceValue(user, "upstream-editor-id", "");
+    await user.click(screen.getByRole("button", { name: m.common_save() }));
+
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ id: "api.example.com" }));
+  });
+
+  it("keeps existing id stable when editing base url", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const source = buildApiKeyUpstream();
+    source.baseUrl = "https://api.example.com";
+
+    renderUpstreamsCard({ upstreams: [source], onChange });
+    await user.click(screen.getByRole("button", { name: m.upstreams_row_edit({ rowLabel: label1 }) }));
+    await replaceValue(user, "upstream-editor-baseUrl", "https://new.example.com");
+
+    expect(getInput("upstream-editor-id")).toHaveValue("openai-1");
+    await user.click(screen.getByRole("button", { name: m.common_save() }));
+    expect(onChange).toHaveBeenCalledWith(0, expect.objectContaining({ id: "openai-1" }));
+  });
+});

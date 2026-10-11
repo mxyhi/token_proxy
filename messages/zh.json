@@ -154,7 +154,7 @@
   "upstreams_section_advanced": "高级设置",
   "upstreams_section_advanced_summary": "可转换格式、模型映射、兼容性和 Header",
   "field_id": "ID",
-  "field_id_tip": "渠道的唯一标识符，用于日志和调试。",
+  "field_id_tip": "渠道的唯一标识符，用于日志、统计和 API Key 绑定。新建时默认取 Base URL 域名并随之更新；手动修改后不再跟随，清空可恢复自动。",
   "field_provider": "提供商",
   "field_provider_tip": "API 提供商类型：openai、openai-response、anthropic、gemini、kiro、codex。",
   "field_status": "状态",

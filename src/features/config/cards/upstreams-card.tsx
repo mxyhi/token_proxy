@@ -9,14 +9,13 @@ import {
 import {
   cloneUpstreamDraft,
   coerceProviderSelection,
-  createCopiedUpstreamId,
+  createAutoUpstreamId,
   isAccountBackedProviderSet,
   isAccountCredentialUpstream,
   isAccountProviderKind,
   normalizeProviders,
   pruneConvertFromMap,
   providersEqual,
-  resolveUpstreamIdForProviderChange,
 } from "@/features/config/cards/upstreams/upstream-editor-helpers";
 import { AddAccountDialog } from "@/features/config/cards/upstreams/add-account-dialog";
 import { ColumnsDialog } from "@/features/config/cards/upstreams/columns-dialog";
@@ -77,14 +76,39 @@ export function UpstreamsCard({
     [columnVisibility]
   );
   const apiKeyVisible = columnVisibility.apiKeys;
+  // 生成 ID 时排除正在编辑的渠道自身，避免清空后重新生成出 "-2"。
+  const getOtherUpstreams = useCallback(
+    (state: UpstreamEditorState) =>
+      state.open && state.mode === "edit"
+        ? upstreams.filter((_, index) => index !== state.index)
+        : upstreams,
+    [upstreams],
+  );
 
   // 更新 draft：provider 变化时收敛 account 字段 / openai 专属开关。
   const updateDraft = useCallback(
     (patch: Partial<UpstreamForm>) => {
+      // ID 跟随规则：手动输入即停止跟随，清空则恢复；跟随期间 Base URL/provider 变化时重新生成。
+      const withAutoId = (
+        prev: Extract<UpstreamEditorState, { open: true }>,
+        next: Extract<UpstreamEditorState, { open: true }>,
+      ): UpstreamEditorState => {
+        if (patch.id !== undefined) {
+          return { ...next, autoId: !patch.id.trim() };
+        }
+        const sourceChanged =
+          next.draft.baseUrl !== prev.draft.baseUrl ||
+          !providersEqual(next.draft.providers, prev.draft.providers);
+        if (!next.autoId || !sourceChanged) {
+          return next;
+        }
+        const id = createAutoUpstreamId(next.draft, getOtherUpstreams(next));
+        return { ...next, draft: { ...next.draft, id } };
+      };
+
       setEditor((prev) => {
         if (!prev.open) return prev;
 
-        const editingIndex = prev.mode === "edit" ? prev.index : undefined;
         const currentProviders = normalizeProviders(prev.draft.providers);
         const nextProviders =
           patch.providers === undefined
@@ -142,22 +166,12 @@ export function UpstreamsCard({
 
           convertFromMap = pruneConvertFromMap(convertFromMap, nextProviders);
 
-          const id = resolveUpstreamIdForProviderChange({
-            mode: prev.mode,
-            currentId: prev.draft.id,
-            currentProviders,
-            nextProviders,
-            upstreams,
-            editingIndex,
-          });
-
-          return {
+          return withAutoId(prev, {
             ...prev,
             draft: {
               ...prev.draft,
               ...patch,
               providers: nextProviders,
-              id,
               baseUrl,
               filterPromptCacheRetention,
               filterSafetyIdentifier,
@@ -166,20 +180,19 @@ export function UpstreamsCard({
               accountId,
               convertFromMap,
             },
-          };
+          });
         }
-        return { ...prev, draft: { ...prev.draft, ...patch } };
+        return withAutoId(prev, { ...prev, draft: { ...prev.draft, ...patch } });
       });
     },
-    [upstreams],
+    [getOtherUpstreams],
   );
 
   const openCreateDialog = () => {
-    const draft = createEmptyUpstream();
-    const nextProviders = normalizeProviders(draft.providers);
-    const hasDuplicateId = upstreams.some((upstream) => upstream.id.trim() === draft.id.trim());
-    const nextId = hasDuplicateId ? createCopiedUpstreamId(draft.id, upstreams) : draft.id;
-    setEditor({ open: true, mode: "create", draft: { ...draft, id: nextId, providers: nextProviders } });
+    const empty = createEmptyUpstream();
+    const draft = { ...empty, providers: normalizeProviders(empty.providers) };
+    const id = createAutoUpstreamId(draft, upstreams);
+    setEditor({ open: true, mode: "create", draft: { ...draft, id }, autoId: true });
   };
 
   const openEditDialog = (index: number) => {
@@ -187,7 +200,8 @@ export function UpstreamsCard({
     if (!upstream) {
       return;
     }
-    setEditor({ open: true, mode: "edit", index, draft: cloneUpstreamDraft(upstream) });
+    // 既有渠道 ID 被 API Key 绑定/统计引用，编辑时默认不跟随 Base URL。
+    setEditor({ open: true, mode: "edit", index, draft: cloneUpstreamDraft(upstream), autoId: false });
   };
 
   const openCopyDialog = (index: number) => {
@@ -196,12 +210,10 @@ export function UpstreamsCard({
       // 账户型禁止复制同 credential。
       return;
     }
-    const nextId = createCopiedUpstreamId(upstream.id, upstreams);
-    const draft: UpstreamForm = {
-      ...cloneUpstreamDraft(upstream),
-      id: nextId,
-    };
-    setEditor({ open: true, mode: "create", draft });
+    // 复制通常是为了换个地址，ID 跟随 Base URL，直到用户手动修改。
+    const draft = cloneUpstreamDraft(upstream);
+    const id = createAutoUpstreamId(draft, upstreams);
+    setEditor({ open: true, mode: "create", draft: { ...draft, id }, autoId: true });
   };
 
   const saveDraft = () => {
@@ -209,10 +221,14 @@ export function UpstreamsCard({
       return;
     }
 
+    // ID 留空时按占位提示的自动 ID 落盘，而不是保存后才报必填。
+    const draft = editor.draft.id.trim()
+      ? editor.draft
+      : { ...editor.draft, id: createAutoUpstreamId(editor.draft, getOtherUpstreams(editor)) };
     if (editor.mode === "create") {
-      onAdd(editor.draft);
+      onAdd(draft);
     } else {
-      onChange(editor.index, editor.draft);
+      onChange(editor.index, draft);
     }
     setEditor({ open: false });
   };
@@ -285,6 +301,9 @@ export function UpstreamsCard({
       />
       <UpstreamEditorDialog
         editor={editor}
+        idPlaceholder={
+          editor.open ? createAutoUpstreamId(editor.draft, getOtherUpstreams(editor)) : ""
+        }
         providerOptions={mergedProviderOptions}
         appProxyUrl={appProxyUrl}
         showApiKeys={showApiKeys}

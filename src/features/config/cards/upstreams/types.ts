@@ -19,9 +19,10 @@ export type UpstreamColumnDefinition = {
 
 export type ColumnVisibility = Record<UpstreamColumnId, boolean>;
 
+/** autoId：ID 是否仍跟随 Base URL/provider 自动生成；用户手动输入后关闭，清空后恢复。 */
 export type UpstreamEditorState =
   | { open: false }
-  | { open: true; mode: "create"; draft: UpstreamForm }
-  | { open: true; mode: "edit"; index: number; draft: UpstreamForm };
+  | { open: true; mode: "create"; draft: UpstreamForm; autoId: boolean }
+  | { open: true; mode: "edit"; index: number; draft: UpstreamForm; autoId: boolean };
 
 export type DeleteDialogState = { open: false } | { open: true; index: number };

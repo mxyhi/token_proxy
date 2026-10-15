@@ -125,13 +125,22 @@ export type LocalApiKey = {
   scope: LocalApiKeyScope;
 };
 
-/** 单个本地 API Key 的累计用量，只统计计费行。 */
-export type LocalApiKeyUsage = {
-  keyId: string;
+/** 累计用量的公共字段，只统计计费行。 */
+export type UsageTotals = {
   requests: number;
   totalTokens: number;
   costNanoUsd: number;
+};
+
+/** 单个本地 API Key 的累计用量。 */
+export type LocalApiKeyUsage = UsageTotals & {
+  keyId: string;
   lastUsedMs: number;
+};
+
+/** 单个渠道的全时间累计用量；按渠道 ID 归集。 */
+export type UpstreamUsage = UsageTotals & {
+  upstreamId: string;
 };
 
 export type ProxyConfigFileBase = {
@@ -181,26 +190,6 @@ export type SaveProxyConfigResult = {
 };
 
 export type ProxyServiceRequestState = "idle" | "working" | "error";
-
-export type AgentNodeConfig = {
-  enabled: boolean;
-  server_url: string;
-  api_key: string;
-  hostname: string | null;
-};
-
-export type AgentNodeServiceState = "running" | "stopped";
-
-export type AgentNodeServiceStatus = {
-  state: AgentNodeServiceState;
-  enabled: boolean;
-  server_url: string | null;
-  hostname: string | null;
-  last_error: string | null;
-  started_at_ms: number | null;
-};
-
-export type AgentNodeRequestState = "idle" | "working" | "error";
 
 /** 所选上游的显式模型能力；缺省保持未知。 */
 export type ModelCapabilities = {

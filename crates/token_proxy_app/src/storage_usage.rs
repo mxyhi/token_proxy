@@ -24,7 +24,7 @@ pub struct DataStorageUsage {
     pub database_bytes: u64,
     /// `config.jsonc`。
     pub config_bytes: u64,
-    /// auth 目录、agent-node 配置等其余文件。
+    /// auth 目录等其余文件（含旧版 Agent 节点遗留的 agent-node.json）。
     pub other_bytes: u64,
 }
 

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import {
@@ -22,13 +22,15 @@ import { ColumnsDialog } from "@/features/config/cards/upstreams/columns-dialog"
 import { DeleteUpstreamDialog } from "@/features/config/cards/upstreams/delete-dialog";
 import { UpstreamEditorDialog } from "@/features/config/cards/upstreams/editor-dialog";
 import { UpstreamsTable, UpstreamsToolbar } from "@/features/config/cards/upstreams/table";
+import { readUpstreamUsage } from "@/features/config/cards/upstreams/usage";
 import type {
   ColumnVisibility,
   DeleteDialogState,
   UpstreamEditorState,
 } from "@/features/config/cards/upstreams/types";
 import { createEmptyUpstream } from "@/features/config/form";
-import type { ConfigForm, UpstreamForm } from "@/features/config/types";
+import type { ConfigForm, UpstreamForm, UpstreamUsage } from "@/features/config/types";
+import { parseError } from "@/lib/error";
 import { m } from "@/paraglide/messages.js";
 
 type UpstreamsCardProps = {
@@ -71,11 +73,28 @@ export function UpstreamsCard({
   const [addUpstreamOpen, setAddUpstreamOpen] = useState(false);
   const [editor, setEditor] = useState<UpstreamEditorState>({ open: false });
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState>({ open: false });
+  const [usage, setUsage] = useState<ReadonlyMap<string, UpstreamUsage>>(new Map());
   const columns = useMemo(
     () => UPSTREAM_COLUMNS.filter((column) => columnVisibility[column.id]),
     [columnVisibility]
   );
   const apiKeyVisible = columnVisibility.apiKeys;
+
+  useEffect(() => {
+    let active = true;
+    readUpstreamUsage()
+      .then((next) => {
+        if (active) setUsage(next);
+      })
+      .catch((error: unknown) => {
+        // 用量只是辅助信息，读取失败不影响渠道管理，列内显示占位。
+        console.warn("[upstreams-card] failed to read upstream usage", parseError(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // 生成 ID 时排除正在编辑的渠道自身，避免清空后重新生成出 "-2"。
   const getOtherUpstreams = useCallback(
     (state: UpstreamEditorState) =>
@@ -267,6 +286,7 @@ export function UpstreamsCard({
             upstreams={upstreams}
             columns={columns}
             showApiKeys={showApiKeys}
+            usage={usage}
             disableDelete={false}
             isCopyDisabled={isAccountCredentialUpstream}
             isDeleteDisabled={() => false}

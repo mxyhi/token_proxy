@@ -1,4 +1,6 @@
-use token_proxy_app::app::{DashboardRange, DashboardSnapshot, LocalApiKeyUsage, TokenProxyApp};
+use token_proxy_app::app::{
+    DashboardRange, DashboardSnapshot, DashboardUpstreamStat, LocalApiKeyUsage, TokenProxyApp,
+};
 
 #[tauri::command]
 pub async fn read_dashboard_snapshot(
@@ -31,4 +33,11 @@ pub async fn read_local_api_key_usage(
     token_proxy_app: tauri::State<'_, TokenProxyApp>,
 ) -> Result<Vec<LocalApiKeyUsage>, String> {
     token_proxy_app.read_local_api_key_usage().await
+}
+
+#[tauri::command]
+pub async fn read_upstream_usage(
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
+) -> Result<Vec<DashboardUpstreamStat>, String> {
+    token_proxy_app.read_upstream_usage().await
 }

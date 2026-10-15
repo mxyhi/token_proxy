@@ -1,5 +1,4 @@
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-mod agent_node_service;
 mod app_proxy;
 mod client_config;
 mod codex;
@@ -14,23 +13,22 @@ use std::{future::Future, sync::Arc};
 use tauri::{Emitter, Manager};
 
 use commands::{
-    agent_node_read_config, agent_node_restart, agent_node_save_config, agent_node_start,
-    agent_node_status, agent_node_stop, codex_fetch_quotas, codex_import_file,
-    codex_import_refresh_tokens, codex_import_text, codex_list_accounts, codex_poll_login,
-    codex_refresh_account, codex_refresh_quota_cache, codex_refresh_quota_now,
-    codex_set_auto_refresh, codex_set_quota_threshold, codex_start_login, fetch_upstream_models,
-    kiro_fetch_quotas, kiro_handle_callback, kiro_import_ide, kiro_import_kam, kiro_list_accounts,
-    kiro_poll_login, kiro_refresh_quota_cache, kiro_refresh_quota_now, kiro_start_login,
-    prepare_relaunch, preview_client_setup, providers_list_accounts_page, proxy_reload,
-    proxy_restart, proxy_start, proxy_status, proxy_stop, read_dashboard_snapshot,
-    read_data_storage_usage, read_default_hot_model_mappings, read_local_api_key_usage,
-    read_model_pricing_settings, read_proxy_config, read_request_detail_capture,
-    read_request_log_body_page, read_request_log_detail, refresh_dashboard_model_discovery,
-    reset_model_pricing_settings, save_model_pricing_settings, save_proxy_config,
-    set_request_detail_capture, write_claude_code_settings, write_codex_config, xai_cancel_login,
-    xai_fetch_quotas, xai_import_file, xai_import_refresh_tokens, xai_import_text,
-    xai_list_accounts, xai_poll_login, xai_refresh_account, xai_refresh_quota_cache,
-    xai_refresh_quota_now, xai_set_auto_refresh, xai_start_login,
+    codex_fetch_quotas, codex_import_file, codex_import_refresh_tokens, codex_import_text,
+    codex_list_accounts, codex_poll_login, codex_refresh_account, codex_refresh_quota_cache,
+    codex_refresh_quota_now, codex_set_auto_refresh, codex_set_quota_threshold, codex_start_login,
+    fetch_upstream_models, kiro_fetch_quotas, kiro_handle_callback, kiro_import_ide,
+    kiro_import_kam, kiro_list_accounts, kiro_poll_login, kiro_refresh_quota_cache,
+    kiro_refresh_quota_now, kiro_start_login, prepare_relaunch, preview_client_setup,
+    providers_list_accounts_page, proxy_reload, proxy_restart, proxy_start, proxy_status,
+    proxy_stop, read_dashboard_snapshot, read_data_storage_usage, read_default_hot_model_mappings,
+    read_local_api_key_usage, read_model_pricing_settings, read_proxy_config,
+    read_request_detail_capture, read_request_log_body_page, read_request_log_detail,
+    read_upstream_usage, refresh_dashboard_model_discovery, reset_model_pricing_settings,
+    save_model_pricing_settings, save_proxy_config, set_request_detail_capture,
+    write_claude_code_settings, write_codex_config, xai_cancel_login, xai_fetch_quotas,
+    xai_import_file, xai_import_refresh_tokens, xai_import_text, xai_list_accounts, xai_poll_login,
+    xai_refresh_account, xai_refresh_quota_cache, xai_refresh_quota_now, xai_set_auto_refresh,
+    xai_start_login,
 };
 
 type LogLevel = logging::LogLevel;
@@ -144,8 +142,6 @@ pub fn run() {
             let xai_store = token_proxy_app.xai_accounts();
 
             app.manage(paths.clone());
-            let agent_node_service = agent_node_service::AgentNodeServiceHandle::new();
-            app.manage(agent_node_service.clone());
             app.manage(logging_state.clone());
             app.manage(app_proxy_state.clone());
             app.manage(kiro_store.clone());
@@ -193,22 +189,6 @@ pub fn run() {
                 if let Err(err) = startup_result {
                     tray_state_for_startup_error.apply_error("启动失败", &err);
                     tracing::error!(error = %err, "proxy startup initialization failed");
-                }
-            });
-
-            let paths_for_agent_node = paths.clone();
-            let agent_node_for_start = agent_node_service.clone();
-            tauri::async_runtime::spawn(async move {
-                match agent_node_service::read_agent_node_config(paths_for_agent_node.as_ref())
-                    .await
-                {
-                    Ok(config) if config.enabled => {
-                        if let Err(err) = agent_node_for_start.start_with_config(config).await {
-                            tracing::error!(error = %err, "agent node autostart failed");
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(err) => tracing::warn!(error = %err, "agent node config read failed"),
                 }
             });
 
@@ -266,6 +246,7 @@ pub fn run() {
             reset_model_pricing_settings,
             read_dashboard_snapshot,
             read_local_api_key_usage,
+            read_upstream_usage,
             refresh_dashboard_model_discovery,
             read_request_log_detail,
             read_request_log_body_page,
@@ -312,12 +293,6 @@ pub fn run() {
             proxy_restart,
             proxy_reload,
             fetch_upstream_models,
-            agent_node_read_config,
-            agent_node_save_config,
-            agent_node_status,
-            agent_node_start,
-            agent_node_stop,
-            agent_node_restart,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

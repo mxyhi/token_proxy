@@ -6,6 +6,5 @@ export { UpstreamsCard } from "./upstreams-card";
 export { ConfigFileCard } from "./config-file-card";
 export { StorageUsageCard } from "./storage-usage-card";
 export { ClientSetupCard } from "./client-setup-card";
-export { AgentNodeCard } from "./agent-node-card";
 export { UpdateCard } from "./update-card";
 export { ProjectLinksCard } from "./project-links-card";

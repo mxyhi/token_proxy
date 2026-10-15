@@ -1,7 +1,18 @@
 import type { ReactElement } from "react";
 
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
-import { Ban, Check, Columns3, Copy, Eye, EyeOff, Pencil, Plus, Trash2 } from "lucide-react";
+import {
+  Ban,
+  Check,
+  Columns3,
+  Copy,
+  Eye,
+  EyeOff,
+  HelpCircle,
+  Pencil,
+  Plus,
+  Trash2,
+} from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,6 +34,7 @@ import {
   toStatusLabel,
 } from "@/features/config/cards/upstreams/constants";
 import type { UpstreamColumnDefinition, UpstreamColumnId } from "@/features/config/cards/upstreams/types";
+import { UsageCell } from "@/features/config/cards/usage-cell";
 import {
   UPSTREAM_DISPATCH_STRATEGIES,
   UPSTREAM_ORDER_STRATEGIES,
@@ -30,6 +42,7 @@ import {
   type UpstreamDispatchType,
   type UpstreamForm,
   type UpstreamOrderStrategy,
+  type UpstreamUsage,
 } from "@/features/config/types";
 import { m } from "@/paraglide/messages.js";
 
@@ -53,6 +66,7 @@ const UPSTREAM_DISPATCH_VALUES: ReadonlySet<string> = new Set(
 const CELL_PLACEHOLDER = "—";
 const PRIORITY_PATTERN = /^-?\d+$/;
 const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
+const EMPTY_USAGE: ReadonlyMap<string, UpstreamUsage> = new Map();
 
 function toUpstreamOrderStrategy(value: string): UpstreamOrderStrategy | null {
   return UPSTREAM_ORDER_VALUES.has(value) ? (value as UpstreamOrderStrategy) : null;
@@ -253,7 +267,14 @@ function UpstreamsTableHeader({ columns }: UpstreamsTableHeaderProps) {
               .filter(Boolean)
               .join(" ")}
           >
-            {column.label()}
+            {column.hint ? (
+              <span className="inline-flex items-center gap-1" title={column.hint()}>
+                {column.label()}
+                <HelpCircle className="size-3" aria-hidden="true" />
+              </span>
+            ) : (
+              column.label()
+            )}
           </th>
         ))}
         <th className="sticky right-0 z-20 w-[9rem] border-l border-border/40 bg-background/95 px-3 py-2 text-right text-xs font-medium text-muted-foreground">
@@ -330,6 +351,7 @@ function renderUpstreamCell(
   columnId: UpstreamColumnId,
   upstream: UpstreamForm,
   showApiKeys: boolean,
+  usage: UpstreamUsage | undefined,
   rowLabel: string,
   onPriorityChange: (priority: string) => void,
 ) {
@@ -352,6 +374,8 @@ function renderUpstreamCell(
       return (
         <PriorityCell value={upstream.priority} rowLabel={rowLabel} onCommit={onPriorityChange} />
       );
+    case "usage":
+      return <UsageCell usage={usage} />;
     case "status":
       return (
         <Badge variant={upstream.enabled ? "default" : "secondary"}>
@@ -438,6 +462,7 @@ type UpstreamsTableRowProps = {
   displayIndex: number;
   columns: readonly UpstreamColumnDefinition[];
   showApiKeys: boolean;
+  usage: UpstreamUsage | undefined;
   disableDelete: boolean;
   isCopyDisabled?: (upstream: UpstreamForm) => boolean;
   isDeleteDisabled?: (upstream: UpstreamForm) => boolean;
@@ -454,6 +479,7 @@ function UpstreamsTableRow({
   displayIndex,
   columns,
   showApiKeys,
+  usage,
   disableDelete,
   isCopyDisabled,
   isDeleteDisabled,
@@ -474,7 +500,7 @@ function UpstreamsTableRow({
           className={["px-3 py-2 align-top", column.cellClassName].filter(Boolean).join(" ")}
         >
           <div className="flex h-8 min-w-0 items-center">
-            {renderUpstreamCell(column.id, upstream, showApiKeys, rowLabel, (priority) =>
+            {renderUpstreamCell(column.id, upstream, showApiKeys, usage, rowLabel, (priority) =>
               onPriorityChange(upstreamIndex, priority)
             )}
           </div>
@@ -498,6 +524,8 @@ export type UpstreamsTableProps = {
   upstreams: UpstreamForm[];
   columns: readonly UpstreamColumnDefinition[];
   showApiKeys: boolean;
+  /** 渠道 ID → 累计用量；缺省或未命中时用量列显示占位。 */
+  usage?: ReadonlyMap<string, UpstreamUsage>;
   disableDelete: boolean;
   isCopyDisabled?: (upstream: UpstreamForm) => boolean;
   isDeleteDisabled?: (upstream: UpstreamForm) => boolean;
@@ -512,6 +540,7 @@ export function UpstreamsTable({
   upstreams,
   columns,
   showApiKeys,
+  usage = EMPTY_USAGE,
   disableDelete,
   isCopyDisabled,
   isDeleteDisabled,
@@ -536,6 +565,7 @@ export function UpstreamsTable({
                 displayIndex={displayIndex}
                 columns={columns}
                 showApiKeys={showApiKeys}
+                usage={usage.get(entry.upstream.id.trim())}
                 disableDelete={disableDelete}
                 isCopyDisabled={isCopyDisabled}
                 isDeleteDisabled={isDeleteDisabled}

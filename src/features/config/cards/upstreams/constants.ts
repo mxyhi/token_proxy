@@ -29,6 +29,14 @@ export const UPSTREAM_COLUMNS: readonly UpstreamColumnDefinition[] = [
     cellClassName: "w-[6rem]",
   },
   {
+    id: "usage",
+    label: () => m.upstreams_column_usage(),
+    hint: () => m.upstreams_usage_hint(),
+    defaultVisible: true,
+    headerClassName: "w-[9rem]",
+    cellClassName: "w-[9rem] max-w-[9rem]",
+  },
+  {
     id: "status",
     label: () => m.upstreams_column_status(),
     defaultVisible: true,
@@ -45,6 +53,7 @@ export function createDefaultColumnVisibility() {
     apiKeys: false,
     proxyUrl: false,
     priority: true,
+    usage: true,
     status: true,
   };
   for (const column of UPSTREAM_COLUMNS) {

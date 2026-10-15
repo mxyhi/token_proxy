@@ -140,6 +140,7 @@ pub struct DashboardUpstreamStat {
     pub upstream_id: String,
     pub requests: u64,
     pub total_tokens: u64,
+    pub cost_nano_usd: u64,
     #[serde(flatten)]
     pub usage: DashboardUsageBreakdown,
 }
@@ -460,6 +461,22 @@ async fn query_model_options(
     Ok(options)
 }
 
+/// 渠道页「累计用量」列：全时间范围按 upstream_id 聚合，只读计费行。
+///
+/// 按 ID 归集：渠道改名后旧 ID 的历史用量不会迁移到新 ID。
+pub async fn read_upstream_usage(
+    pool: &sqlx::SqlitePool,
+) -> Result<Vec<DashboardUpstreamStat>, String> {
+    let started_at = Instant::now();
+    let usage = query_upstreams(pool, None, None).await?;
+    tracing::debug!(
+        upstreams = usage.len(),
+        elapsed_ms = started_at.elapsed().as_millis(),
+        "upstream usage loaded"
+    );
+    Ok(usage)
+}
+
 async fn query_upstreams(
     pool: &sqlx::SqlitePool,
     from_ts_ms: Option<i64>,
@@ -476,11 +493,13 @@ async fn query_upstreams(
             let upstream_id: String = row.try_get("upstream_id").ok()?;
             let requests: i64 = row.try_get("requests").ok()?;
             let total_tokens: i64 = row.try_get("total_tokens").ok()?;
+            let cost_nano_usd: i64 = row.try_get("cost_nano_usd").ok()?;
             let usage = usage_breakdown_from_row(&row);
             Some(DashboardUpstreamStat {
                 upstream_id,
                 requests: i64_to_u64(requests),
                 total_tokens: i64_to_u64(total_tokens),
+                cost_nano_usd: i64_to_u64(cost_nano_usd),
                 usage,
             })
         })

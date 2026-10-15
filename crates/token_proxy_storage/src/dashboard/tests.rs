@@ -953,3 +953,44 @@ async fn dashboard_queries_only_read_covering_index() {
         }
     }
 }
+
+// ============================================================================
+// 渠道累计用量
+// ============================================================================
+
+#[tokio::test]
+async fn upstream_usage_sums_all_time_billable_rows_per_upstream() {
+    let pool = setup_test_db().await;
+    // 跨越很大的时间跨度，确认不受 Dashboard 时间范围限制；被重试取代的行不计入。
+    sqlx::query(
+        r#"
+        INSERT INTO request_logs (
+          ts_ms, path, provider, upstream_id, stream, status,
+          input_tokens, output_tokens, total_tokens, cost_nano_usd, latency_ms, is_billable
+        ) VALUES
+          (1, '/test', 'openai', 'alpha', 0, 200, 3, 4, 100, 5, 10, 1),
+          (9000000000000, '/test', 'openai', 'alpha', 0, 200, 3, 4, NULL, 7, 10, 1),
+          (2, '/test', 'openai', 'alpha', 0, 502, 9, 9, 999, 999, 10, 0),
+          (3, '/test', 'anthropic', 'beta', 0, 500, NULL, NULL, NULL, NULL, 10, 1)
+        "#,
+    )
+    .execute(&pool)
+    .await
+    .expect("insert usage rows");
+
+    let usage = read_upstream_usage(&pool).await.expect("upstream usage");
+    let summary = usage
+        .iter()
+        .map(|item| {
+            (
+                item.upstream_id.as_str(),
+                item.requests,
+                item.total_tokens,
+                item.cost_nano_usd,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    // total_tokens 为空时回退 input + output，与 Dashboard 一致；错误请求计入请求数。
+    assert_eq!(summary, vec![("alpha", 2, 107, 12), ("beta", 1, 0, 0)]);
+}

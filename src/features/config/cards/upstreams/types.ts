@@ -7,11 +7,14 @@ export type UpstreamColumnId =
   | "apiKeys"
   | "proxyUrl"
   | "priority"
+  | "usage"
   | "status";
 
 export type UpstreamColumnDefinition = {
   id: UpstreamColumnId;
   label: () => string;
+  /** 表头悬停说明，存在时在标题旁显示问号图标。 */
+  hint?: () => string;
   defaultVisible: boolean;
   headerClassName?: string;
   cellClassName?: string;

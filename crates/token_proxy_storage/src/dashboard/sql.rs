@@ -160,7 +160,7 @@ ORDER BY total_tokens DESC, requests DESC, model_key ASC
 LIMIT ?4;
 "#;
 
-/// 渠道选项与用量；只受时间范围限制。
+/// 渠道选项与用量；只受时间范围限制。渠道页「累计用量」列以全时间范围复用。
 pub(super) const UPSTREAMS: &str = r#"
 SELECT
   upstream_id,
@@ -170,6 +170,7 @@ SELECT
     WHEN input_tokens IS NOT NULL OR output_tokens IS NOT NULL THEN COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0)
     ELSE 0
   END), 0) AS total_tokens,
+  COALESCE(SUM(COALESCE(cost_nano_usd, 0)), 0) AS cost_nano_usd,
   COALESCE(SUM(COALESCE(uncached_input_tokens, 0)), 0) AS uncached_input_tokens,
   COALESCE(SUM(COALESCE(cache_read_tokens, 0)), 0) AS cache_read_tokens,
   COALESCE(SUM(COALESCE(cache_write_tokens, 0)), 0) AS cache_write_tokens,

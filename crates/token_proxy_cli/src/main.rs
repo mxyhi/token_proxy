@@ -16,28 +16,11 @@ struct Cli {
 enum Command {
     /// 启动代理服务（读取配置并监听 host:port）
     Serve,
-    /// 启动 Agent Console 子节点
-    AgentNode(AgentNodeCommand),
     /// 配置相关命令
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
     },
-}
-
-#[derive(Parser)]
-struct AgentNodeCommand {
-    /// Agent Console 公网地址，例如 https://agent.example.com
-    #[arg(long)]
-    server_url: String,
-
-    /// 用户在 Agent Console 里创建的 node API key
-    #[arg(long)]
-    api_key: String,
-
-    /// 上报给 Agent Console 的节点主机名；默认读取系统环境变量
-    #[arg(long)]
-    hostname: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -72,37 +55,7 @@ async fn run(cli: Cli) -> Result<(), String> {
             }
         },
         Command::Serve => serve(paths).await,
-        Command::AgentNode(command) => run_agent_node(command).await,
     }
-}
-
-async fn run_agent_node(command: AgentNodeCommand) -> Result<(), String> {
-    let config = token_proxy_agent_node::AgentNodeConfig {
-        server_url: command.server_url,
-        api_key: command.api_key,
-        hostname: command.hostname.or_else(default_hostname),
-        os: std::env::consts::OS.to_string(),
-        arch: std::env::consts::ARCH.to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
-    };
-    println!("agent node connecting to {}", config.server_url);
-    let mut client = token_proxy_agent_node::AgentNodeClient::new(config);
-    tokio::select! {
-        result = client.run_with_reconnect() => result,
-        signal = tokio::signal::ctrl_c() => {
-            signal.map_err(|err| format!("Failed to listen for Ctrl+C: {err}"))?;
-            println!("agent node stopped");
-            Ok(())
-        }
-    }
-}
-
-fn default_hostname() -> Option<String> {
-    std::env::var("HOSTNAME")
-        .ok()
-        .or_else(|| std::env::var("COMPUTERNAME").ok())
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
 }
 
 async fn serve(paths: token_proxy_account_store::paths::TokenProxyPaths) -> Result<(), String> {
@@ -141,33 +94,4 @@ async fn serve(paths: token_proxy_account_store::paths::TokenProxyPaths) -> Resu
         .map_err(|err| format!("Failed to listen for Ctrl+C: {err}"))?;
     let _ = app.stop_proxy().await?;
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parses_agent_node_command() {
-        let cli = Cli::try_parse_from([
-            "token-proxy",
-            "agent-node",
-            "--server-url",
-            "https://agent.example.com",
-            "--api-key",
-            "acn_secret",
-            "--hostname",
-            "desk-1",
-        ])
-        .expect("parse agent node command");
-
-        match cli.command {
-            Command::AgentNode(command) => {
-                assert_eq!(command.server_url, "https://agent.example.com");
-                assert_eq!(command.api_key, "acn_secret");
-                assert_eq!(command.hostname.as_deref(), Some("desk-1"));
-            }
-            _ => panic!("expected agent-node command"),
-        }
-    }
 }

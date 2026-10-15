@@ -164,21 +164,4 @@ describe("config/AppView", () => {
     expect(screen.getByTestId("storage-usage-card")).toBeInTheDocument();
     expect(screen.queryByTestId("validation-card")).not.toBeInTheDocument();
   });
-
-  it("keeps agent node out of the agents config section", () => {
-    render(
-      <AppView
-        activeSectionId="agents"
-        {...BASE_APP_VIEW_PROPS}
-        status="idle"
-        statusMessage=""
-        canSave
-        isDirty={false}
-        validation={{ valid: true, message: "" }}
-      />
-    );
-
-    expect(screen.getByTestId("client-setup-card")).toBeInTheDocument();
-    expect(screen.queryByTestId("agent-node-card")).not.toBeInTheDocument();
-  });
 });

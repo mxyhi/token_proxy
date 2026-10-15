@@ -26,7 +26,7 @@ pub use token_proxy_runtime::proxy::{
     token_rate::TokenRateSnapshot,
 };
 pub use token_proxy_storage::{
-    dashboard::{DashboardRange, DashboardSnapshot},
+    dashboard::{DashboardRange, DashboardSnapshot, DashboardUpstreamStat},
     local_api_key_usage::LocalApiKeyUsage,
     logs::{RequestLogBodyPage, RequestLogDetail},
     pricing::{ModelPricingSettingsInput, ModelPricingSettingsSnapshot, RemoteCatalogRefresh},
@@ -217,6 +217,13 @@ impl TokenProxyApp {
         let pool =
             token_proxy_storage::sqlite::open_read_pool(&self.paths.sqlite_db_path()).await?;
         token_proxy_storage::local_api_key_usage::read_local_api_key_usage(&pool).await
+    }
+
+    /// 读取各渠道的累计用量（仅计费行），供渠道页用量列展示。
+    pub async fn read_upstream_usage(&self) -> Result<Vec<DashboardUpstreamStat>, String> {
+        let pool =
+            token_proxy_storage::sqlite::open_read_pool(&self.paths.sqlite_db_path()).await?;
+        token_proxy_storage::dashboard::read_upstream_usage(&pool).await
     }
 
     /// 立即刷新所有上游的模型目录探测缓存。

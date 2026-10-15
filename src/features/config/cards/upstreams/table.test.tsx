@@ -147,6 +147,38 @@ describe("upstreams/table", () => {
     ).toBeDisabled();
   });
 
+  it("shows cumulative usage by trimmed upstream id and a placeholder when missing", () => {
+    const tracked = buildUpstream();
+    const untracked = { ...buildUpstream(), id: "fresh-channel", priority: "1" };
+    render(
+      <UpstreamsTable
+        upstreams={[{ ...tracked, id: ` ${LONG_ID} ` }, untracked]}
+        columns={UPSTREAM_COLUMNS.filter((column) => column.id === "id" || column.id === "usage")}
+        showApiKeys={false}
+        usage={
+          new Map([
+            [
+              LONG_ID,
+              { upstreamId: LONG_ID, requests: 1234, totalTokens: 1_500_000, costNanoUsd: 2_500_000_000 },
+            ],
+          ])
+        }
+        disableDelete={false}
+        onEdit={() => undefined}
+        onCopy={() => undefined}
+        onToggleEnabled={() => undefined}
+        onPriorityChange={() => undefined}
+        onDelete={() => undefined}
+      />
+    );
+
+    const [, trackedRow, untrackedRow] = screen.getAllByRole("row");
+    expect(trackedRow).toHaveTextContent("1.5M");
+    expect(trackedRow).toHaveTextContent("$2.50 · 1,234 req");
+    expect(untrackedRow).toHaveTextContent("—");
+    expect(screen.getByRole("columnheader", { name: /total usage/i })).toBeInTheDocument();
+  });
+
   it("commits inline priority edits on Enter", async () => {
     const user = userEvent.setup();
     const onPriorityChange = vi.fn();

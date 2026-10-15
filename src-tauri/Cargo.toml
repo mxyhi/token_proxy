@@ -1,6 +1,6 @@
 [package]
 name = "token_proxy"
-version = "0.1.213"
+version = "0.1.214"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -55,7 +55,6 @@ url = "2.5.8"
 tracing = { version = "0.1.44", features = ["release_max_level_off"] }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 token_proxy_app = { path = "../crates/token_proxy_app" }
-token_proxy_agent_node = { path = "../crates/token_proxy_agent_node" }
 token_proxy_accounts = { path = "../crates/token_proxy_accounts" }
 token_proxy_account_codex = { path = "../crates/token_proxy_account_codex" }
 token_proxy_account_kiro = { path = "../crates/token_proxy_account_kiro" }

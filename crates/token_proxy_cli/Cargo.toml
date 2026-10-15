@@ -11,6 +11,5 @@ path = "src/main.rs"
 clap = { version = "4.6", features = ["derive"] }
 tokio = { version = "1.53", features = ["rt-multi-thread", "signal"] }
 token_proxy_app = { path = "../token_proxy_app" }
-token_proxy_agent_node = { path = "../token_proxy_agent_node" }
 token_proxy_account_store = { path = "../token_proxy_account_store" }
 token_proxy_config = { path = "../token_proxy_config" }

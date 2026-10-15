@@ -1,4 +1,3 @@
-pub mod agent_node;
 pub mod codex;
 pub mod config;
 pub mod dashboard;
@@ -9,10 +8,6 @@ pub mod providers;
 pub mod proxy;
 pub mod xai;
 
-pub use agent_node::{
-    agent_node_read_config, agent_node_restart, agent_node_save_config, agent_node_start,
-    agent_node_status, agent_node_stop,
-};
 pub use codex::{
     codex_fetch_quotas, codex_import_file, codex_import_refresh_tokens, codex_import_text,
     codex_list_accounts, codex_poll_login, codex_refresh_account, codex_refresh_quota_cache,
@@ -23,7 +18,8 @@ pub use config::{
     read_proxy_config, save_proxy_config, write_claude_code_settings, write_codex_config,
 };
 pub use dashboard::{
-    read_dashboard_snapshot, read_local_api_key_usage, refresh_dashboard_model_discovery,
+    read_dashboard_snapshot, read_local_api_key_usage, read_upstream_usage,
+    refresh_dashboard_model_discovery,
 };
 pub use kiro::{
     kiro_fetch_quotas, kiro_handle_callback, kiro_import_ide, kiro_import_kam, kiro_list_accounts,

@@ -40,25 +40,23 @@ describe("layouts/AppSidebar", () => {
     routerState.pathname = "/config/dashboard";
   });
 
-  it("localizes the Agent Node menu item", () => {
-    setLocale("zh", { reload: false });
-    routerState.pathname = "/agent-node";
-
+  it("only renders config section menu items", () => {
     render(
       <SidebarProvider>
         <AppSidebar />
       </SidebarProvider>
     );
 
-    expect(screen.getByRole("link", { name: m.agent_node_title({}, { locale: "zh" }) })).toHaveAttribute(
+    const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href"));
+    expect(hrefs).not.toContain("/agent-node");
+    expect(screen.getByRole("link", { name: m.config_section_agents_label() })).toHaveAttribute(
       "href",
-      "/agent-node"
+      "/config/agents"
     );
-    expect(screen.queryByText("Agent Node")).not.toBeInTheDocument();
   });
 
   it("marks the active route and renders the motion layout indicator", () => {
-    routerState.pathname = "/agent-node";
+    routerState.pathname = "/config/agents";
 
     const { container } = render(
       <SidebarProvider>
@@ -66,8 +64,8 @@ describe("layouts/AppSidebar", () => {
       </SidebarProvider>
     );
 
-    const agentLink = screen.getByRole("link", { name: m.agent_node_title() });
-    expect(agentLink).toHaveAttribute("data-active", "true");
+    const agentsLink = screen.getByRole("link", { name: m.config_section_agents_label() });
+    expect(agentsLink).toHaveAttribute("data-active", "true");
 
     const indicator = container.querySelector('[data-slot="sidebar-active-indicator"]');
     expect(indicator).not.toBeNull();

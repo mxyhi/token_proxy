@@ -1,6 +1,5 @@
-import { Fragment, type ComponentProps, type ReactNode } from "react"
+import type { ComponentProps, ReactNode } from "react"
 import { Link, useRouterState } from "@tanstack/react-router"
-import { Network } from "lucide-react"
 import { motion, useReducedMotion } from "motion/react"
 
 import {
@@ -15,7 +14,6 @@ import {
 } from "@/components/ui/sidebar"
 import { CONFIG_SECTIONS, DEFAULT_CONFIG_SECTION, getSectionRoute } from "@/features/config/sections"
 import { cn } from "@/lib/utils"
-import { m } from "@/paraglide/messages.js"
 
 /** motion 共享布局 id：同一 LayoutGroup 内激活条在菜单项之间滑动 */
 export const SIDEBAR_ACTIVE_LAYOUT_ID = "sidebar-nav-active"
@@ -90,7 +88,6 @@ function NavLinkContent({
 export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const appTitle = import.meta.env.DEV ? "Token Proxy (dev)" : "Token Proxy"
-  const isAgentNodeActive = pathname === "/agent-node"
 
   return (
     <Sidebar collapsible="offcanvas" {...props}>
@@ -116,42 +113,22 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
                 const isActive = pathname === section.route
                 const Icon = section.icon
                 return (
-                  <Fragment key={section.id}>
-                    <SidebarMenuItem>
-                      <SidebarMenuButton
-                        asChild
-                        isActive={isActive}
-                        tooltip={section.label()}
-                        className={navItemClassName}
-                      >
-                        <Link to={section.route}>
-                          <NavLinkContent
-                            active={isActive}
-                            icon={<Icon className="relative z-10" />}
-                            label={section.label()}
-                          />
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                    {section.id === "agents" ? (
-                      <SidebarMenuItem>
-                        <SidebarMenuButton
-                          asChild
-                          isActive={isAgentNodeActive}
-                          tooltip={m.agent_node_title()}
-                          className={navItemClassName}
-                        >
-                          <Link to="/agent-node">
-                            <NavLinkContent
-                              active={isAgentNodeActive}
-                              icon={<Network className="relative z-10" />}
-                              label={m.agent_node_title()}
-                            />
-                          </Link>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ) : null}
-                  </Fragment>
+                  <SidebarMenuItem key={section.id}>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={isActive}
+                      tooltip={section.label()}
+                      className={navItemClassName}
+                    >
+                      <Link to={section.route}>
+                        <NavLinkContent
+                          active={isActive}
+                          icon={<Icon className="relative z-10" />}
+                          label={section.label()}
+                        />
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
                 )
               })}
             </SidebarMenu>

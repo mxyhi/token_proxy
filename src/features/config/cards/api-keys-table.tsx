@@ -5,13 +5,11 @@ import { Button } from "@/components/ui/button";
 import { toStatusLabel } from "@/features/config/cards/upstreams/constants";
 import {
   createDashboardMinuteFormatter,
-  formatCompact,
   formatDashboardTimestamp,
-  formatInteger,
-  formatNanoUsdCost,
 } from "@/features/dashboard/format";
 import { useI18n } from "@/lib/i18n";
 import type { LocalApiKey, LocalApiKeyUsage } from "../types";
+import { UsageCell } from "./usage-cell";
 import { m } from "@/paraglide/messages.js";
 
 type Props = {
@@ -51,25 +49,6 @@ function ScopeCell({
         {m.api_keys_selected_count({ count: scope.upstream_ids.length })}
       </Badge>
       {expired ? <Badge variant="destructive">{m.api_keys_expired()}</Badge> : null}
-    </div>
-  );
-}
-
-function UsageCell({ usage }: { usage: LocalApiKeyUsage | undefined }) {
-  if (!usage) {
-    return <span className="text-xs text-muted-foreground">—</span>;
-  }
-  const cost = `$${formatNanoUsdCost(usage.costNanoUsd)}`;
-  const requests = m.api_keys_usage_requests({ count: formatInteger(usage.requests) });
-  return (
-    <div
-      className="flex min-w-0 flex-col gap-0.5"
-      title={`${formatInteger(usage.totalTokens)} tokens · ${cost} · ${requests}`}
-    >
-      <span className="truncate font-medium tabular-nums">{formatCompact(usage.totalTokens)}</span>
-      <span className="truncate text-[11px] tabular-nums text-muted-foreground">
-        {cost} · {requests}
-      </span>
     </div>
   );
 }

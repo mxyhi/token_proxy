@@ -573,6 +573,26 @@ describe("logs/LogsPanel", () => {
     expect(screen.getByText("2026-05-02.openai-openrouter-v1")).toBeInTheDocument();
   });
 
+  it("labels whether the selected attempt is the final response", async () => {
+    const user = userEvent.setup();
+    readRequestLogDetailMock.mockResolvedValue(
+      createRequestLogDetail({ attemptIndex: 1, isBillable: false, status: 503 })
+    );
+
+    renderPanel();
+
+    await user.click(
+      await screen.findByRole("button", { name: "alpha · openai · codex-a.json" })
+    );
+
+    expect(await screen.findByText(m.logs_detail_attempt())).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        `${m.logs_attempt_number({ n: "2" })} · ${m.logs_attempt_intermediate()}`
+      )
+    ).toBeInTheDocument();
+  });
+
   it("shows image output tokens from request usage detail", async () => {
     const user = userEvent.setup();
     readRequestLogDetailMock.mockResolvedValueOnce(

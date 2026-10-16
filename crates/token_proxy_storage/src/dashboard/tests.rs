@@ -603,6 +603,76 @@ INSERT INTO request_logs (
 }
 
 #[tokio::test]
+async fn read_snapshot_attaches_superseded_attempts_to_final_request() {
+    let pool = setup_test_db().await;
+    let long_error = "x".repeat(800);
+    sqlx::query(
+        r#"
+INSERT INTO request_logs (
+  ts_ms, path, provider, upstream_id, model, stream, status, latency_ms,
+  upstream_response_headers_ms, response_error, client_request_id, attempt_index, is_billable
+) VALUES
+  (100, '/v1/messages', 'anthropic', 'primary', 'claude', 1, 503, 10, 9, ?1, 'req-a', 0, 0),
+  (110, '/v1/messages', 'anthropic', 'primary', 'claude', 1, 503, 11, 8, 'HTTP 503: busy', 'req-a', 1, 0),
+  (120, '/v1/messages', 'anthropic', 'fallback', 'claude', 1, 200, 30, 20, NULL, 'req-a', 2, 1),
+  (130, '/v1/messages', 'anthropic', 'primary', 'claude', 1, 200, 12, 6, NULL, 'req-b', 0, 1),
+  (140, '/v1/messages', 'anthropic', 'primary', 'claude', 1, 200, 12, 6, NULL, NULL, NULL, 1)
+"#,
+    )
+    .bind(&long_error)
+    .execute(&pool)
+    .await
+    .expect("insert attempt rows");
+
+    let snapshot = read_snapshot(
+        &pool,
+        DashboardRange {
+            from_ts_ms: None,
+            to_ts_ms: None,
+        },
+        Some(0),
+        None,
+        None,
+    )
+    .await
+    .expect("read snapshot");
+
+    // 分页与统计仍按最终请求计数，中间 attempt 只挂在所属请求下。
+    assert_eq!(snapshot.summary.total_requests, 3);
+    let recent = snapshot
+        .recent
+        .iter()
+        .map(|item| (item.ts_ms, item.attempt_index, item.attempts.len()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recent,
+        vec![(140, None, 0), (130, Some(0), 0), (120, Some(2), 2)]
+    );
+
+    let attempts = &snapshot.recent[2].attempts;
+    assert_eq!(
+        attempts
+            .iter()
+            .map(|attempt| (
+                attempt.attempt_index,
+                attempt.status,
+                attempt.upstream_id.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![(Some(1), 503, "primary"), (Some(0), 503, "primary")]
+    );
+    assert_eq!(
+        attempts[0].response_error.as_deref(),
+        Some("HTTP 503: busy")
+    );
+    assert_eq!(attempts[0].upstream_response_headers_ms, Some(8));
+    assert_eq!(
+        attempts[1].response_error.as_ref().map(String::len),
+        Some(500)
+    );
+}
+
+#[tokio::test]
 async fn read_snapshot_groups_models_with_fallback_and_filters() {
     let pool = setup_test_db().await;
 
@@ -952,6 +1022,40 @@ async fn dashboard_queries_only_read_covering_index() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn recent_attempts_query_searches_client_attempt_index() {
+    let pool = setup_test_db().await;
+    let explain = sqlx::AssertSqlSafe(format!(
+        "EXPLAIN QUERY PLAN {}",
+        super::recent_attempts::PLAN_SQL
+    ));
+    let details = sqlx::query(explain)
+        .bind(r#"["req-a"]"#)
+        .bind(500_i64)
+        .fetch_all(&pool)
+        .await
+        .expect("explain recent attempts")
+        .into_iter()
+        .map(|row| row.get::<String, _>("detail"))
+        .collect::<Vec<_>>();
+
+    let table_steps = details
+        .iter()
+        .filter(|detail| detail.contains("request_logs"))
+        .collect::<Vec<_>>();
+    assert!(!table_steps.is_empty(), "plan: {details:?}");
+    for detail in table_steps {
+        assert!(
+            detail.starts_with("SEARCH") && detail.contains("idx_request_logs_client_attempt"),
+            "recent attempts must search idx_request_logs_client_attempt, got {details:?}"
+        );
+    }
+    assert!(
+        !details.iter().any(|detail| detail.contains("TEMP B-TREE")),
+        "recent attempts must reuse index order, got {details:?}"
+    );
 }
 
 // ============================================================================

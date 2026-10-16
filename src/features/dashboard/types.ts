@@ -142,6 +142,27 @@ export type DashboardRequestItem = {
   upstreamRequestId: string | null;
   /** 鉴权通过的本地 API Key ID；名称按当前配置解析。 */
   localApiKeyId?: string | null;
+  /** 最终 attempt 序号（从 0 开始）；旧日志为空。 */
+  attemptIndex?: number | null;
+  /** 同一客户端请求中被重试或 failover 取代的 attempt，按序号倒序；不计费。 */
+  attempts?: DashboardRequestAttempt[];
+};
+
+/** 最终请求之前失败或被取代的上游 attempt。 */
+export type DashboardRequestAttempt = {
+  id: number;
+  tsMs: number;
+  attemptIndex: number | null;
+  provider: string;
+  upstreamId: string;
+  accountId: string | null;
+  model: string | null;
+  mappedModel: string | null;
+  status: number;
+  latencyMs: number;
+  upstreamResponseHeadersMs: number | null;
+  /** 截断后的错误摘要；完整内容在详情面板读取。 */
+  responseError: string | null;
 };
 
 export type DashboardSnapshot = {

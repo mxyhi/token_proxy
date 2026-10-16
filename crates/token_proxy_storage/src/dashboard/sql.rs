@@ -265,7 +265,9 @@ SELECT
   first_client_flush_ms,
   first_output_ms,
   upstream_request_id,
-  local_api_key_id
+  local_api_key_id,
+  client_request_id,
+  attempt_index
 FROM billable_request_logs
 WHERE ts_ms >= ?1
   AND ts_ms <= ?2

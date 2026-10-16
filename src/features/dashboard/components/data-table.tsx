@@ -9,7 +9,8 @@ import {
 } from "@/components/ui/card"
 import { RecentRequestsTable } from "@/features/dashboard/RecentRequestsTable"
 import { formatInteger } from "@/features/dashboard/format"
-import type { DashboardRequestItem } from "@/features/dashboard/types"
+import type { DashboardRequestAttempt, DashboardRequestItem } from "@/features/dashboard/types"
+import { AttemptLegend } from "@/features/logs/AttemptTrace"
 import { m } from "@/paraglide/messages.js"
 
 type DataTableProps = {
@@ -23,6 +24,7 @@ type DataTableProps = {
   onPrevPage: () => void
   onNextPage: () => void
   onSelectItem?: (item: DashboardRequestItem) => void
+  onSelectAttempt?: (attempt: DashboardRequestAttempt) => void
 }
 
 export function DataTable({
@@ -36,17 +38,21 @@ export function DataTable({
   onPrevPage,
   onNextPage,
   onSelectItem,
+  onSelectAttempt,
 }: DataTableProps) {
   return (
     <div className="flex min-h-0 flex-1 flex-col px-4 lg:px-6">
       <Card data-slot="dashboard-recent" className="min-h-0 flex-1 gap-4">
         <CardHeader className="shrink-0">
           <CardTitle className="text-base">{m.dashboard_recent_title()}</CardTitle>
-          <CardDescription>
-            {m.dashboard_recent_desc({
-              pageSize: String(pageSize),
-              total: formatInteger(totalRequests),
-            })}
+          <CardDescription className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span>
+              {m.dashboard_recent_desc({
+                pageSize: String(pageSize),
+                total: formatInteger(totalRequests),
+              })}
+            </span>
+            <AttemptLegend />
           </CardDescription>
           <CardAction className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-2">
@@ -83,6 +89,7 @@ export function DataTable({
               items={items}
               scrollKey={scrollKey}
               onSelectItem={onSelectItem}
+              onSelectAttempt={onSelectAttempt}
             />
           ) : (
             <p className="text-sm text-muted-foreground">{m.dashboard_no_data()}</p>

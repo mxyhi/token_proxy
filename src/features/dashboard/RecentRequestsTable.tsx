@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactElement } from "react";
+import { useEffect, useRef, type ReactElement, type ReactNode } from "react";
 
 import * as TooltipPrimitive from "@radix-ui/react-tooltip";
 import { useVirtualizer, type VirtualItem } from "@tanstack/react-virtual";
@@ -23,7 +23,13 @@ import {
   formatInteger,
   formatNanoUsdCost,
 } from "@/features/dashboard/format";
-import type { DashboardRequestItem } from "@/features/dashboard/types";
+import type { DashboardRequestAttempt, DashboardRequestItem } from "@/features/dashboard/types";
+import {
+  AttemptTraceCell,
+  attemptNumber,
+  formatAttemptChain,
+  summarizeAttemptError,
+} from "@/features/logs/AttemptTrace";
 import { HttpStatusBadge } from "@/features/logs/HttpStatusBadge";
 import { UpstreamResponseModelLine, describeUpstreamResponseModel } from "@/features/logs/UpstreamResponseModelLine";
 import { useI18n } from "@/lib/i18n";
@@ -35,9 +41,9 @@ const HEADER_HEIGHT_PX = 34;
 const OVERSCAN = 6;
 
 // 固定列宽避免虚拟列表行在状态、费用、延迟文本变化时抖动。
-// 模型列要放下「↳ 上游响应: <model>」和不一致标记，比单行模型名更宽。
-const GRID_COLS = "grid-cols-[85px_79px_96px_124px_99px_236px_64px_82px_60px_104px]";
-const TABLE_MIN_WIDTH_PX = 1029;
+// 首列是 attempt 状态点；模型列要放下「↳ 上游响应: <model>」和不一致标记，比单行模型名更宽。
+const GRID_COLS = "grid-cols-[28px_85px_79px_96px_124px_99px_236px_64px_82px_60px_104px]";
+const TABLE_MIN_WIDTH_PX = 1057;
 const CELL_PLACEHOLDER = "—";
 const TOOLTIP_CONTENT_CLASS = "max-w-[560px] whitespace-pre-wrap break-words";
 type CellTooltipProps = {
@@ -65,6 +71,20 @@ function CellTooltip({ content, disabled, children }: CellTooltipProps) {
   );
 }
 
+function traceColumn(): ColumnDef<DashboardRequestItem> {
+  return {
+    id: "trace",
+    header: "",
+    cell: ({ row }) => (
+      <AttemptTraceCell
+        status={row.original.status}
+        variant="final"
+        lineBelow={Boolean(row.original.attempts?.length)}
+      />
+    ),
+  };
+}
+
 function timeColumn(formatter: Intl.DateTimeFormat): ColumnDef<DashboardRequestItem> {
   return {
     id: "time",
@@ -72,9 +92,19 @@ function timeColumn(formatter: Intl.DateTimeFormat): ColumnDef<DashboardRequestI
     cell: ({ row }) => {
       const timestamp = formatDashboardTimestamp(row.original.tsMs, formatter);
       const clockTime = formatDashboardClockTime(row.original.tsMs);
+      const attemptCount = row.original.attempts?.length ? row.original.attempts.length + 1 : 0;
+      // 有中间 attempt 时按发送先后列出渠道链，便于一眼看出从哪个渠道切走。
+      const tooltip = attemptCount ? `${timestamp}\n${formatAttemptChain(row.original)}` : timestamp;
       return (
-        <CellTooltip content={timestamp}>
-          <span className="block truncate text-xs text-muted-foreground">{clockTime}</span>
+        <CellTooltip content={tooltip}>
+          <div className="flex min-w-0 flex-col items-start gap-0.5">
+            <span className="block w-full truncate text-xs text-muted-foreground">{clockTime}</span>
+            {attemptCount ? (
+              <span className="block w-full truncate text-[11px] text-muted-foreground">
+                {m.logs_attempt_count({ count: String(attemptCount) })}
+              </span>
+            ) : null}
+          </div>
         </CellTooltip>
       );
     },
@@ -308,6 +338,7 @@ function formatOptionalLatency(value: number | null | undefined) {
 
 function buildColumns(formatter: Intl.DateTimeFormat, keyNames: ReadonlyMap<string, string>) {
   return [
+    traceColumn(),
     timeColumn(formatter),
     ipColumn(),
     apiKeyColumn(keyNames),
@@ -326,6 +357,9 @@ function headerCellClass() {
 }
 
 function rowCellClass(columnId: string) {
+  if (columnId === "trace") {
+    return "h-full";
+  }
   if (columnId === "time") {
     return "min-w-0 px-3 py-2";
   }
@@ -351,7 +385,28 @@ type RecentRequestsTableProps = {
   items: DashboardRequestItem[];
   scrollKey: string;
   onSelectItem?: (item: DashboardRequestItem) => void;
+  onSelectAttempt?: (attempt: DashboardRequestAttempt) => void;
 };
+
+// 虚拟列表的一行：最终请求，或挂在它下面的中间 attempt（按序号倒序，与列表时间倒序一致）。
+type DisplayRow =
+  | { kind: "request"; key: string; row: Row<DashboardRequestItem> }
+  | { kind: "attempt"; key: string; attempt: DashboardRequestAttempt; isLast: boolean };
+
+function buildDisplayRows(rows: Row<DashboardRequestItem>[]): DisplayRow[] {
+  return rows.flatMap((row): DisplayRow[] => {
+    const attempts = row.original.attempts ?? [];
+    return [
+      { kind: "request", key: `request-${row.id}`, row },
+      ...attempts.map((attempt, index): DisplayRow => ({
+        kind: "attempt",
+        key: `attempt-${attempt.id}`,
+        attempt,
+        isLast: index === attempts.length - 1,
+      })),
+    ];
+  });
+}
 
 function RecentRequestsHeader({ table }: { table: Table<DashboardRequestItem> }) {
   return (
@@ -374,7 +429,7 @@ function RecentRequestsHeader({ table }: { table: Table<DashboardRequestItem> })
   );
 }
 
-function useRecentRowVirtualizer(rows: Row<DashboardRequestItem>[], scrollKey: string) {
+function useRecentRowVirtualizer(rows: DisplayRow[], scrollKey: string) {
   "use no memo";
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -394,54 +449,161 @@ function useRecentRowVirtualizer(rows: Row<DashboardRequestItem>[], scrollKey: s
   return { scrollRef, rowVirtualizer, virtualRows: rowVirtualizer.getVirtualItems() };
 }
 
+type SelectableRowProps = {
+  className: string;
+  virtualRow: VirtualItem;
+  onSelect?: () => void;
+  children: ReactNode;
+};
+
+function SelectableRow({ className, virtualRow, onSelect, children }: SelectableRowProps) {
+  const isInteractive = Boolean(onSelect);
+  return (
+    <div
+      data-slot="recent-requests-table-row"
+      className={cn(
+        "absolute inset-x-0 grid justify-start items-center text-sm",
+        GRID_COLS,
+        className,
+        isInteractive && "cursor-pointer",
+      )}
+      style={{
+        transform: `translateY(${virtualRow.start}px)`,
+        height: `${virtualRow.size}px`,
+      }}
+      role={isInteractive ? "button" : undefined}
+      tabIndex={isInteractive ? 0 : undefined}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (!onSelect) {
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+function AttemptRowCells({
+  attempt,
+  isLast,
+  formatter,
+}: {
+  attempt: DashboardRequestAttempt;
+  isLast: boolean;
+  formatter: Intl.DateTimeFormat;
+}) {
+  const number = attemptNumber(attempt.attemptIndex);
+  const provider = formatDashboardProviderLabel(attempt.upstreamId, attempt.provider, attempt.accountId);
+  const model = attempt.model?.trim() || CELL_PLACEHOLDER;
+  const mapped = attempt.mappedModel?.trim() && attempt.mappedModel !== attempt.model ? attempt.mappedModel : null;
+  const rawError = attempt.responseError?.trim() || CELL_PLACEHOLDER;
+  const error = summarizeAttemptError(attempt.responseError) ?? CELL_PLACEHOLDER;
+  const latencyTooltip = [
+    `${m.dashboard_table_latency_ms()}: ${formatInteger(attempt.latencyMs)}`,
+    `${m.logs_timing_upstream_response_headers_ms()}: ${formatOptionalLatency(attempt.upstreamResponseHeadersMs)}`,
+  ].join("\n");
+
+  return (
+    <>
+      <AttemptTraceCell status={attempt.status} variant="attempt" lineAbove lineBelow={!isLast} />
+      <CellTooltip content={formatDashboardTimestamp(attempt.tsMs, formatter)}>
+        <div className="flex min-w-0 flex-col items-start gap-0.5 px-3 py-2">
+          <span className="block w-full truncate text-xs text-muted-foreground">
+            {formatDashboardClockTime(attempt.tsMs)}
+          </span>
+          {number ? (
+            <span className="block w-full truncate text-[11px] text-muted-foreground">
+              {m.logs_attempt_number({ n: String(number) })}
+            </span>
+          ) : null}
+        </div>
+      </CellTooltip>
+      {/* 中间 attempt 的 IP、Key、路径与最终请求相同，这三列合并展示错误摘要。 */}
+      <CellTooltip content={rawError}>
+        <span
+          data-slot="recent-requests-attempt-error"
+          className="col-span-3 block min-w-0 truncate px-3 py-2 text-xs text-muted-foreground"
+        >
+          {error}
+        </span>
+      </CellTooltip>
+      <CellTooltip content={provider}>
+        <span className="block min-w-0 truncate px-3 py-2 text-xs text-muted-foreground">{provider}</span>
+      </CellTooltip>
+      <div className="flex min-w-0 flex-col items-start gap-0.5 px-3 py-2">
+        <span className="block w-full truncate text-xs text-muted-foreground">{model}</span>
+        {mapped ? (
+          <span className="block w-full truncate text-[11px] text-muted-foreground">{mapped}</span>
+        ) : null}
+      </div>
+      <div className="px-3 py-2">
+        <HttpStatusBadge status={attempt.status} />
+      </div>
+      <span className="px-3 py-2 text-xs text-muted-foreground">{CELL_PLACEHOLDER}</span>
+      <span className="px-3 py-2 text-xs text-muted-foreground">{CELL_PLACEHOLDER}</span>
+      <CellTooltip content={latencyTooltip}>
+        <span className="block min-w-0 truncate px-3 py-2 text-xs text-muted-foreground">
+          {formatOptionalLatency(attempt.upstreamResponseHeadersMs)}
+        </span>
+      </CellTooltip>
+    </>
+  );
+}
+
 function RecentRequestsRows({
   rows,
   virtualRows,
+  formatter,
   onSelectItem,
+  onSelectAttempt,
 }: {
-  rows: Row<DashboardRequestItem>[];
+  rows: DisplayRow[];
   virtualRows: VirtualItem[];
+  formatter: Intl.DateTimeFormat;
   onSelectItem?: (item: DashboardRequestItem) => void;
+  onSelectAttempt?: (attempt: DashboardRequestAttempt) => void;
 }) {
   return virtualRows.map((virtualRow) => {
-    const row = rows[virtualRow.index];
-    if (!row) {
+    const displayRow = rows[virtualRow.index];
+    if (!displayRow) {
       return null;
     }
-    const isInteractive = Boolean(onSelectItem);
 
+    if (displayRow.kind === "attempt") {
+      const { attempt } = displayRow;
+      return (
+        <SelectableRow
+          key={displayRow.key}
+          virtualRow={virtualRow}
+          // 中间 attempt 弱化展示：浅底色、无行顶分隔线，视觉上归属上方的最终请求。
+          className="bg-muted/30 hover:bg-accent/30"
+          onSelect={onSelectAttempt ? () => onSelectAttempt(attempt) : undefined}
+        >
+          <AttemptRowCells attempt={attempt} isLast={displayRow.isLast} formatter={formatter} />
+        </SelectableRow>
+      );
+    }
+
+    const { row } = displayRow;
     return (
-      <div
-        key={row.id}
-        data-slot="recent-requests-table-row"
-        className={cn(
-          "absolute inset-x-0 grid justify-start items-center border-t border-border/60 bg-background/70 text-sm hover:bg-accent/30",
-          GRID_COLS,
-          isInteractive && "cursor-pointer"
-        )}
-        style={{
-          transform: `translateY(${virtualRow.start}px)`,
-          height: `${virtualRow.size}px`,
-        }}
-        role={isInteractive ? "button" : undefined}
-        tabIndex={isInteractive ? 0 : undefined}
-        onClick={isInteractive ? () => onSelectItem?.(row.original) : undefined}
-        onKeyDown={(event) => {
-          if (!isInteractive) {
-            return;
-          }
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onSelectItem?.(row.original);
-          }
-        }}
+      <SelectableRow
+        key={displayRow.key}
+        virtualRow={virtualRow}
+        className="border-t border-border/60 bg-background/70 hover:bg-accent/30"
+        onSelect={onSelectItem ? () => onSelectItem(row.original) : undefined}
       >
         {row.getVisibleCells().map((cell) => (
           <div key={cell.id} className={rowCellClass(cell.column.id)}>
             {flexRender(cell.column.columnDef.cell, cell.getContext())}
           </div>
         ))}
-      </div>
+      </SelectableRow>
     );
   });
 }
@@ -450,12 +612,16 @@ function RecentRequestsScrollArea({
   table,
   rows,
   scrollKey,
+  formatter,
   onSelectItem,
+  onSelectAttempt,
 }: {
   table: Table<DashboardRequestItem>;
-  rows: Row<DashboardRequestItem>[];
+  rows: DisplayRow[];
   scrollKey: string;
+  formatter: Intl.DateTimeFormat;
   onSelectItem?: (item: DashboardRequestItem) => void;
+  onSelectAttempt?: (attempt: DashboardRequestAttempt) => void;
 }) {
   const { scrollRef, rowVirtualizer, virtualRows } = useRecentRowVirtualizer(rows, scrollKey);
   const rowsHeight = rowVirtualizer.getTotalSize();
@@ -483,7 +649,9 @@ function RecentRequestsScrollArea({
           <RecentRequestsRows
             rows={rows}
             virtualRows={virtualRows}
+            formatter={formatter}
             onSelectItem={onSelectItem}
+            onSelectAttempt={onSelectAttempt}
           />
         </div>
       </div>
@@ -491,7 +659,12 @@ function RecentRequestsScrollArea({
   );
 }
 
-export function RecentRequestsTable({ items, scrollKey, onSelectItem }: RecentRequestsTableProps) {
+export function RecentRequestsTable({
+  items,
+  scrollKey,
+  onSelectItem,
+  onSelectAttempt,
+}: RecentRequestsTableProps) {
   "use no memo";
 
   const { locale } = useI18n();
@@ -516,9 +689,11 @@ export function RecentRequestsTable({ items, scrollKey, onSelectItem }: RecentRe
       >
         <RecentRequestsScrollArea
           table={table}
-          rows={table.getRowModel().rows}
+          rows={buildDisplayRows(table.getRowModel().rows)}
           scrollKey={scrollKey}
+          formatter={formatter}
           onSelectItem={onSelectItem}
+          onSelectAttempt={onSelectAttempt}
         />
       </div>
     </TooltipProvider>

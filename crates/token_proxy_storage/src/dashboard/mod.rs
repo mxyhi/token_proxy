@@ -3,7 +3,10 @@ use sqlx::Row;
 use std::collections::HashMap;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+mod recent_attempts;
 mod sql;
+
+pub use recent_attempts::DashboardRequestAttempt;
 
 const RECENT_PAGE_SIZE: u32 = 50;
 /// 模型用量排行上限；本地代理模型种类通常很少，20 足够扫一眼。
@@ -198,6 +201,10 @@ pub struct DashboardRequestItem {
     pub upstream_request_id: Option<String>,
     /// 鉴权通过的本地 API Key ID；名称由前端按当前配置解析，Key 删除后仍保留 ID。
     pub local_api_key_id: Option<String>,
+    /// 最终 attempt 的序号；旧日志没有客户端请求 ID 时为空。
+    pub attempt_index: Option<u64>,
+    /// 同一客户端请求中被重试或 failover 取代的 attempt，按序号倒序。
+    pub attempts: Vec<DashboardRequestAttempt>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -688,7 +695,9 @@ async fn query_recent(
             let first_output_ms: Option<i64> = row.try_get("first_output_ms").ok()?;
             let upstream_request_id: Option<String> = row.try_get("upstream_request_id").ok()?;
             let local_api_key_id: Option<String> = row.try_get("local_api_key_id").ok()?;
-            Some(DashboardRequestItem {
+            let client_request_id: Option<String> = row.try_get("client_request_id").ok()?;
+            let attempt_index: Option<i64> = row.try_get("attempt_index").ok()?;
+            let item = DashboardRequestItem {
                 id: i64_to_u64(id),
                 ts_ms: i64_to_u64(ts_ms),
                 client_ip,
@@ -724,11 +733,29 @@ async fn query_recent(
                 first_output_ms: first_output_ms.map(i64_to_u64),
                 upstream_request_id,
                 local_api_key_id,
-            })
+                attempt_index: attempt_index.map(i64_to_u64),
+                attempts: Vec::new(),
+            };
+            Some((client_request_id, item))
         })
         .collect::<Vec<_>>();
 
-    Ok(recent)
+    // 只有当前页的最终请求需要挂中间 attempt；按客户端请求 ID 索引查询，不扫描时间范围。
+    let client_request_ids = recent
+        .iter()
+        .filter_map(|(client_request_id, _)| client_request_id.as_deref())
+        .collect::<Vec<_>>();
+    let mut attempts = recent_attempts::query_recent_attempts(pool, &client_request_ids).await?;
+
+    Ok(recent
+        .into_iter()
+        .map(|(client_request_id, mut item)| {
+            if let Some(found) = client_request_id.and_then(|id| attempts.remove(&id)) {
+                item.attempts = found;
+            }
+            item
+        })
+        .collect())
 }
 
 async fn resolve_bucket_ms(

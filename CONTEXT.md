@@ -110,7 +110,8 @@ _Avoid_: 客户端请求账单、最终请求
 
 **Final Client Request Billing（客户端最终请求账单）**:
 同一入站请求经过重试或 failover 后，Dashboard、成本和请求量统计使用的唯一账单记录。中间 attempt 仍保留，但 `is_billable=0`；代理按请求内单调的 attempt 完成序号选择最终 attempt 候选，不能用并发发送启动顺序代替完成顺序。
-_Avoid_: 将所有 upstream attempt usage 相加作为客户端账单
+日志列表按最终请求分页计数；同一请求的中间 attempt 挂在最终请求下方展示（实心点为最终返回，空心点为中间 attempt），不单独计入请求数。
+_Avoid_: 将所有 upstream attempt usage 相加作为客户端账单、日志列表隐藏中间 attempt
 
 **No Configured Credential（未配置凭据）**:
 Provider 有路由配置，但没有任何可用账号或 API 凭据，返回 HTTP 502。它是本地上游配置缺失，不是客户端鉴权失败。

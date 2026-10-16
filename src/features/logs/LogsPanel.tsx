@@ -32,6 +32,7 @@ import {
   readRequestDetailCapture,
   setRequestDetailCapture,
 } from "@/features/logs/api";
+import { attemptNumber } from "@/features/logs/AttemptTrace";
 import { HttpStatusBadge } from "@/features/logs/HttpStatusBadge";
 import {
   UpstreamResponseModelLine,
@@ -155,6 +156,7 @@ function BasicInfoSection({ detail, formatter }: BasicInfoSectionProps) {
           <span className={DETAIL_FIELD_LABEL_CLASS}>{m.dashboard_table_status()}</span>
           <HttpStatusBadge status={detail.status} className="justify-self-start" />
         </div>
+        <DetailField label={m.logs_detail_attempt()} value={formatAttempt(detail)} />
         <DetailField label={m.logs_detail_stream()} value={streamText} />
         <DetailField
           label={m.dashboard_table_cost()}
@@ -254,6 +256,7 @@ function formatDetailAsText(detail: RequestLogDetail, formatter: Intl.DateTimeFo
     lines.push(upstreamResponseLine);
   }
   lines.push(`${m.dashboard_table_status()}: ${detail.status}`);
+  lines.push(`${m.logs_detail_attempt()}: ${formatAttempt(detail) ?? DETAIL_PLACEHOLDER}`);
   lines.push(`${m.logs_detail_stream()}: ${detail.stream ? m.logs_detail_stream_yes() : m.logs_detail_stream_no()}`);
   lines.push(`${m.dashboard_table_cost()}: ${formatNanoUsdCost(detail.costNanoUsd)}`);
   lines.push(`${m.logs_detail_image_output_tokens()}: ${formatOptionalInteger(detail.imageOutputTokens)}`);
@@ -298,6 +301,16 @@ function formatDetailAsText(detail: RequestLogDetail, formatter: Intl.DateTimeFo
   }
 
   return lines.join("\n");
+}
+
+// 「第 N 次尝试 · 最终返回」或「第 N 次尝试 · 中间尝试 · 不计费」；旧日志没有序号时为空。
+function formatAttempt(detail: RequestLogDetail) {
+  const number = attemptNumber(detail.attemptIndex);
+  if (number == null) {
+    return null;
+  }
+  const role = detail.isBillable ? m.logs_attempt_final() : m.logs_attempt_intermediate();
+  return `${m.logs_attempt_number({ n: String(number) })} · ${role}`;
 }
 
 function formatOptionalInteger(value: number | null | undefined) {
@@ -652,6 +665,7 @@ export function LogsPanel() {
         onPrevPage={onPrevPage}
         onNextPage={onNextPage}
         onSelectItem={(item) => void requestDetail.select(item.id)}
+        onSelectAttempt={(attempt) => void requestDetail.select(attempt.id)}
       />
 
       <RequestDetailSheet

@@ -184,6 +184,7 @@ describe("dashboard/RecentRequestsTable", () => {
     const table = screen.getByTestId("recent-requests-table");
     const header = table.querySelector('[data-slot="recent-requests-table-header"]');
     expect(Array.from(header?.children ?? []).map((cell) => cell.textContent)).toEqual([
+      "",
       "Time",
       "IP",
       "Key",
@@ -197,9 +198,9 @@ describe("dashboard/RecentRequestsTable", () => {
     ]);
 
     const rows = table.querySelectorAll('[data-slot="recent-requests-table-row"]');
-    expect(rows[0]?.children.item(1)?.textContent).toBe("local");
-    expect(rows[0]?.children.item(3)?.textContent).toBe("/responses");
-    expect(rows[1]?.children.item(1)?.textContent).toBe("local");
+    expect(rows[0]?.children.item(2)?.textContent).toBe("local");
+    expect(rows[0]?.children.item(4)?.textContent).toBe("/responses");
+    expect(rows[1]?.children.item(2)?.textContent).toBe("local");
   });
 
   it("keeps status, tokens, and latency columns left-aligned", () => {
@@ -294,12 +295,12 @@ describe("dashboard/RecentRequestsTable", () => {
     const widthTrack = table.querySelector(
       '[data-slot="recent-requests-table-width-track"]',
     ) as HTMLElement | null;
-    expect(widthTrack?.style.minWidth).toBe("1029px");
+    expect(widthTrack?.style.minWidth).toBe("1057px");
     expect(widthTrack?.parentElement).toBe(scrollArea);
 
     const header = table.querySelector('[data-slot="recent-requests-table-header"]');
     expect(header).toHaveClass("sticky", "top-0", "z-10");
-    expect(header?.className).toContain("85px_79px_96px_124px_99px");
+    expect(header?.className).toContain("28px_85px_79px_96px_124px_99px");
 
     const rowsLayer = table.querySelector(
       '[data-slot="recent-requests-table-rows-layer"]',
@@ -626,10 +627,96 @@ describe("dashboard/RecentRequestsTable", () => {
     const rows = screen
       .getByTestId("recent-requests-table")
       .querySelectorAll('[data-slot="recent-requests-table-row"]');
-    expect(Array.from(rows).map((row) => row.children.item(2)?.textContent)).toEqual([
+    expect(Array.from(rows).map((row) => row.children.item(3)?.textContent)).toEqual([
       "Laptop",
       m.api_keys_deleted(),
       "—",
     ]);
+  });
+  it("nests earlier attempts under the final request and distinguishes them by dot style", async () => {
+    const user = userEvent.setup();
+    const onSelectItem = vi.fn();
+    const onSelectAttempt = vi.fn();
+    const attempt = {
+      tsMs: 100,
+      provider: "anthropic",
+      upstreamId: "primary",
+      accountId: null,
+      model: "claude",
+      mappedModel: null,
+      status: 503,
+      latencyMs: 10,
+      upstreamResponseHeadersMs: 9,
+    };
+    render(
+      <I18nProvider>
+        <RecentRequestsTable
+          scrollKey="test"
+          onSelectItem={onSelectItem}
+          onSelectAttempt={onSelectAttempt}
+          items={[
+            {
+              id: 3,
+              tsMs: 300,
+              clientIp: null,
+              path: "/v1/messages",
+              provider: "anthropic",
+              upstreamId: "fallback",
+              accountId: null,
+              model: "claude",
+              mappedModel: null,
+              stream: true,
+              status: 200,
+              totalTokens: 10,
+              outputTokens: 5,
+              cachedTokens: null,
+              costNanoUsd: 1,
+              pricingVersion: null,
+              pricingModel: null,
+              pricingContextTier: null,
+              latencyMs: 30,
+              upstreamRequestId: null,
+              attemptIndex: 2,
+              attempts: [
+                {
+                  ...attempt,
+                  id: 2,
+                  attemptIndex: 1,
+                  responseError: 'HTTP 503: {"error":{"message":"No available accounts","type":"api_error"}}',
+                },
+                { ...attempt, id: 1, attemptIndex: 0, responseError: null },
+              ],
+            },
+          ]}
+        />
+      </I18nProvider>,
+    );
+
+    const table = screen.getByTestId("recent-requests-table");
+    const rows = Array.from(table.querySelectorAll('[data-slot="recent-requests-table-row"]'));
+    expect(rows).toHaveLength(3);
+    expect(
+      rows.map((row) => row.querySelector("[data-attempt-dot]")?.getAttribute("data-attempt-dot")),
+    ).toEqual(["final", "attempt", "attempt"]);
+    expect(
+      rows.map((row) => row.querySelector("[data-attempt-dot]")?.getAttribute("data-status-tone")),
+    ).toEqual(["success", "server-error", "server-error"]);
+    expect(rows[0]).toHaveTextContent(m.logs_attempt_count({ count: "3" }));
+    expect(rows[1]).toHaveTextContent(m.logs_attempt_number({ n: "2" }));
+    expect(rows[2]).toHaveTextContent(m.logs_attempt_number({ n: "1" }));
+    expect(
+      rows[1]?.querySelector('[data-slot="recent-requests-attempt-error"]')?.textContent,
+    ).toBe("No available accounts");
+
+    // 最终请求的 tooltip 按发送先后列出渠道链。
+    await user.hover(screen.getByText(m.logs_attempt_count({ count: "3" })));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "primary 503 → primary 503 → fallback 200",
+    );
+
+    await user.click(rows[1] as HTMLElement);
+    expect(onSelectAttempt).toHaveBeenCalledWith(expect.objectContaining({ id: 2 }));
+    await user.click(rows[0] as HTMLElement);
+    expect(onSelectItem).toHaveBeenCalledWith(expect.objectContaining({ id: 3 }));
   });
 });

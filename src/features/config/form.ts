@@ -101,6 +101,25 @@ function normalizeAvailableModels(values: readonly string[]) {
   return [...models].sort();
 }
 
+/** Codex 额外模型：去空白、去重并保持用户添加顺序（与后端去重语义一致）。 */
+export function normalizeCodexExtraModels(values: readonly string[]) {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const model = value.trim();
+    if (!model || seen.has(model)) {
+      continue;
+    }
+    seen.add(model);
+    output.push(model);
+  }
+  return output;
+}
+
+/** 后端单模型 ID 校验：<=256 字符且不含控制字符。 */
+const MAX_CODEX_EXTRA_MODEL_ID_LENGTH = 256;
+const MAX_CODEX_EXTRA_MODELS = 64;
+
 const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "host",
   "port",
@@ -110,6 +129,7 @@ const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "cors_enabled",
   "model_list_prefix",
   // model_list_prefix_default_on_migrated 走 extras 透传，避免前端保存时丢掉一次性迁移标记。
+  "codex_extra_models",
   "kiro_preferred_endpoint",
   "log_level",
   "max_request_body_bytes",
@@ -140,6 +160,7 @@ export const EMPTY_FORM: ConfigForm = {
   appProxyUrl: "",
   corsEnabled: false,
   modelListPrefix: true,
+  codexExtraModels: [],
   kiroPreferredEndpoint: "ide",
   logLevel: "silent",
   maxRequestBodyMib: "100",
@@ -261,6 +282,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     appProxyUrl: config.app_proxy_url ?? "",
     corsEnabled: config.cors_enabled ?? false,
     modelListPrefix: config.model_list_prefix ?? true,
+    codexExtraModels: normalizeCodexExtraModels(config.codex_extra_models ?? []),
     kiroPreferredEndpoint: config.kiro_preferred_endpoint ?? "ide",
     logLevel: config.log_level ?? "silent",
     maxRequestBodyMib: bytesToMibString(config.max_request_body_bytes),
@@ -313,6 +335,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
 
 export function toPayload(form: ConfigForm): ProxyConfigFile {
   const port = Number.parseInt(form.port, 10);
+  const codexExtraModels = normalizeCodexExtraModels(form.codexExtraModels);
   return {
     host: form.host.trim(),
     port,
@@ -321,6 +344,8 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     app_proxy_url: form.appProxyUrl.trim() ? form.appProxyUrl.trim() : null,
     cors_enabled: form.corsEnabled,
     model_list_prefix: form.modelListPrefix,
+    // 空列表展示为“仅官方模型”；省略字段与空数组在脏检查中保持等价。
+    ...(codexExtraModels.length ? { codex_extra_models: codexExtraModels } : {}),
     kiro_preferred_endpoint: normalizeKiroPreferredEndpoint(form.kiroPreferredEndpoint),
     log_level: form.logLevel,
     max_request_body_bytes: parseMaxRequestBodyBytes(form.maxRequestBodyMib),
@@ -424,6 +449,27 @@ export function validate(form: ConfigForm) {
   );
   if (hotModelMappingError) {
     return { valid: false, message: hotModelMappingError };
+  }
+
+  const codexExtraModels = normalizeCodexExtraModels(form.codexExtraModels);
+  if (codexExtraModels.length > MAX_CODEX_EXTRA_MODELS) {
+    return {
+      valid: false,
+      message: m.error_codex_extra_models_limit({ max: String(MAX_CODEX_EXTRA_MODELS) }),
+    };
+  }
+  for (const model of codexExtraModels) {
+    // 后端限制 256 UTF-8 字节（非字符长）；char::is_control 检查 C0/DEL/C1 控制字符。
+    const bytes = new TextEncoder().encode(model);
+    if (
+      bytes.length > MAX_CODEX_EXTRA_MODEL_ID_LENGTH ||
+      Array.from(model).some((char) => {
+        const code = char.charCodeAt(0);
+        return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+      })
+    ) {
+      return { valid: false, message: m.error_codex_extra_model_invalid({ model }) };
+    }
   }
 
   const ids = new Set<string>();

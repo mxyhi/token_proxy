@@ -86,6 +86,19 @@ impl ProxyConfig {
 
 fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> {
     local_api_keys::validate(&config.local_api_keys)?;
+    let mut codex_extra_models = Vec::new();
+    for model in &config.codex_extra_models {
+        let model = model.trim();
+        if model.len() > 256 || model.chars().any(char::is_control) {
+            return Err("codex_extra_models contains an invalid model ID.".to_string());
+        }
+        if !model.is_empty() && !codex_extra_models.iter().any(|id| id == model) {
+            codex_extra_models.push(model.to_string());
+        }
+    }
+    if codex_extra_models.len() > 64 {
+        return Err("codex_extra_models supports at most 64 model IDs.".to_string());
+    }
     let log_level = config.log_level;
     let max_request_body_bytes = resolve_max_request_body_bytes(config.max_request_body_bytes);
     let app_proxy_url = normalize_app_proxy_url(config.app_proxy_url.as_deref())?;
@@ -117,6 +130,7 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
             .collect(),
         cors_enabled: config.cors_enabled,
         model_list_prefix: config.model_list_prefix,
+        codex_extra_models,
         log_level,
         max_request_body_bytes,
         retryable_failure_cooldown: resolve_retryable_failure_cooldown(

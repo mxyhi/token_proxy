@@ -163,6 +163,111 @@ describe("config/form", () => {
     });
   });
 
+  it("round-trips codex extra models with trim and de-duplication", () => {
+    const payload = toPayload({
+      ...EMPTY_FORM,
+      codexExtraModels: [
+        " qwen3.8-27b-uncensored ",
+        "qwen3.8-27b-uncensored",
+        "",
+        "other-model",
+      ],
+    });
+
+    expect(payload.codex_extra_models).toEqual([
+      "qwen3.8-27b-uncensored",
+      "other-model",
+    ]);
+    expect(toForm(payload).codexExtraModels).toEqual([
+      "qwen3.8-27b-uncensored",
+      "other-model",
+    ]);
+  });
+
+  it("loads legacy configs without codex extra models", () => {
+    const legacy = { ...toPayload(EMPTY_FORM) };
+    delete legacy.codex_extra_models;
+
+    expect(toForm(legacy).codexExtraModels).toEqual([]);
+    expect(extractConfigExtras(legacy)).not.toHaveProperty("codex_extra_models");
+  });
+
+  it("omits codex_extra_models when the list is empty", () => {
+    const payload = toPayload({ ...EMPTY_FORM, codexExtraModels: [] });
+
+    expect("codex_extra_models" in payload).toBe(false);
+    expect(toForm(payload).codexExtraModels).toEqual([]);
+  });
+
+  it("rejects invalid codex extra model ids", () => {
+    // C0 控制字符 U+0001
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: ["bad\u0001model"] }).valid,
+    ).toBe(false);
+    // 超过 256 字符上限（这里测字符数，后面单独测字节数）
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: ["x".repeat(257)] }).valid,
+    ).toBe(false);
+    // 超过 64 个模型上限
+    expect(
+      validate({
+        ...EMPTY_FORM,
+        codexExtraModels: Array.from({ length: 65 }, (_, index) => `model-${index}`),
+      }).valid,
+    ).toBe(false);
+    // 有效的 ASCII 模型名
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: ["qwen3.8-27b-uncensored"] }).valid,
+    ).toBe(true);
+  });
+
+  it("validates codex extra models by UTF-8 byte length and control chars", () => {
+    // DEL 字符 U+007F（单字节控制字符）
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: ["model\u007ftest"] }).valid,
+    ).toBe(false);
+    // C1 控制字符 U+0085（NEL）
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: ["model\u0085test"] }).valid,
+    ).toBe(false);
+    // U+009F（单字节 C1 范围上界）
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: ["model\u009ftest"] }).valid,
+    ).toBe(false);
+    // 中文多字节：每字 3 字节，3×85=255 字节（有效）
+    const chineseValid = "中".repeat(85);
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: [chineseValid] }).valid,
+    ).toBe(true);
+    // 中文多字节：3×86=258 字节（超过 256 上限，无效）
+    const chineseInvalid = "中".repeat(86);
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: [chineseInvalid] }).valid,
+    ).toBe(false);
+    // 混合 ASCII 和多字节：检验字节精度
+    const mixed = "a".repeat(252) + "中";  // 252 + 3 = 255 字节
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: [mixed] }).valid,
+    ).toBe(true);
+    const mixedOverflow = "a".repeat(253) + "中";  // 253 + 3 = 256 字节上界刚好
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: [mixedOverflow] }).valid,
+    ).toBe(true);
+    const mixedOverflowLarge = "a".repeat(254) + "中";  // 254 + 3 = 257 字节（无效）
+    expect(
+      validate({ ...EMPTY_FORM, codexExtraModels: [mixedOverflowLarge] }).valid,
+    ).toBe(false);
+  });
+
+  it("keeps codex extra models out of config extras", () => {
+    const payload = toPayload({
+      ...EMPTY_FORM,
+      codexExtraModels: ["qwen3.8-27b-uncensored"],
+    });
+
+    expect(extractConfigExtras(payload)).toEqual({});
+  });
+
   it("normalizes payload (trim + de-dup providers + sanitize convert_from_map)", () => {
     const upstream = createEmptyUpstream();
     upstream.id = "  upstream-1 ";

@@ -33,6 +33,7 @@ fn config_with_addr_and_body_limit(
         upstream_ids: Default::default(),
         cors_enabled: false,
         model_list_prefix: false,
+        codex_extra_models: Vec::new(),
         log_level: LogLevel::Silent,
         max_request_body_bytes,
         retryable_failure_cooldown: Duration::from_secs(15),

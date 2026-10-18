@@ -219,3 +219,24 @@ Claude Code／Codex 一键配置只有一条启用 Key 时自动选择；多条�
 - **返回 504？** 上游在 120 秒内未返回响应头或首个 body chunk。对于流式响应，若相邻 chunk 间空闲超过 120 秒，连接也可能被关闭。
 - **413 Payload Too Large？** 请求体超过 `max_request_body_bytes`（默认 100 MiB）或格式转换处理上限
 - **为什么不走系统代理？** `reqwest` 默认 `no_proxy()`；如需代理，请在每个 upstream 设置 `proxy_url`
+
+### Codex 模型菜单
+
+在侧栏「Codex 模型」中添加额外模型（例如点击「添加 Qwen」加入 `qwen3.8-27b-uncensored`），等待 TP 自动保存后，在同页展开 Codex 配置并点击「写入」。重启 Codex 后，通过 `/model` 选择模型。
+
+TP 的 `GET /codex/models.json` 保留 Codex 0.163.0 官方模型的完整元数据，只追加 `codex_extra_models` 中显式选择、已配置且当前本地 API Key 有权使用的模型。该接口复用本地 Key 鉴权，支持 HEAD，不依赖 Codex OAuth 账号；官方快照随 TP 版本维护。普通 `/v1/models` 与原来的 Codex manifest 转发保持原有行为。
+
+```json
+{
+  "codex_extra_models": ["qwen3.8-27b-uncensored"]
+}
+```
+
+一键配置会在当前自定义 provider 下写入以下字段，并备份后移除优先级更高的顶层 `model_catalog_json`。保留已有默认模型和推理等级；如果通过 Codex profile 启动，也需检查该 profile 是否覆盖目录配置。
+
+```toml
+[model_providers.custom]
+model_catalog_url = "http://127.0.0.1:9208/codex/models.json"
+```
+
+菜单可见性不代表调用成功。额外模型默认使用保守的 32K 文本/函数工具配置，不宣称支持 GPT 专用推理参数、内置搜索、图片或 Responses lite；对应上游仍需支持 Responses 或 TP 已配置的协议转换。

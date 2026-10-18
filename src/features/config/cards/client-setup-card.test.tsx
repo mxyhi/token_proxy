@@ -33,6 +33,7 @@ function setup(
     codex_network_access: "enabled",
     codex_preferred_auth_method: "apikey",
     codex_provider_base_url: "http://localhost:9208/v1",
+    codex_model_catalog_url: "http://127.0.0.1:9208/codex/models.json",
     codex_provider_name: "token_proxy",
     codex_provider_requires_openai_auth: true,
     codex_provider_wire_api: "responses",
@@ -112,6 +113,24 @@ describe("client API key selection", () => {
     fireEvent.click(
       screen.getAllByRole("button", { name: m.common_show() })[0],
     );
+    expect(
+      screen.getByRole("button", { name: m.client_setup_apply() }),
+    ).toBeDisabled();
+  });
+
+  it("previews the codex model catalog url and blocks applying unsaved config", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) =>
+      command === "preview_client_setup" ? setup([], false) : { paths: [] },
+    );
+    render(<ClientSetupCard savedAt="" isDirty />);
+    const showButtons = await screen.findAllByRole("button", {
+      name: m.common_show(),
+    });
+
+    fireEvent.click(showButtons[1]);
+    expect(
+      screen.getByText('model_catalog_url = "http://127.0.0.1:9208/codex/models.json"'),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: m.client_setup_apply() }),
     ).toBeDisabled();

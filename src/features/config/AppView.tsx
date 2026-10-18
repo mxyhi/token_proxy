@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   ClientSetupCard,
+  CodexModelMenuCard,
   ConfigFileCard,
   AutoStartCard,
   ProjectLinksCard,
@@ -290,6 +291,17 @@ function ConfigSectionBody({
       return (
         <div className="flex flex-col gap-4">
           <ClientSetupCard savedAt={props.savedAt} isDirty={props.isDirty} />
+        </div>
+      );
+    case "codex-models":
+      return (
+        <div className="flex flex-col gap-4">
+          <CodexModelMenuCard
+            models={props.form.codexExtraModels}
+            onChange={(models) => props.onFormChange({ codexExtraModels: models })}
+            isDirty={props.isDirty}
+          />
+          <ClientSetupCard savedAt={props.savedAt} isDirty={props.isDirty} showCodexOnly={true} />
         </div>
       );
     default:

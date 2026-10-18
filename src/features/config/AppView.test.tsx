@@ -16,6 +16,7 @@ vi.mock("@/layouts/site-header", () => ({
 
 vi.mock("@/features/config/cards", () => ({
   ClientSetupCard: () => <div data-testid="client-setup-card" />,
+  CodexModelMenuCard: () => <div data-testid="codex-model-menu-card" />,
   ConfigFileCard: () => <div data-testid="config-file-card" />,
   StorageUsageCard: () => <div data-testid="storage-usage-card" />,
   AutoStartCard: () => <div data-testid="auto-start-card" />,

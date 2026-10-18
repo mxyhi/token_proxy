@@ -153,6 +153,8 @@ export type ProxyConfigFileBase = {
   model_list_prefix?: boolean;
   /** 后端一次性迁移标记：旧配置已默认打开 model_list_prefix */
   model_list_prefix_default_on_migrated?: boolean;
+  /** Codex `/model` 菜单额外模型；官方模型始终保留，缺省/空数组表示仅官方。 */
+  codex_extra_models?: string[];
   kiro_preferred_endpoint?: KiroPreferredEndpoint | null;
   log_level?: LogLevel;
   /** 入站与 JSON 过滤/转换共用上限，单位字节；缺省 100 MiB。 */
@@ -246,6 +248,7 @@ export type ConfigForm = {
   appProxyUrl: string;
   corsEnabled: boolean;
   modelListPrefix: boolean;
+  codexExtraModels: string[];
   kiroPreferredEndpoint: "" | KiroPreferredEndpoint;
   logLevel: LogLevel;
   maxRequestBodyMib: string;

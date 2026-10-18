@@ -53,6 +53,10 @@ describe("layouts/AppSidebar", () => {
       "href",
       "/config/agents"
     );
+    expect(screen.getByRole("link", { name: m.config_section_codex_models_label() })).toHaveAttribute(
+      "href",
+      "/config/codex-models"
+    );
   });
 
   it("marks the active route and renders the motion layout indicator", () => {

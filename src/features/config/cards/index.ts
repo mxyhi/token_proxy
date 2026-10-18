@@ -8,3 +8,4 @@ export { StorageUsageCard } from "./storage-usage-card";
 export { ClientSetupCard } from "./client-setup-card";
 export { UpdateCard } from "./update-card";
 export { ProjectLinksCard } from "./project-links-card";
+export { CodexModelMenuCard } from "./codex-model-menu-card";

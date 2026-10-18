@@ -10,6 +10,7 @@ describe("config/sections", () => {
     expect(getSectionIdFromPathname("/config/api-keys")).toBe("api-keys");
     expect(getSectionIdFromPathname("/config/upstreams")).toBe("upstreams");
     expect(getSectionIdFromPathname("/config/pricing")).toBe("pricing");
+    expect(getSectionIdFromPathname("/config/codex-models")).toBe("codex-models");
     expect(getSectionIdFromPathname("/config/settings/")).toBe("settings");
   });
 

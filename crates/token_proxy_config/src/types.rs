@@ -335,6 +335,9 @@ pub struct ProxyConfigFile {
         skip_serializing_if = "is_default_model_list_prefix"
     )]
     pub model_list_prefix: bool,
+    /// Codex 模型菜单额外显示的模型；官方目录始终保留，缺省不追加。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codex_extra_models: Vec<String>,
     /// 一次性迁移：旧配置已从「默认关」切到「默认开 model_list_prefix」。
     /// 标记后用户可再手动关闭，不会被再次强制打开。
     #[serde(default, skip_serializing_if = "is_false")]
@@ -395,6 +398,7 @@ impl Default for ProxyConfigFile {
             app_proxy_url: None,
             cors_enabled: false,
             model_list_prefix: default_model_list_prefix(),
+            codex_extra_models: Vec::new(),
             // 新配置无需再跑默认开启迁移。
             model_list_prefix_default_on_migrated: true,
             kiro_preferred_endpoint: None,
@@ -442,6 +446,7 @@ pub struct ProxyConfig {
     pub upstream_ids: std::collections::HashSet<String>,
     pub cors_enabled: bool,
     pub model_list_prefix: bool,
+    pub codex_extra_models: Vec<String>,
     pub log_level: LogLevel,
     pub max_request_body_bytes: usize,
     pub retryable_failure_cooldown: std::time::Duration,

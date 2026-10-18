@@ -11,6 +11,9 @@ import { Route as ConfigIndexRouteImport } from "./routes/config/index"
 
 const ConfigAgentsLazyRouteImport = createFileRoute("/config/agents")()
 const ConfigApiKeysLazyRouteImport = createFileRoute("/config/api-keys")()
+const ConfigCodexModelsLazyRouteImport = createFileRoute(
+  "/config/codex-models",
+)()
 const ConfigCoreLazyRouteImport = createFileRoute("/config/core")()
 const ConfigDashboardLazyRouteImport = createFileRoute("/config/dashboard")()
 const ConfigLogsLazyRouteImport = createFileRoute("/config/logs")()
@@ -44,6 +47,13 @@ const ConfigApiKeysLazyRoute = ConfigApiKeysLazyRouteImport.update({
   getParentRoute: () => ConfigRouteRoute,
 } as any).lazy(() =>
   import("./routes/config/api-keys.lazy").then((d) => d.Route),
+)
+const ConfigCodexModelsLazyRoute = ConfigCodexModelsLazyRouteImport.update({
+  id: "/codex-models",
+  path: "/codex-models",
+  getParentRoute: () => ConfigRouteRoute,
+} as any).lazy(() =>
+  import("./routes/config/codex-models.lazy").then((d) => d.Route),
 )
 const ConfigCoreLazyRoute = ConfigCoreLazyRouteImport.update({
   id: "/core",
@@ -89,6 +99,7 @@ export interface FileRoutesByFullPath {
   "/config": typeof ConfigRouteRouteWithChildren
   "/config/agents": typeof ConfigAgentsLazyRoute
   "/config/api-keys": typeof ConfigApiKeysLazyRoute
+  "/config/codex-models": typeof ConfigCodexModelsLazyRoute
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
@@ -101,6 +112,7 @@ export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/config/agents": typeof ConfigAgentsLazyRoute
   "/config/api-keys": typeof ConfigApiKeysLazyRoute
+  "/config/codex-models": typeof ConfigCodexModelsLazyRoute
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
@@ -115,6 +127,7 @@ export interface FileRoutesById {
   "/config": typeof ConfigRouteRouteWithChildren
   "/config/agents": typeof ConfigAgentsLazyRoute
   "/config/api-keys": typeof ConfigApiKeysLazyRoute
+  "/config/codex-models": typeof ConfigCodexModelsLazyRoute
   "/config/core": typeof ConfigCoreLazyRoute
   "/config/dashboard": typeof ConfigDashboardLazyRoute
   "/config/logs": typeof ConfigLogsLazyRoute
@@ -130,6 +143,7 @@ export interface FileRouteTypes {
     | "/config"
     | "/config/agents"
     | "/config/api-keys"
+    | "/config/codex-models"
     | "/config/core"
     | "/config/dashboard"
     | "/config/logs"
@@ -142,6 +156,7 @@ export interface FileRouteTypes {
     | "/"
     | "/config/agents"
     | "/config/api-keys"
+    | "/config/codex-models"
     | "/config/core"
     | "/config/dashboard"
     | "/config/logs"
@@ -155,6 +170,7 @@ export interface FileRouteTypes {
     | "/config"
     | "/config/agents"
     | "/config/api-keys"
+    | "/config/codex-models"
     | "/config/core"
     | "/config/dashboard"
     | "/config/logs"
@@ -206,6 +222,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ConfigApiKeysLazyRouteImport
       parentRoute: typeof ConfigRouteRoute
     }
+    "/config/codex-models": {
+      id: "/config/codex-models"
+      path: "/codex-models"
+      fullPath: "/config/codex-models"
+      preLoaderRoute: typeof ConfigCodexModelsLazyRouteImport
+      parentRoute: typeof ConfigRouteRoute
+    }
     "/config/core": {
       id: "/config/core"
       path: "/core"
@@ -254,6 +277,7 @@ declare module "@tanstack/react-router" {
 interface ConfigRouteRouteChildren {
   ConfigAgentsLazyRoute: typeof ConfigAgentsLazyRoute
   ConfigApiKeysLazyRoute: typeof ConfigApiKeysLazyRoute
+  ConfigCodexModelsLazyRoute: typeof ConfigCodexModelsLazyRoute
   ConfigCoreLazyRoute: typeof ConfigCoreLazyRoute
   ConfigDashboardLazyRoute: typeof ConfigDashboardLazyRoute
   ConfigLogsLazyRoute: typeof ConfigLogsLazyRoute
@@ -266,6 +290,7 @@ interface ConfigRouteRouteChildren {
 const ConfigRouteRouteChildren: ConfigRouteRouteChildren = {
   ConfigAgentsLazyRoute: ConfigAgentsLazyRoute,
   ConfigApiKeysLazyRoute: ConfigApiKeysLazyRoute,
+  ConfigCodexModelsLazyRoute: ConfigCodexModelsLazyRoute,
   ConfigCoreLazyRoute: ConfigCoreLazyRoute,
   ConfigDashboardLazyRoute: ConfigDashboardLazyRoute,
   ConfigLogsLazyRoute: ConfigLogsLazyRoute,

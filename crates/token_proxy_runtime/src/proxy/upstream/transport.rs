@@ -835,6 +835,7 @@ mod tests {
             upstream_ids: Default::default(),
             cors_enabled: false,
             model_list_prefix: false,
+            codex_extra_models: Vec::new(),
             log_level: LogLevel::Silent,
             max_request_body_bytes: 1024,
             retryable_failure_cooldown: Duration::from_secs(15),

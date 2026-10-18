@@ -21,6 +21,8 @@ export type ClientSetupInfo = {
   codex_network_access: string;
   codex_preferred_auth_method: string;
   codex_provider_base_url: string;
+  /** 可选：旧内核预览不返回该字段时按代理地址回退。 */
+  codex_model_catalog_url?: string;
   codex_provider_name: string;
   codex_provider_requires_openai_auth: boolean;
   codex_provider_wire_api: string;

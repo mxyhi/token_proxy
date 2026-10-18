@@ -32,6 +32,7 @@ const CODEX_RESPONSES_PATH: &str = "/responses";
 type ProxyStateHandle = Arc<RwLock<Arc<ProxyState>>>;
 
 mod bootstrap;
+mod codex_catalog;
 mod dispatch;
 mod execute;
 mod fallback;
@@ -163,11 +164,24 @@ async fn proxy_request_inner(
 
     let is_codex_models_manifest =
         codex_models_manifest::is_request(&method, &path, query.as_deref());
+    let is_codex_catalog = path == codex_catalog::PATH;
+    if is_codex_catalog && !matches!(method, Method::GET | Method::HEAD) {
+        return http::with_cors_headers(
+            &state.config,
+            &headers,
+            http::error_response(
+                axum::http::StatusCode::METHOD_NOT_ALLOWED,
+                "Use GET or HEAD for the Codex model catalog.",
+            ),
+        );
+    }
     // OpenAI 兼容模型索引：跨全部 enabled upstream 并集，不按 priority 单选 provider。
     // Codex 带 client_version 的 manifest 仍走后续转发路径。
     if matches!(method, Method::GET | Method::HEAD)
         && !is_codex_models_manifest
-        && (is_openai_models_index_path(&path) || is_openai_compatible_models_index_path(&path))
+        && (is_codex_catalog
+            || is_openai_models_index_path(&path)
+            || is_openai_compatible_models_index_path(&path))
     {
         let (_body, local_access) = match ensure_local_auth_or_respond(
             &state.config,
@@ -201,14 +215,15 @@ async fn proxy_request_inner(
             return http::with_cors_headers(&state.config, &headers, response);
         }
         tracing::debug!(path = %path, "serving cached multi-provider model catalog");
-        let mut response = aggregate_all_providers_model_catalog(
-            state.clone(),
-            &http::RequestAuth {
-                local_access,
-                ..Default::default()
-            },
-        )
-        .await;
+        let request_auth = http::RequestAuth {
+            local_access,
+            ..Default::default()
+        };
+        let mut response = if is_codex_catalog {
+            codex_catalog::response(state.as_ref(), &request_auth).await
+        } else {
+            aggregate_all_providers_model_catalog(state.clone(), &request_auth).await
+        };
         if method == Method::HEAD {
             *response.body_mut() = Body::empty();
         }

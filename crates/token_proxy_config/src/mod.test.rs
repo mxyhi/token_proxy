@@ -4,6 +4,30 @@ use super::*;
 use std::collections::HashMap;
 use std::time::Duration;
 
+#[test]
+fn codex_extra_models_roundtrip_and_runtime_normalization() {
+    let mut config = ProxyConfigFile::default();
+    let legacy = serde_json::to_value(&config).unwrap();
+    assert!(legacy.get("codex_extra_models").is_none());
+    assert!(serde_json::from_value::<ProxyConfigFile>(legacy)
+        .unwrap()
+        .codex_extra_models
+        .is_empty());
+    config.codex_extra_models = vec![
+        " qwen3.8-27b-uncensored ".into(),
+        "".into(),
+        "qwen3.8-27b-uncensored".into(),
+    ];
+    let restored: ProxyConfigFile =
+        serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+    assert_eq!(restored.codex_extra_models, config.codex_extra_models);
+    assert_eq!(
+        build_runtime_config(restored).unwrap().codex_extra_models,
+        vec!["qwen3.8-27b-uncensored"]
+    );
+    config.codex_extra_models = vec!["bad\nmodel".into()];
+    assert!(build_runtime_config(config).is_err());
+}
 fn sample_upstream(
     id: &str,
     providers: &[&str],

@@ -8,6 +8,7 @@ import {
   SlidersHorizontal,
   ScrollText,
   Settings,
+  Boxes,
 } from "lucide-react";
 
 import { m } from "@/paraglide/messages.js";
@@ -20,11 +21,12 @@ export type ConfigSectionId =
   | "api-keys"
   | "pricing"
   | "agents"
+  | "codex-models"
   | "settings";
 
 export type ConfigEditorSectionId = Extract<
   ConfigSectionId,
-  "core" | "upstreams" | "api-keys" | "agents" | "settings"
+  "core" | "upstreams" | "api-keys" | "agents" | "codex-models" | "settings"
 >;
 
 export type ConfigSectionRoute = `/config/${ConfigSectionId}`;
@@ -72,6 +74,13 @@ export const CONFIG_SECTIONS: readonly ConfigSection[] = [
     label: () => m.config_section_agents_label(),
     description: () => m.config_section_agents_desc(),
     icon: Shuffle,
+  },
+  {
+    id: "codex-models",
+    route: "/config/codex-models",
+    label: () => m.config_section_codex_models_label(),
+    description: () => m.config_section_codex_models_desc(),
+    icon: Boxes,
   },
   {
     id: "core",

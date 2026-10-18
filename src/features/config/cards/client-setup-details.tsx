@@ -25,6 +25,9 @@ export function ClaudeSetupDetails({ setup }: { setup: ClientSetupInfo }) {
 }
 
 export function CodexSetupDetails({ setup }: { setup: ClientSetupInfo }) {
+  const modelCatalogUrl =
+    setup.codex_model_catalog_url ??
+    `${setup.proxy_http_base_url.replace(/\/+$/, "")}/codex/models.json`;
   return (
     <div data-slot="client-setup-codex-details" className="space-y-4">
       <DetailSection label={m.client_setup_target_file_label()}>
@@ -44,6 +47,7 @@ export function CodexSetupDetails({ setup }: { setup: ClientSetupInfo }) {
             `name = "${setup.codex_provider_name}"`,
             `requires_openai_auth = ${setup.codex_provider_requires_openai_auth ? "true" : "false"}`,
             `wire_api = "${setup.codex_provider_wire_api}"`,
+            `model_catalog_url = "${modelCatalogUrl}"`,
             `auth.json: OPENAI_API_KEY = "${
               setup.codex_api_key_configured ? "••••••••" : m.client_setup_not_configured()
             }"`,

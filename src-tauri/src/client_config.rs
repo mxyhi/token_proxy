@@ -41,6 +41,7 @@ pub(crate) struct ClientSetupInfo {
     pub(crate) codex_network_access: String,
     pub(crate) codex_preferred_auth_method: String,
     pub(crate) codex_provider_base_url: String,
+    pub(crate) codex_model_catalog_url: String,
     pub(crate) codex_provider_name: String,
     pub(crate) codex_provider_requires_openai_auth: bool,
     pub(crate) codex_provider_wire_api: String,
@@ -93,6 +94,16 @@ pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
     let codex_config_input = read_text_or_empty(&codex_config_path).await?;
     let (codex_model_provider, codex_provider_name) =
         resolve_codex_target_provider_and_name(&codex_config_input);
+    let codex_doc = toml_edit::DocumentMut::from_str(&codex_config_input).ok();
+    let existing_string = |key: &str, fallback: &str| {
+        codex_doc
+            .as_ref()
+            .and_then(|doc| doc.get(key))
+            .and_then(toml_edit::Item::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(fallback)
+            .to_string()
+    };
     let has_local_key = config.local_api_keys.iter().any(|key| key.enabled);
     let openai_compat_base_url = build_openai_compat_base_url(&proxy_http_base_url);
 
@@ -115,12 +126,16 @@ pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
         codex_config_path: codex_config_path.to_string_lossy().to_string(),
         codex_auth_path: codex_auth_path.to_string_lossy().to_string(),
         codex_disable_response_storage: CODEX_DISABLE_RESPONSE_STORAGE,
-        codex_model: CODEX_MODEL.to_string(),
+        codex_model: existing_string("model", CODEX_MODEL),
         codex_model_provider,
-        codex_model_reasoning_effort: CODEX_MODEL_REASONING_EFFORT.to_string(),
+        codex_model_reasoning_effort: existing_string(
+            "model_reasoning_effort",
+            CODEX_MODEL_REASONING_EFFORT,
+        ),
         codex_network_access: CODEX_NETWORK_ACCESS.to_string(),
         codex_preferred_auth_method: CODEX_PREFERRED_AUTH_METHOD.to_string(),
         codex_provider_base_url: openai_compat_base_url.clone(),
+        codex_model_catalog_url: format!("{proxy_http_base_url}/codex/models.json"),
         codex_provider_name,
         codex_provider_requires_openai_auth: CODEX_PROVIDER_REQUIRES_OPENAI_AUTH,
         codex_provider_wire_api: CODEX_PROVIDER_WIRE_API.to_string(),
@@ -341,9 +356,14 @@ fn apply_codex_proxy_settings(
     codex_provider_base_url: &str,
 ) -> Result<(), String> {
     doc["disable_response_storage"] = toml_edit::value(CODEX_DISABLE_RESPONSE_STORAGE);
-    doc["model"] = toml_edit::value(CODEX_MODEL);
+    // 接入模型菜单时保留用户当前模型与推理等级，避免快速配置顺带切换模型。
+    if doc.get("model").is_none() {
+        doc["model"] = toml_edit::value(CODEX_MODEL);
+    }
     doc["model_provider"] = toml_edit::value(codex_model_provider);
-    doc["model_reasoning_effort"] = toml_edit::value(CODEX_MODEL_REASONING_EFFORT);
+    if doc.get("model_reasoning_effort").is_none() {
+        doc["model_reasoning_effort"] = toml_edit::value(CODEX_MODEL_REASONING_EFFORT);
+    }
     doc["network_access"] = toml_edit::value(CODEX_NETWORK_ACCESS);
     doc["preferred_auth_method"] = toml_edit::value(CODEX_PREFERRED_AUTH_METHOD);
 
@@ -357,6 +377,12 @@ fn apply_codex_proxy_settings(
         toml_edit::value(CODEX_PROVIDER_REQUIRES_OPENAI_AUTH);
     doc["model_providers"][codex_model_provider]["wire_api"] =
         toml_edit::value(CODEX_PROVIDER_WIRE_API);
+    doc["model_providers"][codex_model_provider]["model_catalog_url"] = toml_edit::value(format!(
+        "{}/codex/models.json",
+        codex_provider_base_url.trim_end_matches("/v1")
+    ));
+    // 本地目录优先于远程 URL；明确接入 TP 时移除遮蔽项，原配置已由写入层备份。
+    doc.as_table_mut().remove("model_catalog_json");
 
     if let Some(table) = doc["model_providers"][codex_model_provider].as_table_mut() {
         table.remove("experimental_bearer_token");
@@ -522,6 +548,35 @@ base_url = "https://api.openai.com/v1"
         .expect("apply codex proxy settings");
 
         assert_eq!(doc["model"].as_str(), Some("gpt-5.5"));
+    }
+
+    #[test]
+    fn apply_codex_catalog_keeps_current_model_and_removes_local_override() {
+        let mut doc = DocumentMut::from_str(
+            r#"
+model = "gpt-6-astra"
+model_reasoning_effort = "high"
+model_catalog_json = "/tmp/old-models.json"
+[model_providers.custom]
+name = "My proxy"
+[model_providers.custom.http_headers]
+X-Custom = "preserve"
+"#,
+        )
+        .unwrap();
+        apply_codex_proxy_settings(&mut doc, "custom", "My proxy", "http://127.0.0.1:9208/v1")
+            .unwrap();
+        assert_eq!(doc["model"].as_str(), Some("gpt-6-astra"));
+        assert_eq!(doc["model_reasoning_effort"].as_str(), Some("high"));
+        assert_eq!(
+            doc["model_providers"]["custom"]["model_catalog_url"].as_str(),
+            Some("http://127.0.0.1:9208/codex/models.json")
+        );
+        assert_eq!(
+            doc["model_providers"]["custom"]["http_headers"]["X-Custom"].as_str(),
+            Some("preserve")
+        );
+        assert!(doc.get("model_catalog_json").is_none());
     }
 }
 

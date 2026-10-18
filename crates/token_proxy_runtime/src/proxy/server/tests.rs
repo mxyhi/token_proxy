@@ -2,6 +2,8 @@
 mod chat_truncation_tests;
 #[path = "local_api_keys.test.rs"]
 mod local_api_keys_tests;
+#[path = "codex_catalog.test.rs"]
+mod codex_catalog_tests;
 
 use super::*;
 
@@ -149,6 +151,7 @@ fn config_with_runtime_upstreams(
         upstream_ids: Default::default(),
         cors_enabled: false,
         model_list_prefix: false,
+        codex_extra_models: Vec::new(),
         log_level: LogLevel::Silent,
         max_request_body_bytes: 20 * 1024 * 1024,
         retryable_failure_cooldown: std::time::Duration::from_secs(15),

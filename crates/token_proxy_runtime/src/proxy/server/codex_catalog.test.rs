@@ -61,6 +61,12 @@ fn codex_catalog_preserves_official_metadata_and_only_appends_selected_models() 
         assert_eq!(models.last().unwrap()["visibility"], "list");
         assert_eq!(models.last().unwrap()["support_verbosity"], false);
         assert_eq!(models.last().unwrap()["use_responses_lite"], false);
+        assert_eq!(models.last().unwrap()["context_window"], 32768);
+        assert_eq!(
+            models.last().unwrap()["input_modalities"],
+            serde_json::json!(["text"])
+        );
+        assert_eq!(models.last().unwrap()["default_reasoning_level"], "none");
         // ModelsResponse 在反序列化时强制要求指令模板；缺失会让官方模型也消失。
         for model in models {
             assert!(model["model_messages"]["instructions_template"]
@@ -83,11 +89,69 @@ fn codex_catalog_preserves_official_metadata_and_only_appends_selected_models() 
 }
 
 #[test]
+fn codex_catalog_applies_selected_model_capabilities_without_changing_official_models() {
+    run_async(async {
+        let mut config =
+            config_with_upstreams(&[(PROVIDER_RESPONSES, 0, "qwen", FORMATS_RESPONSES)]);
+        config.codex_extra_models = vec![QWEN.into(), "gpt-6-astra".into()];
+        config.upstreams.get_mut(PROVIDER_RESPONSES).unwrap().groups[0].items[0]
+            .advertised_model_ids = vec![QWEN.into(), "gpt-6-astra".into(), "unselected".into()];
+        let capabilities = token_proxy_config::CodexModelCapabilities {
+            context_window: 131072,
+            supports_vision: true,
+            reasoning_effort: token_proxy_config::CodexReasoningEffort::Xhigh,
+        };
+        for model in [QWEN, "gpt-6-astra", "unselected"] {
+            config
+                .codex_model_capabilities
+                .insert(model.into(), capabilities.clone());
+        }
+        let dir = next_test_data_dir("codex-catalog-capabilities");
+        let state = build_test_state_handle(config, dir.clone()).await;
+        let response = catalog_request(state, Method::GET, None).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let result: Value = serde_json::from_slice(&body).unwrap();
+        let official: Value =
+            serde_json::from_str(include_str!("../../../resources/codex-models-0.163.0.json"))
+                .unwrap();
+        let original = official["models"].as_array().unwrap();
+        let models = result["models"].as_array().unwrap();
+        assert_eq!(&models[..original.len()], original.as_slice());
+        assert_eq!(models.len(), original.len() + 1);
+        let qwen = models.last().unwrap();
+        assert_eq!(qwen["slug"], QWEN);
+        assert_eq!(qwen["context_window"], 131072);
+        assert_eq!(qwen["max_context_window"], 131072);
+        assert_eq!(
+            qwen["input_modalities"],
+            serde_json::json!(["text", "image"])
+        );
+        assert_eq!(qwen["default_reasoning_level"], "xhigh");
+        assert_eq!(qwen["supported_reasoning_levels"][0]["effort"], "xhigh");
+        assert_eq!(
+            qwen["supported_reasoning_levels"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(qwen["supports_reasoning_summary_parameter"], false);
+        let _ = std::fs::remove_dir_all(dir);
+    });
+}
+
+#[test]
 fn codex_catalog_auth_and_scope_hide_unselected_upstream_models() {
     run_async(async {
         let mut config =
             config_with_upstreams(&[(PROVIDER_RESPONSES, 0, "qwen", FORMATS_RESPONSES)]);
         config.codex_extra_models = vec![QWEN.into()];
+        config.codex_model_capabilities.insert(
+            QWEN.into(),
+            token_proxy_config::CodexModelCapabilities {
+                context_window: 131072,
+                supports_vision: true,
+                reasoning_effort: token_proxy_config::CodexReasoningEffort::Xhigh,
+            },
+        );
         config.upstreams.get_mut(PROVIDER_RESPONSES).unwrap().groups[0].items[0]
             .advertised_model_ids = vec![QWEN.into()];
         config.local_api_keys = vec![LocalApiKey {

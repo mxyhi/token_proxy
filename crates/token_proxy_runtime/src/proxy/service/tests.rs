@@ -34,6 +34,7 @@ fn config_with_addr_and_body_limit(
         cors_enabled: false,
         model_list_prefix: false,
         codex_extra_models: Vec::new(),
+        codex_model_capabilities: Default::default(),
         log_level: LogLevel::Silent,
         max_request_body_bytes,
         retryable_failure_cooldown: Duration::from_secs(15),

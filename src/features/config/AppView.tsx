@@ -293,7 +293,11 @@ function ConfigSectionBody({
           <ClientSetupCard savedAt={props.savedAt} isDirty={props.isDirty} />
           <CodexModelMenuCard
             models={props.form.codexExtraModels}
-            onChange={(models) => props.onFormChange({ codexExtraModels: models })}
+            capabilities={props.form.codexModelCapabilities}
+            onChange={(models, capabilities) => props.onFormChange({
+              codexExtraModels: models,
+              codexModelCapabilities: capabilities,
+            })}
             isDirty={props.isDirty}
           />
         </div>

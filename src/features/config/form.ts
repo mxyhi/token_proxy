@@ -1,5 +1,6 @@
 import { validateLocalApiKeys } from "./local-api-keys";
 import {
+  type CodexModelCapabilities,
   type ConfigForm,
   type InboundApiFormat,
   type KiroPreferredEndpoint,
@@ -120,6 +121,20 @@ export function normalizeCodexExtraModels(values: readonly string[]) {
 const MAX_CODEX_EXTRA_MODEL_ID_LENGTH = 256;
 const MAX_CODEX_EXTRA_MODELS = 64;
 
+export const DEFAULT_CODEX_MODEL_CAPABILITIES: CodexModelCapabilities = {
+  context_window: 32768,
+  supports_vision: false,
+  reasoning_effort: "none",
+};
+
+export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+
+function normalizeCodexModelCapabilities(values: Record<string, CodexModelCapabilities>) {
+  return Object.fromEntries(Object.entries(values).map(([model, capabilities]) => [
+    model.trim(), { ...DEFAULT_CODEX_MODEL_CAPABILITIES, ...capabilities },
+  ]));
+}
+
 const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "host",
   "port",
@@ -130,6 +145,7 @@ const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "model_list_prefix",
   // model_list_prefix_default_on_migrated 走 extras 透传，避免前端保存时丢掉一次性迁移标记。
   "codex_extra_models",
+  "codex_model_capabilities",
   "kiro_preferred_endpoint",
   "log_level",
   "max_request_body_bytes",
@@ -161,6 +177,7 @@ export const EMPTY_FORM: ConfigForm = {
   corsEnabled: false,
   modelListPrefix: true,
   codexExtraModels: [],
+  codexModelCapabilities: {},
   kiroPreferredEndpoint: "ide",
   logLevel: "silent",
   maxRequestBodyMib: "100",
@@ -283,6 +300,7 @@ export function toForm(config: ProxyConfigFile): ConfigForm {
     corsEnabled: config.cors_enabled ?? false,
     modelListPrefix: config.model_list_prefix ?? true,
     codexExtraModels: normalizeCodexExtraModels(config.codex_extra_models ?? []),
+    codexModelCapabilities: normalizeCodexModelCapabilities(config.codex_model_capabilities ?? {}),
     kiroPreferredEndpoint: config.kiro_preferred_endpoint ?? "ide",
     logLevel: config.log_level ?? "silent",
     maxRequestBodyMib: bytesToMibString(config.max_request_body_bytes),
@@ -346,6 +364,9 @@ export function toPayload(form: ConfigForm): ProxyConfigFile {
     model_list_prefix: form.modelListPrefix,
     // 空列表展示为“仅官方模型”；省略字段与空数组在脏检查中保持等价。
     ...(codexExtraModels.length ? { codex_extra_models: codexExtraModels } : {}),
+    ...(Object.keys(form.codexModelCapabilities).length
+      ? { codex_model_capabilities: normalizeCodexModelCapabilities(form.codexModelCapabilities) }
+      : {}),
     kiro_preferred_endpoint: normalizeKiroPreferredEndpoint(form.kiroPreferredEndpoint),
     log_level: form.logLevel,
     max_request_body_bytes: parseMaxRequestBodyBytes(form.maxRequestBodyMib),
@@ -473,6 +494,28 @@ export function validate(form: ConfigForm) {
   }
 
   const ids = new Set<string>();
+  const capabilitiesEntries = Object.entries(form.codexModelCapabilities);
+  if (capabilitiesEntries.length > MAX_CODEX_EXTRA_MODELS) {
+    return { valid: false, message: m.error_codex_extra_models_limit({ max: String(MAX_CODEX_EXTRA_MODELS) }) };
+  }
+  const capabilityIds = new Set<string>();
+  for (const [rawModel, capabilities] of capabilitiesEntries) {
+    const model = rawModel.trim();
+    if (!model || capabilityIds.has(model) || new TextEncoder().encode(model).length > MAX_CODEX_EXTRA_MODEL_ID_LENGTH ||
+      Array.from(model).some((char) => {
+        const code = char.charCodeAt(0);
+        return code <= 0x1f || (code >= 0x7f && code <= 0x9f);
+      })) {
+      return { valid: false, message: m.error_codex_extra_model_invalid({ model }) };
+    }
+    capabilityIds.add(model);
+    if (!Number.isInteger(capabilities.context_window) || capabilities.context_window < 1 || capabilities.context_window > 4294967295) {
+      return { valid: false, message: m.codex_model_capabilities_invalid_context() };
+    }
+    if (typeof capabilities.supports_vision !== "boolean" || !CODEX_REASONING_EFFORTS.includes(capabilities.reasoning_effort)) {
+      return { valid: false, message: m.codex_model_capabilities_invalid() };
+    }
+  }
   for (const upstream of form.upstreams) {
     const id = upstream.id.trim();
     if (!id) {

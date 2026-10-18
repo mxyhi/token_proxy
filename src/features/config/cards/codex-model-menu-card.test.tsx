@@ -27,6 +27,33 @@ describe("CodexModelMenuCard", () => {
 
   afterEach(cleanup);
 
+  it("edits one model and removes its capabilities without changing another model", () => {
+    const onChange = vi.fn();
+    const capabilities = {
+      qwen: { context_window: 131072, supports_vision: true, reasoning_effort: "xhigh" as const },
+      other: { context_window: 32768, supports_vision: false, reasoning_effort: "none" as const },
+    };
+    render(<CodexModelMenuCard models={["qwen", "other"]} capabilities={capabilities} onChange={onChange} isDirty={false} />);
+    const editor = within(screen.getByRole("region", { name: "qwen" }));
+    const context = editor.getByRole("spinbutton");
+    fireEvent.change(context, { target: { value: "262144" } });
+    fireEvent.blur(context);
+    expect(onChange).toHaveBeenLastCalledWith(["qwen", "other"], {
+      ...capabilities, qwen: { ...capabilities.qwen, context_window: 262144 },
+    });
+    onChange.mockClear();
+    fireEvent.change(context, { target: { value: "0" } });
+    fireEvent.blur(context);
+    expect(onChange).not.toHaveBeenCalled();
+    expect(editor.getByText(m.codex_model_capabilities_invalid_context())).toBeInTheDocument();
+    fireEvent.click(editor.getByRole("switch"));
+    expect(onChange).toHaveBeenLastCalledWith(["qwen", "other"], {
+      ...capabilities, qwen: { ...capabilities.qwen, supports_vision: false },
+    });
+    fireEvent.click(screen.getByRole("button", { name: m.codex_model_menu_remove({ model: "qwen" }) }));
+    expect(onChange).toHaveBeenLastCalledWith(["other"], { other: capabilities.other });
+  });
+
   it("lists channel candidates without official models and toggles them", async () => {
     invokeMock.mockResolvedValue(["qwen3.8-27b-uncensored", "gpt-5.5", "deepseek-v4"]);
     const onChange = vi.fn();
@@ -41,10 +68,10 @@ describe("CodexModelMenuCard", () => {
     expect(candidateList().getByText("custom-model")).toBeInTheDocument();
 
     fireEvent.click(candidateList().getByRole("checkbox", { name: "deepseek-v4" }));
-    expect(onChange).toHaveBeenLastCalledWith(["custom-model", "deepseek-v4"]);
+    expect(onChange).toHaveBeenLastCalledWith(["custom-model", "deepseek-v4"], {});
 
     fireEvent.click(candidateList().getByRole("checkbox", { name: "custom-model" }));
-    expect(onChange).toHaveBeenLastCalledWith([]);
+    expect(onChange).toHaveBeenLastCalledWith([], {});
   });
 
   it("filters candidates by search keyword", async () => {
@@ -87,7 +114,9 @@ describe("CodexModelMenuCard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: m.codex_model_menu_add_qwen() }));
     expect(onChange).toHaveBeenCalledTimes(1);
-    expect(onChange).toHaveBeenCalledWith(["qwen3.8-27b-uncensored"]);
+    expect(onChange).toHaveBeenCalledWith(["qwen3.8-27b-uncensored"], {
+      "qwen3.8-27b-uncensored": { context_window: 131072, supports_vision: true, reasoning_effort: "xhigh" },
+    });
 
     view.rerender(
       <CodexModelMenuCard
@@ -129,7 +158,7 @@ describe("CodexModelMenuCard", () => {
         name: m.codex_model_menu_remove({ model: "qwen3.8-27b-uncensored" }),
       }),
     );
-    expect(onChange).toHaveBeenCalledWith(["other-model"]);
+    expect(onChange).toHaveBeenCalledWith(["other-model"], {});
   });
 
   it("adds trimmed ids from the input and rejects duplicates", () => {
@@ -141,7 +170,7 @@ describe("CodexModelMenuCard", () => {
     const input = screen.getByLabelText(m.codex_model_menu_input_label());
     fireEvent.change(input, { target: { value: "  custom-model  " } });
     fireEvent.click(screen.getByRole("button", { name: m.codex_model_menu_add() }));
-    expect(onChange).toHaveBeenCalledWith(["custom-model"]);
+    expect(onChange).toHaveBeenCalledWith(["custom-model"], {});
 
     onChange.mockClear();
     view.unmount();

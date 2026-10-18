@@ -17,6 +17,9 @@ import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { parseError } from "@/lib/error";
 import { m } from "@/paraglide/messages.js";
+import { DEFAULT_CODEX_MODEL_CAPABILITIES } from "../form";
+import type { CodexModelCapabilities } from "../types";
+import { CodexModelCapabilitiesEditor } from "./codex-model-capabilities-editor";
 
 /** 官方 Codex 目录 slug；官方模型始终保留，不允许作为“额外模型”重复添加。 */
 const OFFICIAL_CODEX_MODEL_IDS: ReadonlySet<string> = new Set([
@@ -37,7 +40,8 @@ const QWEN_MODEL_ID = "qwen3.8-27b-uncensored";
 
 type CodexModelMenuCardProps = {
   models: readonly string[];
-  onChange: (models: string[]) => void;
+  capabilities?: Record<string, CodexModelCapabilities>;
+  onChange: (models: string[], capabilities: Record<string, CodexModelCapabilities>) => void;
   isDirty: boolean;
 };
 
@@ -46,7 +50,7 @@ async function readCandidates() {
   return await invoke<string[]>("read_codex_extra_model_candidates");
 }
 
-export function CodexModelMenuCard({ models, onChange, isDirty }: CodexModelMenuCardProps) {
+export function CodexModelMenuCard({ models, capabilities = {}, onChange, isDirty }: CodexModelMenuCardProps) {
   const [draft, setDraft] = useState("");
   const [feedback, setFeedback] = useState("");
   const [candidates, setCandidates] = useState<string[]>([]);
@@ -91,12 +95,17 @@ export function CodexModelMenuCard({ models, onChange, isDirty }: CodexModelMenu
       return;
     }
     setFeedback("");
-    onChange([...models, model]);
+    const nextCapabilities = model === QWEN_MODEL_ID && !capabilities[model]
+      ? { ...capabilities, [model]: { context_window: 131072, supports_vision: true, reasoning_effort: "xhigh" as const } }
+      : capabilities;
+    onChange([...models, model], nextCapabilities);
   };
 
   const removeModel = (model: string) => {
     setFeedback("");
-    onChange(models.filter((item) => item !== model));
+    const nextCapabilities = { ...capabilities };
+    delete nextCapabilities[model];
+    onChange(models.filter((item) => item !== model), nextCapabilities);
   };
 
   const refreshCandidates = async () => {
@@ -151,6 +160,15 @@ export function CodexModelMenuCard({ models, onChange, isDirty }: CodexModelMenu
         ) : (
           <p className="text-sm text-muted-foreground">{m.codex_model_menu_empty()}</p>
         )}
+
+        {models.map((model) => (
+          <CodexModelCapabilitiesEditor
+            key={model}
+            model={model}
+            value={capabilities[model] ?? DEFAULT_CODEX_MODEL_CAPABILITIES}
+            onChange={(value) => onChange([...models], { ...capabilities, [model]: value })}
+          />
+        ))}
 
         <div className="grid gap-2">
           <div className="flex items-center gap-2">

@@ -1,5 +1,6 @@
 //! Configuration schema, migration, normalization, and file IO.
 
+mod codex_models;
 mod hot_model_mappings;
 mod io;
 mod jsonc;
@@ -17,6 +18,7 @@ use token_proxy_account_store::paths::TokenProxyPaths;
 const DEFAULT_MAX_REQUEST_BODY_BYTES: u64 = 100 * 1024 * 1024;
 const MIN_TIMEOUT_SECS: u64 = 1;
 
+pub use codex_models::{CodexModelCapabilities, CodexReasoningEffort};
 pub use hot_model_mappings::default_hot_model_mappings;
 pub use hot_model_mappings::expand_model_ids_with_mappings;
 pub use jsonc::sanitize_jsonc;
@@ -99,6 +101,8 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
     if codex_extra_models.len() > 64 {
         return Err("codex_extra_models supports at most 64 model IDs.".to_string());
     }
+    let codex_model_capabilities =
+        codex_models::normalize_capabilities(config.codex_model_capabilities)?;
     let log_level = config.log_level;
     let max_request_body_bytes = resolve_max_request_body_bytes(config.max_request_body_bytes);
     let app_proxy_url = normalize_app_proxy_url(config.app_proxy_url.as_deref())?;
@@ -131,6 +135,7 @@ fn build_runtime_config(config: ProxyConfigFile) -> Result<ProxyConfig, String> 
         cors_enabled: config.cors_enabled,
         model_list_prefix: config.model_list_prefix,
         codex_extra_models,
+        codex_model_capabilities,
         log_level,
         max_request_body_bytes,
         retryable_failure_cooldown: resolve_retryable_failure_cooldown(

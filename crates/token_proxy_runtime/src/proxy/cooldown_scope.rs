@@ -131,6 +131,7 @@ mod tests {
             cors_enabled: false,
             model_list_prefix: false,
             codex_extra_models: Vec::new(),
+            codex_model_capabilities: Default::default(),
             log_level: LogLevel::Silent,
             max_request_body_bytes: 1024,
             retryable_failure_cooldown: Duration::from_secs(15),

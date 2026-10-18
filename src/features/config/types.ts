@@ -143,6 +143,12 @@ export type UpstreamUsage = UsageTotals & {
   upstreamId: string;
 };
 
+export type CodexModelCapabilities = {
+  context_window: number;
+  supports_vision: boolean;
+  reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+};
+
 export type ProxyConfigFileBase = {
   host: string;
   port: number;
@@ -155,6 +161,7 @@ export type ProxyConfigFileBase = {
   model_list_prefix_default_on_migrated?: boolean;
   /** Codex `/model` 菜单额外模型；官方模型始终保留，缺省/空数组表示仅官方。 */
   codex_extra_models?: string[];
+  codex_model_capabilities?: Record<string, CodexModelCapabilities>;
   kiro_preferred_endpoint?: KiroPreferredEndpoint | null;
   log_level?: LogLevel;
   /** 入站与 JSON 过滤/转换共用上限，单位字节；缺省 100 MiB。 */
@@ -249,6 +256,7 @@ export type ConfigForm = {
   corsEnabled: boolean;
   modelListPrefix: boolean;
   codexExtraModels: string[];
+  codexModelCapabilities: Record<string, CodexModelCapabilities>;
   kiroPreferredEndpoint: "" | KiroPreferredEndpoint;
   logLevel: LogLevel;
   maxRequestBodyMib: string;

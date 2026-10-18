@@ -165,4 +165,22 @@ describe("config/AppView", () => {
     expect(screen.getByTestId("storage-usage-card")).toBeInTheDocument();
     expect(screen.queryByTestId("validation-card")).not.toBeInTheDocument();
   });
+
+  it("renders the Codex model menu below client setup on the agents section", () => {
+    render(
+      <AppView
+        activeSectionId="agents"
+        {...BASE_APP_VIEW_PROPS}
+        status="idle"
+        statusMessage=""
+        canSave
+        isDirty={false}
+        validation={{ valid: true, message: "" }}
+      />
+    );
+
+    const setupCard = screen.getByTestId("client-setup-card");
+    const menuCard = screen.getByTestId("codex-model-menu-card");
+    expect(setupCard.compareDocumentPosition(menuCard) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
 });

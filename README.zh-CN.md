@@ -222,7 +222,7 @@ Claude Code／Codex 一键配置只有一条启用 Key 时自动选择；多条�
 
 ### Codex 模型菜单
 
-在侧栏「Codex 模型」中添加额外模型（例如点击「添加 Qwen」加入 `qwen3.8-27b-uncensored`），等待 TP 自动保存后，在同页展开 Codex 配置并点击「写入」。重启 Codex 后，通过 `/model` 选择模型。
+在侧栏「Agents」页底部的「Codex 模型菜单」中添加额外模型（可勾选渠道模型候选，或点击「添加 Qwen」加入 `qwen3.8-27b-uncensored`），等待 TP 自动保存后，在同页展开 Codex 配置并点击「写入」。重启 Codex 后，通过 `/model` 选择模型。
 
 TP 的 `GET /codex/models.json` 保留 Codex 0.163.0 官方模型的完整元数据，只追加 `codex_extra_models` 中显式选择、已配置且当前本地 API Key 有权使用的模型。该接口复用本地 Key 鉴权，支持 HEAD，不依赖 Codex OAuth 账号；官方快照随 TP 版本维护。普通 `/v1/models` 与原来的 Codex manifest 转发保持原有行为。
 

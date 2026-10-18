@@ -49,8 +49,6 @@
   "config_section_pricing_desc": "Billing rates",
   "config_section_agents_label": "Agents",
   "config_section_agents_desc": "Claude Code and Codex setup",
-  "config_section_codex_models_label": "Codex Models",
-  "config_section_codex_models_desc": "Manage Codex model catalog",
   "config_section_settings_label": "Settings",
   "config_section_settings_desc": "Config file, validation, and updates",
   "proxy_core_title": "Core",

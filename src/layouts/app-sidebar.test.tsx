@@ -49,13 +49,10 @@ describe("layouts/AppSidebar", () => {
 
     const hrefs = screen.getAllByRole("link").map((link) => link.getAttribute("href"));
     expect(hrefs).not.toContain("/agent-node");
+    expect(hrefs).not.toContain("/config/codex-models");
     expect(screen.getByRole("link", { name: m.config_section_agents_label() })).toHaveAttribute(
       "href",
       "/config/agents"
-    );
-    expect(screen.getByRole("link", { name: m.config_section_codex_models_label() })).toHaveAttribute(
-      "href",
-      "/config/codex-models"
     );
   });
 

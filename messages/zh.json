@@ -49,8 +49,6 @@
   "config_section_pricing_desc": "计费单价",
   "config_section_agents_label": "Agents",
   "config_section_agents_desc": "Claude Code / Codex 配置",
-  "config_section_codex_models_label": "Codex 模型",
-  "config_section_codex_models_desc": "管理 Codex 模型目录",
   "config_section_settings_label": "设置",
   "config_section_settings_desc": "配置文件、校验与更新",
   "proxy_core_title": "内核",

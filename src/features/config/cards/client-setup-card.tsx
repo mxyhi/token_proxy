@@ -25,7 +25,6 @@ import {
 type ClientSetupCardProps = {
   savedAt: string;
   isDirty: boolean;
-  showCodexOnly?: boolean;
 };
 
 type ToolListItem = {
@@ -136,7 +135,7 @@ function ToolCards({ tools }: { tools: readonly ToolListItem[] }) {
   );
 }
 
-export function ClientSetupCard({ savedAt, isDirty, showCodexOnly }: ClientSetupCardProps) {
+export function ClientSetupCard({ savedAt, isDirty }: ClientSetupCardProps) {
   const { previewState, previewMessage, setup, loadPreview } = useClientSetupPreview(savedAt);
 
   const [chosenKeyId, setChosenKeyId] = useState<string | null>(null);
@@ -162,12 +161,10 @@ export function ClientSetupCard({ savedAt, isDirty, showCodexOnly }: ClientSetup
     isWorking,
   };
 
-  const tools: ToolListItem[] = showCodexOnly
-    ? [buildCodexTool({ ...baseArgs, action: codex.action, onApply: codex.apply })]
-    : [
-        buildClaudeTool({ ...baseArgs, action: claude.action, onApply: claude.apply }),
-        buildCodexTool({ ...baseArgs, action: codex.action, onApply: codex.apply }),
-      ];
+  const tools: ToolListItem[] = [
+    buildClaudeTool({ ...baseArgs, action: claude.action, onApply: claude.apply }),
+    buildCodexTool({ ...baseArgs, action: codex.action, onApply: codex.apply }),
+  ];
 
   return (
     <>

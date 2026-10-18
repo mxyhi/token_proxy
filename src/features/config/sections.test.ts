@@ -10,7 +10,6 @@ describe("config/sections", () => {
     expect(getSectionIdFromPathname("/config/api-keys")).toBe("api-keys");
     expect(getSectionIdFromPathname("/config/upstreams")).toBe("upstreams");
     expect(getSectionIdFromPathname("/config/pricing")).toBe("pricing");
-    expect(getSectionIdFromPathname("/config/codex-models")).toBe("codex-models");
     expect(getSectionIdFromPathname("/config/settings/")).toBe("settings");
   });
 
@@ -18,6 +17,8 @@ describe("config/sections", () => {
     expect(getSectionIdFromPathname("/config")).toBe(DEFAULT_CONFIG_SECTION);
     expect(getSectionIdFromPathname("/config/unknown")).toBe(DEFAULT_CONFIG_SECTION);
     expect(getSectionIdFromPathname("/config/providers")).toBe(DEFAULT_CONFIG_SECTION);
+    // Codex 模型菜单已并入 Agents，旧路由不再是独立分区。
+    expect(getSectionIdFromPathname("/config/codex-models")).toBe(DEFAULT_CONFIG_SECTION);
     expect(getSectionIdFromPathname("/other")).toBe(DEFAULT_CONFIG_SECTION);
   });
 });

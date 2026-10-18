@@ -28,6 +28,69 @@ fn codex_extra_models_roundtrip_and_runtime_normalization() {
     config.codex_extra_models = vec!["bad\nmodel".into()];
     assert!(build_runtime_config(config).is_err());
 }
+
+#[test]
+fn codex_model_capabilities_roundtrip_defaults_and_validation() {
+    let mut config = ProxyConfigFile::default();
+    assert!(serde_json::to_value(&config)
+        .unwrap()
+        .get("codex_model_capabilities")
+        .is_none());
+    let configured = CodexModelCapabilities {
+        context_window: 131072,
+        supports_vision: true,
+        reasoning_effort: CodexReasoningEffort::Xhigh,
+    };
+    config
+        .codex_model_capabilities
+        .insert(" qwen ".into(), configured.clone());
+    let serialized = serde_json::to_value(&config).unwrap();
+    assert_eq!(
+        serialized["codex_model_capabilities"][" qwen "]["reasoning_effort"],
+        "xhigh"
+    );
+    let restored = serde_json::from_value(serialized).unwrap();
+    let runtime = build_runtime_config(restored).unwrap();
+    assert_eq!(runtime.codex_model_capabilities["qwen"], configured);
+    assert_eq!(
+        serde_json::from_str::<CodexModelCapabilities>("{}").unwrap(),
+        CodexModelCapabilities::default()
+    );
+
+    for invalid in [
+        serde_json::json!({"context_window": -1}),
+        serde_json::json!({"context_window": 1.5}),
+        serde_json::json!({"context_window": 4294967296u64}),
+        serde_json::json!({"reasoning_effort": "unknown"}),
+    ] {
+        assert!(serde_json::from_value::<CodexModelCapabilities>(invalid).is_err());
+    }
+    config
+        .codex_model_capabilities
+        .get_mut(" qwen ")
+        .unwrap()
+        .context_window = 0;
+    assert!(build_runtime_config(config).is_err());
+}
+
+#[test]
+fn codex_model_capabilities_reject_invalid_or_ambiguous_model_ids() {
+    for id in ["", "bad\nmodel"] {
+        let mut config = ProxyConfigFile::default();
+        config
+            .codex_model_capabilities
+            .insert(id.into(), CodexModelCapabilities::default());
+        assert!(build_runtime_config(config).is_err());
+    }
+    let mut config = ProxyConfigFile::default();
+    config
+        .codex_model_capabilities
+        .insert("qwen".into(), CodexModelCapabilities::default());
+    config
+        .codex_model_capabilities
+        .insert(" qwen ".into(), CodexModelCapabilities::default());
+    assert!(build_runtime_config(config).is_err());
+}
 fn sample_upstream(
     id: &str,
     providers: &[&str],

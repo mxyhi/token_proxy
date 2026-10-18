@@ -222,13 +222,20 @@ Claude Code／Codex 一键配置只有一条启用 Key 时自动选择；多条�
 
 ### Codex 模型菜单
 
-在侧栏「Agents」页底部的「Codex 模型菜单」中添加额外模型（可勾选渠道模型候选，或点击「添加 Qwen」加入 `qwen3.8-27b-uncensored`），等待 TP 自动保存后，在同页展开 Codex 配置并点击「写入」。重启 Codex 后，通过 `/model` 选择模型。
+在侧栏「Agents」页底部的「Codex 模型菜单」中添加额外模型（可勾选渠道模型候选，或点击「添加 Qwen」加入 `qwen3.8-27b-uncensored`）。每个额外模型可编辑上下文 tokens、视觉输入和推理等级；「添加 Qwen」使用 128K（131072 tokens）、视觉开启、xhigh 预设。等待 TP 自动保存后，在同页展开 Codex 配置并点击「写入」。重启 Codex 后，通过 `/model` 选择模型。
 
 TP 的 `GET /codex/models.json` 保留 Codex 0.163.0 官方模型的完整元数据，只追加 `codex_extra_models` 中显式选择、已配置且当前本地 API Key 有权使用的模型。该接口复用本地 Key 鉴权，支持 HEAD，不依赖 Codex OAuth 账号；官方快照随 TP 版本维护。普通 `/v1/models` 与原来的 Codex manifest 转发保持原有行为。
 
 ```json
 {
-  "codex_extra_models": ["qwen3.8-27b-uncensored"]
+  "codex_extra_models": ["qwen3.8-27b-uncensored"],
+  "codex_model_capabilities": {
+    "qwen3.8-27b-uncensored": {
+      "context_window": 131072,
+      "supports_vision": true,
+      "reasoning_effort": "xhigh"
+    }
+  }
 }
 ```
 
@@ -239,4 +246,6 @@ TP 的 `GET /codex/models.json` 保留 Codex 0.163.0 官方模型的完整元数
 model_catalog_url = "http://127.0.0.1:9208/codex/models.json"
 ```
 
-菜单可见性不代表调用成功。额外模型默认使用保守的 32K 文本/函数工具配置，不宣称支持 GPT 专用推理参数、内置搜索、图片或 Responses lite；对应上游仍需支持 Responses 或 TP 已配置的协议转换。
+`codex_model_capabilities` 按额外模型 ID 配置，旧配置无需迁移；未配置时仍使用 32768 tokens、仅文本、`none` 推理等级。上下文必须是 1–4294967295 的整数；推理等级支持 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`，选中的值同时作为默认值和目录中声明支持的等级。开启视觉会输出 `input_modalities: ["text", "image"]`；上下文同时写入 `context_window` 和 `max_context_window`。这些配置不覆盖官方模型，不会让未选中或当前 Key 无权访问的模型出现在目录中。
+
+能力编辑保存后由 TP 热重载；Codex 已加载的目录可能需要重启客户端刷新。目录声明不代表上游能力验证：对应上游及 TP 协议转换仍需实际支持图片和所选推理参数，不额外宣称支持 GPT 推理摘要、原图细节、内置搜索或 Responses lite。

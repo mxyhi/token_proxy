@@ -11,6 +11,37 @@ import {
 } from "@/features/config/form";
 
 describe("config/form", () => {
+  it("preserves Codex capabilities across config and form serialization without dirtying legacy configs", () => {
+    const legacy = toPayload(EMPTY_FORM);
+    expect(toForm(legacy).codexModelCapabilities).toEqual({});
+    expect(toPayload(toForm(legacy))).toEqual(legacy);
+    expect(legacy).not.toHaveProperty("codex_model_capabilities");
+    const form = {
+      ...EMPTY_FORM,
+      codexExtraModels: ["qwen"],
+      codexModelCapabilities: {
+        qwen: { context_window: 131072, supports_vision: true, reasoning_effort: "xhigh" as const },
+      },
+    };
+    const payload = toPayload(form);
+    expect(payload.codex_model_capabilities).toEqual(form.codexModelCapabilities);
+    expect(toForm(payload).codexModelCapabilities).toEqual(form.codexModelCapabilities);
+    expect(extractConfigExtras(payload)).not.toHaveProperty("codex_model_capabilities");
+    expect(validate(form).valid).toBe(true);
+  });
+
+  it("rejects invalid Codex context windows and ambiguous capability model IDs", () => {
+    const capabilities = { context_window: 131072, supports_vision: true, reasoning_effort: "xhigh" as const };
+    for (const context_window of [0, -1, 1.5, NaN, Infinity, 4294967296]) {
+      expect(validate({
+        ...EMPTY_FORM,
+        codexModelCapabilities: { qwen: { ...capabilities, context_window } },
+      }).valid).toBe(false);
+    }
+    expect(validate({ ...EMPTY_FORM, codexModelCapabilities: { "": capabilities } }).valid).toBe(false);
+    expect(validate({ ...EMPTY_FORM, codexModelCapabilities: { qwen: capabilities, " qwen ": capabilities } }).valid).toBe(false);
+  });
+
   it("uses the development proxy port without replacing saved ports", () => {
     expect(EMPTY_FORM.port).toBe("19208");
     expect(toForm({ ...toPayload(EMPTY_FORM), port: 9208 }).port).toBe("9208");

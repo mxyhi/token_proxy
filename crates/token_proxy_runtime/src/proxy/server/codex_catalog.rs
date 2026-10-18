@@ -5,6 +5,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 use std::{collections::HashSet, sync::OnceLock};
+use token_proxy_config::CodexModelCapabilities;
 
 use crate::proxy::{
     http::RequestAuth, upstream::collect_model_catalog_entries_for_manifest, ProxyState,
@@ -39,7 +40,17 @@ pub(super) async fn response(state: &ProxyState, auth: &RequestAuth) -> Response
             continue;
         };
         if known.insert(id.clone()) {
-            models.push(extra_model(id, display_name.as_deref().unwrap_or(id)));
+            let capabilities = state
+                .config
+                .codex_model_capabilities
+                .get(id)
+                .cloned()
+                .unwrap_or_default();
+            models.push(extra_model(
+                id,
+                display_name.as_deref().unwrap_or(id),
+                &capabilities,
+            ));
             added += 1;
         }
     }
@@ -60,15 +71,19 @@ pub(super) async fn response(state: &ProxyState, auth: &RequestAuth) -> Response
     response
 }
 
-fn extra_model(id: &str, display_name: &str) -> Value {
-    // shortcut: 未知模型用保守的 32K 文本/函数工具配置；有经验证的能力元数据时再扩展。
-    // 不继承 GPT 的 reasoning、verbosity、Responses lite、内置搜索或专有工具声明。
+fn extra_model(id: &str, display_name: &str, capabilities: &CodexModelCapabilities) -> Value {
+    // 只声明用户配置的能力；推理等级不隐含 summary、verbosity 或其它 GPT 专有能力。
+    let input_modalities = if capabilities.supports_vision {
+        vec!["text", "image"]
+    } else {
+        vec!["text"]
+    };
     json!({
         "slug": id,
         "display_name": display_name,
         "description": "通过 Token Proxy 配置的额外模型",
-        "default_reasoning_level": "none",
-        "supported_reasoning_levels": [{"effort": "none", "description": "使用模型默认设置"}],
+        "default_reasoning_level": capabilities.reasoning_effort,
+        "supported_reasoning_levels": [{"effort": capabilities.reasoning_effort, "description": "使用配置的推理等级"}],
         "shell_type": "unified_exec",
         "visibility": "list",
         "supported_in_api": true,
@@ -84,9 +99,11 @@ fn extra_model(id: &str, display_name: &str) -> Value {
         "default_verbosity": null,
         "apply_patch_tool_type": null,
         "truncation_policy": {"mode": "tokens", "limit": 10000},
-        "context_window": 32768,
+        "context_window": capabilities.context_window,
+        "max_context_window": capabilities.context_window,
         "experimental_supported_tools": [],
-        "input_modalities": ["text"],
+        "input_modalities": input_modalities,
+        "supports_image_detail_original": false,
         "supports_search_tool": false,
         "use_responses_lite": false
     })

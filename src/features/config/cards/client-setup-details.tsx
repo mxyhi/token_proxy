@@ -48,6 +48,8 @@ export function CodexSetupDetails({ setup }: { setup: ClientSetupInfo }) {
             `requires_openai_auth = ${setup.codex_provider_requires_openai_auth ? "true" : "false"}`,
             `wire_api = "${setup.codex_provider_wire_api}"`,
             `model_catalog_url = "${modelCatalogUrl}"`,
+            // 与后端写入一致：有本地 key 时同步 auth_mode，避免旧 ChatGPT 登录态遮住 API Key。
+            ...(setup.codex_api_key_configured ? ['auth.json: auth_mode = "apikey"'] : []),
             `auth.json: OPENAI_API_KEY = "${
               setup.codex_api_key_configured ? "••••••••" : m.client_setup_not_configured()
             }"`,

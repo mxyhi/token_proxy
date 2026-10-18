@@ -1,9 +1,9 @@
 #[path = "chat_truncation.test.rs"]
 mod chat_truncation_tests;
-#[path = "local_api_keys.test.rs"]
-mod local_api_keys_tests;
 #[path = "codex_catalog.test.rs"]
 mod codex_catalog_tests;
+#[path = "local_api_keys.test.rs"]
+mod local_api_keys_tests;
 
 use super::*;
 

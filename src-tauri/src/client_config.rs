@@ -16,6 +16,8 @@ const CODEX_DEFAULT_MODEL_PROVIDER: &str = "token_proxy";
 const CODEX_MODEL_REASONING_EFFORT: &str = "xhigh";
 const CODEX_NETWORK_ACCESS: &str = "enabled";
 const CODEX_PREFERRED_AUTH_METHOD: &str = "apikey";
+/// auth.json 的 `auth_mode`；Codex 优先按显式 auth_mode 选认证方式，旧 ChatGPT 登录态会遮住 API Key。
+const CODEX_AUTH_MODE_API_KEY: &str = "apikey";
 const CODEX_PROVIDER_NAME: &str = "token_proxy";
 const CODEX_PROVIDER_REQUIRES_OPENAI_AUTH: bool = true;
 const CODEX_PROVIDER_WIRE_API: &str = "responses";
@@ -219,17 +221,7 @@ pub(crate) async fn write_codex_config(
     write_text_with_backup(&config_path, doc.to_string()).await?;
 
     let mut auth_root = read_json_object_or_default(&auth_path).await?;
-    match selected_key.as_deref() {
-        Some(token) => {
-            auth_root.insert(
-                "OPENAI_API_KEY".to_string(),
-                serde_json::Value::String(token.to_string()),
-            );
-        }
-        None => {
-            auth_root.remove("OPENAI_API_KEY");
-        }
-    }
+    apply_codex_auth(&mut auth_root, selected_key.as_deref());
     write_json_with_backup(&auth_path, &serde_json::Value::Object(auth_root)).await?;
 
     Ok(ClientConfigWriteResult {
@@ -238,6 +230,37 @@ pub(crate) async fn write_codex_config(
             auth_path.to_string_lossy().to_string(),
         ],
     })
+}
+
+/// 对齐 `codex login --with-api-key`：写 key 时同步 `auth_mode = "apikey"`，否则遗留的
+/// `auth_mode = "chatgpt"` 会让 Codex 继续用 ChatGPT token 而不是本地 key。
+/// 清除 key 时只回收我们写入的 apikey 模式（缺 key 的 apikey 模式 Codex 会直接报错），其它登录态保持不动。
+fn apply_codex_auth(
+    auth_root: &mut serde_json::Map<String, serde_json::Value>,
+    api_key: Option<&str>,
+) {
+    match api_key {
+        Some(token) => {
+            auth_root.insert(
+                "auth_mode".to_string(),
+                serde_json::Value::String(CODEX_AUTH_MODE_API_KEY.to_string()),
+            );
+            auth_root.insert(
+                "OPENAI_API_KEY".to_string(),
+                serde_json::Value::String(token.to_string()),
+            );
+        }
+        None => {
+            auth_root.remove("OPENAI_API_KEY");
+            if auth_root
+                .get("auth_mode")
+                .and_then(serde_json::Value::as_str)
+                == Some(CODEX_AUTH_MODE_API_KEY)
+            {
+                auth_root.remove("auth_mode");
+            }
+        }
+    }
 }
 
 async fn load_proxy_config(app: &AppHandle) -> Result<ProxyConfigFile, String> {
@@ -481,9 +504,55 @@ async fn write_text_with_backup(path: &Path, contents: String) -> Result<(), Str
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_codex_proxy_settings, resolve_codex_target_provider_and_name};
+    use super::{
+        apply_codex_auth, apply_codex_proxy_settings, resolve_codex_target_provider_and_name,
+    };
+    use serde_json::json;
     use std::str::FromStr;
     use toml_edit::DocumentMut;
+
+    fn auth_object(value: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        value.as_object().expect("auth object").clone()
+    }
+
+    #[test]
+    fn apply_codex_auth_switches_chatgpt_login_to_api_key_mode() {
+        let mut auth = auth_object(json!({
+            "auth_mode": "chatgpt",
+            "tokens": {"access_token": "chatgpt-token"},
+            "last_refresh": "2026-10-01T00:00:00Z"
+        }));
+
+        apply_codex_auth(&mut auth, Some("local-key"));
+
+        assert_eq!(auth["auth_mode"], "apikey");
+        assert_eq!(auth["OPENAI_API_KEY"], "local-key");
+        // 其它登录态字段保持原样，便于用户切回 ChatGPT 登录。
+        assert_eq!(auth["tokens"]["access_token"], "chatgpt-token");
+    }
+
+    #[test]
+    fn apply_codex_auth_clears_api_key_mode_without_key() {
+        let mut auth = auth_object(json!({"auth_mode": "apikey", "OPENAI_API_KEY": "old"}));
+
+        apply_codex_auth(&mut auth, None);
+
+        assert!(auth.is_empty());
+    }
+
+    #[test]
+    fn apply_codex_auth_keeps_other_modes_without_key() {
+        let mut auth = auth_object(json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": "old",
+            "tokens": {"access_token": "chatgpt-token"}
+        }));
+
+        apply_codex_auth(&mut auth, None);
+
+        assert_eq!(auth["auth_mode"], "chatgpt");
+        assert!(!auth.contains_key("OPENAI_API_KEY"));
+    }
 
     #[test]
     fn resolve_codex_target_provider_preserves_existing_model_provider() {

@@ -28,6 +28,14 @@ pub async fn refresh_dashboard_model_discovery(
     Ok(())
 }
 
+/// Codex 模型菜单的快速选择候选，来自已缓存的上游模型目录。
+#[tauri::command]
+pub async fn read_codex_extra_model_candidates(
+    token_proxy_app: tauri::State<'_, TokenProxyApp>,
+) -> Result<Vec<String>, String> {
+    Ok(token_proxy_app.codex_extra_model_candidates().await)
+}
+
 #[tauri::command]
 pub async fn read_local_api_key_usage(
     token_proxy_app: tauri::State<'_, TokenProxyApp>,

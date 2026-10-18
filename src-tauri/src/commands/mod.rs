@@ -18,8 +18,8 @@ pub use config::{
     read_proxy_config, save_proxy_config, write_claude_code_settings, write_codex_config,
 };
 pub use dashboard::{
-    read_dashboard_snapshot, read_local_api_key_usage, read_upstream_usage,
-    refresh_dashboard_model_discovery,
+    read_codex_extra_model_candidates, read_dashboard_snapshot, read_local_api_key_usage,
+    read_upstream_usage, refresh_dashboard_model_discovery,
 };
 pub use kiro::{
     kiro_fetch_quotas, kiro_handle_callback, kiro_import_ide, kiro_import_kam, kiro_list_accounts,

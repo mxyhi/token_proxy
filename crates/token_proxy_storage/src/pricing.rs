@@ -16,6 +16,17 @@ const CURATED_PRICING_OVERLAY: &str = include_str!(concat!(
     "/resources/curated-model-pricing.json"
 ));
 const SETTINGS_ROW_ID: i64 = 1;
+// 固定默认单价（nano-USD/token），独立于任何模型的价格配置。
+const FALLBACK_PRICING_PROFILE: ModelPricingProfile = ModelPricingProfile {
+    input_nano_usd_per_token: Some(2_000),
+    output_nano_usd_per_token: Some(10_000),
+    cache_read_nano_usd_per_token: Some(100),
+    cache_write_nano_usd_per_token: Some(2_500),
+    cache_write_5m_nano_usd_per_token: Some(2_500),
+    cache_write_1h_nano_usd_per_token: Some(4_000),
+    image_input_nano_usd_per_token: None,
+    image_output_nano_usd_per_token: None,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -378,23 +389,31 @@ pub fn calculate_request_cost(
     let effective_model = mapped_model
         .and_then(non_empty)
         .or_else(|| model.and_then(non_empty))?;
-    let model_price = find_model_price(settings, effective_model)?;
+    let model_price = find_model_price(settings, effective_model);
+    if model_price.is_none() {
+        tracing::debug!(
+            model = effective_model,
+            pricing_model = "default",
+            "unmatched model uses fallback pricing"
+        );
+    }
     let normalized_service_tier = normalize_service_tier(service_tier);
-    let selected_profile = model_price
-        .service_tier_profiles
-        .get(normalized_service_tier.as_str())
-        .or_else(|| {
-            // Fast 是 Priority 的新名称；显式配置优先，别名回退避免按 standard 少计。
-            let alias = match normalized_service_tier.as_str() {
-                "fast" => "priority",
-                "priority" => "fast",
-                _ => return None,
-            };
-            model_price.service_tier_profiles.get(alias)
-        });
+    let selected_profile = model_price.and_then(|price| {
+        price
+            .service_tier_profiles
+            .get(normalized_service_tier.as_str())
+            .or_else(|| {
+                // Fast 是 Priority 的新名称；显式配置优先，别名回退避免按 standard 少计。
+                let alias = match normalized_service_tier.as_str() {
+                    "fast" => "priority",
+                    "priority" => "fast",
+                    _ => return None,
+                };
+                price.service_tier_profiles.get(alias)
+            })
+    });
     let long_context = model_price
-        .long_context
-        .as_ref()
+        .and_then(|price| price.long_context.as_ref())
         .filter(|long| usage.total_input_tokens() > long.threshold);
     let input_long_multiplier = long_context
         .map(|long| long.input_multiplier_scaled)
@@ -402,7 +421,10 @@ pub fn calculate_request_cost(
     let output_long_multiplier = long_context
         .map(|long| long.output_multiplier_scaled)
         .unwrap_or(PRICE_MULTIPLIER_SCALE);
-    let profile = ResolvedProfile::new(&model_price.standard, selected_profile);
+    let standard = model_price
+        .map(|price| &price.standard)
+        .unwrap_or(&FALLBACK_PRICING_PROFILE);
+    let profile = ResolvedProfile::new(standard, selected_profile);
 
     let mut breakdown = RequestCostBreakdown {
         uncached_input_nano_usd: price_component(
@@ -450,12 +472,19 @@ pub fn calculate_request_cost(
             },
         )?,
     };
-    apply_breakdown_multiplier(&mut breakdown, model_price.price_multiplier_scaled);
+    apply_breakdown_multiplier(
+        &mut breakdown,
+        model_price.map_or(PRICE_MULTIPLIER_SCALE, |price| {
+            price.price_multiplier_scaled
+        }),
+    );
 
     Some(RequestCost {
         cost_nano_usd: breakdown.total(),
         pricing_version: settings.version.clone(),
-        pricing_model: model_price.model_id.clone(),
+        pricing_model: model_price
+            .map_or("default", |price| price.model_id.as_str())
+            .to_string(),
         service_tier: normalized_service_tier,
         context_tier: if long_context.is_some() {
             PricingContextTier::Long
@@ -834,7 +863,12 @@ SELECT
   image_input_tokens,
   image_output_tokens
 FROM request_logs
-WHERE pricing_version IS NULL OR pricing_version != ?;
+WHERE pricing_version IS NULL OR pricing_version != ?
+  -- 旧记录可能已有当前价格版本，但因模型未匹配而没有费用，仍需回算。
+  OR (cost_nano_usd IS NULL AND (
+    NULLIF(TRIM(mapped_model), '') IS NOT NULL
+    OR NULLIF(TRIM(model), '') IS NOT NULL
+  ));
 "#,
     )
     .bind(&settings.version)
@@ -1948,6 +1982,144 @@ mod tests {
                     "{model} {service_tier:?} cache write"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn unmatched_models_use_fixed_default_prices() {
+        let settings = default_model_pricing_settings();
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            cache_write_tokens: 1,
+            cache_write_5m_tokens: 1,
+            cache_write_1h_tokens: 1,
+            output_tokens: 1,
+            image_input_tokens: 1,
+            image_output_tokens: 1,
+        };
+
+        for (model, mapped_model) in [
+            (Some("unknown-model"), None),
+            (Some("vendor/unknown-model"), Some(" ")),
+            (Some("gpt-6-sol"), Some("unknown-mapped-model")),
+            (None, Some("unknown-mapped-model")),
+        ] {
+            let cost = calculate_request_cost(&settings, model, mapped_model, None, &usage)
+                .expect("fallback cost");
+            assert_eq!(cost.pricing_model, "default");
+            assert_eq!(cost.cost_nano_usd, 33_100);
+            assert_eq!(cost.context_tier, PricingContextTier::Standard);
+            assert_eq!(
+                cost.breakdown,
+                RequestCostBreakdown {
+                    uncached_input_nano_usd: 2_000,
+                    cache_read_nano_usd: 100,
+                    cache_write_nano_usd: 2_500,
+                    cache_write_5m_nano_usd: 2_500,
+                    cache_write_1h_nano_usd: 4_000,
+                    output_nano_usd: 10_000,
+                    image_input_nano_usd: 2_000,
+                    image_output_nano_usd: 10_000,
+                }
+            );
+        }
+        assert!(calculate_request_cost(&settings, None, Some(" "), None, &usage).is_none());
+    }
+
+    #[test]
+    fn unmatched_model_prices_are_independent_of_sonnet_settings() {
+        let mut settings = default_model_pricing_settings();
+        let sonnet = settings
+            .models
+            .iter_mut()
+            .find(|model| model.model_id == "claude-sonnet-5-5")
+            .expect("Sonnet 5.5 pricing");
+        sonnet.standard.input_nano_usd_per_token = Some(3_000);
+        sonnet.price_multiplier_scaled = PRICE_MULTIPLIER_SCALE * 2;
+        sonnet.service_tier_profiles.insert(
+            "priority".to_string(),
+            ModelPricingProfile {
+                input_nano_usd_per_token: Some(6_000),
+                ..ModelPricingProfile::default()
+            },
+        );
+        sonnet.long_context = Some(LongContextPricing {
+            threshold: 100,
+            input_multiplier_scaled: PRICE_MULTIPLIER_SCALE * 2,
+            output_multiplier_scaled: PRICE_MULTIPLIER_SCALE * 2,
+        });
+        let usage = BillableUsage {
+            uncached_input_tokens: 101,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+        for tier in [None, Some("priority"), Some("fast")] {
+            let cost = calculate_request_cost(&settings, Some("unknown-model"), None, tier, &usage)
+                .expect("fixed fallback cost");
+            assert_eq!(cost.pricing_model, "default");
+            assert_eq!(cost.cost_nano_usd, 212_000);
+            assert_eq!(cost.context_tier, PricingContextTier::Standard);
+        }
+    }
+
+    #[test]
+    fn unmatched_models_use_default_prices_without_sonnet_entry() {
+        let settings = ModelPricingSettings {
+            version: "test".to_string(),
+            source: None,
+            models: vec![custom_model()],
+        };
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+        let cost = calculate_request_cost(&settings, Some("unknown-model"), None, None, &usage)
+            .expect("fixed fallback cost");
+        assert_eq!(cost.pricing_model, "default");
+        assert_eq!(cost.cost_nano_usd, 12_000);
+
+        let matched =
+            calculate_request_cost(&settings, Some("openai/custom-model"), None, None, &usage)
+                .expect("matched custom cost");
+        assert_eq!(matched.pricing_model, "custom-model");
+        assert_eq!(matched.cost_nano_usd, 300);
+    }
+
+    #[tokio::test]
+    async fn backfill_prices_unmatched_models_with_current_pricing_version() {
+        let pool = setup_pool().await;
+        let settings = default_model_pricing_settings();
+        sqlx::query(
+            r#"
+INSERT INTO request_logs (
+  ts_ms, path, provider, upstream_id, model, mapped_model, stream, status,
+  uncached_input_tokens, output_tokens, latency_ms, pricing_version
+) VALUES
+  (1, '/v1/responses', 'openai-response', 'test', 'unknown-model', NULL, 0, 200, 100, 10, 1, ?),
+  (2, '/v1/responses', 'openai-response', 'test', 'gpt-6-sol', 'unknown-model', 0, 200, 100, 10, 1, ?);
+"#,
+        )
+        .bind(&settings.version)
+        .bind(&settings.version)
+        .execute(&pool)
+        .await
+        .expect("insert unpriced logs");
+
+        crate::sqlite::init_schema(&pool)
+            .await
+            .expect("backfill on startup");
+
+        let rows =
+            sqlx::query("SELECT cost_nano_usd, pricing_model FROM request_logs ORDER BY id;")
+                .fetch_all(&pool)
+                .await
+                .expect("read backfilled costs");
+        assert_eq!(rows.len(), 2);
+        for row in rows {
+            assert_eq!(row.get::<i64, _>("cost_nano_usd"), 300_000);
+            assert_eq!(row.get::<String, _>("pricing_model"), "default");
         }
     }
 

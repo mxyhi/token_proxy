@@ -1,6 +1,9 @@
 //! Application composition root shared by CLI and Tauri adapters.
 
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashSet},
+    sync::Arc,
+};
 
 use token_proxy_account_codex::{CodexAccountStore, CodexLoginManager};
 use token_proxy_account_kiro::{KiroAccountStore, KiroLoginManager};
@@ -231,6 +234,11 @@ impl TokenProxyApp {
         self.proxy.refresh_model_discovery().await
     }
 
+    /// Codex 额外模型候选：只读模型目录缓存，不访问上游；代理未运行时为空。
+    pub async fn codex_extra_model_candidates(&self) -> Vec<String> {
+        codex_extra_model_candidates_from(&self.proxy.model_discovery_snapshot().await)
+    }
+
     /// 读取单条请求日志详情。
     pub async fn read_request_log_detail(&self, id: u64) -> Result<RequestLogDetail, String> {
         let pool =
@@ -318,5 +326,48 @@ impl TokenProxyApp {
     /// 返回上传 token 的短暂展示值、活跃连接数及下次刷新时间。
     pub async fn token_rate_snapshot(&self) -> TokenRateSnapshot {
         self.token_rate.snapshot().await
+    }
+}
+
+/// 与 Codex manifest 的补充口径一致：跳过 codex provider（GPT 目录由官方清单提供），
+/// 其余上游已叠加本地 available_models/映射的模型去重排序。
+fn codex_extra_model_candidates_from(probes: &[UpstreamModelProbe]) -> Vec<String> {
+    probes
+        .iter()
+        .filter(|probe| probe.provider != "codex")
+        .flat_map(|probe| probe.models.iter().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use token_proxy_storage::dashboard::UpstreamModelProbeStatus;
+
+    fn probe(provider: &str, models: &[&str]) -> UpstreamModelProbe {
+        UpstreamModelProbe::completed(
+            "upstream",
+            provider,
+            None,
+            UpstreamModelProbeStatus::Ok,
+            None,
+            models.iter().map(|model| (*model).to_string()).collect(),
+        )
+    }
+
+    #[test]
+    fn codex_extra_model_candidates_skip_codex_provider_and_dedupe() {
+        let probes = [
+            probe("openai", &["qwen3.8-27b-uncensored", "deepseek-v4"]),
+            probe("codex", &["gpt-5.5"]),
+            probe("anthropic", &["claude-sonnet-5-5", "deepseek-v4"]),
+        ];
+
+        assert_eq!(
+            codex_extra_model_candidates_from(&probes),
+            ["claude-sonnet-5-5", "deepseek-v4", "qwen3.8-27b-uncensored"]
+        );
     }
 }

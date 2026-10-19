@@ -4,9 +4,18 @@ use sqlx::{Row, SqlitePool};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write;
 use std::sync::OnceLock;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
+
+use crate::sqlite::backfill_mark;
 
 pub const PRICE_MULTIPLIER_SCALE: u64 = 1_000_000_000_000;
+const COST_BACKFILL_MARK: &str = "request_log_cost";
+/// 每批扫描的 id 窗口；单条查询与事务占用写连接的时间有上界，日志写入可穿插执行。
+const COST_BACKFILL_WINDOW: i64 = 2_000;
+// 启动回填、远端价格刷新和用户改价可能并发；串行执行，进度标记才对应真正跑完的价格版本，
+// 启动时的用量回填也不会被费用回填插队（否则缺用量的旧日志会被算成 0 费用）。
+pub(crate) static REQUEST_LOG_BACKFILL_LOCK: Mutex<()> = Mutex::const_new(());
 const BUNDLED_PRICING_CATALOG: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/resources/model-pricing.json"
@@ -374,9 +383,11 @@ ON CONFLICT(id) DO UPDATE SET
     Ok(RemoteCatalogRefresh::Updated)
 }
 
-pub async fn backfill_request_log_costs(pool: &SqlitePool) -> Result<(), String> {
+/// 按当前生效价格补算费用；调用方必须已持有 [`REQUEST_LOG_BACKFILL_LOCK`]。
+pub(crate) async fn backfill_request_log_costs_locked(pool: &SqlitePool) -> Result<(), String> {
+    // 在锁内读取价格，排在价格刷新之后的启动回填才会用到最新版本。
     let settings = read_model_pricing_settings(pool).await?;
-    backfill_request_log_costs_with_settings(pool, &settings).await
+    backfill_request_log_costs_with_settings_locked(pool, &settings).await
 }
 
 pub fn calculate_request_cost(
@@ -836,6 +847,14 @@ async fn backfill_request_log_costs_with_settings(
     pool: &SqlitePool,
     settings: &ModelPricingSettings,
 ) -> Result<(), String> {
+    let _guard = REQUEST_LOG_BACKFILL_LOCK.lock().await;
+    backfill_request_log_costs_with_settings_locked(pool, settings).await
+}
+
+async fn backfill_request_log_costs_with_settings_locked(
+    pool: &SqlitePool,
+    settings: &ModelPricingSettings,
+) -> Result<(), String> {
     let columns = sqlx::query("PRAGMA table_info(request_logs);")
         .fetch_all(pool)
         .await
@@ -847,6 +866,41 @@ async fn backfill_request_log_costs_with_settings(
     if !column_names.contains("uncached_input_tokens") {
         return Ok(());
     }
+    let end_id = backfill_mark::max_request_log_id(pool).await?;
+    // 同一价格版本已处理过的日志不会再变；版本变化时 read 返回 0，重扫全表。
+    let mut window_start = backfill_mark::read(pool, COST_BACKFILL_MARK, &settings.version).await?;
+    if window_start >= end_id {
+        return Ok(());
+    }
+    let started_at = Instant::now();
+    let mut updated_rows = 0_u64;
+    while window_start < end_id {
+        let window_end = window_start
+            .saturating_add(COST_BACKFILL_WINDOW)
+            .min(end_id);
+        updated_rows = updated_rows.saturating_add(
+            backfill_request_log_cost_window(pool, settings, window_start, window_end).await?,
+        );
+        window_start = window_end;
+    }
+    backfill_mark::write(pool, COST_BACKFILL_MARK, &settings.version, end_id).await?;
+    if updated_rows > 0 {
+        tracing::info!(
+            version = %settings.version,
+            updated_rows,
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "request log cost backfill completed"
+        );
+    }
+    Ok(())
+}
+
+async fn backfill_request_log_cost_window(
+    pool: &SqlitePool,
+    settings: &ModelPricingSettings,
+    after_id: i64,
+    through_id: i64,
+) -> Result<u64, String> {
     let rows = sqlx::query(
         r#"
 SELECT
@@ -863,21 +917,26 @@ SELECT
   image_input_tokens,
   image_output_tokens
 FROM request_logs
-WHERE pricing_version IS NULL OR pricing_version != ?
+WHERE id > ? AND id <= ? AND (
+  pricing_version IS NULL OR pricing_version != ?
   -- 旧记录可能已有当前价格版本，但因模型未匹配而没有费用，仍需回算。
   OR (cost_nano_usd IS NULL AND (
     NULLIF(TRIM(mapped_model), '') IS NOT NULL
     OR NULLIF(TRIM(model), '') IS NOT NULL
-  ));
+  ))
+);
 "#,
     )
+    .bind(after_id)
+    .bind(through_id)
     .bind(&settings.version)
     .fetch_all(pool)
     .await
     .map_err(|err| format!("Failed to read request log costs for backfill: {err}"))?;
     if rows.is_empty() {
-        return Ok(());
+        return Ok(0);
     }
+    let updated_rows = rows.len() as u64;
     let mut tx = pool
         .begin()
         .await
@@ -930,7 +989,8 @@ WHERE id = ?;
     }
     tx.commit()
         .await
-        .map_err(|err| format!("Failed to commit request log cost backfill: {err}"))
+        .map_err(|err| format!("Failed to commit request log cost backfill: {err}"))?;
+    Ok(updated_rows)
 }
 
 fn price_component(tokens: u64, price: Option<u64>, multiplier_scaled: u64) -> Option<u64> {
@@ -2107,7 +2167,7 @@ INSERT INTO request_logs (
         .await
         .expect("insert unpriced logs");
 
-        crate::sqlite::init_schema(&pool)
+        crate::sqlite::backfill_request_logs(&pool)
             .await
             .expect("backfill on startup");
 

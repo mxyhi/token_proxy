@@ -1,6 +1,12 @@
 use sqlx::{QueryBuilder, Row, Sqlite, SqlitePool};
 
+use super::backfill_mark;
+
+/// 每批扫描的 id 窗口；按窗口而非按命中行分批，单条查询占用写连接的时间有上界。
 const BATCH_SIZE: i64 = 2_000;
+const MARK_NAME: &str = "request_log_usage";
+/// 解析规则变化时递增，让仍缺规范用量列的历史日志重新回填。
+const MARK_VERSION: &str = "usage.v1";
 
 struct UsageBackfillRow {
     id: i64,
@@ -19,23 +25,25 @@ struct UsageBackfillRow {
 
 // 历史 usage_json 是原始用量事实；按批次重建规范分量，避免一次加载全部日志。
 pub(super) async fn backfill_request_log_usage(pool: &SqlitePool) -> Result<(), String> {
+    let end_id = backfill_mark::max_request_log_id(pool).await?;
+    let mut window_start = backfill_mark::read(pool, MARK_NAME, MARK_VERSION).await?;
+    if window_start >= end_id {
+        return Ok(());
+    }
     create_staging_table(pool).await?;
-    let mut last_id = 0_i64;
     let mut migrated_rows = 0_u64;
     let mut skipped_rows = 0_u64;
 
-    loop {
-        let rows = read_batch(pool, last_id).await?;
-        if rows.is_empty() {
-            break;
-        }
+    while window_start < end_id {
+        let window_end = window_start.saturating_add(BATCH_SIZE).min(end_id);
+        let rows = read_batch(pool, window_start, window_end).await?;
+        window_start = window_end;
 
         let mut updates = Vec::with_capacity(rows.len());
         for row in rows {
             let id = row
                 .try_get::<i64, _>("id")
                 .map_err(|err| format!("Failed to decode request_logs.id: {err}"))?;
-            last_id = id;
             let raw = row
                 .try_get::<String, _>("usage_json")
                 .map_err(|err| format!("Failed to decode request_logs.usage_json: {err}"))?;
@@ -57,6 +65,7 @@ pub(super) async fn backfill_request_log_usage(pool: &SqlitePool) -> Result<(), 
         .execute(pool)
         .await
         .map_err(|err| format!("Failed to drop request log usage backfill table: {err}"))?;
+    backfill_mark::write(pool, MARK_NAME, MARK_VERSION, end_id).await?;
 
     if migrated_rows > 0 || skipped_rows > 0 {
         tracing::info!(
@@ -95,13 +104,15 @@ CREATE TEMP TABLE IF NOT EXISTS request_log_usage_backfill (
 
 async fn read_batch(
     pool: &SqlitePool,
-    last_id: i64,
+    after_id: i64,
+    through_id: i64,
 ) -> Result<Vec<sqlx::sqlite::SqliteRow>, String> {
     sqlx::query(
         r#"
 SELECT id, usage_json
 FROM request_logs
 WHERE id > ?
+  AND id <= ?
   AND usage_json IS NOT NULL
   AND usage_json != 'null'
   AND uncached_input_tokens IS NULL
@@ -111,12 +122,11 @@ WHERE id > ?
   AND cache_write_1h_tokens IS NULL
   AND image_input_tokens IS NULL
   AND image_output_tokens IS NULL
-ORDER BY id ASC
-LIMIT ?;
+ORDER BY id ASC;
 "#,
     )
-    .bind(last_id)
-    .bind(BATCH_SIZE)
+    .bind(after_id)
+    .bind(through_id)
     .fetch_all(pool)
     .await
     .map_err(|err| format!("Failed to read request log usage for backfill: {err}"))

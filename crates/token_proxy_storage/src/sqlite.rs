@@ -8,7 +8,11 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, OnceCell};
 
+mod attribution_compaction;
+pub(crate) mod backfill_mark;
 mod usage_backfill;
+
+pub use attribution_compaction::compact_request_log_attribution;
 
 struct SqlitePools {
     read: SqlitePool,
@@ -62,7 +66,7 @@ async fn open_pools(db_path: &Path) -> Result<SqlitePools, String> {
             .await
             .map_err(|err| format!("Failed to create db directory: {err}"))?;
     }
-    // schema 与回填只需在同一数据库文件上执行一次；回填检查会扫描整张日志表。
+    // schema 只需在同一数据库文件上执行一次；代理监听要等这里返回，所以回填放到后台。
     let write = connect_pool(&db_path, WRITE_POOL_MAX_CONNECTIONS).await?;
     init_schema(&write).await?;
     let read = connect_pool(&db_path, READ_POOL_MAX_CONNECTIONS).await?;
@@ -73,8 +77,57 @@ async fn open_pools(db_path: &Path) -> Result<SqlitePools, String> {
             write: write.clone(),
         },
     );
-    spawn_request_log_retention(write.clone(), db_path);
+    spawn_request_log_retention(write.clone(), db_path.clone());
+    spawn_request_log_maintenance(write.clone(), db_path);
     Ok(SqlitePools { read, write })
+}
+
+fn spawn_request_log_maintenance(pool: SqlitePool, db_path: PathBuf) {
+    tokio::spawn(async move {
+        let started_at = Instant::now();
+        let result = backfill_request_logs(&pool).await;
+        report_maintenance_step("request log backfill", &db_path, started_at, result);
+
+        // 压缩只改写归因明细，不影响用量与费用；放在回填锁之外，避免长时间挡住改价。
+        let started_at = Instant::now();
+        let result = compact_request_log_attribution(&pool).await;
+        report_maintenance_step(
+            "request log attribution compaction",
+            &db_path,
+            started_at,
+            result,
+        );
+    });
+}
+
+fn report_maintenance_step(
+    step: &str,
+    db_path: &Path,
+    started_at: Instant,
+    result: Result<(), String>,
+) {
+    match result {
+        Ok(()) => tracing::info!(
+            database = %db_path.display(),
+            elapsed_ms = started_at.elapsed().as_millis(),
+            "{step} completed"
+        ),
+        // release 构建禁用了 tracing；失败必须可见。未完成的步骤不写进度标记，下次启动会重试。
+        Err(error) => eprintln!(
+            "{step} failed for {} after {} ms: {error}",
+            db_path.display(),
+            started_at.elapsed().as_millis()
+        ),
+    }
+}
+
+/// 用历史 `usage_json` 补齐规范用量列，再按当前价格版本补算费用。
+///
+/// 两步都只扫描上次完成后新增的日志；价格版本变化时费用回填才重扫全表。
+pub async fn backfill_request_logs(pool: &SqlitePool) -> Result<(), String> {
+    let _guard = super::pricing::REQUEST_LOG_BACKFILL_LOCK.lock().await;
+    usage_backfill::backfill_request_log_usage(pool).await?;
+    super::pricing::backfill_request_log_costs_locked(pool).await
 }
 
 fn spawn_request_log_retention(pool: SqlitePool, db_path: PathBuf) {
@@ -257,9 +310,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
     .execute(pool)
     .await
     .map_err(|err| format!("Failed to create billable_request_logs view: {err}"))?;
-    usage_backfill::backfill_request_log_usage(pool).await?;
     super::pricing::init_model_pricing_table(pool).await?;
-    super::pricing::backfill_request_log_costs(pool).await?;
+    backfill_mark::init_table(pool).await?;
 
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_request_logs_ts_ms ON request_logs(ts_ms);")
         .execute(pool)
@@ -897,7 +949,7 @@ FROM request_logs WHERE id = ?;
     }
 
     #[tokio::test]
-    async fn init_schema_backfills_request_log_costs_when_pricing_version_changes() {
+    async fn request_log_backfill_recomputes_costs_when_pricing_version_changes() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -956,7 +1008,9 @@ INSERT INTO request_logs (
         .await
         .expect("insert old request log");
 
-        init_schema(&pool).await.expect("backfill schema");
+        backfill_request_logs(&pool)
+            .await
+            .expect("backfill request logs");
 
         let row = sqlx::query(
             r#"
@@ -994,7 +1048,7 @@ LIMIT 1;
     }
 
     #[tokio::test]
-    async fn init_schema_backfills_precise_usage_from_legacy_usage_json() {
+    async fn request_log_backfill_restores_precise_usage_from_legacy_usage_json() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
@@ -1022,7 +1076,9 @@ INSERT INTO request_logs (
         .await
         .expect("insert legacy usage row");
 
-        init_schema(&pool).await.expect("backfill legacy usage");
+        backfill_request_logs(&pool)
+            .await
+            .expect("backfill legacy usage");
 
         let row = sqlx::query(
             r#"
@@ -1067,7 +1123,9 @@ LIMIT 1;
             Some(pricing_version.as_str())
         );
 
-        init_schema(&pool).await.expect("repeat usage backfill");
+        backfill_request_logs(&pool)
+            .await
+            .expect("repeat usage backfill");
         let count = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM request_logs WHERE cache_read_tokens = 4;",
         )
@@ -1075,5 +1133,187 @@ LIMIT 1;
         .await
         .expect("count backfilled usage rows");
         assert_eq!(count, 1);
+    }
+
+    async fn memory_pool_with_schema() -> SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("connect sqlite");
+        init_schema(&pool).await.expect("init schema");
+        pool
+    }
+
+    async fn insert_stale_priced_log(pool: &SqlitePool) -> i64 {
+        sqlx::query(
+            r#"
+INSERT INTO request_logs (
+  ts_ms, path, provider, upstream_id, model, stream, status,
+  uncached_input_tokens, output_tokens, latency_ms, pricing_version
+) VALUES (1, '/v1/responses', 'openai-response', 'test', 'gpt-5.4', 0, 200, 100, 10, 1, 'old');
+"#,
+        )
+        .execute(pool)
+        .await
+        .expect("insert stale priced log")
+        .last_insert_rowid()
+    }
+
+    async fn pricing_version_of(pool: &SqlitePool, id: i64) -> Option<String> {
+        sqlx::query_scalar("SELECT pricing_version FROM request_logs WHERE id = ?;")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .expect("read pricing version")
+    }
+
+    #[tokio::test]
+    async fn init_schema_leaves_request_log_backfill_to_background() {
+        let pool = memory_pool_with_schema().await;
+        let id = insert_stale_priced_log(&pool).await;
+
+        // init_schema 位于代理监听之前，不能扫描日志表。
+        init_schema(&pool).await.expect("repeat init schema");
+
+        assert_eq!(pricing_version_of(&pool, id).await.as_deref(), Some("old"));
+    }
+
+    #[tokio::test]
+    async fn request_log_backfill_only_rescans_after_completed_mark_or_version_change() {
+        let pool = memory_pool_with_schema().await;
+        let current_version = crate::pricing::default_model_pricing_settings().version;
+        let first_id = insert_stale_priced_log(&pool).await;
+        backfill_request_logs(&pool).await.expect("first backfill");
+        assert_eq!(
+            pricing_version_of(&pool, first_id).await,
+            Some(current_version.clone())
+        );
+
+        // 已越过进度标记的旧行在同一价格版本下不再重扫，只处理新日志。
+        sqlx::query("UPDATE request_logs SET pricing_version = 'old' WHERE id = ?;")
+            .bind(first_id)
+            .execute(&pool)
+            .await
+            .expect("make covered row stale");
+        let second_id = insert_stale_priced_log(&pool).await;
+        backfill_request_logs(&pool)
+            .await
+            .expect("incremental backfill");
+        assert_eq!(
+            pricing_version_of(&pool, first_id).await.as_deref(),
+            Some("old")
+        );
+        assert_eq!(
+            pricing_version_of(&pool, second_id).await,
+            Some(current_version.clone())
+        );
+
+        sqlx::query(
+            "UPDATE request_log_backfill_marks SET version = 'previous' WHERE name = 'request_log_cost';",
+        )
+        .execute(&pool)
+        .await
+        .expect("simulate pricing version change");
+        backfill_request_logs(&pool)
+            .await
+            .expect("full backfill after version change");
+        assert_eq!(
+            pricing_version_of(&pool, first_id).await,
+            Some(current_version)
+        );
+    }
+
+    #[tokio::test]
+    async fn request_log_backfill_covers_rows_across_multiple_windows() {
+        let pool = memory_pool_with_schema().await;
+        sqlx::query(
+            r#"
+WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM seq WHERE n < 4500)
+INSERT INTO request_logs (
+  ts_ms, path, provider, upstream_id, model, stream, status,
+  usage_json, latency_ms, pricing_version
+)
+SELECT n, '/v1/responses', 'openai-response', 'test', 'gpt-5.4', 0, 200,
+  '{"input_tokens":10,"output_tokens":2}', 1, 'old'
+FROM seq;
+"#,
+        )
+        .execute(&pool)
+        .await
+        .expect("insert legacy logs");
+
+        backfill_request_logs(&pool)
+            .await
+            .expect("backfill request logs");
+
+        let backfilled = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM request_logs WHERE uncached_input_tokens = 10 AND pricing_version = ?;",
+        )
+        .bind(crate::pricing::default_model_pricing_settings().version)
+        .fetch_one(&pool)
+        .await
+        .expect("count backfilled rows");
+        assert_eq!(backfilled, 4500);
+    }
+
+    async fn insert_usage_json_log(pool: &SqlitePool, usage_json: &str) -> i64 {
+        sqlx::query(
+            r#"
+INSERT INTO request_logs (ts_ms, path, provider, upstream_id, stream, status, usage_json, latency_ms)
+VALUES (1, '/v1/responses', 'openai-response', 'test', 0, 200, ?, 1);
+"#,
+        )
+        .bind(usage_json)
+        .execute(pool)
+        .await
+        .expect("insert usage json log")
+        .last_insert_rowid()
+    }
+
+    async fn usage_json_of(pool: &SqlitePool, id: i64) -> String {
+        sqlx::query_scalar("SELECT usage_json FROM request_logs WHERE id = ?;")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .expect("read usage json")
+    }
+
+    #[tokio::test]
+    async fn attribution_compaction_rewrites_history_and_keeps_usage_totals() {
+        let pool = memory_pool_with_schema().await;
+        let with_items = r#"{"input_tokens":12,"output_tokens":1,"attribution":{"request_fields":{"tools":{"input_tokens":2}},"items":{"msg_a":{"input_tokens":4,"output_tokens":1},"msg_b":{"input_tokens":6}}}}"#;
+        let plain = r#"{"input_tokens":3,"output_tokens":1}"#;
+        let unknown = r#"{"input_tokens":1,"attribution":{"items":{"msg_a":{"text":"keep"}}}}"#;
+        let compacted_id = insert_usage_json_log(&pool, with_items).await;
+        let plain_id = insert_usage_json_log(&pool, plain).await;
+        let unknown_id = insert_usage_json_log(&pool, unknown).await;
+
+        compact_request_log_attribution(&pool)
+            .await
+            .expect("compact attribution");
+
+        let compacted: serde_json::Value =
+            serde_json::from_str(&usage_json_of(&pool, compacted_id).await).unwrap();
+        assert_eq!(
+            compacted,
+            serde_json::json!({
+                "input_tokens": 12,
+                "output_tokens": 1,
+                "attribution": {
+                    "request_fields": {"tools": {"input_tokens": 2}},
+                    "items_by_type": {"msg_": {"count": 2, "input_tokens": 10, "output_tokens": 1}}
+                }
+            })
+        );
+        assert_eq!(usage_json_of(&pool, plain_id).await, plain);
+        assert_eq!(usage_json_of(&pool, unknown_id).await, unknown);
+
+        // 进度标记之后新增的历史日志在下一次启动时补压缩。
+        let later_id = insert_usage_json_log(&pool, with_items).await;
+        compact_request_log_attribution(&pool)
+            .await
+            .expect("compact new rows");
+        assert!(!usage_json_of(&pool, later_id).await.contains("\"items\""));
     }
 }

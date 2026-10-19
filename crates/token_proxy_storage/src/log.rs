@@ -185,7 +185,10 @@ async fn insert_log_entry_with_body(
         .as_ref()
         .map(|cost| cost.pricing_model.as_str());
     let pricing_context_tier = request_cost.as_ref().map(|cost| cost.context_tier.as_str());
-    let usage_json = entry.usage_json.as_ref().map(Value::to_string);
+    let usage_json = entry
+        .usage_json
+        .as_ref()
+        .map(crate::usage::stored_usage_json);
 
     let mut transaction = pool.begin().await?;
     let inserted = sqlx::query(
@@ -421,6 +424,38 @@ mod tests {
             attempt_index: Some(attempt_index),
             local_api_key_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn write_compacts_usage_attribution_items_before_storing() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlite::init_schema(&pool).await.unwrap();
+        let mut entry = sample_entry(200, 5, 0);
+        entry.usage_json = Some(serde_json::json!({
+            "input_tokens": 5,
+            "output_tokens": 1,
+            "attribution": {"items": {"rs_a": {"input_tokens": 2}, "rs_b": {"input_tokens": 3}}}
+        }));
+
+        LogWriter::new(Some(pool.clone())).write(&entry).await;
+
+        let stored: String = sqlx::query_scalar("SELECT usage_json FROM request_logs WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let stored: Value = serde_json::from_str(&stored).unwrap();
+        assert_eq!(
+            stored,
+            serde_json::json!({
+                "input_tokens": 5,
+                "output_tokens": 1,
+                "attribution": {"items_by_type": {"rs_": {"count": 2, "input_tokens": 5}}}
+            })
+        );
     }
 
     #[tokio::test]

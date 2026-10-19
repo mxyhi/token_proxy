@@ -56,6 +56,10 @@ _Avoid_: Request Log（请求日志整行）、Usage Breakdown 原始 JSON
 `status < 400` 的请求日志行；永久保留，用于长期用量与成本统计。可清空 Request Detail，但不得删除整行，也不得清空 `usage_json` 与规范化 token/成本字段。
 _Avoid_: 成功日志 90 天过期删除
 
+**Usage Attribution（用量归因）**:
+上游在 `usage_json.attribution` 里附带的 token 归因。落库时把逐条目明细 `items` 按条目 ID 前缀（如 `msg_`、`rs_`、`ctco_`）汇总为 `items_by_type`（条数与各 token 合计），`request_fields`、`server_instructions` 等其余字段原样保留；结构无法识别时整段原样保存。升级前写入的历史日志由后台任务一次性压缩。
+_Avoid_: 逐条目归因明细（同一会话每次请求都重复携带全部历史条目，且条目 ID 在 Request Detail 清空后无法对应到内容）
+
 **可用模型白名单**:
 单个上游声明可以接收的入站模型集合。未配置或集合为空表示不限制模型；非空时仅允许精确匹配的模型参与该上游路由。
 _Avoid_: 模型列表（容易与上游探测结果混淆）、模型映射

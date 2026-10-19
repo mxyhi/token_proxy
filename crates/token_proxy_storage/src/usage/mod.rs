@@ -5,6 +5,10 @@ use super::log::{TokenUsage, UsageSnapshot};
 use super::pricing::BillableUsage;
 use token_proxy_protocol::sse::SseEventParser;
 
+mod attribution;
+
+pub(crate) use attribution::{compact_attribution_items, stored_usage_json};
+
 pub struct SseUsageCollector {
     parser: SseEventParser,
     snapshot: UsageSnapshot,

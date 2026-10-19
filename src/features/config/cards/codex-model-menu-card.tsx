@@ -96,7 +96,7 @@ export function CodexModelMenuCard({ models, capabilities = {}, onChange, isDirt
     }
     setFeedback("");
     const nextCapabilities = model === QWEN_MODEL_ID && !capabilities[model]
-      ? { ...capabilities, [model]: { context_window: 131072, supports_vision: true, reasoning_effort: "xhigh" as const } }
+      ? { ...capabilities, [model]: { context_window: 131072, supports_vision: true, reasoning_effort: "max" as const } }
       : capabilities;
     onChange([...models, model], nextCapabilities);
   };

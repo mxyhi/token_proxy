@@ -127,7 +127,7 @@ export const DEFAULT_CODEX_MODEL_CAPABILITIES: CodexModelCapabilities = {
   reasoning_effort: "none",
 };
 
-export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+export const CODEX_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 function normalizeCodexModelCapabilities(values: Record<string, CodexModelCapabilities>) {
   return Object.fromEntries(Object.entries(values).map(([model, capabilities]) => [

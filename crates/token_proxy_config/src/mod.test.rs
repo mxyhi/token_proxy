@@ -39,7 +39,7 @@ fn codex_model_capabilities_roundtrip_defaults_and_validation() {
     let configured = CodexModelCapabilities {
         context_window: 131072,
         supports_vision: true,
-        reasoning_effort: CodexReasoningEffort::Xhigh,
+        reasoning_effort: CodexReasoningEffort::Max,
     };
     config
         .codex_model_capabilities
@@ -47,7 +47,7 @@ fn codex_model_capabilities_roundtrip_defaults_and_validation() {
     let serialized = serde_json::to_value(&config).unwrap();
     assert_eq!(
         serialized["codex_model_capabilities"][" qwen "]["reasoning_effort"],
-        "xhigh"
+        "max"
     );
     let restored = serde_json::from_value(serialized).unwrap();
     let runtime = build_runtime_config(restored).unwrap();
@@ -55,6 +55,12 @@ fn codex_model_capabilities_roundtrip_defaults_and_validation() {
     assert_eq!(
         serde_json::from_str::<CodexModelCapabilities>("{}").unwrap(),
         CodexModelCapabilities::default()
+    );
+    assert_eq!(
+        serde_json::from_str::<CodexModelCapabilities>(r#"{"reasoning_effort":"xhigh"}"#)
+            .unwrap()
+            .reasoning_effort,
+        CodexReasoningEffort::Xhigh
     );
 
     for invalid in [

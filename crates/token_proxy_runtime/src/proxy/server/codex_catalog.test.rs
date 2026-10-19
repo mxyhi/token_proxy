@@ -99,7 +99,7 @@ fn codex_catalog_applies_selected_model_capabilities_without_changing_official_m
         let capabilities = token_proxy_config::CodexModelCapabilities {
             context_window: 131072,
             supports_vision: true,
-            reasoning_effort: token_proxy_config::CodexReasoningEffort::Xhigh,
+            reasoning_effort: token_proxy_config::CodexReasoningEffort::Max,
         };
         for model in [QWEN, "gpt-6-astra", "unselected"] {
             config
@@ -127,8 +127,8 @@ fn codex_catalog_applies_selected_model_capabilities_without_changing_official_m
             qwen["input_modalities"],
             serde_json::json!(["text", "image"])
         );
-        assert_eq!(qwen["default_reasoning_level"], "xhigh");
-        assert_eq!(qwen["supported_reasoning_levels"][0]["effort"], "xhigh");
+        assert_eq!(qwen["default_reasoning_level"], "max");
+        assert_eq!(qwen["supported_reasoning_levels"][0]["effort"], "max");
         assert_eq!(
             qwen["supported_reasoning_levels"].as_array().unwrap().len(),
             1

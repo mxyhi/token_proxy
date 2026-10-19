@@ -11,7 +11,7 @@ import {
 } from "@/features/config/form";
 
 describe("config/form", () => {
-  it("preserves Codex capabilities across config and form serialization without dirtying legacy configs", () => {
+  it.each(["xhigh", "max"] as const)("preserves Codex %s capabilities across config and form serialization without dirtying legacy configs", (reasoning_effort) => {
     const legacy = toPayload(EMPTY_FORM);
     expect(toForm(legacy).codexModelCapabilities).toEqual({});
     expect(toPayload(toForm(legacy))).toEqual(legacy);
@@ -20,7 +20,7 @@ describe("config/form", () => {
       ...EMPTY_FORM,
       codexExtraModels: ["qwen"],
       codexModelCapabilities: {
-        qwen: { context_window: 131072, supports_vision: true, reasoning_effort: "xhigh" as const },
+        qwen: { context_window: 131072, supports_vision: true, reasoning_effort },
       },
     };
     const payload = toPayload(form);
@@ -31,7 +31,7 @@ describe("config/form", () => {
   });
 
   it("rejects invalid Codex context windows and ambiguous capability model IDs", () => {
-    const capabilities = { context_window: 131072, supports_vision: true, reasoning_effort: "xhigh" as const };
+    const capabilities = { context_window: 131072, supports_vision: true, reasoning_effort: "max" as const };
     for (const context_window of [0, -1, 1.5, NaN, Infinity, 4294967296]) {
       expect(validate({
         ...EMPTY_FORM,

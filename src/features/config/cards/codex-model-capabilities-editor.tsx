@@ -12,7 +12,7 @@ import {
 import { m } from "@/paraglide/messages.js";
 import type { CodexModelCapabilities } from "../types";
 
-const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
+const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 const MAX_CONTEXT_WINDOW = 4294967295;
 
 type ReasoningEffort = CodexModelCapabilities["reasoning_effort"];

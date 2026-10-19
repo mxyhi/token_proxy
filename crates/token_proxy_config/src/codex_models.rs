@@ -11,6 +11,7 @@ pub enum CodexReasoningEffort {
     Medium,
     High,
     Xhigh,
+    Max,
 }
 
 /// 仅声明额外模型在 Codex 中的能力，不改变上游模型或协议转换能力。

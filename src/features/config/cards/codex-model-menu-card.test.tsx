@@ -115,7 +115,7 @@ describe("CodexModelMenuCard", () => {
     fireEvent.click(screen.getByRole("button", { name: m.codex_model_menu_add_qwen() }));
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onChange).toHaveBeenCalledWith(["qwen3.8-27b-uncensored"], {
-      "qwen3.8-27b-uncensored": { context_window: 131072, supports_vision: true, reasoning_effort: "xhigh" },
+      "qwen3.8-27b-uncensored": { context_window: 131072, supports_vision: true, reasoning_effort: "max" },
     });
 
     view.rerender(

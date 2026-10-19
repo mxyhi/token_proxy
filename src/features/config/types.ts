@@ -146,7 +146,7 @@ export type UpstreamUsage = UsageTotals & {
 export type CodexModelCapabilities = {
   context_window: number;
   supports_vision: boolean;
-  reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+  reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 };
 
 export type ProxyConfigFileBase = {

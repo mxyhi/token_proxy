@@ -129,7 +129,15 @@ pub(crate) fn chat_request_to_codex_with_prompt_cache_key(
         "instructions".to_string(),
         Value::String(codex_base_instructions_for_model(&model).to_string()),
     );
-    output.insert("parallel_tool_calls".to_string(), Value::Bool(true));
+    output.insert(
+        "parallel_tool_calls".to_string(),
+        Value::Bool(
+            object
+                .get("parallel_tool_calls")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+        ),
+    );
     output.insert("include".to_string(), codex_include(object.get("include")));
     output.insert(
         "reasoning".to_string(),
@@ -1728,3 +1736,149 @@ fn value_to_string(value: &Value) -> String {
     }
     value.to_string()
 }
+
+/// 历史搜索需要声明宿主工具；cached-only 且无原工具时禁止调用，避免回放触发新搜索。
+pub(crate) fn ensure_web_search_history(object: &mut Map<String, Value>, lite: bool) -> bool {
+    let has_search = |tools: Option<&Value>| {
+        tools.and_then(Value::as_array).is_some_and(|items| {
+            items.iter().any(|tool| {
+                tool.get("type")
+                    .and_then(Value::as_str)
+                    .is_some_and(|kind| kind.starts_with("web_search"))
+            })
+        })
+    };
+    let Some(input) = object.get("input").and_then(Value::as_array) else {
+        return false;
+    };
+    if !input
+        .iter()
+        .any(|item| item.get("type").and_then(Value::as_str) == Some("web_search_call"))
+        || has_search(object.get("tools"))
+        || input.iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("additional_tools")
+                && has_search(item.get("tools"))
+        })
+    {
+        return false;
+    }
+    // 非数组 tools 属于无效调用方输入，不能借兼容修复把它改成一个合法的新请求。
+    if object
+        .get("tools")
+        .is_some_and(|tools| !tools.is_array() && !tools.is_null())
+    {
+        return false;
+    }
+    let caller_tools = object
+        .get("tools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| !tools.is_empty())
+        || input.iter().any(|item| {
+            item.get("type").and_then(Value::as_str) == Some("additional_tools")
+                && item
+                    .get("tools")
+                    .and_then(Value::as_array)
+                    .is_some_and(|tools| !tools.is_empty())
+        });
+    let choice = object.get("tool_choice");
+    let automatic = choice
+        .is_none_or(|choice| choice.is_null() || matches!(choice.as_str(), Some("" | "auto")));
+    if !caller_tools && !automatic && choice.and_then(Value::as_str) != Some("none") {
+        return false;
+    }
+    // 注入的工具只用于历史校验，不能因 auto/required 使模型获得新的可调用工具。
+    let allowed = if caller_tools
+        && (automatic || choice.and_then(Value::as_str) == Some("required"))
+    {
+        let declared = object
+            .get("tools")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .chain(
+                input
+                    .iter()
+                    .filter(|item| {
+                        item.get("type").and_then(Value::as_str) == Some("additional_tools")
+                    })
+                    .filter_map(|item| item.get("tools").and_then(Value::as_array))
+                    .flatten(),
+            );
+        let mut allowed = Vec::new();
+        for tool in declared {
+            let Some(kind) = tool.get("type").and_then(Value::as_str) else {
+                return false;
+            };
+            // namespace 选择不能在此处靠猜测展开；保留原请求让上游明确拒绝。
+            if kind == "namespace" {
+                return false;
+            }
+            let mut identity = Map::new();
+            identity.insert("type".into(), json!(kind));
+            for field in ["name", "namespace"] {
+                if let Some(value) = tool.get(field) {
+                    identity.insert(field.into(), value.clone());
+                }
+            }
+            allowed.push(Value::Object(identity));
+        }
+        Some(
+            json!({"type":"allowed_tools","mode":if automatic {"auto"} else {"required"},"tools":allowed}),
+        )
+    } else {
+        None
+    };
+    let tool = json!({"type":"web_search","external_web_access":false});
+    if lite {
+        let input = object
+            .get_mut("input")
+            .and_then(Value::as_array_mut)
+            .expect("checked input");
+        if let Some(item) = input
+            .iter_mut()
+            .find(|item| item.get("type").and_then(Value::as_str) == Some("additional_tools"))
+        {
+            let Some(tools) = item.get_mut("tools").and_then(Value::as_array_mut) else {
+                return false;
+            };
+            tools.push(tool);
+        } else {
+            let index = if input.last().is_some_and(|item| {
+                item.get("type").and_then(Value::as_str) == Some("compaction_trigger")
+            }) {
+                input.len() - 1
+            } else {
+                input.len()
+            };
+            input.insert(
+                index,
+                json!({"type":"additional_tools","role":"developer","tools":[tool]}),
+            );
+        }
+    } else {
+        if !object.get("tools").is_some_and(Value::is_array) {
+            object.insert("tools".to_string(), json!([]));
+        }
+        object
+            .get_mut("tools")
+            .and_then(Value::as_array_mut)
+            .expect("array tools")
+            .push(tool);
+    }
+    if !caller_tools
+        && object.get("tool_choice").is_none_or(|choice| {
+            choice.is_null() || matches!(choice.as_str(), Some("" | "auto" | "none"))
+        })
+    {
+        object.insert("tool_choice".to_string(), json!("none"));
+    }
+    if let Some(allowed) = allowed {
+        object.insert("tool_choice".into(), allowed);
+    }
+    tracing::debug!(lite, "declared cached-only search for Codex history replay");
+    true
+}
+
+#[cfg(test)]
+#[path = "request_updates.test.rs"]
+mod request_updates_tests;

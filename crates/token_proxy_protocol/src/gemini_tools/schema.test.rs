@@ -255,3 +255,13 @@ mod identifier_tests {
         assert!(clean["properties"]["items"]["items"].get("id").is_none());
     }
 }
+
+#[test]
+fn unsupported_annotations_removed_only_at_schema_nodes() {
+    let literal = json!({"readOnly":true,"contentEncoding":"keep","dependentSchemas":{"x":{}}});
+    let schema = json!({"type":"object","readOnly":true,"writeOnly":false,"contentEncoding":"base64","contentMediaType":"image/png","discriminator":{},"dependentRequired":{"x":["y"]},"dependentSchemas":{},"dependencies":{},"properties":{"readOnly":{"type":"string","default":literal}}});
+    let cleaned = clean_tool_schema(&schema);
+    assert!(cleaned.get("readOnly").is_none());
+    assert!(cleaned.get("dependentRequired").is_none());
+    assert_eq!(cleaned["properties"]["readOnly"]["default"], literal);
+}

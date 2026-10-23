@@ -2,6 +2,35 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn claude_speed_is_effective_tier_and_survives_sparse_usage() {
+    let mut collector = SseUsageCollector::new();
+    for event in [
+        json!({"type":"message_start","message":{"usage":{"input_tokens":10,"speed":"fast"}}}),
+        json!({"type":"message_delta","usage":{"output_tokens":3}}),
+    ] {
+        collector
+            .push_chunk(format!("data: {event}\n\n").as_bytes())
+            .unwrap();
+    }
+    assert_eq!(collector.finish().service_tier.as_deref(), Some("fast"));
+    collector.push_chunk(b"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":4,\"speed\":\"standard\"}}\n\n").unwrap();
+    assert_eq!(collector.finish().service_tier.as_deref(), Some("standard"));
+    for (speed, expected) in [
+        ("fast", "fast"),
+        ("standard", "standard"),
+        ("unknown", "priority"),
+    ] {
+        let body = json!({"service_tier":"priority","usage":{"input_tokens":10,"output_tokens":3,"speed":speed}});
+        assert_eq!(
+            extract_usage_from_response(&Bytes::from(body.to_string()))
+                .service_tier
+                .as_deref(),
+            Some(expected)
+        );
+    }
+}
+
+#[test]
 fn gemini_usage_merges_partial_snapshots_without_adding_duplicates() {
     for nested in [false, true] {
         let mut collector = SseUsageCollector::new();
@@ -201,4 +230,32 @@ fn sse_response_model_keeps_the_latest_event_and_does_not_drop_usage() {
         snapshot.usage.as_ref().and_then(|usage| usage.input_tokens),
         Some(3)
     );
+}
+
+#[test]
+fn observed_claude_speed_selects_existing_price_profile() {
+    let settings = crate::pricing::default_model_pricing_settings();
+    for speed in ["fast", "standard"] {
+        let snapshot = extract_usage_from_response(&Bytes::from(
+            json!({"usage":{"input_tokens":100,"output_tokens":10,"speed":speed}}).to_string(),
+        ));
+        let actual = crate::pricing::calculate_request_cost(
+            &settings,
+            Some("claude-opus-5-5"),
+            None,
+            snapshot.service_tier.as_deref(),
+            &snapshot.billable_usage,
+        )
+        .unwrap();
+        let expected = crate::pricing::calculate_request_cost(
+            &settings,
+            Some("claude-opus-5-5"),
+            None,
+            Some(speed),
+            &snapshot.billable_usage,
+        )
+        .unwrap();
+        assert_eq!(actual.service_tier, speed);
+        assert_eq!(actual.cost_nano_usd, expected.cost_nano_usd);
+    }
 }

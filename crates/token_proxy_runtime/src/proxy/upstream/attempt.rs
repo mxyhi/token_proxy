@@ -9,7 +9,10 @@ use super::retry::{
 };
 use super::transport::send_upstream_request;
 use super::{
-    request_repair::{repair_request_body, RequestRepair, RequestRepairState},
+    request_repair::{
+        repair_codex_encrypted_body, repair_request_body, RequestRepair, RequestRepairKind,
+        RequestRepairState,
+    },
     AttemptOutcome, PreparedUpstreamRequest, RetryDirective, RetryScope,
 };
 use crate::proxy::log::RequestTimings;
@@ -19,6 +22,9 @@ use crate::proxy::request_detail::RequestDetailSnapshot;
 use crate::proxy::{
     config::UpstreamRuntime, cooldown_scope::CooldownScope, ProxyState, RequestMeta,
 };
+
+#[path = "encrypted_prelude.rs"]
+mod encrypted_prelude;
 
 /// 发送时记录一次输入 token，并用守卫跟踪整个请求生命周期。
 async fn register_token_tracker_for_attempt(
@@ -65,6 +71,7 @@ pub(super) async fn attempt_upstream(
     let mut effective_body = body.clone();
     let mut repair_state = RequestRepairState::new(&effective_body);
     let mut repair_count = 0usize;
+    let mut encrypted_recovered = false;
     let mut fixed_upstream = upstream.clone();
     let mut first = attempt_send(
         state,
@@ -89,14 +96,25 @@ pub(super) async fn attempt_upstream(
                 break;
             }
         };
-        let (attempt, repair) =
-            match inspect_request_repair(attempt, &effective_body, &mut repair_state).await {
-                Ok(value) => value,
-                Err(failure) => {
-                    first = Err(failure);
-                    break;
-                }
-            };
+        if encrypted_recovered {
+            first = Ok(attempt);
+            break;
+        }
+        let (attempt, repair) = match inspect_request_repair(
+            attempt,
+            provider,
+            &effective_body,
+            &mut repair_state,
+            state.config.stream_first_output_timeout,
+        )
+        .await
+        {
+            Ok(value) => value,
+            Err(failure) => {
+                first = Err(failure);
+                break;
+            }
+        };
         let Some(repair) = repair else {
             first = Ok(attempt);
             break;
@@ -109,6 +127,17 @@ pub(super) async fn attempt_upstream(
                 attempt.selected_account_id.as_deref(),
             );
         }
+        let expected_token = if repair.kind == RequestRepairKind::CodexEncryptedContent {
+            let Some(token) = attempt.account_access_token.clone() else {
+                // 无实际发送凭据快照时不能证明同凭据，保持原失败。
+                first = Ok(attempt);
+                break;
+            };
+            encrypted_recovered = true;
+            Some(token)
+        } else {
+            None
+        };
         repair_count += 1;
         tracing::info!(
             provider,
@@ -121,7 +150,7 @@ pub(super) async fn attempt_upstream(
         );
         drop(attempt);
         effective_body = repair.body;
-        first = attempt_send(
+        first = attempt_send_with_expected_token(
             state,
             method.clone(),
             provider,
@@ -134,8 +163,42 @@ pub(super) async fn attempt_upstream(
             request_auth,
             request_detail.as_ref(),
             cooldown_scope,
+            expected_token.as_deref(),
         )
         .await;
+    }
+    if encrypted_recovered {
+        // 这次有损恢复仅允许一次同凭据发送；之后不进入鉴权刷新、通用重试或跨上游。
+        let outcome = match first {
+            Ok(attempt) => {
+                finalize_attempt(
+                    state,
+                    provider,
+                    upstream,
+                    inbound_path,
+                    client_gemini_api_key,
+                    response_transform,
+                    request_detail,
+                    attempt,
+                    cooldown_scope,
+                )
+                .await
+            }
+            Err(failure) => failure.outcome,
+        };
+        return match outcome {
+            AttemptOutcome::Retryable {
+                response: Some(response),
+                ..
+            } => AttemptOutcome::Fatal(response),
+            AttemptOutcome::Retryable { .. } | AttemptOutcome::SkippedAuth => {
+                AttemptOutcome::Fatal(crate::proxy::http::error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "Upstream request recovery failed.",
+                ))
+            }
+            outcome => outcome,
+        };
     }
     let first = match retry_with_account_auth_recovery(
         state,
@@ -198,10 +261,55 @@ pub(super) async fn attempt_upstream(
 }
 
 async fn inspect_request_repair(
-    attempt: UpstreamAttempt,
+    mut attempt: UpstreamAttempt,
+    provider: &str,
     request_body: &ReplayableBody,
     state: &mut RequestRepairState,
+    first_output_budget: std::time::Duration,
 ) -> Result<(UpstreamAttempt, Option<RequestRepair>), UpstreamAttemptFailure> {
+    let codex_recovery = matches!(provider, "codex" | "openai" | "openai-response");
+    let has_encrypted = codex_recovery
+        && serde_json::from_slice::<serde_json::Value>(request_body.as_bytes())
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("input")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|items| {
+                        items.iter().any(|item| {
+                            item.get("type").and_then(serde_json::Value::as_str)
+                                == Some("reasoning")
+                                && item
+                                    .get("encrypted_content")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|value| !value.is_empty())
+                        })
+                    })
+            })
+            .unwrap_or(false);
+    if has_encrypted
+        && attempt.response.status().is_success()
+        && attempt
+            .response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"))
+    {
+        let (response, rejection) = encrypted_prelude::inspect_encrypted_prelude(
+            attempt.response,
+            attempt.start_time,
+            first_output_budget,
+        )
+        .await;
+        attempt.response = response;
+        let repair = rejection.as_deref().and_then(|error| {
+            repair_codex_encrypted_body(request_body, error, state)
+                .ok()
+                .flatten()
+        });
+        return Ok((attempt, repair));
+    }
     if attempt.response.status() != StatusCode::BAD_REQUEST {
         return Ok((attempt, None));
     }
@@ -250,16 +358,22 @@ async fn inspect_request_repair(
             selected_account_id: selected_account_id.clone(),
         })?;
     *rebuilt.headers_mut() = headers;
-    let repair =
-        repair_request_body(status, request_body, &response_body, state).map_err(|error| {
-            UpstreamAttemptFailure {
-                outcome: AttemptOutcome::Fatal(crate::proxy::http::error_response(
-                    StatusCode::BAD_GATEWAY,
-                    error,
-                )),
-                selected_account_id: selected_account_id.clone(),
-            }
-        })?;
+    let repair = (if codex_recovery {
+        repair_codex_encrypted_body(request_body, &response_body, state)
+    } else {
+        Ok(None)
+    })
+    .and_then(|repair| match repair {
+        Some(repair) => Ok(Some(repair)),
+        None => repair_request_body(status, request_body, &response_body, state),
+    })
+    .map_err(|error| UpstreamAttemptFailure {
+        outcome: AttemptOutcome::Fatal(crate::proxy::http::error_response(
+            StatusCode::BAD_GATEWAY,
+            error,
+        )),
+        selected_account_id: selected_account_id.clone(),
+    })?;
     Ok((
         UpstreamAttempt {
             response: rebuilt,
@@ -316,6 +430,39 @@ pub(super) async fn attempt_send(
     request_detail: Option<&RequestDetailSnapshot>,
     cooldown_scope: &CooldownScope,
 ) -> Result<UpstreamAttempt, UpstreamAttemptFailure> {
+    attempt_send_with_expected_token(
+        state,
+        method,
+        provider,
+        upstream,
+        inbound_path,
+        upstream_path_with_query,
+        headers,
+        body,
+        meta,
+        request_auth,
+        request_detail,
+        cooldown_scope,
+        None,
+    )
+    .await
+}
+
+async fn attempt_send_with_expected_token(
+    state: &ProxyState,
+    method: Method,
+    provider: &str,
+    upstream: &UpstreamRuntime,
+    inbound_path: &str,
+    upstream_path_with_query: &str,
+    headers: &HeaderMap,
+    body: &ReplayableBody,
+    meta: &RequestMeta,
+    request_auth: &crate::proxy::http::RequestAuth,
+    request_detail: Option<&RequestDetailSnapshot>,
+    cooldown_scope: &CooldownScope,
+    expected_token: Option<&str>,
+) -> Result<UpstreamAttempt, UpstreamAttemptFailure> {
     let prepared = super::prepare_upstream_request_with_body(
         state,
         provider,
@@ -333,6 +480,23 @@ pub(super) async fn attempt_send(
         outcome,
         selected_account_id: None,
     })?;
+    if let Some(expected) = expected_token {
+        let current = prepared
+            .request_headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.strip_prefix("Bearer ").unwrap_or(value));
+        if current != Some(expected) {
+            tracing::warn!(provider,upstream=%upstream.id,"aborted encrypted recovery because credential changed");
+            return Err(UpstreamAttemptFailure {
+                outcome: AttemptOutcome::Fatal(crate::proxy::http::error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "Upstream request recovery is unavailable.",
+                )),
+                selected_account_id: prepared.selected_account_id,
+            });
+        }
+    }
     let xai_client_tools = super::request_body::xai_client_tool_mapping(
         provider,
         upstream_path_with_query,
@@ -390,15 +554,11 @@ pub(super) async fn attempt_send(
         }
     };
     // 保留这次实际发送的 token；并发 401 只在凭证版本仍相同时兑换。
-    let account_access_token = matches!(provider, "codex" | "xai" | "kiro")
-        .then(|| {
-            request_headers
-                .get(axum::http::header::AUTHORIZATION)
-                .and_then(|value| value.to_str().ok())
-                .map(|value| value.strip_prefix("Bearer ").unwrap_or(value))
-                .map(str::to_string)
-        })
-        .flatten();
+    let account_access_token = request_headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.strip_prefix("Bearer ").unwrap_or(value))
+        .map(str::to_string);
     Ok(UpstreamAttempt {
         response,
         selected_account_id,

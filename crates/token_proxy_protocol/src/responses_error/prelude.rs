@@ -87,7 +87,7 @@ fn inspect(data: &str) -> ResponsesPreludeDecision {
         return if error.retryable_before_output {
             ResponsesPreludeDecision::RetryableError(error)
         } else {
-            ResponsesPreludeDecision::ReadyForPassThrough
+            ResponsesPreludeDecision::TerminalError(error)
         };
     }
     let Some(kind) = value.get("type").and_then(Value::as_str) else {
@@ -118,6 +118,7 @@ fn inspect(data: &str) -> ResponsesPreludeDecision {
         | "response.in_progress"
         | "codex.rate_limits"
         | "codex.response.metadata"
+        | "response.metadata"
         | "keepalive" => true,
         "response.output_item.added" => value.get("item").is_some_and(empty_item),
         "response.content_part.added" | "response.reasoning_summary_part.added" => {
@@ -246,5 +247,36 @@ mod tests {
             feed(&mut inspector, json!({"type":"keepalive"})),
             ResponsesPreludeDecision::ReadyForPassThrough
         );
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    #[test]
+    fn upstream_update_metadata_keeps_retry_window_until_business_output() {
+        for metadata in ["response.metadata", "codex.response.metadata"] {
+            let mut inspector = ResponsesPreludeInspector::new();
+            assert_eq!(
+                inspector
+                    .inspect_chunk(format!("data: {{\"type\":\"{metadata}\"}}\n\n").as_bytes()),
+                ResponsesPreludeDecision::Pending
+            );
+            assert!(matches!(inspector.inspect_chunk(b"data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"server_is_overloaded\",\"message\":\"overloaded\"}}}\n\n"), ResponsesPreludeDecision::RetryableError(_)));
+            let mut inspector = ResponsesPreludeInspector::new();
+            inspector.inspect_chunk(format!("data: {{\"type\":\"{metadata}\"}}\n\n").as_bytes());
+            assert_eq!(
+                inspector.inspect_chunk(
+                    b"data: {\"type\":\"response.output_text.delta\",\"delta\":\"body\"}\n\n"
+                ),
+                ResponsesPreludeDecision::ReadyForPassThrough
+            );
+            assert_eq!(
+                inspector.inspect_chunk(
+                    b"data: {\"type\":\"error\",\"error\":{\"code\":\"server_is_overloaded\"}}\n\n"
+                ),
+                ResponsesPreludeDecision::ReadyForPassThrough
+            );
+        }
     }
 }

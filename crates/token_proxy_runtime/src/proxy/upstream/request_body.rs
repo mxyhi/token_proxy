@@ -352,8 +352,10 @@ fn force_codex_responses_lite_parallel_tool_calls(
                     .as_str()
                     .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
         });
+    let history_changed =
+        crate::proxy::codex_compat::ensure_web_search_history(object, header_lite || metadata_lite);
     if !header_lite && !metadata_lite {
-        return Ok(false);
+        return Ok(history_changed);
     }
     if let Some(value) = object.get("parallel_tool_calls") {
         if !value.is_boolean() {
@@ -363,7 +365,7 @@ fn force_codex_responses_lite_parallel_tool_calls(
             )));
         }
         if value.as_bool() == Some(false) {
-            return Ok(false);
+            return Ok(history_changed);
         }
     }
     object.insert("parallel_tool_calls".to_string(), Value::Bool(false));

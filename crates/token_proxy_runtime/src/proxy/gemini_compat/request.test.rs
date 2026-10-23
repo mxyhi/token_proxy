@@ -473,3 +473,65 @@ fn chat_request_to_gemini_preserves_strict_tool_contract() {
         );
     }
 }
+
+#[test]
+fn tool_result_images_are_user_media_parts_and_preserve_text() {
+    let input = json!({"messages":[
+        {"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"capture","arguments":"{}"}}]},
+        {"role":"tool","tool_call_id":"c1","content":[{"type":"text","text":"captured"},{"type":"image_url","image_url":{"url":"data:image/png;base64,YQ=="}}]}
+    ]});
+    let output = chat_request_to_gemini(&Bytes::from(input.to_string())).unwrap();
+    let output: Value = serde_json::from_slice(&output).unwrap();
+    let turn = &output["contents"][1];
+    assert_eq!(turn["role"], "user");
+    assert_eq!(turn["parts"][0]["functionResponse"]["name"], "capture");
+    assert_eq!(
+        turn["parts"][0]["functionResponse"]["response"]["result"][0]["text"],
+        "captured"
+    );
+    assert_eq!(turn["parts"][1]["inlineData"]["data"], "YQ==");
+}
+
+#[tokio::test]
+async fn responses_and_anthropic_tool_result_images_reach_gemini_as_media() {
+    use crate::proxy::{
+        http_client::ProxyHttpClients,
+        openai_compat::{transform_request_body, FormatTransform},
+    };
+    let clients = ProxyHttpClients::new().unwrap();
+    let cases = [
+        (
+            FormatTransform::ResponsesToGemini,
+            json!({"input":[
+                {"type":"function_call","call_id":"c1","name":"capture","arguments":"{}"},
+                {"type":"function_call_output","call_id":"c1","output":[{"type":"input_text","text":"captured"},{"type":"input_image","image_url":"data:image/png;base64,YQ=="}]}
+            ]}),
+        ),
+        (
+            FormatTransform::AnthropicToGemini,
+            json!({"model":"gemini","max_tokens":128,"messages":[
+                {"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"capture","input":{}}]},
+                {"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","content":[{"type":"text","text":"captured"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"YQ=="}}]}]}
+            ]}),
+        ),
+    ];
+    for (transform, input) in cases {
+        let output =
+            transform_request_body(transform, &Bytes::from(input.to_string()), &clients, None)
+                .await
+                .unwrap();
+        let output: Value = serde_json::from_slice(&output).unwrap();
+        let contents = output["contents"].as_array().unwrap();
+        let has_image = contents
+            .iter()
+            .filter(|turn| turn["role"] == "user")
+            .any(|turn| {
+                turn["parts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|part| part["inlineData"]["data"] == "YQ==")
+            });
+        assert!(has_image, "{transform:?}: {output}");
+    }
+}

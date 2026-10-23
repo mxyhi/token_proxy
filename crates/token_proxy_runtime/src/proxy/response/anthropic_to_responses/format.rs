@@ -125,7 +125,7 @@ pub(super) fn snapshot_to_output_item(
         } => json!({
             "id": id,
             "type": "function_call",
-            "status": "completed",
+            "status": response_status,
             "call_id": call_id,
             "name": name,
             "arguments": arguments

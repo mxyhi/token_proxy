@@ -148,6 +148,9 @@ pub fn responses_status_from_anthropic_stop_reason(
     if stop_reason == Some("pause_turn") {
         return (Some("incomplete"), None);
     }
+    if stop_reason == Some("model_context_window_exceeded") {
+        return (Some("incomplete"), Some("max_output_tokens"));
+    }
     let finish_reason = match stop_reason {
         Some("max_tokens") => Some("length"),
         Some("refusal") => Some("content_filter"),
@@ -176,6 +179,26 @@ mod tests {
         assert_eq!(
             responses_status_from_anthropic_stop_reason(Some("pause_turn")),
             (Some("incomplete"), None)
+        );
+    }
+
+    #[test]
+    fn upstream_update_context_limit_remains_length_in_chat() {
+        let (status, reason) =
+            responses_status_from_anthropic_stop_reason(Some("model_context_window_exceeded"));
+        assert_eq!(status, Some("incomplete"));
+        assert_eq!(reason, Some("max_output_tokens"));
+        assert_eq!(
+            chat_finish_reason_from_responses(status, reason, true),
+            "length"
+        );
+        assert_eq!(
+            responses_status_from_anthropic_stop_reason(Some("end_turn")),
+            (None, None)
+        );
+        assert_eq!(
+            responses_status_from_anthropic_stop_reason(Some("refusal")),
+            (Some("incomplete"), Some("content_filter"))
         );
     }
 

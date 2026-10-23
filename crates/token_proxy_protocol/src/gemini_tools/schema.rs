@@ -22,6 +22,14 @@ const GEMINI_UNSUPPORTED_SCHEMA_KEYS: &[&str] = &[
     "then",
     "else",
     "deprecated",
+    "readOnly",
+    "writeOnly",
+    "contentMediaType",
+    "contentEncoding",
+    "discriminator",
+    "dependentSchemas",
+    "dependentRequired",
+    "dependencies",
 ];
 
 const SCHEMA_CONTAINER_KEYS: &[&str] = &[

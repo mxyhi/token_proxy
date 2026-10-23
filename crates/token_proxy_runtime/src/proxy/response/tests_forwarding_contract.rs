@@ -133,8 +133,15 @@ fn native_stream_rewrite_must_remove_content_length() {
             .expect("socket stream must have valid HTTP framing");
         server.abort();
         downstream_server.abort();
-        let expected = format!("{upstream_body}data: [DONE]\n\n");
-        assert_eq!(body.as_ref(), expected.as_bytes());
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(text.ends_with("data: [DONE]\n\n"));
+        let terminal: Value =
+            serde_json::from_str(text.lines().next().unwrap().strip_prefix("data: ").unwrap())
+                .unwrap();
+        assert_eq!(terminal["type"], "response.completed");
+        assert_eq!(terminal["response"]["id"], "r1");
+        assert!(terminal["response"]["created_at"].as_u64().unwrap() > 0);
+        assert_eq!(text.matches("[DONE]").count(), 1);
     });
 }
 
@@ -332,5 +339,45 @@ fn cancelled_stream_flushes_spooled_detail_without_losing_forwarded_prefix() {
                 None => break,
             }
         }
+    });
+}
+
+#[test]
+fn native_responses_missing_created_at_is_stable_and_preserves_valid_values() {
+    run_async(async {
+        let (log, mut context, _) = setup_responses_stream().await;
+        context.provider = "openai-response".into();
+        let tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None)
+            .await;
+        let events = [
+            json!({"type":"response.created","response":{"id":"r1","created_at":42}}),
+            json!({"type":"response.in_progress","response":{"id":"r1"}}),
+            json!({"type":"response.completed","response":{"id":"r1","status":"completed","created_at":null,"output":[]}}),
+        ];
+        let upstream = futures_util::stream::iter(
+            events
+                .into_iter()
+                .map(|event| Ok::<_, std::io::Error>(Bytes::from(format!("data: {event}\n\n")))),
+        );
+        let chunks: Vec<_> =
+            super::super::streaming::stream_with_logging(upstream, context, log, tracker)
+                .collect()
+                .await;
+        let mut parser = token_proxy_protocol::sse::SseEventParser::new();
+        let mut payloads = Vec::<Value>::new();
+        for chunk in chunks {
+            parser
+                .push_chunk(&chunk.unwrap(), |data| {
+                    if data != "[DONE]" {
+                        payloads.push(serde_json::from_str(&data).unwrap());
+                    }
+                })
+                .unwrap();
+        }
+        assert_eq!(payloads[0]["response"]["created_at"], 42);
+        let fallback = payloads[1]["response"]["created_at"].as_u64().unwrap();
+        assert!(fallback > 0);
+        assert_eq!(payloads[2]["response"]["created_at"], fallback);
     });
 }

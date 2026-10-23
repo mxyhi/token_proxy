@@ -154,3 +154,9 @@ fn gemini_response_to_chat_maps_audio_inline_data() {
     assert_eq!(message["audio"]["data"], json!("UklGRg=="));
     assert_eq!(message["audio"]["transcript"], json!(""));
 }
+
+#[test]
+fn malformed_gemini_tool_call_is_not_a_successful_completion() {
+    let input = json!({"candidates":[{"finishReason":"MALFORMED_FUNCTION_CALL","content":{"parts":[{"functionCall":{"name":"broken","args":{}}}]}}]});
+    assert!(gemini_response_to_chat(&Bytes::from(input.to_string()), None).is_err());
+}

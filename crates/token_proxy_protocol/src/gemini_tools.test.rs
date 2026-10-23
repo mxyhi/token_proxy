@@ -148,3 +148,14 @@ fn validated_mode_round_trips_strictness_and_allowed_names() {
         "VALIDATED"
     );
 }
+
+#[test]
+fn public_mapper_expands_local_refs_before_stripping_definitions() {
+    let mapped = map_chat_tools_to_gemini(&json!([{"type":"function","function":{"name":"query","parameters":{"type":"object","$defs":{"count":{"type":"integer","minimum":1}},"properties":{"limit":{"$ref":"#/$defs/count"}}}}}])).unwrap();
+    assert_eq!(
+        mapped[0]["functionDeclarations"][0]["parametersJsonSchema"]["properties"]["limit"]
+            ["minimum"],
+        1
+    );
+    assert!(map_chat_tools_to_gemini(&json!([{"type":"function","function":{"name":"bad","parameters":{"type":"object","properties":{"x":{"$ref":"#"}}}}}])).is_err());
+}

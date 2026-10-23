@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 
+mod refs;
 mod schema;
 
 use schema::clean_tool_schema;
@@ -41,7 +42,8 @@ pub fn map_chat_tools_to_gemini(tools: &Value) -> Result<Value, String> {
         let parameters = function
             .get("parameters")
             .or_else(|| function.get("format"))
-            .map(clean_tool_schema)
+            .map(|schema| refs::resolve(schema).map(|resolved| clean_tool_schema(&resolved)))
+            .transpose()?
             .unwrap_or_else(|| json!({"type":"object","properties":{}}));
         if schema::explicit_non_object_root(&parameters) {
             tracing::warn!(

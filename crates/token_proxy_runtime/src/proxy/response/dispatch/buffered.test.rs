@@ -1302,3 +1302,51 @@ fn buffered_responses_text_recovery_ignores_ambiguous_anonymous_delta() {
         assert_eq!(value["output"], items);
     }
 }
+
+#[tokio::test]
+async fn native_responses_json_created_at_repair_removes_stale_length() {
+    for (original, expected) in [(json!(null), None), (json!(42), Some(42))] {
+        let body = Bytes::from(json!({"object":"response","id":"r1","status":"completed","output":[],"created_at":original}).to_string());
+        let upstream = axum::http::Response::builder()
+            .status(200)
+            .body(body.clone())
+            .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            CONTENT_LENGTH,
+            HeaderValue::from_str(&body.len().to_string()).unwrap(),
+        );
+        let mut context = test_context();
+        context.path = "/v1/responses".into();
+        context.provider = "openai-response".into();
+        let tracker = TokenRateTracker::new().register(None).await;
+        let response = build_buffered_response(
+            StatusCode::OK,
+            reqwest::Response::from(upstream),
+            headers,
+            context,
+            Arc::new(LogWriter::new(None)),
+            tracker,
+            FormatTransform::None,
+            None,
+            None,
+            None,
+            None,
+            Duration::from_secs(5),
+        )
+        .await;
+        if expected.is_none() {
+            assert!(!response.headers().contains_key(CONTENT_LENGTH));
+        }
+        let actual: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(actual["id"], "r1");
+        if let Some(expected) = expected {
+            assert_eq!(actual["created_at"], expected);
+        } else {
+            assert!(actual["created_at"].as_u64().unwrap() > 0);
+        }
+    }
+}

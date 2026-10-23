@@ -7,12 +7,17 @@ use std::collections::HashSet;
 
 use crate::proxy::request_body::ReplayableBody;
 
+#[path = "codex_encrypted.rs"]
+mod codex_encrypted;
+pub(super) use codex_encrypted::repair_codex_encrypted_body;
+
 const MAX_REJECTED_FIELD_REPAIRS: usize = 6;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RequestRepairKind {
     RejectedField,
     InvalidEncryptedContent,
+    CodexEncryptedContent,
 }
 
 pub(super) struct RequestRepair {
@@ -46,6 +51,7 @@ impl RequestRepairState {
                 return false;
             }
             RequestRepairKind::InvalidEncryptedContent
+            | RequestRepairKind::CodexEncryptedContent
                 if self.invalid_encrypted_content_repaired =>
             {
                 return false;
@@ -57,7 +63,8 @@ impl RequestRepairState {
         }
         match kind {
             RequestRepairKind::RejectedField => self.rejected_field_repairs += 1,
-            RequestRepairKind::InvalidEncryptedContent => {
+            RequestRepairKind::InvalidEncryptedContent
+            | RequestRepairKind::CodexEncryptedContent => {
                 self.invalid_encrypted_content_repaired = true;
             }
         }
@@ -429,3 +436,7 @@ mod tests {
         .is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "encrypted_repair.test.rs"]
+mod encrypted_repair_tests;

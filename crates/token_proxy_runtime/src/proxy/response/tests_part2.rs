@@ -1975,10 +1975,21 @@ fn stream_anthropic_to_responses_preserves_inline_tool_input() {
                 .iter()
                 .find(|event| event["type"] == "response.output_item.done")
                 .expect("item done");
+            let expected_terminal = if message_stop {
+                "response.completed"
+            } else {
+                "response.failed"
+            };
             let completed = payloads
                 .iter()
-                .find(|event| event["type"] == "response.completed")
-                .expect("completed");
+                .find(|event| event["type"] == expected_terminal)
+                .expect("matching terminal");
+            if !message_stop {
+                assert!(!payloads
+                    .iter()
+                    .any(|event| event["type"] == "response.completed"));
+                assert_eq!(item_done["item"]["status"], "incomplete");
+            }
             assert_eq!(item_done["item"]["arguments"], expected, "case={name}");
             assert_eq!(
                 completed["response"]["output"][0]["arguments"], expected,

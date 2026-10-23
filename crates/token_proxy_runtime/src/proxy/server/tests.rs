@@ -11448,3 +11448,6 @@ mod body_limit;
 
 #[path = "credential_results.test.rs"]
 mod credential_results;
+
+#[path = "request_recovery_updates.test.rs"]
+mod request_recovery_updates_tests;

@@ -1,6 +1,6 @@
 # Sub2API / CPA 更新对比与实施方案
 
-核验日期：2026-10-23。状态：**用户确认的三个批次已完成本地实现和回归；未提交、推送、发布或调用真实供应商**。
+核验日期：2026-10-23。状态：**用户确认的三个批次已完成实现和回归；已接入 v0.1.222 主线，准备发布 v0.1.223，未调用真实供应商**。
 
 ## 实施结果
 
@@ -77,3 +77,7 @@ ranxi 的 SIWC、2FA 自动准入、IP/用户风控管理、证据加密、定�
 ## 证据范围
 
 详细核查表保存在 `.planning/2026-10-23-upstream-update-audit-2026-10-23/cpa-protocol.md`、`sub2api-findings.md`；上游标签快照在 `/tmp/token-proxy-cpa-audit-20261023` 和 `/tmp/token-proxy-sub2api-audit-20261023`，属于本机会话临时材料。本文提供永久 release/commit 标识便于复核。
+
+## v0.1.223 发布前检查
+
+接入主线 v0.1.222 的 Codex 配置修复后重新验证：Rust workspace 通过，前端构建通过，43 个前端测试文件/267 项通过，发布 guard 4 项通过；fmt/diff 通过。正式 tag、CI 发布与资产验证结果以 GitHub Release 为准。

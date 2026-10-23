@@ -7,6 +7,7 @@ const INVALID_EVENT_LIMIT: usize = 1024;
 pub enum ResponsesPreludeDecision {
     Pending,
     RetryableError(ResponsesStreamError),
+    TerminalError(ResponsesStreamError),
     ReadyForPassThrough,
 }
 
@@ -128,6 +129,13 @@ fn classify_error_semantics(
     message: &str,
     status_hint: Option<StatusCode>,
 ) -> (StatusCode, bool) {
+    // 明确的会话冻结即使带 403/5xx 提示也不是账户故障，不得重放。
+    if code.and_then(Value::as_str) == Some("session_blocked_by_cyber_policy") {
+        return (StatusCode::FORBIDDEN, false);
+    }
+    if code.and_then(Value::as_str) == Some("invalid_encrypted_content") {
+        return (StatusCode::BAD_REQUEST, false);
+    }
     let error_type = error_type.to_ascii_lowercase();
     let numeric_status = status_hint.or_else(|| code.and_then(parse_numeric_status));
     let code = code
@@ -514,14 +522,14 @@ mod tests {
         ));
 
         let mut inspector = ResponsesPreludeInspector::new();
-        assert_eq!(
+        assert!(matches!(
             inspector.inspect_chunk(
                 br#"data: {"type":"response.failed","response":{"error":{"type":"invalid_request_error","message":"bad input"}}}
 
 "#
             ),
-            ResponsesPreludeDecision::ReadyForPassThrough
-        );
+            ResponsesPreludeDecision::TerminalError(_)
+        ));
 
         let mut inspector = ResponsesPreludeInspector::new();
         assert_eq!(
@@ -603,6 +611,29 @@ mod tests {
         assert!(matches!(
             decision,
             ResponsesPreludeDecision::RetryableError(_)
+        ));
+    }
+}
+
+/// 只识别结构化错误 code，不从普通 message 文本推断会话级策略。
+pub fn is_session_policy_rejection(value: &Value) -> bool {
+    responses_error_source(value)
+        .get("code")
+        .and_then(Value::as_str)
+        == Some("session_blocked_by_cyber_policy")
+}
+#[cfg(test)]
+mod session_policy_tests {
+    use super::*;
+    #[test]
+    fn session_rejection_is_terminal_even_with_retryable_status() {
+        let event = serde_json::json!({"type":"response.failed","status":403,"response":{"error":{"code":"session_blocked_by_cyber_policy","message":"access forbidden"}}});
+        let error = responses_stream_error(&event).unwrap();
+        assert_eq!(error.status, StatusCode::FORBIDDEN);
+        assert!(!error.retryable_before_output);
+        assert!(is_session_policy_rejection(&event));
+        assert!(!is_session_policy_rejection(
+            &serde_json::json!({"error":{"message":"session_blocked_by_cyber_policy"}})
         ));
     }
 }

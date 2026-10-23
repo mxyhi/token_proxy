@@ -410,33 +410,42 @@ fn event_body(value: Value) -> Bytes {
 }
 
 #[test]
-fn cpa_chat_cancel_is_not_upstream_truncation() {
+fn cpa_chat_and_anthropic_cancel_is_not_upstream_truncation() {
     run_async(async {
-        let (log, mut context, pool) = setup_responses_stream().await;
-        context.provider = "openai".into();
-        let tracker = crate::proxy::token_rate::TokenRateTracker::new()
-            .register(None)
-            .await;
-        let upstream = futures_util::stream::pending::<Result<Bytes, std::io::Error>>();
-        let mut stream = super::super::chat_to_responses::stream_chat_to_responses(
-            upstream, context, log, tracker,
-        )
-        .boxed();
-        stream
-            .next()
-            .await
-            .expect("created event")
-            .expect("created frame");
-        drop(stream);
-        wait_for_log_rows(&pool, 1).await;
-        let row = sqlx::query("SELECT response_error FROM request_logs")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(
-            row.get::<String, _>("response_error"),
-            super::super::streaming::STREAM_DROPPED_ERROR
-        );
+        for anthropic in [false, true] {
+            let (log, mut context, pool) = setup_responses_stream().await;
+            context.provider = if anthropic { "anthropic" } else { "openai" }.into();
+            let tracker = crate::proxy::token_rate::TokenRateTracker::new()
+                .register(None)
+                .await;
+            let upstream = futures_util::stream::pending::<Result<Bytes, std::io::Error>>();
+            let mut stream = if anthropic {
+                super::super::anthropic_to_responses::stream_anthropic_to_responses(
+                    upstream, context, log, tracker,
+                )
+                .boxed()
+            } else {
+                super::super::chat_to_responses::stream_chat_to_responses(
+                    upstream, context, log, tracker,
+                )
+                .boxed()
+            };
+            stream
+                .next()
+                .await
+                .expect("created event")
+                .expect("created frame");
+            drop(stream);
+            wait_for_log_rows(&pool, 1).await;
+            let row = sqlx::query("SELECT response_error FROM request_logs")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(
+                row.get::<String, _>("response_error"),
+                super::super::streaming::STREAM_DROPPED_ERROR
+            );
+        }
     });
 }
 
@@ -460,5 +469,153 @@ fn cpa_anthropic_interrupted_reasoning_and_signature_only_have_correct_parts() {
             .iter()
             .filter(|v| v["type"] == "response.output_item.done")
             .all(|v| v["item"]["summary"] == json!([])));
+    });
+}
+
+#[test]
+fn upstream_update_anthropic_eof_and_error_never_complete() {
+    run_async(async {
+        for error in [false, true] {
+            for partial in [false, true] {
+                let mut chunks = vec![event(
+                    json!({"type":"message_start","message":{"usage":{"input_tokens":7,"output_tokens":1}}}),
+                )];
+                if partial {
+                    chunks.push(event(json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"partial"}})));
+                }
+                chunks.push(event(
+                    json!({"type":"message_delta","delta":{},"usage":{"output_tokens":3}}),
+                ));
+                if error {
+                    chunks.push(event(json!({"type":"error","error":{"type":"overloaded_error","message":"provider overloaded","code":"server_is_overloaded"}})));
+                }
+                let (values, pool) = converted(chunks, true).await;
+                let failures = values
+                    .iter()
+                    .filter(|v| v["type"] == "response.failed")
+                    .collect::<Vec<_>>();
+                assert_eq!(failures.len(), 1, "{values:?}");
+                assert!(!values.iter().any(|v| v["type"] == "response.completed"));
+                assert_eq!(failures[0]["response"]["usage"]["output_tokens"], 3);
+                if error {
+                    assert_eq!(
+                        failures[0]["response"]["error"]["code"],
+                        "server_is_overloaded"
+                    );
+                }
+                wait_for_log_rows(&pool, 1).await;
+                let row =
+                    sqlx::query("SELECT status,response_error,output_tokens FROM request_logs")
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                assert!(row.get::<i64, _>("status") >= 400);
+                assert_eq!(row.get::<i64, _>("output_tokens"), 3);
+                assert!(row.get::<String, _>("response_error").contains(if error {
+                    "overloaded"
+                } else {
+                    "terminal"
+                }));
+            }
+        }
+    });
+}
+
+#[test]
+fn upstream_update_anthropic_context_limit_matches_buffered_and_streamed() {
+    run_async(async {
+        let (values, _) = converted(vec![
+            event(json!({"type":"message_delta","delta":{"stop_reason":"model_context_window_exceeded"},"usage":{"output_tokens":3}})),
+            event(json!({"type":"message_delta","delta":{},"usage":{"output_tokens":3}})),
+            event(json!({"type":"message_stop"})),
+        ], true).await;
+        let response = &values
+            .iter()
+            .find(|v| v["type"] == "response.incomplete")
+            .expect("context limit must be incomplete")["response"];
+        assert_eq!(
+            response["incomplete_details"]["reason"],
+            "max_output_tokens"
+        );
+        let body = crate::proxy::anthropic_compat::anthropic_response_to_responses(&event_body(json!({"id":"msg_1","stop_reason":"model_context_window_exceeded","content":[],"usage":{"input_tokens":7,"output_tokens":3}}))).unwrap();
+        let buffered: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(buffered["status"], "incomplete");
+        assert_eq!(
+            buffered["incomplete_details"],
+            response["incomplete_details"]
+        );
+    });
+}
+
+#[test]
+fn upstream_update_empty_eof_fails_for_chat_and_anthropic() {
+    run_async(async {
+        for anthropic in [false, true] {
+            let (values, pool) = converted(Vec::new(), anthropic).await;
+            assert_eq!(
+                values
+                    .iter()
+                    .filter(|v| v["type"] == "response.failed")
+                    .count(),
+                1
+            );
+            assert!(!values.iter().any(|v| v["type"] == "response.completed"));
+            wait_for_log_rows(&pool, 1).await;
+            let status: i64 = sqlx::query_scalar("SELECT status FROM request_logs")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(status, 502);
+        }
+    });
+}
+
+#[test]
+fn upstream_update_metadata_does_not_set_first_output_in_log() {
+    run_async(async {
+        let (log, context, pool) = setup_responses_stream().await;
+        let tracker = crate::proxy::token_rate::TokenRateTracker::new()
+            .register(None)
+            .await;
+        let upstream = futures_util::stream::iter(vec![
+            Ok::<_, std::io::Error>(event(
+                json!({"type":"response.metadata","metadata":{"id":"meta"}}),
+            )),
+            Ok(event(
+                json!({"type":"response.failed","response":{"error":{"message":"overloaded","code":"server_is_overloaded"}}}),
+            )),
+        ]);
+        let _ = super::super::streaming::stream_with_logging(upstream, context, log, tracker)
+            .map(|item| item.expect("protocol event"))
+            .collect::<Vec<_>>()
+            .await;
+        wait_for_log_rows(&pool, 1).await;
+        let first_output: Option<i64> =
+            sqlx::query_scalar("SELECT first_output_ms FROM request_logs")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(first_output, None);
+    });
+}
+
+#[test]
+fn upstream_update_anthropic_speed_survives_sparse_tail_and_reaches_responses() {
+    run_async(async {
+        for speed in ["fast", "standard"] {
+            let (values, _) = converted(vec![
+                event(json!({"type":"message_start","message":{"id":"m1","model":"claude","usage":{"input_tokens":7,"speed":speed}}})),
+                event(json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}})),
+                event(json!({"type":"message_stop"})),
+            ], true).await;
+            let response = &values
+                .iter()
+                .find(|v| v["type"] == "response.completed")
+                .unwrap()["response"];
+            assert_eq!(response["service_tier"], speed);
+            let buffered = crate::proxy::anthropic_compat::anthropic_response_to_responses(&event_body(json!({"id":"m1","stop_reason":"end_turn","content":[],"usage":{"input_tokens":7,"output_tokens":3,"speed":speed}}))).unwrap();
+            let buffered: Value = serde_json::from_slice(&buffered).unwrap();
+            assert_eq!(buffered["service_tier"], response["service_tier"]);
+        }
     });
 }

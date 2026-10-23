@@ -1358,3 +1358,43 @@ async fn preserves_existing_codex_installation_id() {
 
     assert!(rewritten.is_none());
 }
+
+#[tokio::test]
+async fn codex_search_history_final_transport_respects_lite_header() {
+    for lite in [false, true] {
+        let upstream = test_upstream(false, false, false);
+        let mut headers = axum::http::HeaderMap::new();
+        if lite {
+            headers.insert(
+                CODEX_RESPONSES_LITE_HEADER,
+                axum::http::HeaderValue::from_static("true"),
+            );
+        }
+        let body=ReplayableBody::from_bytes(Bytes::from_static(br#"{"model":"gpt-5","parallel_tool_calls":false,"tools":[],"input":[{"type":"web_search_call"},{"type":"compaction_trigger"}]}"#));
+        let changed = build_json_transformed_body_with_headers(
+            "codex",
+            &upstream,
+            "/v1/responses",
+            &body,
+            &xai_meta("gpt-5", true),
+            None,
+            &headers,
+            false,
+            DEFAULT_JSON_TRANSFORM_LIMIT_BYTES,
+        )
+        .await;
+        let Ok(Some(changed)) = changed else {
+            panic!("history must change")
+        };
+        let bytes = changed.read_bytes_if_small(4096).await.unwrap().unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(value["parallel_tool_calls"], false);
+        assert_eq!(value["tool_choice"], "none");
+        if lite {
+            assert_eq!(value["input"][1]["type"], "additional_tools");
+            assert!(value["tools"].as_array().unwrap().is_empty());
+        } else {
+            assert_eq!(value["tools"][0]["external_web_access"], false);
+        }
+    }
+}

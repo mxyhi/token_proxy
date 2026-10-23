@@ -290,17 +290,10 @@ fn chat_messages_to_gemini_contents(
                             .map(|value| value.to_string())
                     })
                     .unwrap_or_else(|| "function".to_string());
-                let response_content = message.get("content");
-                let response = parse_tool_response_content(response_content);
-                contents.push(json!({
-                    "role": "user",
-                    "parts": [{
-                        "functionResponse": {
-                            "name": name,
-                            "response": response
-                        }
-                    }]
-                }));
+                let (response, media) = tool_response_with_media(message.get("content"))?;
+                let mut parts = vec![json!({"functionResponse":{"name":name,"response":response}})];
+                parts.extend(media);
+                contents.push(json!({"role":"user","parts":parts}));
             }
             _ => {}
         }
@@ -1116,6 +1109,31 @@ fn legacy_function_call_to_gemini(function_call: &serde_json::Map<String, Value>
             "args": args
         }
     }))
+}
+
+/// 工具结果媒体是 Gemini user turn 的独立 part，不可把图片只嵌进 JSON 结果。
+fn tool_response_with_media(content: Option<&Value>) -> Result<(Value, Vec<Value>), String> {
+    let Some(items) = content.and_then(Value::as_array) else {
+        return Ok((parse_tool_response_content(content), Vec::new()));
+    };
+    let mut media = Vec::new();
+    let mut remaining = Vec::new();
+    for item in items {
+        if matches!(
+            item.get("type").and_then(Value::as_str),
+            Some("image_url" | "input_image" | "output_image")
+        ) {
+            media.extend(chat_content_to_gemini_parts(Some(&Value::Array(vec![
+                item.clone(),
+            ])))?);
+        } else {
+            remaining.push(item.clone());
+        }
+    }
+    if media.is_empty() {
+        return Ok((parse_tool_response_content(content), media));
+    }
+    Ok((json!({"result":remaining}), media))
 }
 
 /// 解析工具响应内容

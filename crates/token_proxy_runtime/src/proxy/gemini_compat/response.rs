@@ -77,6 +77,12 @@ pub(crate) fn gemini_response_to_chat(
         .map(|arr| arr.as_slice())
         .unwrap_or(&[]);
 
+    if candidates.iter().any(|candidate| {
+        candidate.get("finishReason").and_then(Value::as_str) == Some("MALFORMED_FUNCTION_CALL")
+    }) {
+        return Err("Gemini upstream returned an invalid function call.".to_string());
+    }
+
     let model = model_hint.unwrap_or("gemini");
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

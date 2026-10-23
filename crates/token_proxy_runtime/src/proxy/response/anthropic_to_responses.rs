@@ -219,10 +219,7 @@ where
                     let message = format!("Failed to read upstream response: {err}");
                     tracing::warn!(upstream_id = %self.context.upstream_id, error = %message,
                         "Claude to Responses upstream stream failed");
-                    self.context.status = 502;
-                    self.write_log_once(Some(message.clone()));
-                    self.finish_response(Some(message));
-                    self.upstream_ended = true;
+                    self.push_failed(message);
                     self.restore_queued_tool_identities();
                 }
                 None => {
@@ -242,7 +239,10 @@ where
                     }
 
                     if !self.sent_done {
-                        self.push_done();
+                        // Transport EOF is not Claude's message_stop; never invent a successful turn.
+                        self.push_failed(
+                            "Upstream Claude stream truncated before a terminal event.".to_string(),
+                        );
                     }
                     self.restore_queued_tool_identities();
                     self.log_usage_once();
@@ -270,6 +270,10 @@ where
         let Ok(value) = serde_json::from_str::<Value>(data) else {
             return;
         };
+        if let Some(error) = super::responses_error::responses_stream_error(&value) {
+            self.push_error(error);
+            return;
+        }
         let Some(event_type) = value.get("type").and_then(Value::as_str) else {
             return;
         };
@@ -881,7 +885,29 @@ where
         self.finish_response(None);
     }
 
-    fn finish_response(&mut self, response_error: Option<String>) {
+    fn push_failed(&mut self, message: String) {
+        self.push_error(super::responses_error::ResponsesStreamError {
+            message,
+            error_type: "upstream_error".to_string(),
+            code: Some(json!("upstream_stream_error")),
+            status: axum::http::StatusCode::BAD_GATEWAY,
+            retryable_before_output: false,
+        });
+    }
+
+    fn push_error(&mut self, error: super::responses_error::ResponsesStreamError) {
+        if self.sent_done {
+            return;
+        }
+        tracing::warn!(upstream_id = %self.context.upstream_id, status = error.status.as_u16(),
+            "Claude to Responses upstream stream failed");
+        self.context.status = error.status.as_u16();
+        self.write_log_once(Some(error.message.clone()));
+        self.finish_response(Some(Value::Object(error.openai_error_object())));
+        self.upstream_ended = true;
+    }
+
+    fn finish_response(&mut self, response_error: Option<Value>) {
         if self.sent_done {
             return;
         }
@@ -1029,10 +1055,13 @@ where
             Some(completed_at),
             incomplete_details,
         );
-        let event_type = if let Some(message) = response_error {
+        if let Some(tier) = usage_snapshot.service_tier {
+            response["service_tier"] = json!(tier);
+        }
+        let event_type = if let Some(error) = response_error {
             response["status"] = json!("failed");
             response["completed_at"] = Value::Null;
-            response["error"] = json!({"code":"upstream_stream_error","message":message});
+            response["error"] = error;
             "response.failed"
         } else if status == "incomplete" {
             "response.incomplete"
@@ -1082,7 +1111,14 @@ where
                 call_id,
                 name,
                 arguments,
-            } => self.push_function_call_done_events(id, *output_index, call_id, name, arguments),
+            } => self.push_function_call_done_events(
+                id,
+                *output_index,
+                call_id,
+                name,
+                arguments,
+                response_status,
+            ),
             OutputItemSnapshot::WebSearch {
                 id,
                 output_index,
@@ -1202,6 +1238,7 @@ where
         call_id: &str,
         name: &str,
         arguments: &str,
+        response_status: &str,
     ) {
         let sequence_number = self.next_sequence_number();
         self.out.push_back(super::responses_event_sse(json!({
@@ -1220,7 +1257,7 @@ where
             "item": {
                 "id": item_id,
                 "type": "function_call",
-                "status": "completed",
+                "status": response_status,
                 "arguments": arguments,
                 "call_id": call_id,
                 "name": name

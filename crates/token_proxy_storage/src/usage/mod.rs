@@ -129,7 +129,12 @@ fn snapshot_from_envelope(value: &Value) -> Option<UsageSnapshot> {
             .and_then(|response| response.get("usageMetadata"))?;
         snapshot_from_usage_metadata_value(metadata)
     };
-    snapshot.service_tier = service_tier.or(snapshot.service_tier);
+    // speed 是 Claude 实际执行档位；其余协议仍沿用信封 service_tier 的优先级。
+    let effective_speed = snapshot.usage_json.as_ref().and_then(claude_speed);
+    snapshot.service_tier = effective_speed
+        .map(str::to_string)
+        .or(service_tier)
+        .or(snapshot.service_tier);
     Some(snapshot)
 }
 
@@ -255,13 +260,19 @@ fn snapshot_from_usage_value(value: &Value) -> UsageSnapshot {
                 }),
         }),
         billable_usage,
-        service_tier: value
-            .get("service_tier")
-            .and_then(Value::as_str)
+        service_tier: claude_speed(value)
+            .or_else(|| value.get("service_tier").and_then(Value::as_str))
             .map(str::to_ascii_lowercase),
         usage_json: Some(value.clone()),
         response_model: None,
     }
+}
+
+fn claude_speed(value: &Value) -> Option<&str> {
+    value
+        .get("speed")
+        .and_then(Value::as_str)
+        .filter(|speed| matches!(*speed, "fast" | "standard"))
 }
 
 fn snapshot_from_usage_metadata_value(value: &Value) -> UsageSnapshot {
@@ -374,7 +385,11 @@ fn update_usage(snapshot: &mut UsageSnapshot, gemini_usage: &mut Value, data: &s
     let Some(mut updated) = updated else {
         return;
     };
-    updated.service_tier = service_tier_from_envelope(&value).or(updated.service_tier);
+    // 稀疏尾用量没有档位时保留已观察值；明确返回 standard 必须覆盖 fast。
+    updated.service_tier = updated
+        .service_tier
+        .or_else(|| service_tier_from_envelope(&value))
+        .or_else(|| snapshot.service_tier.clone());
     updated.response_model = snapshot.response_model.clone();
     if updated.usage_json.is_some() {
         *snapshot = updated;

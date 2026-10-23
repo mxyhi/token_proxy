@@ -126,6 +126,7 @@ pub fn map_usage_chat_to_responses(usage: &Value) -> Option<Value> {
         .and_then(Value::as_object)
         .and_then(|details| details.get("reasoning_tokens"))
         .and_then(Value::as_u64)
+        .or_else(|| usage.get("reasoning_tokens").and_then(Value::as_u64))
         .unwrap_or(0);
     mapped.insert(
         "output_tokens_details".to_string(),
@@ -139,6 +140,27 @@ pub fn map_usage_chat_to_responses(usage: &Value) -> Option<Value> {
 mod tests {
     use super::{map_usage_chat_to_responses, map_usage_responses_to_chat};
     use serde_json::json;
+
+    #[test]
+    fn chat_reasoning_tokens_use_nested_value_then_flat_without_double_counting() {
+        for (details, expected) in [
+            (json!({}), 4),
+            (json!({"reasoning_tokens":0}), 0),
+            (json!({"reasoning_tokens":2}), 2),
+        ] {
+            let mapped = map_usage_chat_to_responses(&json!({
+                "prompt_tokens":10,"completion_tokens":6,"reasoning_tokens":4,
+                "completion_tokens_details":details
+            }))
+            .unwrap();
+            assert_eq!(
+                mapped["output_tokens_details"]["reasoning_tokens"],
+                expected
+            );
+            assert_eq!(mapped["output_tokens"], 6);
+            assert_eq!(mapped["total_tokens"], 16);
+        }
+    }
 
     #[test]
     fn responses_cache_write_maps_to_both_chat_cache_fields() {

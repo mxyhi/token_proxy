@@ -22,8 +22,8 @@ pub(crate) use headers::{
 #[cfg(test)]
 pub(crate) use request::{chat_request_to_codex, responses_request_to_codex};
 pub(crate) use request::{
-    chat_request_to_codex_with_prompt_cache_key, responses_request_to_codex_with_prompt_cache_key,
-    supported_codex_model_ids,
+    chat_request_to_codex_with_prompt_cache_key, ensure_web_search_history,
+    responses_request_to_codex_with_prompt_cache_key, supported_codex_model_ids,
 };
 pub(crate) use response::{codex_response_to_chat, codex_response_to_responses};
 pub(crate) use stream::{

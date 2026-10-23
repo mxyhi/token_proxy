@@ -401,6 +401,11 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
     }
 
     let parallel_tool_calls = tool_call_count > 1;
+    let service_tier = object
+        .get("usage")
+        .and_then(|usage| usage.get("speed"))
+        .and_then(Value::as_str)
+        .filter(|speed| matches!(*speed, "fast" | "standard"));
 
     if output.is_empty() {
         output.push(json!({
@@ -414,7 +419,7 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
         }));
     }
 
-    let out = json!({
+    let mut out = json!({
         "id": id,
         "object": "response",
         "created_at": created_at,
@@ -426,6 +431,9 @@ pub(super) fn anthropic_response_to_responses(body: &Bytes) -> Result<Bytes, Str
         "output": output,
         "usage": usage
     });
+    if let Some(tier) = service_tier {
+        out["service_tier"] = json!(tier);
+    }
 
     serde_json::to_vec(&out)
         .map(Bytes::from)

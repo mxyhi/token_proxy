@@ -1214,6 +1214,23 @@ async fn prepare_upstream_stream_inner(
                                 log,
                             ));
                         }
+                        responses_error::ResponsesPreludeDecision::TerminalError(error) => {
+                            if matches!(
+                                error.code.as_ref().and_then(Value::as_str),
+                                Some(
+                                    "session_blocked_by_cyber_policy" | "invalid_encrypted_content"
+                                )
+                            ) {
+                                return Err(responses_prelude_retry_response(
+                                    status,
+                                    headers,
+                                    response_transform,
+                                    error,
+                                    context,
+                                    log,
+                                ));
+                            }
+                        }
                         responses_error::ResponsesPreludeDecision::ReadyForPassThrough => {}
                     }
                 }
@@ -1303,8 +1320,8 @@ fn responses_prelude_retry_response(
     context.mark_upstream_first_byte();
     let is_request_policy_rejection = context.provider == PROVIDER_XAI
         && classify_responses_error_scope(&error) == XaiForbiddenScope::RequestContentPolicy;
-    if is_request_policy_rejection {
-        context.status = StatusCode::FORBIDDEN.as_u16();
+    if !error.retryable_before_output || is_request_policy_rejection {
+        context.status = error.status.as_u16();
         // 策略错误可能对应敏感 prompt/media；请求日志不持久化该正文。
         context.request_body = None;
         let error_code = responses_error_safe_code(&error);
@@ -1317,14 +1334,22 @@ fn responses_prelude_retry_response(
             error_type = %error.error_type,
             error_code = ?error_code,
             forbidden_scope = ?XaiForbiddenScope::RequestContentPolicy,
-            "xAI request rejected by content policy before first business output"
+            "upstream request rejected before first business output; no retry"
         );
-        let log_message = "xAI request rejected by content policy.".to_string();
+        let log_message = "Upstream rejected the request without retry.".to_string();
         let empty_usage = UsageSnapshot::default();
         let entry = build_log_entry(context, empty_usage, Some(log_message));
         log.clone().write_detached(entry);
 
-        let mut response = http::error_response(StatusCode::FORBIDDEN, error.display_message());
+        let mut response = if is_request_policy_rejection {
+            http::error_response(StatusCode::FORBIDDEN, error.display_message())
+        } else {
+            http::build_response(
+                status,
+                headers.clone(),
+                Body::from(responses_prelude_error_body(response_transform, &error)),
+            )
+        };
         response
             .extensions_mut()
             .insert(NonRetryableSemanticResponse);

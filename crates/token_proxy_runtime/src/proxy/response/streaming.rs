@@ -401,6 +401,7 @@ struct ModelOverrideStreamState<S> {
     saw_sse_event: bool,
     diagnostic: Option<super::body_capture::StreamDiagnostic>,
     output_item_ids: BTreeMap<i64, String>,
+    created_at: token_proxy_protocol::responses_created_at::ResponsesCreatedAt,
 }
 
 impl<S> ModelOverrideStreamState<S> {
@@ -464,6 +465,7 @@ where
             saw_sse_event: false,
             diagnostic: Some(super::body_capture::StreamDiagnostic::new()),
             output_item_ids: BTreeMap::new(),
+            created_at: Default::default(),
         }
     }
 
@@ -757,21 +759,22 @@ where
             .unwrap_or("unknown")
             .to_string();
         let failure_model = self.failure_model().map(str::to_string);
+        let added_created_at = self.created_at.normalize(&mut value);
         let normalization = responses_failure::normalize_stream_event(
             &mut value,
             &mut self.sequence,
             failure_model.as_deref(),
         );
-        if normalization.changed() {
-            tracing::warn!(
+        if normalization.changed() || added_created_at {
+            tracing::debug!(
                 provider = %self.context.provider,
                 upstream_id = %self.context.upstream_id,
                 event_type,
                 sequence_number = ?normalization.sequence_number,
-                added_created_at = normalization.added_created_at,
+                added_created_at = normalization.added_created_at || added_created_at,
                 added_model = normalization.added_model,
                 repaired_response_shape = normalization.repaired_response_shape,
-                "normalized incomplete Responses terminal failure event"
+                "normalized missing Responses envelope fields"
             );
             return value.to_string();
         }
@@ -1040,6 +1043,10 @@ fn openai_responses_data_starts_client_output(provider: &str, value: &Value) -> 
         event_type.trim(),
         "" | "response.created"
             | "response.in_progress"
+            | "response.metadata"
+            | "codex.response.metadata"
+            | "codex.rate_limits"
+            | "keepalive"
             | "response.failed"
             | "response.error"
             | "error"
@@ -1177,5 +1184,28 @@ mod tests {
             false
         ));
         assert!(should_forward_response_event("[DONE]", false));
+    }
+}
+
+#[cfg(test)]
+mod metadata_tests {
+    use super::*;
+    #[test]
+    fn upstream_update_metadata_is_not_first_output() {
+        for event in [
+            "response.metadata",
+            "codex.response.metadata",
+            "codex.rate_limits",
+            "keepalive",
+        ] {
+            assert!(!openai_responses_data_starts_client_output(
+                PROVIDER_CODEX,
+                &serde_json::json!({"type":event})
+            ));
+        }
+        assert!(openai_responses_data_starts_client_output(
+            PROVIDER_CODEX,
+            &serde_json::json!({"type":"response.output_text.delta","delta":"hello"})
+        ));
     }
 }

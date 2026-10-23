@@ -185,9 +185,24 @@ pub(super) async fn build_buffered_response(
         response_error_for_status(status, &bytes)
     };
     let account_cooldown_hint = xai_account_cooldown_hint(&context.provider, status, &bytes);
+    let is_session_policy_rejection = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .as_ref()
+        .is_some_and(responses_error::is_session_policy_rejection);
+    let encrypted_rejection = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .is_some_and(|value| {
+            value
+                .pointer("/error/code")
+                .or_else(|| value.get("code"))
+                .and_then(Value::as_str)
+                == Some("invalid_encrypted_content")
+        });
     let is_non_retryable_semantic_error = !status.is_success()
         && (is_context_window_error(response_error.as_deref(), &bytes)
-            || is_request_policy_rejection);
+            || is_request_policy_rejection
+            || is_session_policy_rejection
+            || encrypted_rejection);
     // Bytes 克隆只增引用计数；不能把整段请求体复制成 String（非流式响应每次都会经过这里）。
     let client_request_body = context.client_request_body.clone();
     let captured_request_body = context.request_body.clone();
@@ -214,6 +229,11 @@ pub(super) async fn build_buffered_response(
         }
     } else {
         bytes
+    };
+    let output = if status.is_success() {
+        normalize_responses_created_at(output, &mut headers)
+    } else {
+        output
     };
     if let Some(message) =
         empty_chat_completion_retry_message(&output, &context, response_transform)
@@ -1120,6 +1140,19 @@ fn body_looks_like_sse(bytes: &Bytes) -> bool {
 struct ConvertedBody {
     output: Bytes,
     usage: UsageSnapshot,
+}
+
+fn normalize_responses_created_at(bytes: Bytes, headers: &mut HeaderMap) -> Bytes {
+    let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else {
+        return bytes;
+    };
+    if token_proxy_protocol::responses_created_at::ResponsesCreatedAt::default()
+        .normalize(&mut value)
+    {
+        headers.remove(CONTENT_LENGTH);
+        return Bytes::from(value.to_string());
+    }
+    bytes
 }
 
 fn convert_success_body(

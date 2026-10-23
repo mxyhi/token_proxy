@@ -142,7 +142,7 @@ pub(super) async fn handle_upstream_result(
                 .get::<NonRetryableSemanticResponse>()
                 .is_some()
             {
-                return AttemptOutcome::Success(attach_codex_response_identity(
+                return AttemptOutcome::Fatal(attach_codex_response_identity(
                     response,
                     provider,
                     account_id_value.as_deref(),
@@ -222,6 +222,17 @@ pub(super) async fn handle_upstream_result(
                 state.config.sync_response_timeout,
             )
             .await;
+            if response
+                .extensions()
+                .get::<NonRetryableSemanticResponse>()
+                .is_some()
+            {
+                return AttemptOutcome::Fatal(attach_codex_response_identity(
+                    response,
+                    provider,
+                    account_id_value.as_deref(),
+                ));
+            }
             if let Some(retryable) = response
                 .extensions()
                 .get::<RetryableStreamResponse>()

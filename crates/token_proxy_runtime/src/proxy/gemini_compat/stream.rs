@@ -189,9 +189,8 @@ where
                         self.handle_event(&data);
                     }
                 }
-                Some(Err(err)) => {
-                    self.log_usage_once();
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+                Some(Err(_)) => {
+                    self.fail_stream("Upstream stream interrupted.");
                 }
                 None => {
                     self.upstream_ended = true;
@@ -207,7 +206,11 @@ where
                     }
 
                     if !self.sent_done {
-                        self.push_done("stop");
+                        if self.finish_reason.is_some() {
+                            self.push_done("stop");
+                        } else {
+                            self.fail_stream("Upstream stream ended before completion.");
+                        }
                     }
                     self.log_usage_once();
                     if self.out.is_empty() {
@@ -230,6 +233,10 @@ where
             return;
         };
 
+        if value.get("error").is_some_and(|error| !error.is_null()) {
+            self.fail_stream("Upstream stream failed.");
+            return;
+        }
         // 用量可在 finishReason 之后单独到达，直到 EOF/[DONE] 才发送下游终止帧。
         if let Some(usage) = value.get("usageMetadata").filter(|usage| usage.is_object()) {
             token_proxy_protocol::gemini_usage::merge_snapshot(&mut self.final_usage, usage);
@@ -241,6 +248,9 @@ where
 
         for candidate in candidates {
             self.handle_candidate(candidate);
+            if self.sent_done {
+                break;
+            }
         }
     }
 
@@ -250,16 +260,22 @@ where
         };
 
         // 检查 finishReason
-        let finish_reason = candidate.get("finishReason").and_then(Value::as_str);
+        let finish_reason = candidate
+            .get("finishReason")
+            .and_then(Value::as_str)
+            .filter(|reason| !reason.is_empty() && *reason != "FINISH_REASON_UNSPECIFIED");
+        if finish_reason == Some("MALFORMED_FUNCTION_CALL") {
+            self.fail_stream("Upstream returned an invalid function call.");
+            return;
+        }
 
+        if finish_reason.is_some() {
+            self.finish_reason = Some(gemini_finish_reason_to_chat(
+                finish_reason,
+                self.tool_call_index > 0,
+            ));
+        }
         let Some(content) = candidate.get("content").and_then(Value::as_object) else {
-            // 如果有 finishReason 但没有 content，发送完成信号
-            if finish_reason.is_some() {
-                self.finish_reason = Some(gemini_finish_reason_to_chat(
-                    finish_reason,
-                    self.tool_call_index > 0,
-                ));
-            }
             return;
         };
 
@@ -380,6 +396,21 @@ where
         self.out.push_back(Bytes::from("data: [DONE]\n\n"));
     }
 
+    fn fail_stream(&mut self, message: &str) {
+        if self.sent_done {
+            return;
+        }
+        self.context.status = 502;
+        self.sent_done = true;
+        self.upstream_ended = true;
+        let error = json!({"error":{"type":"server_error","code":"upstream_stream_error","message":message}});
+        self.out
+            .push_back(Bytes::from(format!("data: {error}\n\n")));
+        self.write_log_once(Some(message.to_string()));
+        tracing::warn!(provider = %self.context.provider, upstream = %self.context.upstream_id,
+            "Gemini stream failed before a valid completion");
+    }
+
     fn log_usage_once(&mut self) {
         self.write_log_once(None);
     }
@@ -445,9 +476,9 @@ where
                         self.handle_event(&data);
                     }
                 }
-                Some(Err(err)) => {
-                    self.log_usage_once();
-                    return Err(std::io::Error::new(std::io::ErrorKind::Other, err));
+                Some(Err(_)) => {
+                    self.upstream_ended = true;
+                    self.fail_stream(&json!({"message":"Upstream stream interrupted."}));
                 }
                 None => {
                     self.upstream_ended = true;
@@ -463,7 +494,9 @@ where
                     }
 
                     if !self.sent_done {
-                        self.push_finish_reason("STOP", None);
+                        self.fail_stream(
+                            &json!({"message":"Upstream stream ended before completion."}),
+                        );
                     }
                     self.log_usage_once();
                     if self.out.is_empty() {
@@ -719,3 +752,7 @@ fn chat_finish_reason_to_gemini(reason: &str) -> &'static str {
         _ => "STOP",
     }
 }
+
+#[cfg(test)]
+#[path = "stream.test.rs"]
+mod tests;

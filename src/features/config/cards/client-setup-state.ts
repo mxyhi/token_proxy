@@ -14,12 +14,9 @@ export type ClientSetupInfo = {
   claude_auth_token_configured: boolean;
   codex_config_path: string;
   codex_auth_path: string;
-  codex_disable_response_storage: boolean;
   codex_model: string;
   codex_model_provider: string;
   codex_model_reasoning_effort: string;
-  codex_network_access: string;
-  codex_preferred_auth_method: string;
   codex_provider_base_url: string;
   /** 可选：旧内核预览不返回该字段时按代理地址回退。 */
   codex_model_catalog_url?: string;

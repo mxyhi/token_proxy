@@ -36,12 +36,9 @@ export function CodexSetupDetails({ setup }: { setup: ClientSetupInfo }) {
       <DetailSection label={m.client_setup_effective_config_label()}>
         <CodeBlock
           lines={[
-            `disable_response_storage = ${setup.codex_disable_response_storage ? "true" : "false"}`,
             `model = "${setup.codex_model}"`,
             `model_provider = "${setup.codex_model_provider}"`,
             `model_reasoning_effort = "${setup.codex_model_reasoning_effort}"`,
-            `network_access = "${setup.codex_network_access}"`,
-            `preferred_auth_method = "${setup.codex_preferred_auth_method}"`,
             `[model_providers.${setup.codex_model_provider}]`,
             `base_url = "${setup.codex_provider_base_url}"`,
             `name = "${setup.codex_provider_name}"`,

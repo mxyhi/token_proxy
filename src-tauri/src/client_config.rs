@@ -9,13 +9,10 @@ use tauri::Manager;
 
 use token_proxy_config::ProxyConfigFile;
 
-const CODEX_DISABLE_RESPONSE_STORAGE: bool = true;
 const CLAUDE_MODEL: &str = "claude-sonnet-4-6";
 const CODEX_MODEL: &str = "gpt-5.5";
 const CODEX_DEFAULT_MODEL_PROVIDER: &str = "token_proxy";
 const CODEX_MODEL_REASONING_EFFORT: &str = "xhigh";
-const CODEX_NETWORK_ACCESS: &str = "enabled";
-const CODEX_PREFERRED_AUTH_METHOD: &str = "apikey";
 /// auth.json 的 `auth_mode`；Codex 优先按显式 auth_mode 选认证方式，旧 ChatGPT 登录态会遮住 API Key。
 const CODEX_AUTH_MODE_API_KEY: &str = "apikey";
 const CODEX_PROVIDER_NAME: &str = "token_proxy";
@@ -36,12 +33,9 @@ pub(crate) struct ClientSetupInfo {
     pub(crate) codex_config_path: String,
     pub(crate) codex_auth_path: String,
 
-    pub(crate) codex_disable_response_storage: bool,
     pub(crate) codex_model: String,
     pub(crate) codex_model_provider: String,
     pub(crate) codex_model_reasoning_effort: String,
-    pub(crate) codex_network_access: String,
-    pub(crate) codex_preferred_auth_method: String,
     pub(crate) codex_provider_base_url: String,
     pub(crate) codex_model_catalog_url: String,
     pub(crate) codex_provider_name: String,
@@ -127,15 +121,12 @@ pub(crate) async fn preview(app: AppHandle) -> Result<ClientSetupInfo, String> {
         claude_auth_token_configured: has_local_key,
         codex_config_path: codex_config_path.to_string_lossy().to_string(),
         codex_auth_path: codex_auth_path.to_string_lossy().to_string(),
-        codex_disable_response_storage: CODEX_DISABLE_RESPONSE_STORAGE,
         codex_model: existing_string("model", CODEX_MODEL),
         codex_model_provider,
         codex_model_reasoning_effort: existing_string(
             "model_reasoning_effort",
             CODEX_MODEL_REASONING_EFFORT,
         ),
-        codex_network_access: CODEX_NETWORK_ACCESS.to_string(),
-        codex_preferred_auth_method: CODEX_PREFERRED_AUTH_METHOD.to_string(),
         codex_provider_base_url: openai_compat_base_url.clone(),
         codex_model_catalog_url: format!("{proxy_http_base_url}/codex/models.json"),
         codex_provider_name,
@@ -204,7 +195,7 @@ pub(crate) async fn write_codex_config(
     // 为了让 Codex 直接走本地代理，我们写入固定的 token_proxy provider 配置，并尽量不动其他字段。
     //
     // - base_url = http://127.0.0.1:<port>/v1
-    // - preferred_auth_method = apikey
+    // - auth.json 的 auth_mode = apikey
     // - token 写入 $CODEX_HOME/auth.json 的 OPENAI_API_KEY（而非 experimental_bearer_token）
     let input = read_text_or_empty(&config_path).await?;
     let mut doc = toml_edit::DocumentMut::from_str(&input)
@@ -378,7 +369,14 @@ fn apply_codex_proxy_settings(
     codex_provider_name: &str,
     codex_provider_base_url: &str,
 ) -> Result<(), String> {
-    doc["disable_response_storage"] = toml_edit::value(CODEX_DISABLE_RESPONSE_STORAGE);
+    // 清理旧版快速配置写入的无效顶层字段，保留用户已有的沙箱与联网权限。
+    for key in [
+        "disable_response_storage",
+        "network_access",
+        "preferred_auth_method",
+    ] {
+        doc.as_table_mut().remove(key);
+    }
     // 接入模型菜单时保留用户当前模型与推理等级，避免快速配置顺带切换模型。
     if doc.get("model").is_none() {
         doc["model"] = toml_edit::value(CODEX_MODEL);
@@ -387,8 +385,6 @@ fn apply_codex_proxy_settings(
     if doc.get("model_reasoning_effort").is_none() {
         doc["model_reasoning_effort"] = toml_edit::value(CODEX_MODEL_REASONING_EFFORT);
     }
-    doc["network_access"] = toml_edit::value(CODEX_NETWORK_ACCESS);
-    doc["preferred_auth_method"] = toml_edit::value(CODEX_PREFERRED_AUTH_METHOD);
 
     ensure_toml_table_path(doc, &["model_providers"])?;
     ensure_toml_table_path(doc, &["model_providers", codex_model_provider])?;
@@ -617,6 +613,68 @@ base_url = "https://api.openai.com/v1"
         .expect("apply codex proxy settings");
 
         assert_eq!(doc["model"].as_str(), Some("gpt-5.5"));
+        for key in [
+            "disable_response_storage",
+            "network_access",
+            "preferred_auth_method",
+        ] {
+            assert!(doc.get(key).is_none(), "unsupported setting: {key}");
+        }
+        assert!(doc.get("sandbox_workspace_write").is_none());
+    }
+
+    #[test]
+    fn apply_codex_proxy_settings_removes_legacy_fields_and_preserves_permissions() {
+        for network_access in [false, true] {
+            let input = format!(
+                r#"
+disable_response_storage = true
+network_access = "enabled"
+preferred_auth_method = "apikey"
+sandbox_mode = "workspace-write"
+approval_policy = "on-request"
+[sandbox_workspace_write]
+network_access = {network_access}
+writable_roots = ["/tmp/project"]
+"#
+            );
+            let mut doc = DocumentMut::from_str(&input).expect("parse legacy config");
+            apply_codex_proxy_settings(
+                &mut doc,
+                "token_proxy",
+                "token_proxy",
+                "http://127.0.0.1:9208/v1",
+            )
+            .expect("apply codex proxy settings");
+
+            for key in [
+                "disable_response_storage",
+                "network_access",
+                "preferred_auth_method",
+            ] {
+                assert!(doc.get(key).is_none(), "unsupported setting: {key}");
+            }
+            assert_eq!(doc["sandbox_mode"].as_str(), Some("workspace-write"));
+            assert_eq!(doc["approval_policy"].as_str(), Some("on-request"));
+            assert_eq!(
+                doc["sandbox_workspace_write"]["network_access"].as_bool(),
+                Some(network_access)
+            );
+            assert_eq!(
+                doc["sandbox_workspace_write"]["writable_roots"][0].as_str(),
+                Some("/tmp/project")
+            );
+
+            let output = doc.to_string();
+            apply_codex_proxy_settings(
+                &mut doc,
+                "token_proxy",
+                "token_proxy",
+                "http://127.0.0.1:9208/v1",
+            )
+            .expect("reapply codex proxy settings");
+            assert_eq!(doc.to_string(), output);
+        }
     }
 
     #[test]

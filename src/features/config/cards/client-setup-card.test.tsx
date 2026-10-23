@@ -26,12 +26,9 @@ function setup(
     claude_auth_token_configured: required,
     codex_config_path: "/tmp/codex/config.toml",
     codex_auth_path: "/tmp/codex/auth.json",
-    codex_disable_response_storage: true,
     codex_model: "gpt-test",
     codex_model_provider: "token_proxy",
     codex_model_reasoning_effort: "high",
-    codex_network_access: "enabled",
-    codex_preferred_auth_method: "apikey",
     codex_provider_base_url: "http://localhost:9208/v1",
     codex_model_catalog_url: "http://127.0.0.1:9208/codex/models.json",
     codex_provider_name: "token_proxy",
@@ -131,6 +128,10 @@ describe("client API key selection", () => {
     expect(
       screen.getByText('model_catalog_url = "http://127.0.0.1:9208/codex/models.json"'),
     ).toBeInTheDocument();
+    // 当前 Codex 不识别这三个顶层字段，预览不应再展示。
+    expect(screen.queryByText(/^disable_response_storage\b/)).toBeNull();
+    expect(screen.queryByText(/^network_access\b/)).toBeNull();
+    expect(screen.queryByText(/^preferred_auth_method\b/)).toBeNull();
     expect(
       screen.getByRole("button", { name: m.client_setup_apply() }),
     ).toBeDisabled();

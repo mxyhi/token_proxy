@@ -70,3 +70,27 @@ describe("账户渠道模型刷新", () => {
     expect(onChangeDraft).not.toHaveBeenCalled();
   });
 });
+
+describe("普通 API 渠道模型刷新", () => {
+  it("传递渠道代理且不传账户", async () => {
+    const draft = {
+      ...createEmptyUpstream(),
+      providers: ["openai"],
+      accountId: "stale-account",
+      baseUrl: " https://api.example.com ",
+      apiKeys: "sk-test",
+      proxyUrl: " http://127.0.0.1:7890 ",
+      availableModelsMode: "selected" as const,
+    };
+    vi.mocked(invoke).mockResolvedValue(["gpt-test"]);
+    render(<AvailableModelsEditor draft={draft} onChangeDraft={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: m.available_models_sync() }));
+
+    expect(invoke).toHaveBeenCalledWith("fetch_upstream_models", {
+      provider: "openai",
+      baseUrl: "https://api.example.com",
+      apiKey: "sk-test",
+      proxyUrl: "http://127.0.0.1:7890",
+    });
+  });
+});

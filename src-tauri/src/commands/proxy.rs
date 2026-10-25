@@ -1,5 +1,8 @@
+use std::{error::Error, time::Duration};
+
 use crate::tray;
 use serde_json::Value;
+use token_proxy_account_store::oauth_util::normalize_proxy_url;
 use token_proxy_app::app::{ProxyServiceStatus, TokenProxyApp};
 use url::Url;
 
@@ -24,21 +27,50 @@ pub async fn fetch_upstream_models(
             )
             .await;
     }
+    let app_proxy = token_proxy_app.app_proxy().read().await.clone();
+    fetch_model_catalog(
+        &provider,
+        &base_url,
+        &api_key,
+        proxy_url.as_deref(),
+        app_proxy.as_deref(),
+    )
+    .await
+}
+
+async fn fetch_model_catalog(
+    provider: &str,
+    base_url: &str,
+    api_key: &str,
+    proxy_url: Option<&str>,
+    app_proxy: Option<&str>,
+) -> Result<Vec<String>, String> {
     let api_key = api_key.trim();
     let url = build_model_catalog_url(&provider, &base_url, api_key)?;
     tracing::debug!(provider = %provider, "fetching upstream model catalog");
 
-    let client = reqwest::Client::new();
+    let proxy_url = resolve_catalog_proxy(proxy_url, app_proxy)?;
+    let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(30));
+    if let Some(proxy_url) = &proxy_url {
+        builder = builder
+            .proxy(reqwest::Proxy::all(proxy_url).map_err(|_| "渠道代理 URL 无效。".to_string())?);
+    } else {
+        // 与实际转发保持一致：渠道代理留空即直连，不继承系统代理。
+        builder = builder.no_proxy();
+    }
+    let client = builder
+        .build()
+        .map_err(|_| "创建模型列表 HTTP 客户端失败。".to_string())?;
     let request = apply_model_catalog_auth(client.get(url), &provider, api_key);
 
     let response = request
         .send()
         .await
         .map_err(|err| {
-            // Gemini key 位于 query 中；移除 URL，避免错误文本和日志泄漏凭证。
-            let err = err.without_url();
-            tracing::warn!(provider = %provider, error = %err, "failed to fetch upstream model catalog");
-            format!("请求渠道模型列表失败: {err}")
+            // Gemini key 位于 query 中，只展示脱敏后的错误分类。
+            let message = model_catalog_request_error(&err);
+            tracing::warn!(provider = %provider, error = %message, proxy_enabled = proxy_url.is_some(), "failed to fetch upstream model catalog");
+            message
         })?;
 
     if !response.status().is_success() {
@@ -50,7 +82,7 @@ pub async fn fetch_upstream_models(
     let body: Value = response
         .json()
         .await
-        .map_err(|err| format!("解析渠道模型列表失败: {err}"))?;
+        .map_err(|err| format!("解析渠道模型列表失败: {}", err.without_url()))?;
     let models = extract_upstream_model_ids(&body);
 
     if models.is_empty() {
@@ -59,6 +91,54 @@ pub async fn fetch_upstream_models(
 
     tracing::info!(provider = %provider, model_count = models.len(), "fetched upstream model catalog");
     Ok(models)
+}
+
+fn resolve_catalog_proxy(
+    proxy_url: Option<&str>,
+    app_proxy: Option<&str>,
+) -> Result<Option<String>, String> {
+    let proxy_url = proxy_url.map(str::trim).filter(|value| !value.is_empty());
+    let effective = match proxy_url {
+        Some("$app_proxy_url") => Some(
+            app_proxy
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "渠道使用应用代理，但应用代理尚未配置。".to_string())?,
+        ),
+        explicit => explicit,
+    };
+    normalize_proxy_url(effective).map_err(|_| "渠道代理 URL 无效或协议不受支持。".to_string())
+}
+
+fn model_catalog_request_error(error: &reqwest::Error) -> String {
+    // 只用底层错误分类，不能回显包含 Gemini query key 或代理凭据的错误链。
+    let mut source = error.source();
+    let mut tls = false;
+    let mut dns = false;
+    while let Some(cause) = source {
+        let message = cause.to_string().to_ascii_lowercase();
+        tls |= ["tls", "ssl", "certificate"]
+            .iter()
+            .any(|marker| message.contains(marker));
+        dns |= ["dns", "name resolution"]
+            .iter()
+            .any(|marker| message.contains(marker));
+        source = cause.source();
+    }
+    let reason = if error.is_timeout() {
+        "请求超时，请检查渠道地址和代理连通性。"
+    } else if tls {
+        "TLS 握手或证书校验失败，请检查渠道地址和代理。"
+    } else if dns {
+        "DNS 解析失败，请检查渠道域名和代理。"
+    } else if error.is_connect() {
+        "连接失败，请检查渠道地址与代理是否可用。"
+    } else if error.is_builder() {
+        "请求配置无效，请检查渠道地址和 API Key 格式。"
+    } else {
+        "网络请求失败，请检查渠道地址和代理。"
+    };
+    format!("请求渠道模型列表失败: {reason}")
 }
 
 fn build_model_catalog_url(provider: &str, base_url: &str, api_key: &str) -> Result<Url, String> {
@@ -225,6 +305,94 @@ pub async fn proxy_reload(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn model_catalog_proxy_matches_channel_configuration() {
+        let app_proxy = Some(" socks5h://127.0.0.1:7891 ");
+        for direct in [None, Some(""), Some(" ")] {
+            assert_eq!(resolve_catalog_proxy(direct, app_proxy).unwrap(), None);
+        }
+        assert_eq!(
+            resolve_catalog_proxy(Some(" $app_proxy_url "), app_proxy).unwrap(),
+            Some("socks5h://127.0.0.1:7891".to_string())
+        );
+        assert_eq!(
+            resolve_catalog_proxy(Some(" http://127.0.0.1:7890 "), app_proxy).unwrap(),
+            Some("http://127.0.0.1:7890".to_string())
+        );
+        for missing in [None, Some(""), Some(" ")] {
+            assert!(resolve_catalog_proxy(Some("$app_proxy_url"), missing).is_err());
+        }
+        for invalid in ["invalid", "file:///tmp/proxy"] {
+            assert!(resolve_catalog_proxy(Some(invalid), app_proxy).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn model_catalog_connection_error_does_not_leak_credentials() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let proxy = format!("http://proxy-user:proxy-password@{address}");
+        let error = fetch_model_catalog(
+            "gemini",
+            "https://catalog.invalid",
+            "secret-key",
+            Some(&proxy),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.contains("连接失败"), "{error}");
+        for secret in [
+            "secret-key",
+            "proxy-user",
+            "proxy-password",
+            "catalog.invalid",
+        ] {
+            assert!(!error.contains(secret), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn model_catalog_uses_channel_proxy() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for configured in ["$app_proxy_url", "explicit"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let proxy = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut buffer = [0; 4096];
+                let size = socket.read(&mut buffer).await.unwrap();
+                let request = String::from_utf8_lossy(&buffer[..size]);
+                assert!(request.starts_with("GET http://catalog.invalid/v1/models HTTP/1.1"));
+                assert!(request
+                    .to_lowercase()
+                    .contains("authorization: bearer test-key"));
+                let body = r#"{"data":[{"id":"proxy-model"}]}"#;
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).as_bytes()).await.unwrap();
+            });
+            let channel_proxy = if configured == "explicit" {
+                &proxy
+            } else {
+                configured
+            };
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                fetch_model_catalog(
+                    "openai",
+                    "http://catalog.invalid",
+                    "test-key",
+                    Some(channel_proxy),
+                    Some(&proxy),
+                ),
+            )
+            .await
+            .expect("catalog request timed out");
+            assert_eq!(result.unwrap(), vec!["proxy-model"]);
+            server.await.unwrap();
+        }
+    }
 
     #[test]
     fn model_catalog_url_preserves_existing_version_root() {

@@ -125,10 +125,9 @@ export function AvailableModelsEditor({
         provider,
         baseUrl: draft.baseUrl.trim(),
         apiKey: firstApiKey(draft.apiKeys),
+        proxyUrl: draft.proxyUrl.trim(),
         // 账户鉴权由后端解析固定身份；凭据不进入前端或自定义 Base URL。
-        ...(isAccount
-          ? { accountId: draft.accountId.trim(), proxyUrl: draft.proxyUrl.trim() }
-          : {}),
+        ...(isAccount ? { accountId: draft.accountId.trim() } : {}),
       });
       if (!models.length) {
         setFeedback(m.available_models_sync_empty());

@@ -211,7 +211,7 @@ Claude Code and Codex setup require an explicit selection when multiple keys are
 
 ## One-click CLI setup
 - Claude Code: writes `~/.claude/settings.json` `env` (`ANTHROPIC_BASE_URL`, `ANTHROPIC_MODEL=claude-sonnet-4-6`, `ANTHROPIC_AUTH_TOKEN` when local key is set).
-- Codex: writes `~/.codex/config.toml` `model="gpt-5.5"`, `model_provider="token_proxy"`, and `[model_providers.token_proxy].base_url` → `http://127.0.0.1:<port>/v1`; writes `~/.codex/auth.json` `OPENAI_API_KEY`.
+- Codex: writes `~/.codex/config.toml` `model="gpt-6.1-sol"`, `model_provider="token_proxy"`, and `[model_providers.token_proxy].base_url` → `http://127.0.0.1:<port>/v1`; writes `~/.codex/auth.json` `OPENAI_API_KEY`.
 - A `.token_proxy.bak` file is created before overwriting; restart the CLI to apply.
 
 ## FAQ

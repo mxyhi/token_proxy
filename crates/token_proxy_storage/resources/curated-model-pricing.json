@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "curated.20261007",
+  "version": "curated.20261027",
   "models": [
     {
       "source": {
@@ -725,6 +725,57 @@
         },
         "serviceTierProfiles": {},
         "longContext": null
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+        "verifiedAt": "2026-10-27"
+      },
+      "model": {
+        "modelId": "gpt-6.1-terra",
+        "aliases": [
+          "openai/gpt-6.1-terra"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 1000,
+          "outputNanoUsdPerToken": 5000,
+          "cacheReadNanoUsdPerToken": 50,
+          "cacheWriteNanoUsdPerToken": 1250,
+          "cacheWrite5mNanoUsdPerToken": 1250
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 2000,
+            "outputNanoUsdPerToken": 10000,
+            "cacheReadNanoUsdPerToken": 100,
+            "cacheWriteNanoUsdPerToken": 2500
+          },
+          "fast": {
+            "inputNanoUsdPerToken": 2000,
+            "outputNanoUsdPerToken": 10000,
+            "cacheReadNanoUsdPerToken": 100,
+            "cacheWriteNanoUsdPerToken": 2500
+          },
+          "flex": {
+            "inputNanoUsdPerToken": 500,
+            "outputNanoUsdPerToken": 2500,
+            "cacheReadNanoUsdPerToken": 25,
+            "cacheWriteNanoUsdPerToken": 625
+          },
+          "batch": {
+            "inputNanoUsdPerToken": 500,
+            "outputNanoUsdPerToken": 2500,
+            "cacheReadNanoUsdPerToken": 25,
+            "cacheWriteNanoUsdPerToken": 625
+          }
+        },
+        "longContext": {
+          "threshold": 272000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
       }
     }
   ]

@@ -25,6 +25,7 @@ import { CodexModelCapabilitiesEditor } from "./codex-model-capabilities-editor"
 const OFFICIAL_CODEX_MODEL_IDS: ReadonlySet<string> = new Set([
   "gpt-6-astra",
   "gpt-6.1-sol",
+  "gpt-6.1-terra",
   "gpt-6-sol",
   "gpt-6-luna",
   "gpt-5.6-sol",
@@ -32,7 +33,6 @@ const OFFICIAL_CODEX_MODEL_IDS: ReadonlySet<string> = new Set([
   "gpt-5.6-luna",
   "gpt-daybreak-blue-latest",
   "gpt-daybreak-red-latest",
-  "gpt-5.5",
   "codex-auto-review",
 ]);
 

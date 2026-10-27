@@ -210,7 +210,7 @@ Claude Code／Codex 一键配置只有一条启用 Key 时自动选择；多条�
 
 ## 一键写 CLI 配置
 - Claude Code：写入 `~/.claude/settings.json` 的 `env`（`ANTHROPIC_BASE_URL`、`ANTHROPIC_MODEL=claude-sonnet-4-6`，若有本地密钥则写 `ANTHROPIC_AUTH_TOKEN`）
-- Codex：写入 `~/.codex/config.toml` 的 `model="gpt-5.5"`、`model_provider="token_proxy"` 与 `[model_providers.token_proxy].base_url` → `http://127.0.0.1:<port>/v1`；写入 `~/.codex/auth.json` 的 `OPENAI_API_KEY`
+- Codex：写入 `~/.codex/config.toml` 的 `model="gpt-6.1-sol"`、`model_provider="token_proxy"` 与 `[model_providers.token_proxy].base_url` → `http://127.0.0.1:<port>/v1`；写入 `~/.codex/auth.json` 的 `OPENAI_API_KEY`
 - 写入前会生成 `.token_proxy.bak` 备份；写完重启对应 CLI 生效
 
 ## FAQ
@@ -224,7 +224,9 @@ Claude Code／Codex 一键配置只有一条启用 Key 时自动选择；多条�
 
 在侧栏「Agents」页底部的「Codex 模型菜单」中添加额外模型（可勾选渠道模型候选，或点击「添加 Qwen」加入 `qwen3.8-27b-uncensored`）。每个额外模型可编辑上下文 tokens、视觉输入和推理等级；「添加 Qwen」使用 128K（131072 tokens）、视觉开启、max 预设。等待 TP 自动保存后，在同页展开 Codex 配置并点击「写入」。重启 Codex 后，通过 `/model` 选择模型。
 
-TP 的 `GET /codex/models.json` 保留 Codex 0.163.0 官方模型的完整元数据，只追加 `codex_extra_models` 中显式选择、已配置且当前本地 API Key 有权使用的模型。该接口复用本地 Key 鉴权，支持 HEAD，不依赖 Codex OAuth 账号；官方快照随 TP 版本维护。普通 `/v1/models` 与原来的 Codex manifest 转发保持原有行为。
+TP 的 `GET /codex/models.json` 从 [GitHub 模型目录](https://github.com/mxyhi/token_proxy/blob/main/crates/token_proxy_runtime/resources/codex-models.json) 读取公共模型元数据，首次访问及缓存到期时刷新（成功缓存 15 分钟，失败 1 分钟后重试，单次请求限时 3 秒）。并发读取直接使用已有目录；下载失败或校验不通过时保留已有快照，离线首次启动则使用内置目录。后续新增、移除模型或调整菜单顺序，只需更新仓库 JSON，无需重新发布 TP；Codex 已加载的菜单需重启客户端刷新。
+
+目录保留官方能力与指令元数据，菜单按版本递减、同版本价格由高到低排列，已移除 GPT-5.5。`codex_extra_models` 仍只追加显式选择、已配置且当前本地 API Key 有权使用的模型。该接口复用本地 Key 鉴权，支持 HEAD；下载公共 JSON 不携带本地 Key 或 Codex OAuth 凭据。普通 `/v1/models` 与原来的 Codex manifest 转发保持原有行为。
 
 ```json
 {

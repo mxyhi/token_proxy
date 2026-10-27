@@ -2,6 +2,7 @@ mod account_selector;
 mod anthropic_compat;
 mod claude_reasoning;
 mod client_lifecycle;
+mod codex_catalog_cache;
 mod codex_compat;
 mod codex_models_manifest;
 mod codex_turn_state;
@@ -45,6 +46,7 @@ use token_proxy_account_kiro::KiroAccountStore;
 use token_proxy_account_xai::XaiAccountStore;
 
 struct ProxyState {
+    codex_catalog: codex_catalog_cache::CodexCatalogCache,
     config: token_proxy_config::ProxyConfig,
     http_clients: http_client::ProxyHttpClients,
     log: Arc<log::LogWriter>,

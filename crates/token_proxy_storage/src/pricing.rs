@@ -1178,7 +1178,7 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20261007"
+            "catalog.69854741.b88b66df+curated.20261027"
         );
         let source = settings.source.expect("catalog source");
         assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
@@ -1390,7 +1390,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20261007"));
+        assert!(settings.version.contains("+curated.20261027"));
     }
 
     #[test]
@@ -1469,7 +1469,7 @@ mod tests {
             assert_eq!(long.cost_nano_usd, 800_016_000);
             assert_eq!(long.context_tier, PricingContextTier::Long);
         }
-        assert!(settings.version.contains("+curated.20261007"));
+        assert!(settings.version.contains("+curated.20261027"));
     }
 
     #[test]
@@ -1571,7 +1571,7 @@ mod tests {
             assert_eq!(long_ultrafast.cost_nano_usd, 32_640_570_000, "{model}");
             assert_eq!(long.context_tier, PricingContextTier::Long, "{model}");
         }
-        assert!(settings.version.contains("+curated.20261007"));
+        assert!(settings.version.contains("+curated.20261027"));
     }
 
     #[test]
@@ -1651,6 +1651,49 @@ mod tests {
             assert_eq!(flex.breakdown.cache_write_nano_usd, 63, "{model}");
             assert_eq!(flex.cost_nano_usd, 368, "{model}");
             assert_eq!(long.cost_nano_usd, 54_400_950, "{model}");
+        }
+    }
+
+    #[test]
+    fn gpt61_terra_prices_cover_aliases_tiers_and_long_context_boundary() {
+        let settings = default_model_pricing_settings();
+        // 官方 2026-10-27：$1 输入、$0.05 缓存读、$1.25 默认缓存写、$5 输出 / 1M。
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            cache_write_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+        for model in ["gpt-6.1-terra", "openai/gpt-6.1-terra"] {
+            for (tier, expected) in [
+                (None, 7_300),
+                (Some("fast"), 14_600),
+                (Some("priority"), 14_600),
+                (Some("flex"), 3_650),
+                (Some("batch"), 3_650),
+            ] {
+                let cost =
+                    calculate_request_cost(&settings, Some(model), None, tier, &usage).unwrap();
+                assert_eq!(cost.pricing_model, "gpt-6.1-terra");
+                assert_eq!(cost.cost_nano_usd, expected);
+            }
+            let at_boundary = BillableUsage {
+                uncached_input_tokens: 271_998,
+                ..usage.clone()
+            };
+            let at =
+                calculate_request_cost(&settings, Some(model), None, None, &at_boundary).unwrap();
+            assert_eq!(at.context_tier, PricingContextTier::Standard);
+            let above = BillableUsage {
+                uncached_input_tokens: 271_999,
+                ..usage.clone()
+            };
+            let long = calculate_request_cost(&settings, Some(model), None, None, &above).unwrap();
+            assert_eq!(long.context_tier, PricingContextTier::Long);
+            assert_eq!(long.breakdown.cache_read_nano_usd, 100);
+            assert_eq!(long.breakdown.cache_write_nano_usd, 2_500);
+            assert_eq!(long.cost_nano_usd, 544_008_100);
         }
     }
 
@@ -2267,7 +2310,7 @@ INSERT INTO request_logs (
 
         assert_eq!(first, RemoteCatalogRefresh::Updated);
         assert_eq!(etag.as_deref(), Some("\"pricing-v1\""));
-        assert_eq!(settings.version, "remote.test+curated.20261007");
+        assert_eq!(settings.version, "remote.test+curated.20261027");
     }
 
     #[test]

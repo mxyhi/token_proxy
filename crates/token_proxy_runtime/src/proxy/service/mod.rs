@@ -659,6 +659,9 @@ async fn build_proxy_state(
     let codex_accounts = ctx.codex_accounts.clone();
     let xai_accounts = ctx.xai_accounts.clone();
     Ok(Arc::new(ProxyState {
+        codex_catalog: super::codex_catalog_cache::CodexCatalogCache::new(Some(
+            super::codex_catalog_cache::CATALOG_URL.to_string(),
+        )),
         upstream_selector: super::upstream_selector::UpstreamSelectorRuntime::new_with_cooldown(
             config.retryable_failure_cooldown,
         ),

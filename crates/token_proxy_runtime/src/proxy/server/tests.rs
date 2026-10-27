@@ -2085,6 +2085,7 @@ async fn build_test_state_handle_with_paths(
     }
     let retryable_failure_cooldown = config.retryable_failure_cooldown;
     let state = Arc::new(ProxyState {
+        codex_catalog: super::super::codex_catalog_cache::CodexCatalogCache::new(None),
         config,
         http_clients: super::super::http_client::ProxyHttpClients::new().expect("http clients"),
         log: Arc::new(super::super::log::LogWriter::new(log_pool)),

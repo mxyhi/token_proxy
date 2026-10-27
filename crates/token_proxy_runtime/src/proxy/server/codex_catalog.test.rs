@@ -14,7 +14,7 @@ async fn catalog_request(state: ProxyStateHandle, method: Method, key: Option<&s
     proxy_request(
         State(state),
         method,
-        Uri::from_static("/codex/models.json?client_version=0.163.0"),
+        Uri::from_static("/codex/models.json?client_version=0.164.0"),
         headers,
         Body::empty(),
     )
@@ -47,8 +47,7 @@ fn codex_catalog_preserves_official_metadata_and_only_appends_selected_models() 
         );
         let result: Value = serde_json::from_slice(&body).unwrap();
         let official: Value =
-            serde_json::from_str(include_str!("../../../resources/codex-models-0.163.0.json"))
-                .unwrap();
+            serde_json::from_str(include_str!("../../../resources/codex-models.json")).unwrap();
         let original = official["models"].as_array().unwrap();
         let models = result["models"].as_array().unwrap();
         assert_eq!(
@@ -113,8 +112,7 @@ fn codex_catalog_applies_selected_model_capabilities_without_changing_official_m
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let result: Value = serde_json::from_slice(&body).unwrap();
         let official: Value =
-            serde_json::from_str(include_str!("../../../resources/codex-models-0.163.0.json"))
-                .unwrap();
+            serde_json::from_str(include_str!("../../../resources/codex-models.json")).unwrap();
         let original = official["models"].as_array().unwrap();
         let models = result["models"].as_array().unwrap();
         assert_eq!(&models[..original.len()], original.as_slice());

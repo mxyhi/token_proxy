@@ -10,7 +10,7 @@ use tauri::Manager;
 use token_proxy_config::ProxyConfigFile;
 
 const CLAUDE_MODEL: &str = "claude-sonnet-4-6";
-const CODEX_MODEL: &str = "gpt-5.5";
+const CODEX_MODEL: &str = "gpt-6.1-sol";
 const CODEX_DEFAULT_MODEL_PROVIDER: &str = "token_proxy";
 const CODEX_MODEL_REASONING_EFFORT: &str = "xhigh";
 /// auth.json 的 `auth_mode`；Codex 优先按显式 auth_mode 选认证方式，旧 ChatGPT 登录态会遮住 API Key。
@@ -612,7 +612,7 @@ base_url = "https://api.openai.com/v1"
         )
         .expect("apply codex proxy settings");
 
-        assert_eq!(doc["model"].as_str(), Some("gpt-5.5"));
+        assert_eq!(doc["model"].as_str(), Some("gpt-6.1-sol"));
         for key in [
             "disable_response_storage",
             "network_access",

@@ -4,7 +4,7 @@ use axum::{
     response::Response,
 };
 use serde_json::{json, Value};
-use std::{collections::HashSet, sync::OnceLock};
+use std::collections::HashSet;
 use token_proxy_config::CodexModelCapabilities;
 
 use crate::proxy::{
@@ -12,20 +12,16 @@ use crate::proxy::{
 };
 
 pub(super) const PATH: &str = "/codex/models.json";
-const OFFICIAL_CATALOG: &str = include_str!("../../../resources/codex-models-0.163.0.json");
 const EXTRA_MODEL_INSTRUCTIONS: &str = "You are a coding assistant. Help the user with software engineering tasks. Inspect relevant code before making changes, use the available tools when needed, and verify your work.";
 
-fn official_catalog() -> &'static Value {
-    static CATALOG: OnceLock<Value> = OnceLock::new();
-    CATALOG.get_or_init(|| {
-        serde_json::from_str(OFFICIAL_CATALOG).expect("bundled Codex catalog must be valid JSON")
-    })
-}
-
-/// 官方完整元数据在构建时固定版本；读取目录不依赖 OAuth 账号或实时上游请求。
+/// 公共目录可远端刷新，本地额外模型在鉴权后按请求追加。
 pub(super) async fn response(state: &ProxyState, auth: &RequestAuth) -> Response {
     let entries = collect_model_catalog_entries_for_manifest(state, auth).await;
-    let mut catalog = official_catalog().clone();
+    let client = state
+        .http_clients
+        .client_for_proxy_url(None)
+        .expect("direct HTTP client initialized");
+    let mut catalog = state.codex_catalog.get(&client).await;
     let models = catalog["models"]
         .as_array_mut()
         .expect("bundled Codex models array");
@@ -54,11 +50,7 @@ pub(super) async fn response(state: &ProxyState, auth: &RequestAuth) -> Response
             added += 1;
         }
     }
-    tracing::debug!(
-        official_version = "0.163.0",
-        added,
-        "serving Codex model catalog"
-    );
+    tracing::debug!(added, "serving Codex model catalog");
     let mut response = Response::new(Body::from(catalog.to_string()));
     response.headers_mut().insert(
         header::CONTENT_TYPE,

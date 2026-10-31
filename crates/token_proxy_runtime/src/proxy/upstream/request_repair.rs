@@ -12,12 +12,11 @@ mod codex_encrypted;
 pub(super) use codex_encrypted::repair_codex_encrypted_body;
 
 const MAX_REJECTED_FIELD_REPAIRS: usize = 6;
-// Each removal must be named by the upstream error. Cap the total loss while
-// allowing long histories to migrate when several old items are rejected.
-// Long-running Codex sessions can legitimately contain more than 64 historical
-// reasoning items. Keep a hard upper bound to avoid an unbounded replay loop,
-// while allowing normal context migration to finish.
-const MAX_CODEX_ENCRYPTED_REPAIRS: usize = 256;
+// Keep the existing cap for the other Responses-compatible providers. Azure
+// GPT has a separate provider contract because it can reject long histories
+// one reasoning item at a time during migration.
+const MAX_CODEX_ENCRYPTED_REPAIRS: usize = 64;
+const MAX_AZUREGPT_ENCRYPTED_REPAIRS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RequestRepairKind {
@@ -35,18 +34,38 @@ pub(super) struct RequestRepair {
 pub(super) struct RequestRepairState {
     rejected_field_repairs: usize,
     codex_encrypted_repairs: usize,
+    max_codex_encrypted_repairs: usize,
     invalid_encrypted_content_repaired: bool,
     seen_body_hashes: HashSet<[u8; 32]>,
 }
 
 impl RequestRepairState {
+    #[cfg(test)]
     pub(super) fn new(initial_body: &ReplayableBody) -> Self {
+        Self::new_with_extended_history(initial_body, false)
+    }
+
+    #[cfg(test)]
+    pub(super) fn new_for_provider(initial_body: &ReplayableBody, provider: &str) -> Self {
+        Self::new_with_extended_history(initial_body, provider == "azuregpt")
+    }
+
+    pub(super) fn new_with_extended_history(
+        initial_body: &ReplayableBody,
+        extended_history: bool,
+    ) -> Self {
+        let max_codex_encrypted_repairs = if extended_history {
+            MAX_AZUREGPT_ENCRYPTED_REPAIRS
+        } else {
+            MAX_CODEX_ENCRYPTED_REPAIRS
+        };
         let mut seen_body_hashes =
-            HashSet::with_capacity(MAX_REJECTED_FIELD_REPAIRS + MAX_CODEX_ENCRYPTED_REPAIRS + 2);
+            HashSet::with_capacity(MAX_REJECTED_FIELD_REPAIRS + max_codex_encrypted_repairs + 2);
         seen_body_hashes.insert(body_hash(initial_body.as_bytes()));
         Self {
             rejected_field_repairs: 0,
             codex_encrypted_repairs: 0,
+            max_codex_encrypted_repairs,
             invalid_encrypted_content_repaired: false,
             seen_body_hashes,
         }
@@ -65,7 +84,7 @@ impl RequestRepairState {
                 return false;
             }
             RequestRepairKind::CodexEncryptedContent
-                if self.codex_encrypted_repairs >= MAX_CODEX_ENCRYPTED_REPAIRS =>
+                if self.codex_encrypted_repairs >= self.max_codex_encrypted_repairs =>
             {
                 return false;
             }

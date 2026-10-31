@@ -470,7 +470,8 @@ fn rewrite_model_mapping(
 fn should_apply_reasoning_effort(provider: &str, upstream_path: &str, meta: &RequestMeta) -> bool {
     meta.reasoning_effort.is_some()
         && ((provider == "openai" && upstream_path == OPENAI_CHAT_PATH)
-            || (provider == "openai-response" && upstream_path == OPENAI_RESPONSES_PATH))
+            || (matches!(provider, "openai-response" | "azuregpt")
+                && upstream_path == OPENAI_RESPONSES_PATH))
 }
 
 fn apply_reasoning_effort(
@@ -546,7 +547,7 @@ fn should_filter_openai_responses_fields(
     upstream: &UpstreamRuntime,
     upstream_path: &str,
 ) -> bool {
-    provider == "openai-response"
+    matches!(provider, "openai-response" | "azuregpt")
         && upstream_path == OPENAI_RESPONSES_PATH
         && (upstream.filter_prompt_cache_retention || upstream.filter_safety_identifier)
 }
@@ -576,7 +577,8 @@ fn filter_openai_responses_fields(
 }
 
 fn should_sanitize_native_openai_responses_input(provider: &str, upstream_path: &str) -> bool {
-    matches!(provider, "openai" | "openai-response") && upstream_path == OPENAI_RESPONSES_PATH
+    matches!(provider, "openai" | "openai-response" | "azuregpt")
+        && upstream_path == OPENAI_RESPONSES_PATH
 }
 
 /// 清理客户端历史元数据，同时保留原生工具调用的 namespace 身份。
@@ -995,7 +997,7 @@ fn should_strip_openai_responses_sampling_params(
         .mapped_model
         .as_deref()
         .or(meta.original_model.as_deref());
-    provider == "openai-response"
+    matches!(provider, "openai-response" | "azuregpt")
         && upstream_path == OPENAI_RESPONSES_PATH
         && model.is_some_and(model::is_openai_responses_reasoning_model)
 }
@@ -1249,7 +1251,7 @@ async fn maybe_filter_openai_responses_request_fields(
 ) -> Result<Option<ReplayableBody>, AttemptOutcome> {
     let should_filter_prompt_cache_retention = upstream.filter_prompt_cache_retention;
     let should_filter_safety_identifier = upstream.filter_safety_identifier;
-    if provider != "openai-response"
+    if !matches!(provider, "openai-response" | "azuregpt")
         || (!should_filter_prompt_cache_retention && !should_filter_safety_identifier)
     {
         return Ok(None);

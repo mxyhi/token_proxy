@@ -449,7 +449,9 @@ fn builtin_model_ids(provider: &str) -> Vec<String> {
 
 fn model_catalog_probe_paths(provider: &str) -> Option<(&'static str, &'static str)> {
     match provider {
-        "openai" | "openai-response" | "anthropic" | "xai" => Some(("/v1/models", "/v1/models")),
+        "openai" | "openai-response" | "azuregpt" | "anthropic" | "xai" => {
+            Some(("/v1/models", "/v1/models"))
+        }
         "gemini" => Some(("/v1beta/models", "/v1beta/models")),
         _ => None,
     }

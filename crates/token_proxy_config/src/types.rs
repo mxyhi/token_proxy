@@ -269,13 +269,13 @@ pub struct UpstreamConfig {
     /// 判别联合凭据；旧平铺字段由 migrate 一次性升级。
     #[serde(default)]
     pub credential: UpstreamCredential,
-    /// Only meaningful for provider "openai-response": strip `prompt_cache_retention` from /v1/responses requests.
+    /// Only meaningful for Responses providers: strip `prompt_cache_retention` from /v1/responses requests.
     #[serde(default, skip_serializing_if = "is_false")]
     pub filter_prompt_cache_retention: bool,
-    /// Only meaningful for provider "openai-response": strip `safety_identifier` from /v1/responses requests.
+    /// Only meaningful for Responses providers: strip `safety_identifier` from /v1/responses requests.
     #[serde(default, skip_serializing_if = "is_false")]
     pub filter_safety_identifier: bool,
-    /// Only meaningful for provider "openai-response": send inbound `/v1/responses` traffic to `/v1/chat/completions`.
+    /// Only meaningful for Responses providers: send inbound `/v1/responses` traffic to `/v1/chat/completions`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub use_chat_completions_for_responses: bool,
     /// Rewrite OpenAI-compatible message role `developer` to `system` before forwarding upstream.
@@ -535,6 +535,8 @@ pub struct UpstreamRuntime {
     pub filter_prompt_cache_retention: bool,
     pub filter_safety_identifier: bool,
     pub rewrite_developer_role_to_system: bool,
+    /// Azure GPT can reject long encrypted reasoning histories item by item.
+    pub allow_extended_encrypted_history_repair: bool,
     pub kiro_account_id: Option<String>,
     pub codex_account_id: Option<String>,
     pub xai_account_id: Option<String>,

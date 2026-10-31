@@ -227,7 +227,7 @@ fn encrypted_recovery_handles_more_than_64_rejected_reasoning_items() {
         responses.push((StatusCode::OK, successful_response(), "text/event-stream"));
         let upstream = spawn_mock_raw_sequence_upstream(responses).await;
         let mut config = config_with_runtime_upstreams(&[(
-            PROVIDER_RESPONSES,
+            "azuregpt",
             10,
             "encrypted-long-history",
             upstream.base_url.as_str(),

@@ -143,7 +143,7 @@ fn model_catalog_request_error(error: &reqwest::Error) -> String {
 
 fn build_model_catalog_url(provider: &str, base_url: &str, api_key: &str) -> Result<Url, String> {
     let target_root = match provider {
-        "openai" | "openai-response" | "anthropic" => "/v1/models",
+        "openai" | "openai-response" | "azuregpt" | "anthropic" => "/v1/models",
         "gemini" => "/v1beta/models",
         _ => return Err(format!("不支持的 provider: {provider}")),
     };

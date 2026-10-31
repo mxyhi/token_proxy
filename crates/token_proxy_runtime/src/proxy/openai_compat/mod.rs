@@ -23,6 +23,7 @@ pub(crate) const RESPONSES_PATH: &str = "/v1/responses";
 
 pub(crate) const PROVIDER_CHAT: &str = "openai";
 pub(crate) const PROVIDER_RESPONSES: &str = "openai-response";
+pub(crate) const PROVIDER_AZUREGPT: &str = "azuregpt";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ApiFormat {

@@ -146,12 +146,14 @@ export function UpstreamsCard({
           let baseUrl = patch.baseUrl ?? prev.draft.baseUrl;
           let convertFromMap = patch.convertFromMap ?? prev.draft.convertFromMap;
 
-          if (!nextProviders.includes("openai-response")) {
+          if (!nextProviders.some((provider) => provider === "openai-response" || provider === "azuregpt")) {
             filterPromptCacheRetention = false;
             filterSafetyIdentifier = false;
             useChatCompletionsForResponses = false;
           }
-          if (!nextProviders.some((provider) => provider === "openai" || provider === "openai-response")) {
+          if (!nextProviders.some((provider) =>
+            provider === "openai" || provider === "openai-response" || provider === "azuregpt"
+          )) {
             rewriteDeveloperRoleToSystem = false;
           }
           // 离开账户型 provider 时清空 accountId；进入账户型时清空 baseUrl/apiKeys。

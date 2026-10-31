@@ -25,6 +25,7 @@ pub(super) fn compatible_plans(
         [
             "openai",
             "openai-response",
+            "azuregpt",
             "codex",
             "xai",
             "anthropic",
@@ -58,10 +59,10 @@ pub(super) fn plan_for_format(
 
     let (outbound_path, request_transform, response_transform) = match (format, provider) {
         (OpenaiChat, "openai")
-        | (OpenaiResponses, "openai-response" | "xai")
+        | (OpenaiResponses, "openai-response" | "azuregpt" | "xai")
         | (AnthropicMessages, "anthropic")
         | (Gemini, "gemini") => (Option::None, None, None),
-        (OpenaiChat, "openai-response" | "xai") => {
+        (OpenaiChat, "openai-response" | "azuregpt" | "xai") => {
             (Some(RESPONSES_PATH), ChatToResponses, ResponsesToChat)
         }
         (OpenaiChat, "codex") => (Some(CODEX_RESPONSES_PATH), ChatToCodex, CodexToChat),
@@ -87,7 +88,7 @@ pub(super) fn plan_for_format(
         ),
         (OpenaiResponses, "gemini") => (Option::None, ResponsesToGemini, GeminiToResponses),
         (AnthropicMessages, "kiro") => (Some(RESPONSES_PATH), None, KiroToAnthropic),
-        (AnthropicMessages, "openai-response" | "xai") => (
+        (AnthropicMessages, "openai-response" | "azuregpt" | "xai") => (
             Some(RESPONSES_PATH),
             AnthropicToResponses,
             ResponsesToAnthropic,
@@ -99,7 +100,7 @@ pub(super) fn plan_for_format(
         ),
         (AnthropicMessages, "openai") => (Some(CHAT_PATH), AnthropicToChat, ChatToAnthropic),
         (AnthropicMessages, "gemini") => (Option::None, AnthropicToGemini, GeminiToAnthropic),
-        (Gemini, "openai-response" | "xai") => {
+        (Gemini, "openai-response" | "azuregpt" | "xai") => {
             (Some(RESPONSES_PATH), GeminiToResponses, ResponsesToGemini)
         }
         (Gemini, "openai") => (Some(CHAT_PATH), GeminiToChat, ChatToGemini),

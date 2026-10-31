@@ -75,19 +75,19 @@ export type UpstreamConfig = {
   /**
    * Whether to drop OpenAI Responses request field `prompt_cache_retention` before sending upstream.
    *
-   * Only meaningful for provider "openai-response".
+   * Only meaningful for Responses providers ("openai-response" / "azuregpt").
    */
   filter_prompt_cache_retention?: boolean;
   /**
    * Whether to drop OpenAI Responses request field `safety_identifier` before sending upstream.
    *
-   * Only meaningful for provider "openai-response".
+   * Only meaningful for Responses providers ("openai-response" / "azuregpt").
    */
   filter_safety_identifier?: boolean;
   /**
    * Whether to send inbound `/v1/responses` requests to `/v1/chat/completions` for this upstream.
    *
-   * Only meaningful for provider "openai-response".
+   * Only meaningful for Responses providers ("openai-response" / "azuregpt").
    */
   use_chat_completions_for_responses?: boolean;
   /**

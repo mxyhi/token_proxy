@@ -12,6 +12,9 @@ mod codex_encrypted;
 pub(super) use codex_encrypted::repair_codex_encrypted_body;
 
 const MAX_REJECTED_FIELD_REPAIRS: usize = 6;
+// Each removal must be named by the upstream error. Cap the total loss while
+// allowing long histories to migrate when several old items are rejected.
+const MAX_CODEX_ENCRYPTED_REPAIRS: usize = 64;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RequestRepairKind {
@@ -28,16 +31,19 @@ pub(super) struct RequestRepair {
 
 pub(super) struct RequestRepairState {
     rejected_field_repairs: usize,
+    codex_encrypted_repairs: usize,
     invalid_encrypted_content_repaired: bool,
     seen_body_hashes: HashSet<[u8; 32]>,
 }
 
 impl RequestRepairState {
     pub(super) fn new(initial_body: &ReplayableBody) -> Self {
-        let mut seen_body_hashes = HashSet::with_capacity(MAX_REJECTED_FIELD_REPAIRS + 2);
+        let mut seen_body_hashes =
+            HashSet::with_capacity(MAX_REJECTED_FIELD_REPAIRS + MAX_CODEX_ENCRYPTED_REPAIRS + 2);
         seen_body_hashes.insert(body_hash(initial_body.as_bytes()));
         Self {
             rejected_field_repairs: 0,
+            codex_encrypted_repairs: 0,
             invalid_encrypted_content_repaired: false,
             seen_body_hashes,
         }
@@ -51,8 +57,12 @@ impl RequestRepairState {
                 return false;
             }
             RequestRepairKind::InvalidEncryptedContent
-            | RequestRepairKind::CodexEncryptedContent
                 if self.invalid_encrypted_content_repaired =>
+            {
+                return false;
+            }
+            RequestRepairKind::CodexEncryptedContent
+                if self.codex_encrypted_repairs >= MAX_CODEX_ENCRYPTED_REPAIRS =>
             {
                 return false;
             }
@@ -63,10 +73,10 @@ impl RequestRepairState {
         }
         match kind {
             RequestRepairKind::RejectedField => self.rejected_field_repairs += 1,
-            RequestRepairKind::InvalidEncryptedContent
-            | RequestRepairKind::CodexEncryptedContent => {
+            RequestRepairKind::InvalidEncryptedContent => {
                 self.invalid_encrypted_content_repaired = true;
             }
+            RequestRepairKind::CodexEncryptedContent => self.codex_encrypted_repairs += 1,
         }
         true
     }

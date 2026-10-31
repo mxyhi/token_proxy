@@ -97,3 +97,33 @@ fn codex_repair_requires_unambiguous_structured_rejection() {
         assert!(repair_codex_encrypted_body(&initial,error,&mut state).unwrap().is_none());
     }
 }
+
+#[test]
+fn codex_repair_caps_multi_item_history_loss() {
+    let items = (0..65)
+        .map(|index| {
+            json!({
+                "type": "reasoning",
+                "id": format!("rs_{index}"),
+                "encrypted_content": format!("cipher-{index}")
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut body = request(json!(items));
+    let mut state = RequestRepairState::new(&body);
+    for index in 0..64 {
+        let error = rejection(&format!(
+            "The encrypted content for item rs_{index} could not be verified. Reason: Encrypted content could not be decrypted or parsed."
+        ));
+        body = repair_codex_encrypted_body(&body, &error, &mut state)
+            .unwrap()
+            .expect("repair within bounded loss")
+            .body;
+    }
+    let error = rejection(
+        "The encrypted content for item rs_64 could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+    );
+    assert!(repair_codex_encrypted_body(&body, &error, &mut state)
+        .unwrap()
+        .is_none());
+}

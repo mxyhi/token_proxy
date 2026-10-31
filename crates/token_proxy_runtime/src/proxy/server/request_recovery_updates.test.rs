@@ -12,6 +12,20 @@ fn encrypted_sse() -> Bytes {
         json!({"type":"response.failed","response":encrypted_error()})
     ))
 }
+fn encrypted_sse_rejection(id: &str) -> Bytes {
+    Bytes::from(format!(
+        "data: {}\n\n",
+        json!({
+            "type": "response.failed",
+            "response": {
+                "error": {
+                    "code": "invalid_encrypted_content",
+                    "message": format!("The encrypted content for item {id} could not be verified. Reason: Encrypted content could not be decrypted or parsed.")
+                }
+            }
+        })
+    ))
+}
 fn successful_response() -> Bytes {
     Bytes::from_static(b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_ok\",\"object\":\"response\",\"created_at\":123,\"model\":\"gpt-5\",\"status\":\"completed\",\"output\":[]}}\n\n")
 }
@@ -187,6 +201,55 @@ fn session_policy_http_and_sse_do_not_retry_or_cool_down() {
             secondary.abort();
             let _ = std::fs::remove_dir_all(dir);
         }
+    });
+}
+
+#[test]
+fn encrypted_recovery_sse_repairs_multiple_rejected_reasoning_items_in_order() {
+    run_async(async {
+        let upstream = spawn_mock_raw_sequence_upstream(vec![
+            (
+                StatusCode::OK,
+                encrypted_sse_rejection("rs_first"),
+                "text/event-stream",
+            ),
+            (
+                StatusCode::OK,
+                encrypted_sse_rejection("rs_second"),
+                "text/event-stream",
+            ),
+            (StatusCode::OK, successful_response(), "text/event-stream"),
+        ])
+        .await;
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_RESPONSES,
+            10,
+            "encrypted-sse-multi-repair",
+            upstream.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        config.same_upstream_retry_count = 3;
+        let dir = next_test_data_dir("encrypted-sse-multi-repair");
+        let state = build_test_state_handle(config, dir.clone()).await;
+        let (status, _) = raw_request(
+            state,
+            json!({"model":"gpt-6-astra","stream":true,"input":[
+                {"type":"reasoning","id":"rs_first","encrypted_content":"first"},
+                {"type":"reasoning","id":"rs_second","encrypted_content":"second"},
+                {"type":"message","role":"user","content":"hello"}
+            ]}),
+        )
+        .await;
+        let requests = upstream.requests();
+        upstream.abort();
+        let _ = std::fs::remove_dir_all(dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].body["input"].as_array().unwrap().len(), 3);
+        assert_eq!(requests[1].body["input"].as_array().unwrap().len(), 2);
+        assert_eq!(requests[2].body["input"].as_array().unwrap().len(), 1);
+        assert_eq!(requests[2].body["input"][0]["type"], "message");
     });
 }
 

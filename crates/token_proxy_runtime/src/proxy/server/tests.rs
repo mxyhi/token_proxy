@@ -9634,6 +9634,66 @@ fn responses_azure_rejected_reasoning_id_repairs_with_tool_namespace_intact() {
 }
 
 #[test]
+fn responses_azure_repairs_multiple_rejected_reasoning_items_in_order() {
+    run_async(async {
+        let rejected = |id: &str| {
+            Bytes::from(
+                json!({
+                    "error": {
+                        "code": "invalid_encrypted_content",
+                        "message": format!(
+                            "The encrypted content for item {id} could not be verified. Reason: Encrypted content could not be decrypted or parsed."
+                        )
+                    }
+                })
+                .to_string(),
+            )
+        };
+        let upstream = spawn_mock_raw_sequence_upstream(vec![
+            (StatusCode::BAD_REQUEST, rejected("rs_first"), "application/json"),
+            (StatusCode::BAD_REQUEST, rejected("rs_second"), "application/json"),
+            (
+                StatusCode::OK,
+                Bytes::from_static(
+                    br#"{"id":"resp_azure_multi_repaired","object":"response","created_at":123,"model":"gpt-6-astra","status":"completed","output":[]}"#,
+                ),
+                "application/json",
+            ),
+        ])
+        .await;
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_RESPONSES,
+            10,
+            "azure-multi-repair",
+            upstream.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        config.same_upstream_retry_count = 3;
+        let data_dir = next_test_data_dir("responses_azure_multi_reasoning_repair");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let input = json!([
+            {"type":"reasoning","id":"rs_first","encrypted_content":"first","summary":[]},
+            {"type":"reasoning","id":"rs_second","encrypted_content":"second","summary":[]},
+            {"type":"message","role":"user","content":"hello"}
+        ]);
+        let (status, _) =
+            send_responses_request_with_body(state, json!({"model":"gpt-6-astra","input":input}))
+                .await;
+        let requests = upstream.requests();
+        upstream.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].body["input"].as_array().unwrap().len(), 3);
+        assert_eq!(requests[1].body["input"].as_array().unwrap().len(), 2);
+        assert_eq!(requests[1].body["input"][0]["id"], "rs_second");
+        assert_eq!(requests[2].body["input"].as_array().unwrap().len(), 1);
+        assert_eq!(requests[2].body["input"][0]["type"], "message");
+    });
+}
+
+#[test]
 fn responses_xai_invalid_encrypted_content_repairs_once() {
     run_async(async {
         let upstream = spawn_mock_raw_sequence_upstream(vec![

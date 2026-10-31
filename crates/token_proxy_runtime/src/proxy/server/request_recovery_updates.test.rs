@@ -94,6 +94,65 @@ fn encrypted_recovery_http_and_sse_use_same_sent_credential() {
         }
     });
 }
+
+#[test]
+fn encrypted_recovery_accepts_api_key_header_without_authorization() {
+    run_async(async {
+        for sse in [false, true] {
+            let upstream = spawn_mock_raw_sequence_upstream(vec![
+                if sse {
+                    (StatusCode::OK, encrypted_sse(), "text/event-stream")
+                } else {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Bytes::from(encrypted_error().to_string()),
+                        "application/json",
+                    )
+                },
+                (StatusCode::OK, successful_response(), "text/event-stream"),
+            ])
+            .await;
+            let mut config = config_with_runtime_upstreams(&[(
+                PROVIDER_RESPONSES,
+                10,
+                "encrypted-api-key-repair",
+                upstream.base_url.as_str(),
+                FORMATS_RESPONSES,
+            )]);
+            config.same_upstream_retry_count = 0;
+            config
+                .upstreams
+                .get_mut(PROVIDER_RESPONSES)
+                .expect("responses provider")
+                .groups[0]
+                .items[0]
+                .header_overrides = Some(vec![
+                token_proxy_config::HeaderOverride {
+                    name: axum::http::header::AUTHORIZATION,
+                    value: None,
+                },
+                token_proxy_config::HeaderOverride {
+                    name: axum::http::HeaderName::from_static("api-key"),
+                    value: Some(axum::http::HeaderValue::from_static("test-key")),
+                },
+            ]);
+            let dir = next_test_data_dir("encrypted-recovery-api-key-header");
+            let state = build_test_state_handle(config, dir.clone()).await;
+            let (status, _) = raw_request(state, encrypted_request()).await;
+            let requests = upstream.requests();
+            upstream.abort();
+            let _ = std::fs::remove_dir_all(dir);
+
+            assert_eq!(status, StatusCode::OK, "recovery should work for sse={sse}");
+            assert_eq!(requests.len(), 2, "recover exactly once for sse={sse}");
+            assert!(requests
+                .iter()
+                .all(|request| request.authorization.is_none()));
+            assert_eq!(requests[1].body["input"].as_array().unwrap().len(), 1);
+        }
+    });
+}
+
 #[test]
 fn encrypted_recovery_http_then_sse_does_not_get_second_budget_or_failover() {
     run_async(async {

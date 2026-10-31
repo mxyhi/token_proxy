@@ -8,6 +8,49 @@ fn rejection(message: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({"error":{"code":"invalid_encrypted_content","message":message}}))
         .unwrap()
 }
+
+#[test]
+fn codex_repair_matches_azure_rejected_reasoning_id_exactly() {
+    let items = json!([
+        {"type":"reasoning","id":"rs_keep","encrypted_content":"keep-ciphertext"},
+        {"type":"reasoning","id":"rs_rejected","encrypted_content":"rejected-ciphertext"},
+        {"type":"message","role":"user","content":"keep"},
+        {"type":"function_call","namespace":"team","call_id":"call_1","name":"exec","arguments":"{}"},
+        {"type":"function_call_output","call_id":"call_1","output":"keep"}
+    ]);
+    let initial = request(items.clone());
+    let error = rejection("The encrypted content for item rs_rejected could not be verified. Reason: Encrypted content could not be decrypted or parsed.");
+    let mut state = RequestRepairState::new(&initial);
+    let repaired = repair_codex_encrypted_body(&initial, &error, &mut state)
+        .unwrap()
+        .expect("explicitly rejected reasoning id is recoverable");
+    let value: Value = serde_json::from_slice(repaired.body.as_bytes()).unwrap();
+    let mut expected = items.as_array().unwrap().clone();
+    expected.remove(1);
+    assert_eq!(value["input"], json!(expected));
+    assert!(repair_codex_encrypted_body(&initial, &error, &mut state)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn codex_repair_rejects_missing_duplicate_or_non_reasoning_item_ids() {
+    let error = rejection("The encrypted content for item rs_rejected could not be verified. Reason: Encrypted content could not be decrypted or parsed.");
+    for items in [
+        json!([{"type":"reasoning","id":"rs_other","encrypted_content":"one"}]),
+        json!([{"type":"reasoning","id":"rs_rejected","encrypted_content":"one"},{"type":"message","id":"rs_rejected"}]),
+        json!([{"type":"message","id":"rs_rejected","encrypted_content":"one"}]),
+        json!([{"type":"reasoning","id":"rs_rejected"}]),
+        json!([{"type":"reasoning","id":"rs_rejected","encrypted_content":"one"},{"type":"compaction","encrypted_content":"keep"}]),
+    ] {
+        let initial = request(items);
+        let mut state = RequestRepairState::new(&initial);
+        assert!(repair_codex_encrypted_body(&initial, &error, &mut state)
+            .unwrap()
+            .is_none());
+    }
+}
+
 #[test]
 fn codex_repair_removes_only_uniquely_rejected_item_and_shares_budget() {
     let initial = request(json!([

@@ -1,6 +1,7 @@
 pub struct SseEventParser {
     buffer: Vec<u8>,
     current_data: String,
+    private_event_type: Option<String>,
     max_line_bytes: usize,
     max_event_bytes: usize,
     failed: bool,
@@ -53,6 +54,7 @@ impl SseEventParser {
         Self {
             buffer: Vec::new(),
             current_data: String::new(),
+            private_event_type: None,
             max_line_bytes,
             max_event_bytes,
             failed: false,
@@ -109,6 +111,7 @@ impl SseEventParser {
         // 错误后立即释放大块缓存；禁止继续消费并把截断后的流误报成功。
         self.buffer = Vec::new();
         self.current_data = String::new();
+        self.private_event_type = None;
         tracing::warn!(
             scope,
             limit_bytes = limit,
@@ -147,6 +150,16 @@ impl SseEventParser {
             self.flush_event(on_event);
             return Ok(());
         }
+        if let Some(name) = line.strip_prefix("event:") {
+            let name = name.trim();
+            // Consumers use JSON type for privacy filtering. Keep the private SSE
+            // event identity even when a gateway omits or mismatches data.type.
+            self.private_event_type = (name.len() <= 256
+                && (matches!(name, "response.metadata" | "response.subscription_usage")
+                    || name.starts_with("codex.")
+                    || name.starts_with("responsesapi.")))
+            .then(|| name.to_string());
+        }
         if let Some(data) = line.strip_prefix("data:") {
             let data = data.trim_start();
             let separator_bytes = usize::from(!self.current_data.is_empty());
@@ -163,12 +176,23 @@ impl SseEventParser {
     }
 
     fn flush_event<F: FnMut(String)>(&mut self, on_event: &mut F) {
+        let private_event_type = self.private_event_type.take();
         if self.current_data.is_empty() {
             return;
         }
         let data = std::mem::take(&mut self.current_data);
         let data = data.trim();
         if data.is_empty() {
+            return;
+        }
+        if let Some(event_type) = private_event_type {
+            if let Ok(serde_json::Value::Object(mut object)) = serde_json::from_str(data) {
+                object.insert("type".into(), serde_json::Value::String(event_type));
+                on_event(serde_json::Value::Object(object).to_string());
+            } else {
+                // Invalid private metadata is not a public text fragment.
+                tracing::debug!(event_type, "discarded malformed private SSE metadata");
+            }
             return;
         }
         if let Some(documents) = split_responses_json_documents(data.as_bytes()) {
@@ -191,6 +215,31 @@ impl SseEventParser {
 #[cfg(test)]
 mod tests {
     use super::{split_responses_json_documents, SseEventParser};
+
+    #[test]
+    fn private_sse_event_names_survive_fragmentation_without_json_type() {
+        let payload = b"event: response.metadata\ndata: {\"private\":true}\n\nevent: response.subscription_usage\ndata: {\"type\":\"response.completed\"}\n\nevent: message\ndata: {\"text\":\"public\"}\n\n";
+        for split in 0..=payload.len() {
+            let mut parser = SseEventParser::new();
+            let mut events = Vec::new();
+            parser
+                .push_chunk(&payload[..split], |event| events.push(event))
+                .unwrap();
+            parser
+                .push_chunk(&payload[split..], |event| events.push(event))
+                .unwrap();
+            assert_eq!(events.len(), 3);
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&events[0]).unwrap()["type"],
+                "response.metadata"
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&events[1]).unwrap()["type"],
+                "response.subscription_usage"
+            );
+            assert_eq!(events[2], r#"{"text":"public"}"#);
+        }
+    }
 
     #[test]
     fn utf8_survives_every_network_split_and_unterminated_final_line() {

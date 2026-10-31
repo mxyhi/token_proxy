@@ -76,6 +76,9 @@ mod stream_contract;
 #[path = "tests_local_shell.rs"]
 mod local_shell;
 
+#[path = "cpa_protocol.test.rs"]
+mod cpa_protocol;
+
 async fn setup_responses_stream() -> (Arc<LogWriter>, LogContext, SqlitePool) {
     let sqlite_pool = create_test_sqlite_pool().await;
     let log = Arc::new(LogWriter::new(Some(sqlite_pool.clone())));

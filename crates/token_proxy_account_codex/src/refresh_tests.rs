@@ -19,7 +19,6 @@ fn reimport_new_oauth_credentials_recovers_invalid_account_without_changing_sett
             id.into(),
             TokenRefreshCooldown {
                 retry_at: tokio::time::Instant::now() + std::time::Duration::from_secs(300),
-                invalid_grant_count: 0,
                 error: Some("old credential failure".into()),
             },
         );
@@ -486,7 +485,7 @@ fn scheduled_refresh_filters_channels_and_cools_down_short_lived_success() {
 }
 
 #[test]
-fn token_exchange_retries_transient_failure_three_times_and_stops_revoked_sessions() {
+fn token_exchange_stops_rejected_refresh_without_discarding_live_access() {
     run_async(async {
         for (status, code, expected_requests, expected_status) in [
             (
@@ -499,11 +498,14 @@ fn token_exchange_retries_transient_failure_three_times_and_stops_revoked_sessio
                 401,
                 "refresh_token_invalidated",
                 1,
-                CodexAccountStatus::Invalid,
+                CodexAccountStatus::Active,
             ),
-            (401, "refresh_token_expired", 1, CodexAccountStatus::Invalid),
-            (401, "refresh_token_reused", 1, CodexAccountStatus::Invalid),
-            (401, "refresh_token_revoked", 1, CodexAccountStatus::Invalid),
+            (401, "refresh_token_expired", 1, CodexAccountStatus::Active),
+            (401, "refresh_token_reused", 1, CodexAccountStatus::Active),
+            (401, "refresh_token_revoked", 1, CodexAccountStatus::Active),
+            (400, "invalid_grant", 1, CodexAccountStatus::Active),
+            (400, "invalid_client", 1, CodexAccountStatus::Active),
+            (401, "unknown", 1, CodexAccountStatus::Active),
         ] {
             let (store, data_dir) = create_test_store();
             store
@@ -560,7 +562,7 @@ fn token_exchange_retries_transient_failure_three_times_and_stops_revoked_sessio
 }
 
 #[test]
-fn invalid_grant_preserves_live_access_token_and_cools_down_refresh() {
+fn invalid_grant_preserves_live_access_until_expiry_and_requires_new_refresh_credential() {
     run_async(async {
         let (store, data_dir) = create_test_store();
         store
@@ -610,6 +612,41 @@ fn invalid_grant_preserves_live_access_token_and_cools_down_refresh() {
             assert_eq!(record.oauth().unwrap().access_token, "live-access");
             assert_eq!(record.status, CodexAccountStatus::Active);
         }
+        let mut expired = store.load_account("invalid-grant").await.unwrap();
+        *expired.oauth_mut().unwrap().expires_at = past_rfc3339(1);
+        store
+            .save_record("invalid-grant".into(), expired)
+            .await
+            .unwrap();
+        assert!(store.get_account_record("invalid-grant").await.is_err());
+        assert!(store.refresh_account("invalid-grant").await.is_err());
+        assert_eq!(
+            count.load(Ordering::SeqCst),
+            1,
+            "known rejected refresh must never be retried"
+        );
+        store
+            .import_text(
+                &json!({
+                    "access_token":"new-access", "refresh_token":"new-refresh",
+                    "id_token":build_id_token("test@example.com", "account"),
+                    "expires_at":future_rfc3339(48)
+                })
+                .to_string(),
+            )
+            .await
+            .unwrap();
+        assert!(store.rejected_refresh_tokens.lock().unwrap().is_empty());
+        assert_eq!(
+            store
+                .get_account_record("invalid-grant")
+                .await
+                .unwrap()
+                .oauth()
+                .unwrap()
+                .access_token,
+            "new-access"
+        );
         server.abort();
         let _ = std::fs::remove_dir_all(data_dir);
         assert_eq!(count.load(Ordering::SeqCst), 1);
@@ -723,10 +760,22 @@ fn rejected_live_access_token_is_not_returned_while_refresh_is_pending() {
         let (store, data_dir) = create_test_store();
         let store = Arc::new(store);
         let id = "rejected-live-token";
-        store.save_record(id.into(), oauth_test_record(
-            "old-access", "old-refresh", String::new(), true, CodexAccountStatus::Active,
-            "account", "test@example.com", future_rfc3339(48),
-        )).await.unwrap();
+        store
+            .save_record(
+                id.into(),
+                oauth_test_record(
+                    "old-access",
+                    "old-refresh",
+                    String::new(),
+                    true,
+                    CodexAccountStatus::Active,
+                    "account",
+                    "test@example.com",
+                    future_rfc3339(48),
+                ),
+            )
+            .await
+            .unwrap();
         let entered = Arc::new(tokio::sync::Notify::new());
         let release = Arc::new(tokio::sync::Notify::new());
         let app = axum::Router::new().route("/token", axum::routing::post({
@@ -740,19 +789,43 @@ fn rejected_live_access_token_is_not_returned_while_refresh_is_pending() {
             }
         }));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        store.set_test_token_url(&format!("http://{}/token", listener.local_addr().unwrap())).await;
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
+        store
+            .set_test_token_url(&format!("http://{}/token", listener.local_addr().unwrap()))
+            .await;
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
         let refresh = tokio::spawn({
             let store = store.clone();
-            async move { store.refresh_account_after_unauthorized(id, "old-access").await }
+            async move {
+                store
+                    .refresh_account_after_unauthorized(id, "old-access")
+                    .await
+            }
         });
         entered.notified().await;
-        let early = tokio::time::timeout(std::time::Duration::from_millis(100), store.get_account_record(id)).await;
+        let early = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            store.get_account_record(id),
+        )
+        .await;
         let returned_rejected = matches!(early, Ok(Ok(ref record)) if record.oauth().unwrap().access_token == "old-access");
         release.notify_one();
         refresh.await.unwrap().unwrap();
-        assert!(!returned_rejected, "a known rejected token must wait or fail, never be dispatched again");
-        assert_eq!(store.get_account_record(id).await.unwrap().oauth().unwrap().access_token, "new-access");
+        assert!(
+            !returned_rejected,
+            "a known rejected token must wait or fail, never be dispatched again"
+        );
+        assert_eq!(
+            store
+                .get_account_record(id)
+                .await
+                .unwrap()
+                .oauth()
+                .unwrap()
+                .access_token,
+            "new-access"
+        );
         server.abort();
         let _ = std::fs::remove_dir_all(data_dir);
     });
@@ -762,17 +835,47 @@ fn rejected_live_access_token_is_not_returned_while_refresh_is_pending() {
 fn rejected_token_cannot_fall_back_when_refresh_is_disabled() {
     run_async(async {
         let (store, dir) = create_test_store();
-        store.save_record("account".into(), oauth_test_record(
-            "rejected", "refresh", String::new(), false, CodexAccountStatus::Active,
-            "account", "test@example.com", future_rfc3339(48),
-        )).await.unwrap();
-        assert!(store.refresh_account_after_unauthorized("account", "rejected").await.is_err());
+        store
+            .save_record(
+                "account".into(),
+                oauth_test_record(
+                    "rejected",
+                    "refresh",
+                    String::new(),
+                    false,
+                    CodexAccountStatus::Active,
+                    "account",
+                    "test@example.com",
+                    future_rfc3339(48),
+                ),
+            )
+            .await
+            .unwrap();
+        assert!(store
+            .refresh_account_after_unauthorized("account", "rejected")
+            .await
+            .is_err());
         assert!(store.get_account_record("account").await.is_err());
         let mut replacement = store.load_account("account").await.unwrap();
         *replacement.oauth_mut().unwrap().access_token = "replacement".into();
-        store.save_record("account".into(), replacement).await.unwrap();
-        store.refresh_account_after_unauthorized("account", "rejected").await.unwrap();
-        assert_eq!(store.get_account_record("account").await.unwrap().oauth().unwrap().access_token, "replacement");
+        store
+            .save_record("account".into(), replacement)
+            .await
+            .unwrap();
+        store
+            .refresh_account_after_unauthorized("account", "rejected")
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .get_account_record("account")
+                .await
+                .unwrap()
+                .oauth()
+                .unwrap()
+                .access_token,
+            "replacement"
+        );
         assert!(store.rejected_access_tokens.lock().unwrap().is_empty());
         let _ = std::fs::remove_dir_all(dir);
     });

@@ -121,6 +121,7 @@ pub(super) async fn finalize_attempt(
         &attempt.meta,
         provider,
         &upstream.id,
+        &upstream.selector_key,
         attempt.selected_account_id.clone(),
         inbound_path,
         state.log.clone(),

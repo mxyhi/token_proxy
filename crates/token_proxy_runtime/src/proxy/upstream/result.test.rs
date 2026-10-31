@@ -4,6 +4,24 @@ use crate::proxy::log::{build_log_entry, LogContext, UsageSnapshot};
 use std::time::Instant;
 
 #[test]
+fn transient_retry_after_skips_immediate_same_upstream_replay() {
+    let mut response = http::error_response(StatusCode::TOO_MANY_REQUESTS, "at capacity");
+    response
+        .headers_mut()
+        .insert("retry-after", "12".parse().unwrap());
+    honor_transient_retry_after(&mut response, false);
+    assert_eq!(response.headers()["retry-after"], "12");
+    assert_eq!(
+        response.extensions().get::<RetryDirective>().unwrap().scope,
+        RetryScope::NextOnly
+    );
+
+    let mut response = http::error_response(StatusCode::TOO_MANY_REQUESTS, "at capacity");
+    honor_transient_retry_after(&mut response, false);
+    assert!(response.extensions().get::<RetryDirective>().is_none());
+}
+
+#[test]
 fn xai_free_usage_hint_applies_explicit_cooldown_when_default_is_disabled() {
     let selector = AccountSelectorRuntime::new_with_cooldown(std::time::Duration::ZERO);
     let mut response = http::error_response(StatusCode::OK, "free usage exhausted");

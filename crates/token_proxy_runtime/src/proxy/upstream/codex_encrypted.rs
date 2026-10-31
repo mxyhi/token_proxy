@@ -34,7 +34,17 @@ pub(in crate::proxy::upstream) fn repair_codex_encrypted_body(
         .and_then(|message| message.strip_suffix(" could not be verified. Reason: Encrypted content could not be decrypted or parsed."))
         .and_then(|locator| locator.split_once("..."))
         .filter(|(start,end)| [*start,*end].iter().all(|part| part.len()==4 && part.bytes().all(|b| b.is_ascii_alphanumeric() || b==b'_' || b==b'-')));
-    if !generic && locator.is_none() {
+    // Azure 用完整 reasoning item ID 定位拒绝项；只接受精确且唯一的匹配。
+    let rejected_id = message
+        .strip_prefix("The encrypted content for item ")
+        .and_then(|id| id.strip_suffix(" could not be verified. Reason: Encrypted content could not be decrypted or parsed."))
+        .filter(|id| {
+            id.starts_with("rs_")
+                && id.len() > 3
+                && id.len() <= 256
+                && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        });
+    if !generic && locator.is_none() && rejected_id.is_none() {
         return Ok(None);
     }
     if !unambiguous_json(request.as_bytes()) {
@@ -74,6 +84,7 @@ pub(in crate::proxy::upstream) fn repair_codex_encrypted_body(
             }
             if locator
                 .is_none_or(|(start, end)| encrypted.starts_with(start) && encrypted.ends_with(end))
+                && rejected_id.is_none_or(|id| item.get("id").and_then(Value::as_str) == Some(id))
             {
                 candidates.push(index);
             }

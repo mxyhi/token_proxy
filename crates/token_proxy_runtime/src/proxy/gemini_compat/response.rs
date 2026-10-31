@@ -60,15 +60,36 @@ pub(crate) fn gemini_response_to_chat(
     bytes: &Bytes,
     model_hint: Option<&str>,
 ) -> Result<Bytes, String> {
-    let value: Value =
+    let mut value: Value =
         serde_json::from_slice(bytes).map_err(|_| "Upstream response must be JSON.".to_string())?;
+    if let Some(candidates) = value.get_mut("candidates").and_then(Value::as_array_mut) {
+        for candidate in candidates {
+            if let Some(parts) = candidate
+                .pointer_mut("/content/parts")
+                .and_then(Value::as_array_mut)
+            {
+                for part in parts {
+                    if let Some(call) = part.get_mut("functionCall").and_then(Value::as_object_mut)
+                    {
+                        if super::partial_args::is_partial(call) {
+                            let mut partial = super::partial_args::PartialCall::new(call, None)?;
+                            if !partial.push(call)? {
+                                return Err("Gemini returned incomplete function arguments.".into());
+                            }
+                            *call = partial.into_call();
+                        }
+                    }
+                }
+            }
+        }
+    }
     let Some(object) = value.as_object() else {
         return Err("Upstream response must be a JSON object.".to_string());
     };
 
     // 检查是否有 error 字段（Gemini 错误响应）
-    if let Some(error) = object.get("error") {
-        return handle_gemini_error(error, model_hint);
+    if object.get("error").is_some_and(|error| !error.is_null()) {
+        return Err("Gemini upstream returned an error.".into());
     }
 
     let candidates = object
@@ -77,10 +98,13 @@ pub(crate) fn gemini_response_to_chat(
         .map(|arr| arr.as_slice())
         .unwrap_or(&[]);
 
+    if let Some(reason) = blocked_prompt_reason(&value) {
+        return Err(format!("Gemini upstream blocked the prompt ({reason})."));
+    }
     if candidates.iter().any(|candidate| {
-        candidate.get("finishReason").and_then(Value::as_str) == Some("MALFORMED_FUNCTION_CALL")
+        malformed_finish_reason(candidate.get("finishReason").and_then(Value::as_str))
     }) {
-        return Err("Gemini upstream returned an invalid function call.".to_string());
+        return Err("Gemini upstream returned malformed output.".to_string());
     }
 
     let model = model_hint.unwrap_or("gemini");
@@ -129,46 +153,37 @@ pub(crate) fn gemini_response_to_chat(
         .map_err(|err| format!("Failed to serialize Chat response: {err}"))
 }
 
-/// 处理 Gemini 错误响应
-fn handle_gemini_error(error: &Value, model_hint: Option<&str>) -> Result<Bytes, String> {
-    let message = error
-        .get("message")
+pub(super) fn blocked_prompt_reason(value: &Value) -> Option<&str> {
+    if value
+        .get("candidates")
+        .and_then(Value::as_array)
+        .is_some_and(|items| !items.is_empty())
+    {
+        return None;
+    }
+    value
+        .pointer("/promptFeedback/blockReason")
         .and_then(Value::as_str)
-        .unwrap_or("Unknown error from Gemini");
-    let code = error.get("code").and_then(Value::as_i64).unwrap_or(500);
+        .filter(|reason| !reason.is_empty() && *reason != "BLOCK_REASON_UNSPECIFIED")
+}
 
-    let model = model_hint.unwrap_or("gemini");
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-
-    let out = json!({
-        "id": format!("chatcmpl_gemini_{now_ms}"),
-        "object": "chat.completion",
-        "created": (now_ms / 1000) as i64,
-        "model": model,
-        "choices": [{
-            "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": format!("Error from Gemini (code {}): {}", code, message)
-            },
-            "finish_reason": "stop"
-        }],
-        "usage": null
-    });
-
-    serde_json::to_vec(&out)
-        .map(Bytes::from)
-        .map_err(|err| format!("Failed to serialize error response: {err}"))
+pub(super) fn malformed_finish_reason(reason: Option<&str>) -> bool {
+    matches!(
+        reason,
+        Some("MALFORMED_FUNCTION_CALL" | "MALFORMED_RESPONSE" | "UNEXPECTED_TOOL_CALL")
+    )
 }
 
 /// 将 Gemini candidate 转换为 Chat choice
 fn gemini_candidate_to_chat_choice(candidate: &Value, index: usize) -> Option<Value> {
     let candidate = candidate.as_object()?;
-    let content = candidate.get("content")?.as_object()?;
-    let parts = content.get("parts").and_then(Value::as_array)?;
+    // Safety and token-limit candidates can terminate without a content object.
+    let parts = candidate
+        .get("content")
+        .and_then(|content| content.get("parts"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
 
     let mut content_parts = Vec::new();
     let mut tool_calls = Vec::new();
@@ -295,12 +310,11 @@ fn gemini_candidate_to_chat_choice(candidate: &Value, index: usize) -> Option<Va
 }
 
 /// 将 Gemini finishReason 转换为 Chat finish_reason
-fn gemini_finish_reason_to_chat(reason: Option<&str>, has_tool_calls: bool) -> &'static str {
-    if has_tool_calls {
-        return "tool_calls";
-    }
+pub(super) fn gemini_finish_reason_to_chat(
+    reason: Option<&str>,
+    has_tool_calls: bool,
+) -> &'static str {
     match reason {
-        Some("STOP") => "stop",
         Some("MAX_TOKENS") => "length",
         Some("SAFETY") => "content_filter",
         Some("RECITATION") => "content_filter",
@@ -310,8 +324,8 @@ fn gemini_finish_reason_to_chat(reason: Option<&str>, has_tool_calls: bool) -> &
         Some("SPII") => "content_filter",
         Some("IMAGE_SAFETY") => "content_filter",
         Some("IMAGE_PROHIBITED_CONTENT") => "content_filter",
-        Some("TOO_MANY_TOOL_CALLS") => "stop",
-        Some("MALFORMED_RESPONSE") => "stop",
+        Some("TOO_MANY_TOOL_CALLS") => "length",
+        _ if has_tool_calls => "tool_calls",
         _ => "stop",
     }
 }

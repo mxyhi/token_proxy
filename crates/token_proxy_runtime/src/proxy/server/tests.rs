@@ -4,6 +4,8 @@ mod chat_truncation_tests;
 mod codex_catalog_tests;
 #[path = "local_api_keys.test.rs"]
 mod local_api_keys_tests;
+#[path = "model_capacity.test.rs"]
+mod model_capacity_tests;
 
 use super::*;
 
@@ -9579,6 +9581,55 @@ fn responses_repaired_body_survives_same_upstream_retry_and_failover() {
             .body
             .get("max_output_tokens")
             .is_none());
+    });
+}
+
+#[test]
+fn responses_azure_rejected_reasoning_id_repairs_with_tool_namespace_intact() {
+    run_async(async {
+        let upstream = spawn_mock_raw_sequence_upstream(vec![
+            (
+                StatusCode::BAD_REQUEST,
+                Bytes::from_static(br#"{"error":{"code":"invalid_encrypted_content","message":"The encrypted content for item rs_rejected could not be verified. Reason: Encrypted content could not be decrypted or parsed."}}"#),
+                "application/json",
+            ),
+            (
+                StatusCode::OK,
+                Bytes::from_static(br#"{"id":"resp_azure_repaired","object":"response","created_at":123,"model":"gpt-6-astra","status":"completed","output":[]}"#),
+                "application/json",
+            ),
+        ])
+        .await;
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_RESPONSES,
+            10,
+            "azure-repair",
+            upstream.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        config.same_upstream_retry_count = 0;
+        let data_dir = next_test_data_dir("responses_azure_reasoning_repair");
+        let state = build_test_state_handle(config, data_dir.clone()).await;
+        let input = json!([
+            {"type":"reasoning","id":"rs_rejected","encrypted_content":"rejected","summary":[]},
+            {"type":"reasoning","id":"rs_keep","encrypted_content":"keep","summary":[]},
+            {"type":"function_call","namespace":"team","call_id":"call_1","name":"exec","arguments":"{}"},
+            {"type":"function_call_output","call_id":"call_1","output":"OK"}
+        ]);
+        let (status, _) =
+            send_responses_request_with_body(state, json!({"model":"gpt-6-astra","input":input}))
+                .await;
+        let requests = upstream.requests();
+        upstream.abort();
+        let _ = std::fs::remove_dir_all(&data_dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0].body["input"], input);
+        assert_eq!(
+            requests[1].body["input"],
+            json!([input[1], input[2], input[3]])
+        );
     });
 }
 

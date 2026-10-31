@@ -922,8 +922,11 @@ fn should_forward_response_event(data: &str, allow_codex_metadata: bool) -> bool
     let Some(event_type) = value.get("type").and_then(Value::as_str) else {
         return true;
     };
-    if event_type.starts_with("responsesapi.") {
+    if event_type.starts_with("responsesapi.") || event_type == "response.subscription_usage" {
         return false;
+    }
+    if event_type == "response.metadata" {
+        return allow_codex_metadata;
     }
     if event_type.starts_with("codex.") {
         return allow_codex_metadata && event_type == "codex.response.metadata";
@@ -1163,6 +1166,20 @@ mod tests {
 
     #[test]
     fn filters_private_responses_events_by_client_contract() {
+        assert!(!should_forward_response_event(
+            r#"{"type":"response.metadata"}"#,
+            false
+        ));
+        assert!(should_forward_response_event(
+            r#"{"type":"response.metadata"}"#,
+            true
+        ));
+        for allow_codex_metadata in [false, true] {
+            assert!(!should_forward_response_event(
+                r#"{"type":"response.subscription_usage"}"#,
+                allow_codex_metadata
+            ));
+        }
         assert!(!should_forward_response_event(
             r#"{"type":"responsesapi.telemetry"}"#,
             false

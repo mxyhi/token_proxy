@@ -1,15 +1,27 @@
 use serde_json::Value;
 
 const CODEX_RELOGIN_REQUIRED_MESSAGE: &str = "Codex 登录已失效，请重新登录该账户。";
-const CODEX_INVALID_GRANT_MESSAGE: &str = "Codex OAuth refresh rejected (invalid_grant).";
 
 pub(super) fn format_oauth_status_error(status: u16, body: &str) -> String {
-    if error_code(body).as_deref() == Some("invalid_grant") {
-        return CODEX_INVALID_GRANT_MESSAGE.to_string();
+    if status == 401 || relogin_required_message(body).is_some() {
+        return CODEX_RELOGIN_REQUIRED_MESSAGE.to_string();
     }
-    relogin_required_message(body)
-        .map(str::to_string)
-        .unwrap_or_else(|| format!("Codex OAuth request failed (status {status}): {body}"))
+    // OAuth 错误正文可能回显 access/refresh token；只展示受限诊断字段。
+    let code = error_code(body).filter(|code| {
+        matches!(
+            code.as_str(),
+            "temporarily_unavailable"
+                | "server_error"
+                | "invalid_request"
+                | "unsupported_grant_type"
+                | "invalid_scope"
+                | "access_denied"
+        )
+    });
+    match code {
+        Some(code) => format!("Codex OAuth request failed (status {status}, code {code})."),
+        None => format!("Codex OAuth request failed (status {status})."),
+    }
 }
 
 pub(super) fn format_usage_status_error(status: u16, body: &str) -> String {
@@ -26,13 +38,9 @@ pub(super) fn error_requires_relogin(message: &str) -> bool {
     message.trim() == CODEX_RELOGIN_REQUIRED_MESSAGE
 }
 
-pub(super) fn error_is_invalid_grant(message: &str) -> bool {
-    message == CODEX_INVALID_GRANT_MESSAGE
-}
-
 pub(super) fn oauth_status_is_retryable(status: u16, body: &str) -> bool {
-    relogin_required_message(body).is_none()
-        && error_code(body).as_deref() != Some("invalid_grant")
+    status != 401
+        && relogin_required_message(body).is_none()
         && (status == 408 || status == 429 || status >= 500)
 }
 
@@ -67,12 +75,35 @@ fn is_relogin_required_code(code: &str) -> bool {
             | "refresh_token_revoked"
             | "token_invalidated"
             | "token_revoked"
+            | "invalid_client"
+            | "invalid_grant"
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::{format_oauth_status_error, format_usage_status_error};
+
+    #[test]
+    fn oauth_terminal_grants_and_401_request_relogin_without_echoing_secrets() {
+        for code in ["invalid_grant", "invalid_client", "refresh_token_reused"] {
+            let body = serde_json::json!({"error":{"code":code,"message":"refresh_token=secret"}})
+                .to_string();
+            assert_eq!(
+                format_oauth_status_error(400, &body),
+                "Codex 登录已失效，请重新登录该账户。"
+            );
+        }
+        assert_eq!(
+            format_oauth_status_error(401, "secret"),
+            "Codex 登录已失效，请重新登录该账户。"
+        );
+        let diagnostic = format_oauth_status_error(
+            503,
+            r#"{"error":{"code":"secret_refresh_token","message":"secret_access_token"}}"#,
+        );
+        assert_eq!(diagnostic, "Codex OAuth request failed (status 503).");
+    }
 
     #[test]
     fn oauth_refresh_token_reused_maps_to_relogin_message() {

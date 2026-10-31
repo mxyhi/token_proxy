@@ -20,6 +20,7 @@ pub(super) async fn responses_request_to_anthropic(
         return Err("Request body must be a JSON object.".to_string());
     };
     // Claude 工具名限 64 字符 [A-Za-z0-9_-]；与 Chat 共用确定性映射，历史与 tool_choice 同步改写。
+    token_proxy_protocol::tool_identity::promote_additional_tools(object);
     token_proxy_protocol::tool_identity::normalize_responses_tool_names(object, &[])?;
 
     let model = object
@@ -162,9 +163,70 @@ pub(super) async fn anthropic_request_to_responses(
     let Some(messages) = object.get("messages").and_then(Value::as_array) else {
         return Err("Request must include messages.".to_string());
     };
+    let mut available_tools = object
+        .get("tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut pending_calls = HashSet::new();
+    let mut deferred = Vec::new();
     for message in messages {
-        claude_message_to_responses_input_items(message, &mut input_items)?;
+        let mut items = Vec::new();
+        let mut added_tools = Vec::new();
+        if let Some(blocks) = message.get("content").and_then(Value::as_array) {
+            for block in blocks {
+                if block.get("type").and_then(Value::as_str) != Some("tool_addition") {
+                    continue;
+                }
+                let Some(tool) = block.get("tool") else {
+                    continue;
+                };
+                let definition = match tool.get("type").and_then(Value::as_str) {
+                    Some("tool_definition") => tool.get("definition").cloned(),
+                    Some("tool_reference") => tool
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .and_then(|name| {
+                            available_tools.iter().find(|entry| {
+                                entry.get("name").and_then(Value::as_str) == Some(name)
+                            })
+                        })
+                        .cloned(),
+                    _ => None,
+                };
+                if let Some(definition) = definition {
+                    available_tools.push(definition.clone());
+                    added_tools.push(definition);
+                }
+            }
+        }
+        if !added_tools.is_empty() {
+            items.push(json!({"type":"additional_tools","role":"developer","tools":tools::map_anthropic_tools_to_responses(&Value::Array(added_tools))}));
+        }
+        claude_message_to_responses_input_items(message, &mut items)?;
+        for item in items {
+            match item.get("type").and_then(Value::as_str) {
+                Some("function_call") => {
+                    if let Some(id) = item.get("call_id").and_then(Value::as_str) {
+                        pending_calls.insert(id.to_string());
+                    }
+                    input_items.push(item);
+                }
+                Some("function_call_output") => {
+                    if let Some(id) = item.get("call_id").and_then(Value::as_str) {
+                        pending_calls.remove(id);
+                    }
+                    input_items.push(item);
+                    if pending_calls.is_empty() {
+                        input_items.append(&mut deferred);
+                    }
+                }
+                _ if !pending_calls.is_empty() => deferred.push(item),
+                _ => input_items.push(item),
+            }
+        }
     }
+    input_items.append(&mut deferred);
 
     let mut out = Map::new();
     out.insert("model".to_string(), Value::String(model.to_string()));
@@ -593,9 +655,7 @@ fn claude_message_to_responses_input_items(
         .get("role")
         .and_then(Value::as_str)
         .unwrap_or("user");
-    if role == "system" {
-        return Ok(());
-    }
+    let role = if role == "system" { "developer" } else { role };
 
     let content = message.get("content");
     let blocks = claude_content_to_blocks(content);
@@ -623,6 +683,17 @@ fn claude_message_to_responses_input_items(
             "thinking" => {
                 if let Some(text) = block.get("thinking").and_then(Value::as_str) {
                     if !text.is_empty() {
+                        if role == "assistant"
+                            && crate::proxy::claude_reasoning::is_commentary_marker(
+                                block.get("signature").and_then(Value::as_str),
+                            )
+                        {
+                            if !message_parts.is_empty() {
+                                input_items.push(json!({"type":"message","role":role,"content":std::mem::take(&mut message_parts)}));
+                            }
+                            input_items.push(json!({"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":text}]}));
+                            continue;
+                        }
                         message_parts.push(json!({ "type": "output_text", "text": text }));
                     }
                 }

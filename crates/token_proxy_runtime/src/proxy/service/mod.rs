@@ -421,7 +421,7 @@ impl ProxyServiceInner {
         }
 
         let sqlite_pool = self.sqlite_pool.clone();
-        let new_state = build_proxy_state(
+        let mut new_state = build_proxy_state(
             ctx,
             loaded_config,
             sqlite_pool,
@@ -434,6 +434,11 @@ impl ProxyServiceInner {
         };
         {
             let mut guard = running.state_handle.write().await;
+            let next = Arc::get_mut(&mut new_state).expect("new proxy state has no observers");
+            next.account_selector
+                .inherit_mandatory_waits(&guard.account_selector);
+            next.upstream_selector
+                .inherit_model_waits(&guard.upstream_selector);
             *guard = new_state;
         }
         if let Some(task) = running.model_discovery_task.take() {

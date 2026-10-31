@@ -48,11 +48,12 @@ impl XaiClientToolMapping {
 pub fn adapt_request(
     object: &mut Map<String, Value>,
 ) -> Result<(XaiClientToolMapping, bool), String> {
+    let promoted = crate::tool_identity::promote_additional_tools(object);
     let Some(tools) = object.get("tools").and_then(Value::as_array) else {
-        return Ok((XaiClientToolMapping::default(), false));
+        return Ok((XaiClientToolMapping::default(), promoted));
     };
     if tools.is_empty() {
-        return Ok((XaiClientToolMapping::default(), false));
+        return Ok((XaiClientToolMapping::default(), promoted));
     }
 
     let mut mapping = XaiClientToolMapping {
@@ -104,7 +105,7 @@ pub fn adapt_request(
     let flattened = crate::tool_identity::flatten_responses_namespaces(object, &[])? > 0;
     let mut lowered = Vec::new();
     let mut seen_search = false;
-    let mut changed = flattened;
+    let mut changed = flattened || promoted;
     let tools = object
         .get("tools")
         .and_then(Value::as_array)
@@ -940,6 +941,22 @@ fn restore_namespace_event(event: &mut Value, mapping: &XaiClientToolMapping) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn historical_tools_merge_first_wins_and_restore_namespace_identity() {
+        let mut body = json!({"tools":[{"type":"function","name":"f","description":"current","parameters":{"type":"object"}},{"type":"namespace","name":"mcp","tools":[{"type":"function","name":"one","parameters":{"type":"object"}}]}],"input":[{"type":"additional_tools","tools":[{"type":"function","name":"f","description":"historical"},{"type":"namespace","name":"mcp","tools":[{"type":"function","name":"one"},{"type":"function","name":"two","parameters":{"type":"object"}}]},{"type":"custom","name":"exec"}]}]});
+        let (mapping, changed) = adapt_request(body.as_object_mut().unwrap()).unwrap();
+        assert!(changed);
+        assert_eq!(body["input"], json!([]));
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 4);
+        assert_eq!(
+            tools.iter().find(|tool| tool["name"] == "f").unwrap()["description"],
+            "current"
+        );
+        assert_eq!(mapping.namespace_tools["mcp__two"].name, "two");
+        assert!(mapping.custom_tools.contains("exec"));
+    }
 
     fn mapping() -> XaiClientToolMapping {
         XaiClientToolMapping {

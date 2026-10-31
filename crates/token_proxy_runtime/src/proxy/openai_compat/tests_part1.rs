@@ -768,7 +768,7 @@ fn responses_response_to_chat_extracts_output_text_and_maps_usage() {
 }
 
 #[test]
-fn responses_response_to_chat_omits_empty_usage_details() {
+fn responses_response_to_chat_preserves_explicit_zero_usage_details() {
     let input = bytes_from_json(json!({
         "id": "resp_zero_usage_details",
         "created_at": 1700000001,
@@ -804,8 +804,24 @@ fn responses_response_to_chat_omits_empty_usage_details() {
         transform_response_body(FormatTransform::ResponsesToChat, &input, None).expect("transform");
     let value = json_from_bytes(output);
 
-    assert!(value["usage"].get("prompt_tokens_details").is_none());
-    assert!(value["usage"].get("completion_tokens_details").is_none());
+    assert_eq!(value["usage"]["prompt_tokens_details"]["cached_tokens"], 0);
+    assert_eq!(value["usage"]["prompt_tokens_details"]["audio_tokens"], 0);
+    assert_eq!(
+        value["usage"]["completion_tokens_details"]["reasoning_tokens"],
+        0
+    );
+    assert_eq!(
+        value["usage"]["completion_tokens_details"]["audio_tokens"],
+        0
+    );
+    assert_eq!(
+        value["usage"]["completion_tokens_details"]["accepted_prediction_tokens"],
+        0
+    );
+    assert_eq!(
+        value["usage"]["completion_tokens_details"]["rejected_prediction_tokens"],
+        0
+    );
 }
 
 #[test]

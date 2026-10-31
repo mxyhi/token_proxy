@@ -3,7 +3,10 @@
 use axum::{body::Bytes, http::StatusCode};
 use futures_util::{stream::try_unfold, StreamExt};
 use serde_json::{json, Value};
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::Arc,
+};
 
 use crate::proxy::log::{build_log_entry, LogContext, LogWriter};
 use crate::proxy::response::STREAM_DROPPED_ERROR;
@@ -11,6 +14,9 @@ use crate::proxy::sse::SseEventParser;
 use crate::proxy::token_rate::RequestTokenTracker;
 use crate::proxy::usage::SseUsageCollector;
 
+use super::response::{
+    blocked_prompt_reason, gemini_finish_reason_to_chat, malformed_finish_reason,
+};
 use super::tools::gemini_function_call_to_chat_tool_call;
 
 /// 将 Gemini 流式响应转换为 OpenAI Chat 流式响应
@@ -57,6 +63,7 @@ struct GeminiToChatState<S> {
     logged: bool,
     upstream_ended: bool,
     tool_call_index: usize,
+    partial_calls: HashMap<u64, super::partial_args::PartialCall>,
     finish_reason: Option<&'static str>,
     final_usage: Value,
     response_body_buf: crate::proxy::response::body_capture::ResponseBodyCapture,
@@ -152,6 +159,7 @@ where
             logged: false,
             upstream_ended: false,
             tool_call_index: 0,
+            partial_calls: HashMap::new(),
             finish_reason: None,
             final_usage: Value::Null,
             response_body_buf,
@@ -226,7 +234,11 @@ where
             return;
         }
         if data == "[DONE]" {
-            self.push_done("stop");
+            if self.finish_reason.is_some() {
+                self.push_done("stop");
+            } else {
+                self.fail_stream("Gemini stream ended before a finish reason.");
+            }
             return;
         }
         let Ok(value) = serde_json::from_str::<Value>(data) else {
@@ -240,6 +252,10 @@ where
         // 用量可在 finishReason 之后单独到达，直到 EOF/[DONE] 才发送下游终止帧。
         if let Some(usage) = value.get("usageMetadata").filter(|usage| usage.is_object()) {
             token_proxy_protocol::gemini_usage::merge_snapshot(&mut self.final_usage, usage);
+        }
+        if let Some(reason) = blocked_prompt_reason(&value) {
+            self.fail_stream(&format!("Gemini upstream blocked the prompt ({reason})."));
+            return;
         }
         // 处理 Gemini 响应格式
         let Some(candidates) = value.get("candidates").and_then(Value::as_array) else {
@@ -264,8 +280,8 @@ where
             .get("finishReason")
             .and_then(Value::as_str)
             .filter(|reason| !reason.is_empty() && *reason != "FINISH_REASON_UNSPECIFIED");
-        if finish_reason == Some("MALFORMED_FUNCTION_CALL") {
-            self.fail_stream("Upstream returned an invalid function call.");
+        if malformed_finish_reason(finish_reason) {
+            self.fail_stream("Gemini upstream returned malformed output.");
             return;
         }
 
@@ -325,12 +341,63 @@ where
 
             // 函数调用
             if let Some(function_call) = part.get("functionCall").and_then(Value::as_object) {
+                let candidate_index = candidate.get("index").and_then(Value::as_u64).unwrap_or(0);
+                let signature = part.get("thoughtSignature").and_then(Value::as_str);
+                let mut completed = None;
+                if super::partial_args::is_partial(function_call)
+                    || self.partial_calls.contains_key(&candidate_index)
+                {
+                    if !self.partial_calls.contains_key(&candidate_index) {
+                        if self.partial_calls.len() >= 16 {
+                            self.fail_stream(
+                                "Gemini stream exceeded the partial function call limit.",
+                            );
+                            return;
+                        }
+                        match super::partial_args::PartialCall::new(function_call, signature) {
+                            Ok(call) => {
+                                self.partial_calls.insert(candidate_index, call);
+                            }
+                            Err(error) => {
+                                self.fail_stream(&error);
+                                return;
+                            }
+                        }
+                    }
+                    let pending = self
+                        .partial_calls
+                        .get_mut(&candidate_index)
+                        .expect("partial call exists");
+                    if pending.signature.is_none() {
+                        pending.signature = signature.map(str::to_string);
+                    }
+                    match pending.push(function_call) {
+                        Ok(false) => continue,
+                        Ok(true) => {
+                            let pending = self
+                                .partial_calls
+                                .remove(&candidate_index)
+                                .expect("partial call exists");
+                            let signature = pending.signature.clone();
+                            completed = Some((pending.into_call(), signature));
+                        }
+                        Err(error) => {
+                            self.fail_stream(&error);
+                            return;
+                        }
+                    }
+                }
+                let (function_call, signature) = completed
+                    .as_ref()
+                    .map(|(call, signature)| (call, signature.as_deref()))
+                    .unwrap_or((function_call, signature));
                 has_tool_calls = true;
                 self.ensure_role_sent();
                 let mut tool_call =
                     gemini_function_call_to_chat_tool_call(function_call, self.tool_call_index);
+                tool_call["index"] = json!(self.tool_call_index);
                 // Gemini 3 下一轮会校验当前轮首个 functionCall 的签名；流式也必须随调用透传。
-                if let Some(signature) = part.get("thoughtSignature").and_then(Value::as_str) {
+                if let Some(signature) = signature {
                     tool_call["provider_specific_fields"] = json!({
                         "provider": "gemini",
                         "thought_signature": signature
@@ -376,6 +443,10 @@ where
 
     fn push_done(&mut self, finish_reason: &str) {
         if self.sent_done {
+            return;
+        }
+        if !self.partial_calls.is_empty() {
+            self.fail_stream("Gemini stream ended with incomplete function arguments.");
             return;
         }
         self.sent_done = true;
@@ -512,7 +583,9 @@ where
             return;
         }
         if data == "[DONE]" {
-            self.sent_done = true;
+            self.fail_stream(
+                &json!({"message":"Upstream Chat stream ended before a finish reason."}),
+            );
             return;
         }
         let Ok(value) = serde_json::from_str::<Value>(data) else {
@@ -576,6 +649,18 @@ where
         if self.sent_done {
             return;
         }
+        // An initial empty arguments delta announces the call; only the terminal
+        // frame proves a truly parameterless call. Incomplete JSON is an error.
+        let pending = std::mem::take(&mut self.tool_calls);
+        for state in pending.into_iter().flatten() {
+            if state.name.is_empty() || !state.arguments.trim().is_empty() {
+                self.fail_stream(
+                    &json!({"message":"Upstream stream ended with incomplete function arguments."}),
+                );
+                return;
+            }
+            self.push_candidate_part(json!({"functionCall":{"name":state.name,"args":{}}}), None);
+        }
         self.sent_done = true;
         let candidate = json!({
             "index": 0,
@@ -618,6 +703,13 @@ where
             .and_then(Value::as_str)
             .unwrap_or("");
 
+        if name.is_empty()
+            && delta.is_empty()
+            && self.tool_calls.get(index).is_none_or(Option::is_none)
+        {
+            return None;
+        }
+
         if self.tool_calls.len() <= index {
             self.tool_calls.resize_with(index + 1, || None);
         }
@@ -635,7 +727,7 @@ where
             return None;
         }
         let args = if state.arguments.is_empty() {
-            json!({})
+            return None;
         } else {
             match serde_json::from_str::<Value>(&state.arguments) {
                 Ok(args) => args,
@@ -673,23 +765,6 @@ fn chat_chunk_sse(
         }]
     });
     Bytes::from(format!("data: {}\n\n", chunk))
-}
-
-fn gemini_finish_reason_to_chat(reason: Option<&str>, has_tool_calls: bool) -> &'static str {
-    if has_tool_calls {
-        return "tool_calls";
-    }
-    match reason {
-        Some("STOP") => "stop",
-        Some("MAX_TOKENS") => "length",
-        Some("SAFETY") => "content_filter",
-        Some("RECITATION") => "content_filter",
-        Some("OTHER") => "stop",
-        Some("BLOCKLIST") => "content_filter",
-        Some("PROHIBITED_CONTENT") => "content_filter",
-        Some("SPII") => "content_filter",
-        _ => "stop",
-    }
 }
 
 fn gemini_chunk_sse(candidate: Value, usage: Option<Value>) -> Bytes {

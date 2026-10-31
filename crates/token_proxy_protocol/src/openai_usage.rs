@@ -31,22 +31,18 @@ pub fn map_usage_responses_to_chat(usage: &Value) -> Option<Value> {
     if let Some(details) = usage
         .get("output_tokens_details")
         .and_then(Value::as_object)
-        .and_then(map_responses_output_details_to_chat)
+        .filter(|details| !details.is_empty())
     {
-        mapped.insert("completion_tokens_details".to_string(), details);
+        mapped.insert("completion_tokens_details".to_string(), json!(details));
     }
 
     Some(Value::Object(mapped))
 }
 
 fn map_responses_input_details_to_chat(details: &Map<String, Value>) -> Option<Value> {
-    let mut mapped = Map::new();
-    insert_nonzero_u64(&mut mapped, "cached_tokens", details.get("cached_tokens"));
+    // 两种 OpenAI 协议的 token 明细共享语义；保留上游显式零和扩展字段。
+    let mut mapped = details.clone();
     let cache_write_tokens = details.get("cache_write_tokens").and_then(Value::as_u64);
-    let cached_creation_tokens = details
-        .get("cached_creation_tokens")
-        .and_then(Value::as_u64)
-        .filter(|tokens| *tokens > 0);
     if let Some(tokens) = cache_write_tokens {
         mapped.insert("cache_write_tokens".to_string(), json!(tokens));
         mapped.insert(
@@ -54,42 +50,11 @@ fn map_responses_input_details_to_chat(details: &Map<String, Value>) -> Option<V
             // Legacy clients read this name, so it mirrors the native field.
             json!(tokens),
         );
-    } else if let Some(tokens) = cached_creation_tokens {
-        mapped.insert("cached_creation_tokens".to_string(), json!(tokens));
     }
-    insert_nonzero_u64(&mut mapped, "audio_tokens", details.get("audio_tokens"));
     if mapped.contains_key("cached_creation_tokens") {
         tracing::debug!("preserved cache creation usage in Chat details");
     }
     (!mapped.is_empty()).then_some(Value::Object(mapped))
-}
-
-fn map_responses_output_details_to_chat(details: &Map<String, Value>) -> Option<Value> {
-    let mut mapped = Map::new();
-    insert_nonzero_u64(
-        &mut mapped,
-        "reasoning_tokens",
-        details.get("reasoning_tokens"),
-    );
-    insert_nonzero_u64(&mut mapped, "audio_tokens", details.get("audio_tokens"));
-    insert_nonzero_u64(
-        &mut mapped,
-        "accepted_prediction_tokens",
-        details.get("accepted_prediction_tokens"),
-    );
-    insert_nonzero_u64(
-        &mut mapped,
-        "rejected_prediction_tokens",
-        details.get("rejected_prediction_tokens"),
-    );
-    (!mapped.is_empty()).then_some(Value::Object(mapped))
-}
-
-fn insert_nonzero_u64(mapped: &mut Map<String, Value>, key: &str, value: Option<&Value>) {
-    let Some(tokens) = value.and_then(Value::as_u64).filter(|tokens| *tokens > 0) else {
-        return;
-    };
-    mapped.insert(key.to_string(), json!(tokens));
 }
 
 pub fn map_usage_chat_to_responses(usage: &Value) -> Option<Value> {
@@ -120,17 +85,21 @@ pub fn map_usage_chat_to_responses(usage: &Value) -> Option<Value> {
         mapped.insert("input_tokens_details".to_string(), details.clone());
     }
 
-    // Preserve reasoning token details when converting Chat -> Responses.
-    let reasoning_tokens = usage
+    // 保留完整输出明细。reasoning 仍优先使用嵌套字段，且不重复加到输出总数。
+    let mut output_details = usage
         .get("completion_tokens_details")
         .and_then(Value::as_object)
-        .and_then(|details| details.get("reasoning_tokens"))
+        .cloned()
+        .unwrap_or_default();
+    let reasoning_tokens = output_details
+        .get("reasoning_tokens")
         .and_then(Value::as_u64)
         .or_else(|| usage.get("reasoning_tokens").and_then(Value::as_u64))
         .unwrap_or(0);
+    output_details.insert("reasoning_tokens".to_string(), json!(reasoning_tokens));
     mapped.insert(
         "output_tokens_details".to_string(),
-        json!({ "reasoning_tokens": reasoning_tokens }),
+        Value::Object(output_details),
     );
 
     Some(Value::Object(mapped))
@@ -140,6 +109,24 @@ pub fn map_usage_chat_to_responses(usage: &Value) -> Option<Value> {
 mod tests {
     use super::{map_usage_chat_to_responses, map_usage_responses_to_chat};
     use serde_json::json;
+
+    #[test]
+    fn openai_usage_conversion_preserves_details_and_explicit_zero() {
+        let input =
+            json!({"cached_tokens":0,"image_tokens":2,"audio_tokens":0,"cache_write_tokens":0});
+        let output = json!({"reasoning_tokens":0,"image_tokens":3,"audio_tokens":4,"accepted_prediction_tokens":0,"provider_detail":{"a":1}});
+        let chat = map_usage_responses_to_chat(&json!({
+            "input_tokens":10,"output_tokens":8,
+            "input_tokens_details":input,"output_tokens_details":output
+        }))
+        .unwrap();
+        assert_eq!(chat["prompt_tokens_details"]["cached_tokens"], 0);
+        assert_eq!(chat["prompt_tokens_details"]["image_tokens"], 2);
+        assert_eq!(chat["completion_tokens_details"], output);
+        let responses = map_usage_chat_to_responses(&chat).unwrap();
+        assert_eq!(responses["output_tokens_details"], output);
+        assert_eq!(responses["output_tokens"], 8);
+    }
 
     #[test]
     fn chat_reasoning_tokens_use_nested_value_then_flat_without_double_counting() {

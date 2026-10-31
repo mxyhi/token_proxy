@@ -946,7 +946,12 @@ pub(super) fn is_codex_business_output_event(value: &Value) -> bool {
 }
 
 fn is_private_responses_event_type(event_type: &str) -> bool {
-    event_type.starts_with("responsesapi.") || event_type.starts_with("codex.")
+    event_type.starts_with("responsesapi.")
+        || event_type.starts_with("codex.")
+        || matches!(
+            event_type,
+            "response.metadata" | "response.subscription_usage"
+        )
 }
 
 fn image_generation_call_text(item: &Map<String, Value>) -> Option<String> {

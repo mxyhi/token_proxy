@@ -1,6 +1,37 @@
 use super::*;
 use token_proxy_config::{LocalApiKey, LocalApiKeyScope};
 
+#[test]
+fn unauthenticated_pending_body_does_not_delay_rejection_with_detail_logging() {
+    run_async(async {
+        let mut config = config_with_providers(&[(PROVIDER_RESPONSES, FORMATS_RESPONSES)]);
+        config.local_api_keys = vec![scoped_key("only", &[PROVIDER_RESPONSES])];
+        let state = build_test_state_handle(config, next_test_data_dir("auth-no-body-drain")).await;
+        let snapshot = state.read().await.clone();
+        let body =
+            Body::from_stream(futures_util::stream::pending::<Result<Bytes, std::io::Error>>());
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            super::super::inbound::ensure_local_auth_or_respond(
+                &snapshot.config,
+                &snapshot.log,
+                &HeaderMap::new(),
+                &Method::POST,
+                body,
+                true,
+                None,
+                RESPONSES_PATH,
+                None,
+                std::time::Instant::now(),
+                snapshot.config.max_request_body_bytes,
+            ),
+        )
+        .await
+        .expect("unauthenticated bodies must not be awaited for logging");
+        assert_eq!(result.err().unwrap().status(), StatusCode::UNAUTHORIZED);
+    });
+}
+
 fn scoped_key(id: &str, upstreams: &[&str]) -> LocalApiKey {
     LocalApiKey {
         id: id.into(),

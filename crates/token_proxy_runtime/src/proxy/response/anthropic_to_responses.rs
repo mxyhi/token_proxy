@@ -93,6 +93,7 @@ struct AnthropicToResponsesState<S> {
     input_tokens: u64,
     cache_read_input_tokens: u64,
     cache_creation_input_tokens: u64,
+    thinking_tokens: Option<u64>,
     // Claude 侧工具名经过限长/去重映射，回给客户端前按原请求还原。
     tool_identity_request: Option<Value>,
     custom_tool_item_ids: HashMap<String, String>,
@@ -167,6 +168,7 @@ where
             input_tokens: 0,
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
+            thinking_tokens: None,
             tool_identity_request: None,
             custom_tool_item_ids: HashMap::new(),
         };
@@ -331,6 +333,13 @@ where
         let Some(usage) = usage.and_then(Value::as_object) else {
             return;
         };
+        if let Some(tokens) = usage
+            .get("output_tokens_details")
+            .and_then(|details| details.get("thinking_tokens"))
+            .and_then(Value::as_u64)
+        {
+            self.thinking_tokens = Some(tokens);
+        }
         if let Some(tokens) = usage.get("cache_read_input_tokens").and_then(Value::as_u64) {
             self.cache_read_input_tokens = tokens;
         }
@@ -953,6 +962,7 @@ where
                     read_tokens: self.cache_read_input_tokens,
                     creation_tokens: self.cache_creation_input_tokens,
                 }),
+                self.thinking_tokens,
             )
         });
 

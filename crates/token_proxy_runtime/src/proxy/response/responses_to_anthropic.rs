@@ -36,6 +36,7 @@ const MAX_TOOL_ARGUMENT_BYTES: usize = 1024 * 1024;
 enum ActiveBlock {
     Text { index: usize },
     Thinking { index: usize },
+    Commentary { index: usize },
     ToolUse { item_id: String },
     WebSearch { item_id: String },
 }
@@ -96,6 +97,7 @@ struct ResponsesToAnthropicState<S> {
     stop_reason_override: Option<&'static str>,
     saw_reasoning_delta: bool,
     text_recovery: token_proxy_protocol::responses_text::ResponsesTextRecovery,
+    commentary_items: HashSet<String>,
     response_body_buf: super::body_capture::ResponseBodyCapture,
 }
 
@@ -161,6 +163,7 @@ where
             stop_reason_override: None,
             saw_reasoning_delta: false,
             text_recovery: Default::default(),
+            commentary_items: HashSet::new(),
             response_body_buf,
         }
     }
@@ -282,9 +285,7 @@ where
         let Some(event_type) = value.get("type").and_then(Value::as_str) else {
             return;
         };
-        for text in self.text_recovery.process(value) {
-            self.emit_output_text(&text);
-        }
+        self.handle_message_text(value);
         if event_type.ends_with("reasoning_text.delta")
             || event_type.ends_with("reasoning_summary_text.delta")
         {
@@ -328,6 +329,75 @@ where
                 "delta": { "type": "text_delta", "text": delta }
             }),
         ));
+    }
+
+    fn handle_message_text(&mut self, value: &Value) {
+        let event_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+        // Recover terminal snapshots one message at a time so commentary and final
+        // answer text cannot share a block, even when only completed was received.
+        if matches!(event_type, "response.completed" | "response.incomplete") {
+            if let Some(items) = value.pointer("/response/output").and_then(Value::as_array) {
+                for (index, item) in items.iter().enumerate() {
+                    self.handle_message_text(&json!({"type":"response.output_item.done","output_index":index,"item":item}));
+                }
+            }
+            self.text_recovery.process(value);
+            return;
+        }
+        let item = value.get("item");
+        let item_id = item
+            .and_then(|item| item.get("id"))
+            .or_else(|| value.get("item_id"))
+            .and_then(Value::as_str);
+        let id_key = item_id.map(|id| format!("id:{id}"));
+        let index_key = value
+            .get("output_index")
+            .and_then(Value::as_u64)
+            .map(|index| format!("index:{index}"));
+        if item
+            .and_then(|item| item.get("phase"))
+            .and_then(Value::as_str)
+            == Some("commentary")
+        {
+            for key in [&id_key, &index_key].into_iter().flatten() {
+                if self.commentary_items.len() < 256 {
+                    self.commentary_items.insert(key.clone());
+                }
+            }
+        }
+        let commentary = [&id_key, &index_key]
+            .into_iter()
+            .flatten()
+            .any(|key| self.commentary_items.contains(key));
+        for text in self.text_recovery.process(value) {
+            if commentary {
+                self.ensure_message_start();
+                let index = self.ensure_commentary_block();
+                self.out.push_back(super::anthropic_event_sse("content_block_delta", json!({"type":"content_block_delta","index":index,"delta":{"type":"thinking_delta","thinking":text}})));
+            } else {
+                self.emit_output_text(&text);
+            }
+        }
+        if event_type == "response.output_item.done"
+            && item
+                .and_then(|item| item.get("type"))
+                .and_then(Value::as_str)
+                == Some("message")
+        {
+            self.stop_active_block();
+        }
+    }
+
+    fn ensure_commentary_block(&mut self) -> usize {
+        if let Some(ActiveBlock::Commentary { index }) = self.active_block {
+            return index;
+        }
+        self.stop_active_block();
+        let index = self.next_block_index;
+        self.next_block_index += 1;
+        self.active_block = Some(ActiveBlock::Commentary { index });
+        self.out.push_back(super::anthropic_event_sse("content_block_start", json!({"type":"content_block_start","index":index,"content_block":{"type":"thinking","thinking":""}})));
+        index
     }
 
     fn handle_reasoning_text_delta(&mut self, value: &Value) {
@@ -1146,6 +1216,13 @@ where
             return;
         };
         match active {
+            ActiveBlock::Commentary { index } => {
+                self.out.push_back(super::anthropic_event_sse("content_block_delta", json!({"type":"content_block_delta","index":index,"delta":{"type":"signature_delta","signature":claude_reasoning::COMMENTARY_MARKER}})));
+                self.out.push_back(super::anthropic_event_sse(
+                    "content_block_stop",
+                    json!({"type":"content_block_stop","index":index}),
+                ));
+            }
             ActiveBlock::Text { index } => {
                 self.out.push_back(super::anthropic_event_sse(
                     "content_block_stop",

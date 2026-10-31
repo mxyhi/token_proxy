@@ -1,6 +1,25 @@
 use super::*;
 use token_proxy_config::UpstreamRuntime;
 
+#[test]
+fn capacity_wait_is_scoped_to_model_and_credential_and_survives_reload() {
+    let old = UpstreamSelectorRuntime::new_with_cooldown(Duration::ZERO);
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(axum::http::header::RETRY_AFTER, "60".parse().unwrap());
+    old.mark_model_wait("codex", "key1", "model-a", &headers);
+    assert_eq!(old.model_wait_seconds("codex", "key1", "model-a"), Some(60));
+    assert!(old.model_wait_seconds("codex", "key2", "model-a").is_none());
+    assert!(old.model_wait_seconds("codex", "key1", "model-b").is_none());
+    old.clear_cooldown_scoped("codex", "key1", &CooldownScope::Global);
+    assert!(old.model_wait_seconds("codex", "key1", "model-a").is_some());
+    let mut next = UpstreamSelectorRuntime::new_with_cooldown(Duration::ZERO);
+    next.inherit_model_waits(&old);
+    old.mark_model_wait("codex", "key1", "late-model", &headers);
+    assert!(next
+        .model_wait_seconds("codex", "key1", "late-model")
+        .is_some());
+}
+
 fn runtime(id: &str, selector_key: &str) -> UpstreamRuntime {
     UpstreamRuntime {
         id: id.to_string(),

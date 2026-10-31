@@ -1,6 +1,31 @@
 use super::*;
 use serde_json::json;
 
+#[tokio::test]
+async fn claude_tool_error_survives_responses_chat_gemini_bridge() {
+    use crate::proxy::{
+        http_client::ProxyHttpClients,
+        openai_compat::{transform_request_body, FormatTransform},
+    };
+    let input = json!({"model":"gemini","messages":[
+        {"role":"assistant","content":[{"type":"tool_use","id":"c","name":"fetch","input":{}}]},
+        {"role":"user","content":[{"type":"tool_result","tool_use_id":"c","is_error":true,"content":"failed"}]}
+    ]});
+    let output = transform_request_body(
+        FormatTransform::AnthropicToGemini,
+        &Bytes::from(input.to_string()),
+        &ProxyHttpClients::new().unwrap(),
+        None,
+    )
+    .await
+    .unwrap();
+    let output: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        output["contents"][1]["parts"][0]["functionResponse"]["response"],
+        json!({"error":"failed"})
+    );
+}
+
 #[test]
 fn chat_to_gemini_rejects_explicit_non_object_tool_parameters() {
     for parameters in [

@@ -46,6 +46,48 @@ pub(super) fn should_cooldown_retryable_status(status: StatusCode) -> bool {
     ) || status.is_server_error()
 }
 
+fn honor_transient_retry_after(response: &mut Response, should_cooldown: bool) {
+    if !should_cooldown
+        && response
+            .headers()
+            .contains_key(axum::http::header::RETRY_AFTER)
+    {
+        // 临时模型容量不隔离整个账户，但明确要求等待时也不能立刻向同一
+        // 上游重放；其它上游仍可服务，最终响应保留 Retry-After 交由客户端等待。
+        response.extensions_mut().insert(RetryDirective {
+            scope: RetryScope::NextOnly,
+            effective_body: None,
+        });
+    }
+}
+
+fn record_model_wait(
+    state: &ProxyState,
+    provider: &str,
+    upstream_key: &str,
+    meta: &RequestMeta,
+    response: &Response,
+) {
+    if response
+        .extensions()
+        .get::<crate::proxy::response::TransientModelCapacity>()
+        .is_some()
+    {
+        if let Some(model) = meta
+            .mapped_model
+            .as_deref()
+            .or(meta.original_model.as_deref())
+        {
+            state.upstream_selector.mark_model_wait(
+                provider,
+                upstream_key,
+                model,
+                response.headers(),
+            );
+        }
+    }
+}
+
 /// 是否把可重试 HTTP 状态标为 `RetryScope::NextOnly`（跳过 same-upstream 再放）。
 ///
 /// 规则：
@@ -99,6 +141,7 @@ pub(super) async fn handle_upstream_result(
     meta: &RequestMeta,
     provider: &str,
     upstream_id: &str,
+    upstream_key: &str,
     account_id: Option<String>,
     inbound_path: &str,
     log: Arc<LogWriter>,
@@ -149,26 +192,42 @@ pub(super) async fn handle_upstream_result(
                 ));
             }
             let cooldown_hint = response.extensions().get::<AccountCooldownHint>().cloned();
-            let credential_current = with_current_account_result(
-                state,
-                provider,
-                account_id_value.as_deref(),
-                account_access_token,
-                || {
-                    update_account_cooldown_from_response(
-                        &state.account_selector,
-                        provider,
-                        account_id_value.as_deref(),
-                        status,
-                        &response_headers,
-                        cooldown_hint.as_ref(),
-                        cooldown_scope,
-                    );
-                },
-            )
-            .await
-            .is_some();
+            let retryable_response = response
+                .extensions()
+                .get::<RetryableStreamResponse>()
+                .cloned();
+            let should_cooldown = retryable_response.as_ref().map_or_else(
+                || should_cooldown_retryable_status(status),
+                |retryable| retryable.should_cooldown,
+            );
+            // 先判定语义再更新账户；临时模型容量即使使用 HTTP 429 也不代表
+            // 凭据耗尽，否则后面的 should_cooldown=false 已无法撤销账户隔离。
+            let credential_current = if should_cooldown || cooldown_hint.is_some() {
+                with_current_account_result(
+                    state,
+                    provider,
+                    account_id_value.as_deref(),
+                    account_access_token,
+                    || {
+                        update_account_cooldown_from_response(
+                            &state.account_selector,
+                            provider,
+                            account_id_value.as_deref(),
+                            status,
+                            &response_headers,
+                            cooldown_hint.as_ref(),
+                            cooldown_scope,
+                        );
+                    },
+                )
+                .await
+                .is_some()
+            } else {
+                true
+            };
             let mut response = response;
+            record_model_wait(state, provider, upstream_key, meta, &response);
+            honor_transient_retry_after(&mut response, should_cooldown);
             // 固定账户 401/403/400 等：同 Upstream 再打无意义，直接跨 Upstream。
             // API-key upstream 不进此分支，保留 same_upstream_retry_count。
             if is_next_only_retryable_status(status, provider, account_id_value.as_deref()) {
@@ -184,14 +243,6 @@ pub(super) async fn handle_upstream_result(
                     "retryable status marked NextOnly for cross-upstream failover"
                 );
             }
-            let retryable_response = response
-                .extensions()
-                .get::<RetryableStreamResponse>()
-                .cloned();
-            let should_cooldown = retryable_response.as_ref().map_or_else(
-                || should_cooldown_retryable_status(status),
-                |retryable| retryable.should_cooldown,
-            );
             AttemptOutcome::Retryable {
                 message: format!("Upstream responded with {}", response.status()),
                 response: Some(response),
@@ -202,7 +253,7 @@ pub(super) async fn handle_upstream_result(
         Ok(res) => {
             let status = res.status();
             let response_headers = res.headers().clone();
-            let response = build_proxy_response(
+            let mut response = build_proxy_response(
                 meta,
                 provider,
                 upstream_id,
@@ -238,6 +289,8 @@ pub(super) async fn handle_upstream_result(
                 .get::<RetryableStreamResponse>()
                 .cloned()
             {
+                record_model_wait(state, provider, upstream_key, meta, &response);
+                honor_transient_retry_after(&mut response, retryable.should_cooldown);
                 let mut credential_current = true;
                 if retryable.should_cooldown
                     || response.extensions().get::<AccountCooldownHint>().is_some()

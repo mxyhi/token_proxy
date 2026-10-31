@@ -16,6 +16,7 @@ const ANTHROPIC_COUNT_TOKENS_PATH: &str = "/v1/messages/count_tokens";
 const ANTHROPIC_MESSAGES_PATH: &str = "/v1/messages";
 const REQUEST_MODEL_MAPPING_LIMIT_BYTES: usize = 4 * 1024 * 1024;
 /// 默认 JSON 过滤/转换上限；运行时用配置 `max_request_body_bytes` 覆盖。
+#[cfg(test)]
 const DEFAULT_JSON_TRANSFORM_LIMIT_BYTES: usize = 100 * 1024 * 1024;
 const CODEX_INSTALLATION_ID_KEY: &str = "x-codex-installation-id";
 const CODEX_RESPONSES_LITE_HEADER: &str = "x-openai-internal-codex-responses-lite";
@@ -49,6 +50,16 @@ pub(super) async fn build_upstream_body(
     let final_source = transformed.as_ref().unwrap_or(body);
     if let Ok(Some(bytes)) = final_source.read_bytes_if_small(filter_limit_bytes).await {
         timings.record_sent_service_tier(&bytes);
+        timings
+            .record_sent_image_details(
+                upstream_path_with_query,
+                request_headers
+                    .get(axum::http::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or(""),
+                &bytes,
+            )
+            .await;
     }
     final_source.to_reqwest_body().await.map_err(|err| {
         AttemptOutcome::Fatal(http::error_response(
@@ -182,11 +193,14 @@ async fn build_json_transformed_body_with_headers(
     let Ok(mut value) = serde_json::from_slice::<Value>(&bytes) else {
         return Ok(None);
     };
-    let Some(object) = value.as_object_mut() else {
+    if !value.is_object() {
         return Ok(None);
-    };
+    }
 
-    let mut changed = false;
+    // Commentary 标记是跨协议历史载体，不能作为 Claude 的真实签名发送。
+    let mut changed = should_restore_anthropic_commentary(provider, upstream_path)
+        && super::super::claude_reasoning::restore_commentary_markers(&mut value);
+    let object = value.as_object_mut().expect("checked JSON object");
     let body_len = bytes.len();
     changed |= normalize_anthropic_model(provider, upstream_path, object, meta, body_len);
     changed |= rewrite_model_mapping(object, meta, body_len);
@@ -287,6 +301,7 @@ fn json_transform_read_limit(
         || should_strip_openai_responses_sampling_params(provider, upstream_path, meta)
         || should_rewrite_developer_roles(upstream, upstream_path)
         || should_filter_anthropic_count_tokens_request(provider, upstream_path)
+        || should_restore_anthropic_commentary(provider, upstream_path)
         || should_inject_codex_installation_id(provider, codex_openai_device_id)
         || should_inspect_codex_responses_lite(provider, upstream_path, request_headers)
     {
@@ -313,6 +328,7 @@ fn needs_json_transform(
         || should_strip_openai_responses_sampling_params(provider, upstream_path, meta)
         || should_rewrite_developer_roles(upstream, upstream_path)
         || should_filter_anthropic_count_tokens_request(provider, upstream_path)
+        || should_restore_anthropic_commentary(provider, upstream_path)
         || should_inject_codex_installation_id(provider, codex_openai_device_id)
         || should_inspect_codex_responses_lite(provider, upstream_path, request_headers)
 }
@@ -323,6 +339,14 @@ fn should_inspect_codex_responses_lite(
     _request_headers: &HeaderMap,
 ) -> bool {
     provider == "codex" && upstream_path == OPENAI_RESPONSES_PATH
+}
+
+fn should_restore_anthropic_commentary(provider: &str, upstream_path: &str) -> bool {
+    provider == "anthropic"
+        && matches!(
+            upstream_path,
+            ANTHROPIC_MESSAGES_PATH | ANTHROPIC_COUNT_TOKENS_PATH
+        )
 }
 
 fn force_codex_responses_lite_parallel_tool_calls(
@@ -555,7 +579,7 @@ fn should_sanitize_native_openai_responses_input(provider: &str, upstream_path: 
     matches!(provider, "openai" | "openai-response") && upstream_path == OPENAI_RESPONSES_PATH
 }
 
-/// 删除上游不接受的客户端历史元数据；只处理 direct input item，不触碰 tools 或嵌套 content。
+/// 清理客户端历史元数据，同时保留原生工具调用的 namespace 身份。
 fn sanitize_native_openai_responses_input(
     provider: &str,
     upstream_path: &str,
@@ -578,15 +602,28 @@ fn sanitize_native_openai_responses_input(
         let Some(item) = item.as_object_mut() else {
             continue;
         };
-        removed_namespace_count += usize::from(item.remove("namespace").is_some());
-
         let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+        // 原生 Responses 用 namespace 区分同名工具，回放时删除会使调用落入错误命名空间。
+        let preserve_namespace = matches!(item_type, "function_call" | "custom_tool_call");
         let required_id_prefix = match item_type {
             "message" => Some("msg"),
-            "function_call" | "tool_call" | "local_shell_call" | "tool_search_call"
-            | "custom_tool_call" | "mcp_tool_call" => Some("fc"),
+            "tool_search_call" => Some("tsc_"),
+            // Older gateways used fc_ for custom calls; accept both replayable forms.
+            "custom_tool_call"
+                if item
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| id.starts_with("ctc_")) =>
+            {
+                Some("ctc_")
+            }
+            "function_call" | "tool_call" | "local_shell_call" | "custom_tool_call"
+            | "mcp_tool_call" => Some("fc"),
             _ => None,
         };
+        if !preserve_namespace {
+            removed_namespace_count += usize::from(item.remove("namespace").is_some());
+        }
         if required_id_prefix.is_some_and(|prefix| {
             item.get("id")
                 .is_some_and(|id| !id.as_str().is_some_and(|id| id.starts_with(prefix)))
@@ -745,35 +782,11 @@ fn is_xai_native_x_search_tool(tool: &Value) -> bool {
 // Responses Lite encodes extra declarations as input items, while xAI accepts
 // declarations only in the root tools array. Preserve root order, then append extras.
 fn promote_xai_additional_tools(object: &mut Map<String, Value>) -> bool {
-    let Some(input) = object.get_mut("input").and_then(Value::as_array_mut) else {
-        return false;
-    };
-
-    let original_len = input.len();
-    let mut promoted = Vec::new();
-    input.retain(|item| {
-        if item.get("type").and_then(Value::as_str) != Some("additional_tools") {
-            return true;
-        }
-        if let Some(tools) = item.get("tools").and_then(Value::as_array) {
-            promoted.extend(tools.iter().cloned());
-        }
-        false
-    });
-    if input.len() == original_len {
-        return false;
+    let changed = token_proxy_protocol::tool_identity::promote_additional_tools(object);
+    if changed {
+        tracing::debug!("promoted and deduplicated xAI additional_tools");
     }
-
-    if !promoted.is_empty() {
-        match object.get_mut("tools") {
-            Some(Value::Array(tools)) => tools.extend(promoted),
-            _ => {
-                object.insert("tools".to_string(), Value::Array(promoted));
-            }
-        }
-    }
-    tracing::debug!("promoted xAI additional_tools into root tools");
-    true
+    changed
 }
 
 // xAI requires every branch of an object-only root union to declare its type.

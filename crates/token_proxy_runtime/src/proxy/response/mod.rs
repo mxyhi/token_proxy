@@ -19,6 +19,9 @@ use super::{
 use token_proxy_protocol::xai_client_tools::XaiClientToolMapping;
 
 const PROVIDER_OPENAI: &str = "openai";
+
+#[derive(Clone, Copy)]
+pub(crate) struct TransientModelCapacity;
 const PROVIDER_OPENAI_RESPONSES: &str = "openai-response";
 const PROVIDER_ANTHROPIC: &str = "anthropic";
 const PROVIDER_GEMINI: &str = "gemini";

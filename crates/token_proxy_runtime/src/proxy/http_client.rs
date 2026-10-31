@@ -254,6 +254,23 @@ fn build_tuned_client(
     }
     if redirects_disabled {
         builder = builder.redirect(Policy::none());
+    } else {
+        // reqwest 会移除标准 Authorization，但不会移除供应商自定义 api-key
+        // 头。仅跟随同源跳转，避免自定义凭据及 307/308 请求体被重放到其他源。
+        builder = builder.redirect(Policy::custom(|attempt| {
+            if attempt.previous().len() >= 10 {
+                return attempt.error("too many redirects");
+            }
+            if attempt
+                .previous()
+                .first()
+                .is_some_and(|original| original.origin() != attempt.url().origin())
+            {
+                tracing::warn!("blocked cross-origin upstream redirect");
+                return attempt.stop();
+            }
+            attempt.follow()
+        }));
     }
     builder.build()
 }
@@ -380,8 +397,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn xai_clients_do_not_replay_sensitive_posts_across_307_or_308() {
+    async fn credentialed_clients_do_not_follow_cross_origin_redirects() {
         for status in [
+            StatusCode::MOVED_PERMANENTLY,
+            StatusCode::FOUND,
+            StatusCode::SEE_OTHER,
             StatusCode::TEMPORARY_REDIRECT,
             StatusCode::PERMANENT_REDIRECT,
         ] {
@@ -418,7 +438,7 @@ mod tests {
             });
 
             let clients = ProxyHttpClients::new().expect("clients");
-            let xai_clients = [
+            let sensitive_clients = [
                 clients
                     .xai_client_for_proxy_url(None)
                     .expect("xAI H2 client"),
@@ -428,12 +448,26 @@ mod tests {
                 clients
                     .xai_client_for_proxy_url_http1(None)
                     .expect("xAI HTTP/1 client"),
+                clients
+                    .client_for_proxy_url(None)
+                    .expect("ordinary H2 client"),
+                clients
+                    .rotate_client_for_proxy_url(None)
+                    .expect("rotated ordinary H2 client"),
+                clients
+                    .client_for_proxy_url_http1(None)
+                    .expect("ordinary HTTP/1 client"),
+                clients
+                    .codex_client_for_proxy_url(None, false)
+                    .expect("Codex client"),
             ];
-            for client in xai_clients {
+            for client in sensitive_clients {
                 let response = client
                     .post(format!("http://{redirect_addr}/redirect"))
                     .bearer_auth("secret-bearer")
                     .header("x-xai-token-auth", "xai-grok-cli")
+                    .header("x-api-key", "sensitive-api-key")
+                    .header("api-key", "sensitive-azure-key")
                     .body("sensitive request body")
                     .send()
                     .await
@@ -442,7 +476,7 @@ mod tests {
             }
 
             let observed = observed.lock().expect("redirect observations");
-            assert_eq!(observed.len(), 3);
+            assert_eq!(observed.len(), 7);
             assert!(observed.iter().all(|(authorization, cli_identity, body)| {
                 authorization == "Bearer secret-bearer"
                     && cli_identity == "xai-grok-cli"
@@ -452,5 +486,39 @@ mod tests {
             redirect_task.abort();
             target_task.abort();
         }
+    }
+
+    #[tokio::test]
+    async fn ordinary_clients_follow_same_origin_redirects() {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = Router::new()
+            .route(
+                "/redirect",
+                post(|| async {
+                    (
+                        StatusCode::TEMPORARY_REDIRECT,
+                        [(header::LOCATION, "/capture")],
+                    )
+                }),
+            )
+            .route("/capture", post(redirected_target))
+            .with_state(hits.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let response = ProxyHttpClients::new()
+            .unwrap()
+            .client_for_proxy_url(None)
+            .unwrap()
+            .post(format!("http://{addr}/redirect"))
+            .header("x-api-key", "test-key")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+        server.abort();
     }
 }

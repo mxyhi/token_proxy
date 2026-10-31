@@ -75,7 +75,7 @@ const SCHEMA_CONTAINER_KEYS: &[&str] = &[
 pub(super) fn clean_tool_schema(schema: &Value) -> Value {
     match schema {
         Value::Object(object) => {
-            clean_tool_schema_object(&normalize_malformed_schema_object(object))
+            clean_tool_schema_object(&normalize_malformed_schema_object(object), true)
         }
         Value::Array(items) => Value::Array(items.iter().map(clean_tool_schema).collect()),
         Value::Bool(true) => json!({}),
@@ -109,7 +109,7 @@ pub(super) fn explicit_non_object_root(schema: &Value) -> bool {
     }
 }
 
-fn clean_tool_schema_object(object: &Map<String, Value>) -> Value {
+fn clean_tool_schema_object(object: &Map<String, Value>, synthesize_items: bool) -> Value {
     let mut source = object.clone();
     normalize_prefix_items(&mut source);
     merge_conditional_properties(&mut source, object.get("then"));
@@ -196,11 +196,20 @@ fn clean_tool_schema_object(object: &Map<String, Value>) -> Value {
     }
     if cleaned.get("type").and_then(Value::as_str) == Some("array") {
         let invalid_items = cleaned.get("items").is_none_or(|items| !items.is_object());
-        if invalid_items {
+        let composed_items = cleaned
+            .get("allOf")
+            .and_then(Value::as_array)
+            .is_some_and(|branches| branches.iter().any(|branch| branch.get("items").is_some()));
+        if synthesize_items && invalid_items && !composed_items {
             cleaned.insert("items".to_string(), json!({ "type": "string" }));
         }
     }
-    if !cleaned.contains_key("properties") {
+    if !cleaned.contains_key("properties")
+        && cleaned
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind != "object")
+    {
         cleaned.remove("required");
     }
     Value::Object(cleaned)
@@ -357,8 +366,46 @@ fn merge_all_of_properties(cleaned: &mut Map<String, Value>, all_of: Option<&Val
     let Some(branches) = all_of.and_then(Value::as_array) else {
         return;
     };
-    let branches = branches.iter().map(clean_tool_schema).collect::<Vec<_>>();
-    if branches.iter().any(has_non_object_type) {
+    let branches = branches
+        .iter()
+        .map(|branch| match branch {
+            Value::Object(object) => {
+                clean_tool_schema_object(&normalize_malformed_schema_object(object), false)
+            }
+            other => clean_tool_schema(other),
+        })
+        .collect::<Vec<_>>();
+    // Flattening closed objects, required sets or conflicting properties changes
+    // conjunction into a union. parametersJsonSchema supports native allOf.
+    let assertions = branches.iter().any(|branch| {
+        branch.as_object().is_none_or(|branch| {
+            branch.keys().any(|key| {
+                !matches!(
+                    key.as_str(),
+                    "type" | "properties" | "description" | "title"
+                )
+            })
+        })
+    });
+    let mut known_properties = cleaned
+        .get("properties")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let mut conflicting_properties = false;
+    for branch in &branches {
+        if let Some(properties) = branch.get("properties").and_then(Value::as_object) {
+            for (name, schema) in properties {
+                conflicting_properties |= known_properties
+                    .get(name)
+                    .is_some_and(|known| known != schema);
+                known_properties
+                    .entry(name.clone())
+                    .or_insert_with(|| schema.clone());
+            }
+        }
+    }
+    if assertions || conflicting_properties || branches.iter().any(has_non_object_type) {
         cleaned.insert("allOf".to_string(), Value::Array(branches));
         return;
     }

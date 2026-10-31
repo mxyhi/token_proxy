@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -29,6 +29,8 @@ impl CooldownKey {
 pub(crate) struct UpstreamSelectorRuntime {
     retryable_failure_cooldown: Duration,
     cooldowns: Mutex<HashMap<CooldownKey, Instant>>,
+    /// 容量等待只约束一个实际上游凭据的一个模型，不改变整个账户健康状态。
+    model_waits: Arc<Mutex<HashMap<(String, String, String), Instant>>>,
 }
 
 impl UpstreamSelectorRuntime {
@@ -36,7 +38,59 @@ impl UpstreamSelectorRuntime {
         Self {
             retryable_failure_cooldown,
             cooldowns: Mutex::new(HashMap::new()),
+            model_waits: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub(crate) fn mark_model_wait(
+        &self,
+        provider: &str,
+        upstream_key: &str,
+        model: &str,
+        headers: &axum::http::HeaderMap,
+    ) {
+        let now = Instant::now();
+        let Some(until) = super::account_selector::retry_after_deadline(now, headers)
+            .filter(|until| *until > now)
+        else {
+            return;
+        };
+        let mut waits = self.model_waits.lock().expect("model wait lock poisoned");
+        waits.retain(|_, until| *until > now);
+        let entry = waits
+            .entry((provider.into(), upstream_key.into(), model.into()))
+            .or_insert(until);
+        *entry = (*entry).max(until);
+        tracing::debug!(
+            provider,
+            upstream_key,
+            model,
+            "recorded model capacity Retry-After"
+        );
+    }
+
+    pub(crate) fn model_wait_seconds(
+        &self,
+        provider: &str,
+        upstream_key: &str,
+        model: &str,
+    ) -> Option<u64> {
+        let now = Instant::now();
+        let mut waits = self.model_waits.lock().expect("model wait lock poisoned");
+        waits.retain(|_, until| *until > now);
+        let remaining = waits
+            .get(&(provider.into(), upstream_key.into(), model.into()))?
+            .checked_duration_since(now)?;
+        Some(
+            remaining
+                .as_secs()
+                .saturating_add(u64::from(remaining.subsec_nanos() > 0)),
+        )
+    }
+
+    pub(crate) fn inherit_model_waits(&mut self, previous: &Self) {
+        // 共享等待表，热加载前已经发出的请求稍后返回 Retry-After 时也必须生效。
+        self.model_waits = previous.model_waits.clone();
     }
 
     pub(crate) fn order_group_scoped(

@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    http::{HeaderMap, Method, StatusCode},
+    http::{header::CONNECTION, HeaderMap, HeaderValue, Method, StatusCode},
     response::Response,
 };
 use std::{sync::Arc, time::Instant};
@@ -184,17 +184,18 @@ pub(super) async fn ensure_local_auth_or_respond(
     path: &str,
     query: Option<&str>,
     request_start: Instant,
-    max_body_bytes: usize,
+    _max_body_bytes: usize,
 ) -> Result<(Body, Option<http::LocalAccess>), Response> {
     let access = match http::ensure_local_auth(config, headers, method, path, query) {
         Ok(access) => access,
         Err(message) => {
             tracing::warn!("local auth failed");
-            let detail = if capture_request_detail_enabled {
-                Some(capture_detail_from_body(headers, body, max_body_bytes).await)
-            } else {
-                None
-            };
+            // 未认证客户端可以永远不结束 body；日志只记录请求头，不能为取详情占住连接。
+            drop(body);
+            let detail = capture_request_detail_enabled.then(|| RequestDetailSnapshot {
+                request_headers: serialize_request_headers(headers),
+                request_body: None,
+            });
             log_request_error(
                 log,
                 detail,
@@ -206,24 +207,15 @@ pub(super) async fn ensure_local_auth_or_respond(
                 message.clone(),
                 request_start,
             );
-            return Err(http::error_response(StatusCode::UNAUTHORIZED, message));
+            let mut response = http::error_response(StatusCode::UNAUTHORIZED, message);
+            // HTTP/1 不复用尚有未读请求体的连接；HTTP/2 由传输层取消对应流。
+            response
+                .headers_mut()
+                .insert(CONNECTION, HeaderValue::from_static("close"));
+            return Err(response);
         }
     };
     Ok((body, access))
-}
-
-async fn capture_detail_from_body(
-    headers: &HeaderMap,
-    body: Body,
-    max_body_bytes: usize,
-) -> RequestDetailSnapshot {
-    match ReplayableBody::from_body(body, max_body_bytes).await {
-        Ok(replayable) => capture_request_detail(headers, &replayable, max_body_bytes).await,
-        Err(err) => RequestDetailSnapshot {
-            request_headers: serialize_request_headers(headers),
-            request_body: Some(format!("Failed to read request body: {err}")),
-        },
-    }
 }
 
 pub(super) fn log_request_error(

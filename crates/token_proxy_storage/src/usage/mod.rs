@@ -6,6 +6,7 @@ use super::pricing::BillableUsage;
 use token_proxy_protocol::sse::SseEventParser;
 
 mod attribution;
+mod observations;
 
 pub(crate) use attribution::{compact_attribution_items, stored_usage_json};
 
@@ -13,6 +14,7 @@ pub struct SseUsageCollector {
     parser: SseEventParser,
     snapshot: UsageSnapshot,
     gemini_usage: Value,
+    observations: observations::UsageObservations,
 }
 
 impl SseUsageCollector {
@@ -21,28 +23,34 @@ impl SseUsageCollector {
             parser: SseEventParser::new(),
             snapshot: UsageSnapshot::default(),
             gemini_usage: Value::Null,
+            observations: observations::UsageObservations::default(),
         }
     }
 
     pub fn push_chunk(&mut self, chunk: &[u8]) -> std::io::Result<()> {
         let snapshot = &mut self.snapshot;
         let gemini_usage = &mut self.gemini_usage;
-        self.parser
-            .push_chunk(chunk, |data| update_usage(snapshot, gemini_usage, &data))
+        let observations = &mut self.observations;
+        self.parser.push_chunk(chunk, |data| {
+            update_usage(snapshot, gemini_usage, observations, &data)
+        })
     }
 
     pub fn finish(&mut self) -> UsageSnapshot {
         let snapshot = &mut self.snapshot;
         let gemini_usage = &mut self.gemini_usage;
+        let observations = &mut self.observations;
         // 这是计费观察器：主转发 parser 负责向客户端传播相同错误。
         // Drop/失败日志仍需返回错误之前已有的真实 usage，不能凭空清零。
         if let Err(error) = self
             .parser
-            .finish(|data| update_usage(snapshot, gemini_usage, &data))
+            .finish(|data| update_usage(snapshot, gemini_usage, observations, &data))
         {
             tracing::warn!(%error, "returning partial usage after SSE parser failure");
         }
-        self.snapshot.clone()
+        let mut snapshot = self.snapshot.clone();
+        self.observations.attach(&mut snapshot);
+        snapshot
     }
 }
 
@@ -59,6 +67,9 @@ pub fn extract_usage_from_response(bytes: &Bytes) -> UsageSnapshot {
     let mut snapshot = snapshot_from_envelope(&value).unwrap_or_default();
     // 没有 usage 的错误体也要留下响应模型，后面才能标「模型不一致」。
     snapshot.response_model = response_model_from_envelope(&value);
+    let mut observations = observations::UsageObservations::default();
+    observations.observe(&value);
+    observations.attach(&mut snapshot);
     snapshot
 }
 
@@ -103,23 +114,9 @@ fn contains_usage_metadata_fields(value: &Value) -> bool {
     .any(|field| value.get(*field).is_some())
 }
 
-fn extract_usage_from_event(value: &Value) -> Option<UsageSnapshot> {
-    snapshot_from_envelope(value)
-}
-
 fn snapshot_from_envelope(value: &Value) -> Option<UsageSnapshot> {
     let service_tier = service_tier_from_envelope(value);
-    let mut snapshot = if let Some(usage) = value
-        .get("response")
-        .and_then(|response| response.get("usage"))
-    {
-        snapshot_from_usage_value(usage)
-    } else if let Some(usage) = value.get("usage") {
-        snapshot_from_usage_value(usage)
-    } else if let Some(usage) = value
-        .get("message")
-        .and_then(|message| message.get("usage"))
-    {
+    let mut snapshot = if let Some(usage) = usage_from_envelope(value) {
         snapshot_from_usage_value(usage)
     } else if let Some(metadata) = value.get("usageMetadata") {
         snapshot_from_usage_metadata_value(metadata)
@@ -136,6 +133,31 @@ fn snapshot_from_envelope(value: &Value) -> Option<UsageSnapshot> {
         .or(service_tier)
         .or(snapshot.service_tier);
     Some(snapshot)
+}
+
+fn usage_from_envelope(value: &Value) -> Option<&Value> {
+    ["/response/usage", "/usage", "/message/usage"]
+        .iter()
+        .find_map(|pointer| value.pointer(pointer).filter(|usage| usage.is_object()))
+}
+
+/// SSE usage 是累计快照；仅覆盖显式字段，并保留稀疏嵌套明细与显式零。
+/// 不累加重复帧，否则缓存、工具次数和输出 token 会重复计费。
+fn merge_usage_snapshot(accumulated: &mut Value, incoming: &Value) {
+    match (accumulated, incoming) {
+        (Value::Object(accumulated), Value::Object(incoming)) => {
+            for (key, value) in incoming {
+                if !value.is_null() {
+                    merge_usage_snapshot(
+                        accumulated.entry(key.clone()).or_insert(Value::Null),
+                        value,
+                    );
+                }
+            }
+        }
+        (accumulated, incoming) if !incoming.is_null() => *accumulated = incoming.clone(),
+        _ => {}
+    }
 }
 
 fn snapshot_from_usage_value(value: &Value) -> UsageSnapshot {
@@ -361,13 +383,22 @@ fn service_tier_from_envelope(value: &Value) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
-fn update_usage(snapshot: &mut UsageSnapshot, gemini_usage: &mut Value, data: &str) {
+fn update_usage(
+    snapshot: &mut UsageSnapshot,
+    gemini_usage: &mut Value,
+    observations: &mut observations::UsageObservations,
+    data: &str,
+) {
     if data == "[DONE]" {
         return;
     }
     let Ok(value) = serde_json::from_str::<Value>(data) else {
         return;
     };
+    observations.observe(&value);
+    if let Some(tier) = service_tier_from_envelope(&value) {
+        snapshot.service_tier = Some(tier);
+    }
     // 后到的事件覆盖先到的。response.completed 一般在流末尾，带最终模型。
     if let Some(model) = response_model_from_envelope(&value) {
         snapshot.response_model = Some(model);
@@ -379,8 +410,34 @@ fn update_usage(snapshot: &mut UsageSnapshot, gemini_usage: &mut Value, data: &s
     let updated = if let Some(metadata) = metadata {
         token_proxy_protocol::gemini_usage::merge_snapshot(gemini_usage, metadata);
         Some(snapshot_from_usage_metadata_value(gemini_usage))
+    } else if let Some(usage) = usage_from_envelope(&value) {
+        let mut merged = snapshot.usage_json.take().unwrap_or_default();
+        // 只有分量更新的尾帧会使旧 total 过时，必须用合并后的分量重新计算。
+        if usage.get("total_tokens").and_then(Value::as_u64).is_none()
+            && [
+                "input_tokens",
+                "prompt_tokens",
+                "output_tokens",
+                "completion_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+            ]
+            .iter()
+            .any(|field| {
+                usage
+                    .get(*field)
+                    .and_then(Value::as_u64)
+                    .is_some_and(|next| merged.get(*field).and_then(Value::as_u64) != Some(next))
+            })
+        {
+            if let Some(fields) = merged.as_object_mut() {
+                fields.remove("total_tokens");
+            }
+        }
+        merge_usage_snapshot(&mut merged, usage);
+        Some(snapshot_from_usage_value(&merged))
     } else {
-        extract_usage_from_event(&value)
+        None
     };
     let Some(mut updated) = updated else {
         return;

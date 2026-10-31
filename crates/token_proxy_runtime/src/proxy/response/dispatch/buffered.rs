@@ -280,6 +280,9 @@ pub(super) async fn build_buffered_response(
             .extensions_mut()
             .insert(NonRetryableSemanticResponse);
     } else if let Some(message) = capacity_retry_message {
+        response
+            .extensions_mut()
+            .insert(crate::proxy::response::TransientModelCapacity);
         response.extensions_mut().insert(RetryableStreamResponse {
             status,
             message,
@@ -1627,27 +1630,73 @@ pub(super) fn is_capacity_retry_error(response_error: &str, body: &str) -> bool 
                 || lower.contains("at capacity"))
     }
 
-    if matches_text(response_error) || matches_text(body) {
-        return true;
-    }
     let Ok(value) = serde_json::from_str::<Value>(body) else {
-        return false;
+        return matches_text(response_error) || matches_text(body);
     };
+    if [
+        "/error/type",
+        "/response/error/type",
+        "/body/error/type",
+        "/type",
+    ]
+    .iter()
+    .filter_map(|pointer| value.pointer(pointer).and_then(Value::as_str))
+    .any(|kind| {
+        matches!(
+            kind.to_ascii_lowercase().as_str(),
+            "usage_limit_reached" | "insufficient_quota"
+        )
+    }) {
+        return false;
+    }
+    // 明确 quota/rate-limit code 的优先级高于文案，不能因文案出现 capacity
+    // 就绕过账户限流；临时 turn/model 容量则不能污染凭据健康状态。
     for pointer in [
-        "/error/message",
-        "/response/error/message",
-        "/message",
         "/error/code",
         "/response/error/code",
+        "/body/error/code",
         "/code",
     ] {
-        if value
+        if let Some(code) = value
             .pointer(pointer)
             .and_then(Value::as_str)
-            .is_some_and(matches_text)
+            .map(str::trim)
+            .filter(|code| !code.is_empty())
         {
-            return true;
+            return matches!(
+                code.to_ascii_lowercase().as_str(),
+                "turn_rate_limit_exceeded"
+                    | "model_at_capacity"
+                    | "model_is_at_capacity"
+                    | "server_is_overloaded"
+                    | "server_overloaded"
+                    | "slow_down"
+            );
         }
     }
-    false
+    let rate_limit_typed = [
+        "/error/type",
+        "/response/error/type",
+        "/body/error/type",
+        "/type",
+    ]
+    .iter()
+    .any(|pointer| {
+        value
+            .pointer(pointer)
+            .and_then(Value::as_str)
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("rate_limit_error"))
+    });
+    [
+        "/error/message",
+        "/response/error/message",
+        "/body/error/message",
+        "/message",
+    ]
+    .iter()
+    .filter_map(|pointer| value.pointer(pointer).and_then(Value::as_str))
+    .any(|message| {
+        matches_text(message)
+            || rate_limit_typed && message.to_ascii_lowercase().contains("at capacity")
+    })
 }

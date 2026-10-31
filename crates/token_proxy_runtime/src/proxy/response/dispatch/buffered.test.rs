@@ -1,6 +1,6 @@
 use super::buffered::{
     buffer_event_stream_response, build_buffered_response, empty_chat_completion_retry_message,
-    response_error_for_status, value_is_absent,
+    is_capacity_retry_error, response_error_for_status, value_is_absent,
 };
 use crate::proxy::openai_compat::FormatTransform;
 use crate::proxy::response::{NonRetryableSemanticResponse, RetryableStreamResponse};
@@ -24,6 +24,33 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::time::sleep;
+
+#[test]
+fn transient_capacity_uses_structured_codes_before_message_text() {
+    for code in [
+        "turn_rate_limit_exceeded",
+        "model_at_capacity",
+        "model_is_at_capacity",
+    ] {
+        let body = json!({"error":{"code":code,"message":"Please retry later"}}).to_string();
+        assert!(is_capacity_retry_error(&body, &body), "{code}");
+    }
+    for code in [
+        "rate_limit_exceeded",
+        "usage_limit_reached",
+        "insufficient_quota",
+    ] {
+        let body = json!({"error":{"code":code,"type":"rate_limit_error","message":"Selected model is at capacity; please try again"}}).to_string();
+        assert!(!is_capacity_retry_error(&body, &body), "{code}");
+    }
+    let body =
+        json!({"error":{"type":"rate_limit_error","message":"Service is at capacity"}}).to_string();
+    assert!(is_capacity_retry_error(&body, &body));
+    let quota =
+        json!({"error":{"type":"usage_limit_reached","message":"Selected model is at capacity"}})
+            .to_string();
+    assert!(!is_capacity_retry_error(&quota, &quota));
+}
 
 fn test_context() -> LogContext {
     LogContext {

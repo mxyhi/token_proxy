@@ -45,6 +45,9 @@ struct BillingAttempt {
     index: u64,
 }
 
+#[path = "image_request_details.rs"]
+mod image_request_details;
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct RequestTimingSnapshot {
     pub(crate) upstream_first_byte_ms: Option<u128>,
@@ -60,6 +63,7 @@ pub(crate) struct RequestTimings {
     billing: Option<ClientRequestBilling>,
     billing_attempt: Arc<OnceLock<BillingAttempt>>,
     sent_service_tier: Arc<OnceLock<Option<String>>>,
+    sent_image_details: Arc<OnceLock<Option<Value>>>,
     local_api_key_id: Option<Arc<str>>,
 }
 
@@ -71,6 +75,7 @@ impl RequestTimings {
             billing: Some(billing),
             billing_attempt: Arc::default(),
             sent_service_tier: Arc::default(),
+            sent_image_details: Arc::default(),
         }
     }
 
@@ -94,6 +99,16 @@ impl RequestTimings {
             .map(|tier| tier.trim().to_string())
             .filter(|tier| !tier.is_empty());
         let _ = self.sent_service_tier.set(tier);
+    }
+
+    pub(crate) async fn record_sent_image_details(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: &axum::body::Bytes,
+    ) {
+        let details = image_request_details::extract(path, content_type, body).await;
+        let _ = self.sent_image_details.set(details);
     }
 
     pub(crate) fn mark_upstream_response_headers(&self, value: u128) {
@@ -200,9 +215,22 @@ impl LogContext {
 
 pub(crate) fn build_log_entry(
     context: &LogContext,
-    usage: UsageSnapshot,
+    mut usage: UsageSnapshot,
     response_error: Option<String>,
 ) -> LogEntry {
+    if let Some(Some(details)) = context.timings.sent_image_details.get() {
+        let raw = usage
+            .usage_json
+            .get_or_insert_with(|| serde_json::json!({}));
+        if let Some(object) = raw.as_object_mut() {
+            let observed = object
+                .entry("_proxy_observed")
+                .or_insert_with(|| serde_json::json!({}));
+            if let Some(observed) = observed.as_object_mut() {
+                observed.insert("request_image_details".into(), details.clone());
+            }
+        }
+    }
     let canceled = context
         .timings
         .billing
@@ -345,6 +373,37 @@ fn now_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn image_parameters_are_logged_on_failed_requests_without_details_or_cost_inference() {
+        let baseline = build_log_entry(
+            &context(RequestTimings::default()),
+            UsageSnapshot::default(),
+            Some("upstream failed".into()),
+        );
+        let timings = RequestTimings::default();
+        timings
+            .record_sent_image_details(
+                "/v1/images/generations",
+                "application/json",
+                &axum::body::Bytes::from_static(
+                    br#"{"n":2,"size":"1024x1024","prompt":"private"}"#,
+                ),
+            )
+            .await;
+        let entry = build_log_entry(
+            &context(timings),
+            UsageSnapshot::default(),
+            Some("upstream failed".into()),
+        );
+        assert_eq!(
+            entry.usage_json.unwrap()["_proxy_observed"]["request_image_details"],
+            serde_json::json!({"n":2,"size":"1024x1024"})
+        );
+        assert!(entry.usage.is_none());
+        assert!(entry.request_body.is_none());
+        assert_eq!(entry.cost_nano_usd, baseline.cost_nano_usd);
+    }
     use std::time::Duration;
     use token_proxy_storage::pricing::BillableUsage;
 

@@ -17,6 +17,8 @@ pub(super) struct UpstreamAttempt {
     pub(super) selected_account_id: Option<String>,
     /// 实际发送的凭据，用于 401 恢复及迟到结果比较，禁止写入日志或响应。
     pub(super) account_access_token: Option<String>,
+    /// 实际发送请求的不可逆指纹，用于有损恢复前后确认请求仍绑定同一凭据。
+    pub(super) credential_fingerprint: [u8; 32],
     pub(super) meta: RequestMeta,
     pub(super) start_time: std::time::Instant,
     pub(super) timings: RequestTimings,
@@ -362,6 +364,7 @@ async fn retry_after_agent_identity_task_recovery(
         response,
         selected_account_id,
         account_access_token,
+        credential_fingerprint,
         meta: attempt_meta,
         start_time,
         timings,
@@ -399,6 +402,7 @@ async fn retry_after_agent_identity_task_recovery(
             response: reqwest::Response::from(rebuilt),
             selected_account_id,
             account_access_token,
+            credential_fingerprint,
             meta: attempt_meta,
             start_time,
             timings,

@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use axum::http::{HeaderMap, Method, StatusCode};
 use reqwest::ResponseBuilderExt;
+use sha2::{Digest, Sha256};
 
 use super::retry::{
     finalize_attempt, retry_after_kiro_refresh, retry_with_account_auth_recovery,
@@ -129,14 +130,9 @@ pub(super) async fn attempt_upstream(
                 attempt.selected_account_id.as_deref(),
             );
         }
-        let expected_token = if repair.kind == RequestRepairKind::CodexEncryptedContent {
-            let Some(token) = attempt.account_access_token.clone() else {
-                // 无实际发送凭据快照时不能证明同凭据，保持原失败。
-                first = Ok(attempt);
-                break;
-            };
+        let expected_credential = if repair.kind == RequestRepairKind::CodexEncryptedContent {
             encrypted_recovered = true;
-            Some(token)
+            Some(attempt.credential_fingerprint)
         } else {
             None
         };
@@ -152,7 +148,7 @@ pub(super) async fn attempt_upstream(
         );
         drop(attempt);
         effective_body = repair.body;
-        first = attempt_send_with_expected_token(
+        first = attempt_send_with_expected_credential(
             state,
             method.clone(),
             provider,
@@ -165,7 +161,7 @@ pub(super) async fn attempt_upstream(
             request_auth,
             request_detail.as_ref(),
             cooldown_scope,
-            expected_token.as_deref(),
+            expected_credential,
         )
         .await;
     }
@@ -319,6 +315,7 @@ async fn inspect_request_repair(
         response,
         selected_account_id,
         account_access_token,
+        credential_fingerprint,
         meta,
         start_time,
         timings,
@@ -381,6 +378,7 @@ async fn inspect_request_repair(
             response: rebuilt,
             selected_account_id,
             account_access_token,
+            credential_fingerprint,
             meta,
             start_time,
             timings,
@@ -432,7 +430,7 @@ pub(super) async fn attempt_send(
     request_detail: Option<&RequestDetailSnapshot>,
     cooldown_scope: &CooldownScope,
 ) -> Result<UpstreamAttempt, UpstreamAttemptFailure> {
-    attempt_send_with_expected_token(
+    attempt_send_with_expected_credential(
         state,
         method,
         provider,
@@ -450,7 +448,7 @@ pub(super) async fn attempt_send(
     .await
 }
 
-async fn attempt_send_with_expected_token(
+async fn attempt_send_with_expected_credential(
     state: &ProxyState,
     method: Method,
     provider: &str,
@@ -463,7 +461,7 @@ async fn attempt_send_with_expected_token(
     request_auth: &crate::proxy::http::RequestAuth,
     request_detail: Option<&RequestDetailSnapshot>,
     cooldown_scope: &CooldownScope,
-    expected_token: Option<&str>,
+    expected_credential: Option<[u8; 32]>,
 ) -> Result<UpstreamAttempt, UpstreamAttemptFailure> {
     let prepared = super::prepare_upstream_request_with_body(
         state,
@@ -482,13 +480,10 @@ async fn attempt_send_with_expected_token(
         outcome,
         selected_account_id: None,
     })?;
-    if let Some(expected) = expected_token {
-        let current = prepared
-            .request_headers
-            .get(axum::http::header::AUTHORIZATION)
-            .and_then(|value| value.to_str().ok())
-            .map(|value| value.strip_prefix("Bearer ").unwrap_or(value));
-        if current != Some(expected) {
+    let credential_fingerprint =
+        fingerprint_upstream_request(&prepared.upstream_url, &prepared.request_headers);
+    if let Some(expected) = expected_credential {
+        if credential_fingerprint != expected {
             tracing::warn!(provider,upstream=%upstream.id,"aborted encrypted recovery because credential changed");
             return Err(UpstreamAttemptFailure {
                 outcome: AttemptOutcome::Fatal(crate::proxy::http::error_response(
@@ -565,6 +560,7 @@ async fn attempt_send_with_expected_token(
         response,
         selected_account_id,
         account_access_token,
+        credential_fingerprint,
         meta,
         start_time,
         timings,
@@ -572,4 +568,27 @@ async fn attempt_send_with_expected_token(
         xai_client_tools,
         skip_same_upstream_retry: false,
     })
+}
+
+/// Hash the complete prepared URL and header set so custom API-key headers and
+/// provider-specific credential overrides are covered without retaining or
+/// logging their plaintext values.
+fn fingerprint_upstream_request(upstream_url: &str, headers: &HeaderMap) -> [u8; 32] {
+    let mut entries: Vec<(String, Vec<u8>)> = headers
+        .iter()
+        .map(|(name, value)| (name.as_str().to_string(), value.as_bytes().to_vec()))
+        .collect();
+    entries.sort();
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"token-proxy:upstream-credential:v1\0");
+    hasher.update(upstream_url.as_bytes());
+    hasher.update([0]);
+    for (name, value) in entries {
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+        hasher.update(value);
+        hasher.update([0]);
+    }
+    hasher.finalize().into()
 }

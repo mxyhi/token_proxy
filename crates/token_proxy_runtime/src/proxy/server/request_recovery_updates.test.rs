@@ -197,6 +197,81 @@ fn encrypted_recovery_http_then_sse_does_not_get_second_budget_or_failover() {
         let _ = std::fs::remove_dir_all(dir);
     });
 }
+
+#[test]
+fn encrypted_recovery_handles_more_than_64_rejected_reasoning_items() {
+    run_async(async {
+        const ITEM_COUNT: usize = 65;
+        let rejection = |index: usize| {
+            Bytes::from(
+                json!({
+                    "error": {
+                        "code": "invalid_encrypted_content",
+                        "message": format!(
+                            "The encrypted content for item rs_{index} could not be verified. Reason: Encrypted content could not be decrypted or parsed."
+                        )
+                    }
+                })
+                .to_string(),
+            )
+        };
+        let mut responses = (0..ITEM_COUNT)
+            .map(|index| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    rejection(index),
+                    "application/json",
+                )
+            })
+            .collect::<Vec<_>>();
+        responses.push((StatusCode::OK, successful_response(), "text/event-stream"));
+        let upstream = spawn_mock_raw_sequence_upstream(responses).await;
+        let mut config = config_with_runtime_upstreams(&[(
+            PROVIDER_RESPONSES,
+            10,
+            "encrypted-long-history",
+            upstream.base_url.as_str(),
+            FORMATS_RESPONSES,
+        )]);
+        config.same_upstream_retry_count = 0;
+        let dir = next_test_data_dir("encrypted-recovery-long-history");
+        let state = build_test_state_handle(config, dir.clone()).await;
+        let input = (0..ITEM_COUNT)
+            .map(|index| {
+                json!({
+                    "type": "reasoning",
+                    "id": format!("rs_{index}"),
+                    "encrypted_content": format!("cipher-{index}"),
+                    "summary": []
+                })
+            })
+            .chain(std::iter::once(json!({
+                "type": "message",
+                "role": "user",
+                "content": "hello"
+            })))
+            .collect::<Vec<_>>();
+        let (status, _) = raw_request(
+            state,
+            json!({"model":"gpt-6-astra","stream":true,"input":input}),
+        )
+        .await;
+        let requests = upstream.requests();
+        upstream.abort();
+        let _ = std::fs::remove_dir_all(dir);
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(requests.len(), ITEM_COUNT + 1);
+        assert_eq!(
+            requests.last().unwrap().body["input"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    });
+}
+
 #[test]
 fn session_policy_http_and_sse_do_not_retry_or_cool_down() {
     run_async(async {

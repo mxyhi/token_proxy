@@ -96,10 +96,6 @@ pub(super) async fn attempt_upstream(
                 break;
             }
         };
-        if encrypted_recovered {
-            first = Ok(attempt);
-            break;
-        }
         let (attempt, repair) = match inspect_request_repair(
             attempt,
             provider,
@@ -119,6 +115,12 @@ pub(super) async fn attempt_upstream(
             first = Ok(attempt);
             break;
         };
+        if encrypted_recovered && repair.kind != RequestRepairKind::CodexEncryptedContent {
+            // Once an encrypted-history recovery starts, do not mix in a
+            // broader field repair or let the request leave this upstream.
+            first = Ok(attempt);
+            break;
+        }
         // 修复重试必须固定当前 account_id；跨账户选号已删除。
         if matches!(provider, "codex" | "xai" | "kiro") {
             super::retry::pin_account_if_missing(
@@ -168,7 +170,7 @@ pub(super) async fn attempt_upstream(
         .await;
     }
     if encrypted_recovered {
-        // 这次有损恢复仅允许一次同凭据发送；之后不进入鉴权刷新、通用重试或跨上游。
+        // 有损恢复链只允许同一凭据发送；完成后不进入鉴权刷新、通用重试或跨上游。
         let outcome = match first {
             Ok(attempt) => {
                 finalize_attempt(

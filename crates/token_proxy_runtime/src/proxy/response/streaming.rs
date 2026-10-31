@@ -16,7 +16,7 @@ use super::{
     responses_error::{responses_stream_error, ResponsesStreamError},
     responses_failure,
     sequence::ResponsesEventSequence,
-    PROVIDER_ANTHROPIC, PROVIDER_CODEX, PROVIDER_GEMINI, PROVIDER_OPENAI,
+    PROVIDER_ANTHROPIC, PROVIDER_AZUREGPT, PROVIDER_CODEX, PROVIDER_GEMINI, PROVIDER_OPENAI,
     PROVIDER_OPENAI_RESPONSES, PROVIDER_XAI,
 };
 
@@ -965,7 +965,11 @@ fn sse_data_type(data: &str) -> Option<String> {
 fn openai_stream_semantics(provider: &str, path: &str) -> OpenAiStreamSemantics {
     let done_sentinel = matches!(
         provider,
-        PROVIDER_OPENAI | PROVIDER_OPENAI_RESPONSES | PROVIDER_CODEX | PROVIDER_XAI
+        PROVIDER_OPENAI
+            | PROVIDER_OPENAI_RESPONSES
+            | PROVIDER_AZUREGPT
+            | PROVIDER_CODEX
+            | PROVIDER_XAI
     );
     OpenAiStreamSemantics {
         done_sentinel,
@@ -1015,17 +1019,19 @@ fn openai_stream_value_is_terminal(value: &Value) -> bool {
 
 fn extract_stream_text_from_value<'a>(provider: &str, value: &'a Value) -> Option<&'a str> {
     match provider {
-        PROVIDER_OPENAI | PROVIDER_OPENAI_RESPONSES | PROVIDER_CODEX | PROVIDER_XAI => {
-            extract_openai_stream_text(value)
-                .or_else(|| extract_openai_responses_delta_text(value))
-                .or_else(|| {
-                    if value.get("type").is_none() {
-                        extract_fallback_stream_text(value)
-                    } else {
-                        None
-                    }
-                })
-        }
+        PROVIDER_OPENAI
+        | PROVIDER_OPENAI_RESPONSES
+        | PROVIDER_AZUREGPT
+        | PROVIDER_CODEX
+        | PROVIDER_XAI => extract_openai_stream_text(value)
+            .or_else(|| extract_openai_responses_delta_text(value))
+            .or_else(|| {
+                if value.get("type").is_none() {
+                    extract_fallback_stream_text(value)
+                } else {
+                    None
+                }
+            }),
         PROVIDER_ANTHROPIC => extract_anthropic_stream_text(value),
         PROVIDER_GEMINI => extract_gemini_stream_text(value),
         _ => extract_fallback_stream_text(value),
@@ -1035,7 +1041,7 @@ fn extract_stream_text_from_value<'a>(provider: &str, value: &'a Value) -> Optio
 fn openai_responses_data_starts_client_output(provider: &str, value: &Value) -> bool {
     if !matches!(
         provider,
-        PROVIDER_OPENAI_RESPONSES | PROVIDER_CODEX | PROVIDER_XAI
+        PROVIDER_OPENAI_RESPONSES | PROVIDER_AZUREGPT | PROVIDER_CODEX | PROVIDER_XAI
     ) {
         return false;
     }

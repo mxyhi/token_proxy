@@ -291,7 +291,7 @@ function UpstreamOpenAIResponsesFields({
 }: UpstreamOpenAIResponsesFieldsProps) {
   const isOpenai = draft.providers.some((value) => value.trim() === "openai");
   const isOpenaiResponses = draft.providers.some(
-    (value) => value.trim() === "openai-response",
+    (value) => ["openai-response", "azuregpt"].includes(value.trim()),
   );
   if (!isOpenai && !isOpenaiResponses) {
     return null;

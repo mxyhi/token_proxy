@@ -70,7 +70,10 @@ pub(super) async fn attempt_upstream(
         .await;
     }
     let mut effective_body = body.clone();
-    let mut repair_state = RequestRepairState::new(&effective_body);
+    let mut repair_state = RequestRepairState::new_with_extended_history(
+        &effective_body,
+        upstream.allow_extended_encrypted_history_repair || provider == "azuregpt",
+    );
     let mut repair_count = 0usize;
     let mut encrypted_recovered = false;
     let mut fixed_upstream = upstream.clone();
@@ -265,7 +268,10 @@ async fn inspect_request_repair(
     state: &mut RequestRepairState,
     first_output_budget: std::time::Duration,
 ) -> Result<(UpstreamAttempt, Option<RequestRepair>), UpstreamAttemptFailure> {
-    let codex_recovery = matches!(provider, "codex" | "openai" | "openai-response");
+    let codex_recovery = matches!(
+        provider,
+        "azuregpt" | "codex" | "openai" | "openai-response"
+    );
     let has_encrypted = codex_recovery
         && serde_json::from_slice::<serde_json::Value>(request_body.as_bytes())
             .ok()

@@ -184,6 +184,7 @@ fn normalize_single_upstream(
                 filter_prompt_cache_retention: upstream.filter_prompt_cache_retention,
                 filter_safety_identifier: upstream.filter_safety_identifier,
                 rewrite_developer_role_to_system: upstream.rewrite_developer_role_to_system,
+                allow_extended_encrypted_history_repair: provider == "azuregpt",
                 kiro_account_id: kiro_account_id.clone(),
                 codex_account_id: codex_account_id.clone(),
                 xai_account_id: xai_account_id.clone(),
@@ -417,7 +418,7 @@ fn build_selector_key(upstream_id: &str, api_key_count: usize, index: usize) -> 
 }
 
 fn runtime_provider_for_upstream(provider: &str, use_chat_completions_for_responses: bool) -> &str {
-    if provider == "openai-response" && use_chat_completions_for_responses {
+    if matches!(provider, "azuregpt" | "openai-response") && use_chat_completions_for_responses {
         return "openai";
     }
     provider
@@ -426,7 +427,14 @@ fn runtime_provider_for_upstream(provider: &str, use_chat_completions_for_respon
 fn is_supported_provider(provider: &str) -> bool {
     matches!(
         provider,
-        "openai" | "openai-response" | "anthropic" | "gemini" | "kiro" | "codex" | "xai"
+        "openai"
+            | "openai-response"
+            | "azuregpt"
+            | "anthropic"
+            | "gemini"
+            | "kiro"
+            | "codex"
+            | "xai"
     )
 }
 
@@ -546,7 +554,8 @@ fn default_inbound_formats_for_provider(
     configured_provider: &str,
     runtime_provider: &str,
 ) -> InboundApiFormatMask {
-    if configured_provider == "openai-response" && runtime_provider == "openai" {
+    if matches!(configured_provider, "azuregpt" | "openai-response") && runtime_provider == "openai"
+    {
         let mut mask = InboundApiFormatMask::default();
         mask.insert(InboundApiFormat::OpenaiResponses);
         return mask;
@@ -558,7 +567,7 @@ fn native_inbound_formats_for_provider(provider: &str) -> InboundApiFormatMask {
     let mut mask = InboundApiFormatMask::default();
     match provider {
         "openai" => mask.insert(InboundApiFormat::OpenaiChat),
-        "openai-response" => mask.insert(InboundApiFormat::OpenaiResponses),
+        "openai-response" | "azuregpt" => mask.insert(InboundApiFormat::OpenaiResponses),
         "anthropic" => mask.insert(InboundApiFormat::AnthropicMessages),
         "gemini" => mask.insert(InboundApiFormat::Gemini),
         // Kiro 仅作为 Anthropic `/v1/messages` 的同协议 provider；

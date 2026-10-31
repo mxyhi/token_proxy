@@ -10,7 +10,7 @@ use super::{
         gemini,
         inbound::detect_inbound_api_format,
         openai,
-        openai_compat::{FormatTransform, PROVIDER_CHAT, PROVIDER_RESPONSES},
+        openai_compat::{FormatTransform, PROVIDER_AZUREGPT, PROVIDER_CHAT, PROVIDER_RESPONSES},
         RequestMeta,
     },
     CODEX_RESPONSES_PATH, ERROR_NO_UPSTREAM, PROVIDER_ANTHROPIC, PROVIDER_CODEX, PROVIDER_GEMINI,
@@ -142,9 +142,12 @@ fn resolve_openai_native_plan(
     path: &str,
 ) -> Option<Result<DispatchPlan, String>> {
     if openai::is_openai_responses_resource_path(path) {
-        let provider =
-            choose_provider_by_priority(config, None, &[PROVIDER_RESPONSES, PROVIDER_CHAT])
-                .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+        let provider = choose_provider_by_priority(
+            config,
+            None,
+            &[PROVIDER_RESPONSES, PROVIDER_AZUREGPT, PROVIDER_CHAT],
+        )
+        .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
         return Some(provider.map(base_plan));
     }
     if openai::is_openai_native_resource_path(path) {
@@ -152,7 +155,12 @@ fn resolve_openai_native_plan(
             if let Some(provider) = choose_provider_by_priority(
                 config,
                 None,
-                &[PROVIDER_CHAT, PROVIDER_RESPONSES, PROVIDER_XAI],
+                &[
+                    PROVIDER_CHAT,
+                    PROVIDER_RESPONSES,
+                    PROVIDER_AZUREGPT,
+                    PROVIDER_XAI,
+                ],
             ) {
                 return Some(Ok(base_plan(provider)));
             }
@@ -172,9 +180,12 @@ fn resolve_openai_native_plan(
                 response_transform: FormatTransform::CodexToImagesGenerations,
             }));
         }
-        let provider =
-            choose_provider_by_priority(config, None, &[PROVIDER_CHAT, PROVIDER_RESPONSES])
-                .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
+        let provider = choose_provider_by_priority(
+            config,
+            None,
+            &[PROVIDER_CHAT, PROVIDER_RESPONSES, PROVIDER_AZUREGPT],
+        )
+        .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
         return Some(provider.map(base_plan));
     }
     None
@@ -228,13 +239,15 @@ fn resolve_anthropic_plan(
         if provider_rank_for_inbound(config, PROVIDER_ANTHROPIC, inbound_format).is_some() {
             return Some(Ok(base_plan(PROVIDER_ANTHROPIC)));
         }
-        if provider_rank_for_inbound(config, PROVIDER_RESPONSES, inbound_format).is_some() {
-            return Some(Ok(DispatchPlan {
-                provider: PROVIDER_RESPONSES,
-                outbound_path: Some(RESPONSES_INPUT_TOKENS_PATH),
-                request_transform: FormatTransform::AnthropicCountTokensToResponsesInputTokens,
-                response_transform: FormatTransform::ResponsesInputTokensToAnthropicCountTokens,
-            }));
+        for provider in [PROVIDER_RESPONSES, PROVIDER_AZUREGPT] {
+            if provider_rank_for_inbound(config, provider, inbound_format).is_some() {
+                return Some(Ok(DispatchPlan {
+                    provider,
+                    outbound_path: Some(RESPONSES_INPUT_TOKENS_PATH),
+                    request_transform: FormatTransform::AnthropicCountTokensToResponsesInputTokens,
+                    response_transform: FormatTransform::ResponsesInputTokensToAnthropicCountTokens,
+                }));
+            }
         }
     }
     if provider_rank_for_inbound(config, PROVIDER_ANTHROPIC, inbound_format).is_some() {
@@ -247,7 +260,12 @@ fn resolve_formatless_plan(config: &ProxyConfig) -> Result<DispatchPlan, String>
     let provider = choose_provider_by_priority(
         config,
         None,
-        &[PROVIDER_CHAT, PROVIDER_RESPONSES, PROVIDER_ANTHROPIC],
+        &[
+            PROVIDER_CHAT,
+            PROVIDER_RESPONSES,
+            PROVIDER_AZUREGPT,
+            PROVIDER_ANTHROPIC,
+        ],
     )
     .ok_or_else(|| ERROR_NO_UPSTREAM.to_string())?;
     Ok(base_plan(provider))
@@ -306,9 +324,14 @@ fn resolve_models_plan(
     if is_openai_compatible_models_path(path) {
         let candidates: &[&'static str] =
             if method == Method::GET && is_openai_compatible_models_index_path(path) {
-                &[PROVIDER_CHAT, PROVIDER_RESPONSES, PROVIDER_XAI]
+                &[
+                    PROVIDER_CHAT,
+                    PROVIDER_RESPONSES,
+                    PROVIDER_AZUREGPT,
+                    PROVIDER_XAI,
+                ]
             } else {
-                &[PROVIDER_CHAT, PROVIDER_RESPONSES]
+                &[PROVIDER_CHAT, PROVIDER_RESPONSES, PROVIDER_AZUREGPT]
             };
         let provider = choose_provider_by_priority(config, None, candidates)
             .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
@@ -327,9 +350,14 @@ fn resolve_models_plan(
         }
         let candidates: &[&'static str] =
             if method == Method::GET && is_openai_models_index_path(path) {
-                &[PROVIDER_CHAT, PROVIDER_RESPONSES, PROVIDER_XAI]
+                &[
+                    PROVIDER_CHAT,
+                    PROVIDER_RESPONSES,
+                    PROVIDER_AZUREGPT,
+                    PROVIDER_XAI,
+                ]
             } else {
-                &[PROVIDER_CHAT, PROVIDER_RESPONSES]
+                &[PROVIDER_CHAT, PROVIDER_RESPONSES, PROVIDER_AZUREGPT]
             };
         let provider = choose_provider_by_priority(config, None, candidates)
             .ok_or_else(|| ERROR_NO_UPSTREAM.to_string());
@@ -443,7 +471,7 @@ fn resolve_retry_fallback_provider(
 ) -> Option<(&'static str, Option<InboundApiFormat>)> {
     if openai::is_openai_image_generations_path(path) {
         return match primary_provider {
-            PROVIDER_CHAT | PROVIDER_RESPONSES | PROVIDER_XAI => {
+            PROVIDER_CHAT | PROVIDER_RESPONSES | PROVIDER_AZUREGPT | PROVIDER_XAI => {
                 Some((PROVIDER_CODEX, Some(InboundApiFormat::OpenaiResponses)))
             }
             _ => None,
@@ -455,6 +483,7 @@ fn resolve_retry_fallback_provider(
             PROVIDER_ANTHROPIC => PROVIDER_KIRO,
             PROVIDER_KIRO => PROVIDER_ANTHROPIC,
             PROVIDER_RESPONSES => PROVIDER_CODEX,
+            PROVIDER_AZUREGPT => PROVIDER_CODEX,
             PROVIDER_CODEX => PROVIDER_RESPONSES,
             PROVIDER_XAI => PROVIDER_RESPONSES,
             _ => return None,
@@ -465,11 +494,11 @@ fn resolve_retry_fallback_provider(
     match (detect_inbound_api_format(path), primary_provider) {
         (
             Some(InboundApiFormat::OpenaiChat),
-            PROVIDER_CHAT | PROVIDER_RESPONSES | PROVIDER_CODEX | PROVIDER_XAI,
+            PROVIDER_CHAT | PROVIDER_RESPONSES | PROVIDER_AZUREGPT | PROVIDER_CODEX | PROVIDER_XAI,
         ) => {
             let fallback = match primary_provider {
                 PROVIDER_CHAT => PROVIDER_RESPONSES,
-                PROVIDER_RESPONSES => PROVIDER_CODEX,
+                PROVIDER_RESPONSES | PROVIDER_AZUREGPT => PROVIDER_CODEX,
                 PROVIDER_CODEX => PROVIDER_RESPONSES,
                 PROVIDER_XAI => PROVIDER_RESPONSES,
                 _ => unreachable!("guarded by match arm"),
@@ -478,10 +507,10 @@ fn resolve_retry_fallback_provider(
         }
         (
             Some(InboundApiFormat::OpenaiResponses),
-            PROVIDER_RESPONSES | PROVIDER_CODEX | PROVIDER_XAI,
+            PROVIDER_RESPONSES | PROVIDER_AZUREGPT | PROVIDER_CODEX | PROVIDER_XAI,
         ) => Some((
             match primary_provider {
-                PROVIDER_RESPONSES => PROVIDER_CODEX,
+                PROVIDER_RESPONSES | PROVIDER_AZUREGPT => PROVIDER_CODEX,
                 PROVIDER_CODEX | PROVIDER_XAI => PROVIDER_RESPONSES,
                 _ => unreachable!("guarded by match arm"),
             },

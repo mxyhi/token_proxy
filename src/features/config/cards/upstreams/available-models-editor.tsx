@@ -51,7 +51,7 @@ export function AvailableModelsEditor({
   const isAccount = isAccountProviderKind(provider);
   const canFetch = isAccount
     ? !!draft.accountId.trim()
-    : ["openai", "openai-response", "anthropic", "gemini"].includes(provider) &&
+    : ["openai", "openai-response", "azuregpt", "anthropic", "gemini"].includes(provider) &&
       !!draft.baseUrl.trim();
   const selectedModels = mergeModels(draft.availableModels);
   const selectedModelSet = new Set(selectedModels);

@@ -23,6 +23,7 @@ describe("upstreams/constants", () => {
     expect(mergeProviderOptions([])).toEqual([
       "openai",
       "openai-response",
+      "azuregpt",
       "anthropic",
       "gemini",
     ]);
@@ -35,6 +36,7 @@ describe("upstreams/constants", () => {
     ).toEqual([
       "openai",
       "openai-response",
+      "azuregpt",
       "anthropic",
       "gemini",
       "antigravity",

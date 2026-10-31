@@ -94,6 +94,7 @@ fn upstream_without_key() -> UpstreamRuntime {
         filter_prompt_cache_retention: false,
         filter_safety_identifier: false,
         rewrite_developer_role_to_system: false,
+        allow_extended_encrypted_history_repair: false,
         kiro_account_id: None,
         codex_account_id: None,
         xai_account_id: None,

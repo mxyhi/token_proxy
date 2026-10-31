@@ -27,8 +27,8 @@ use super::super::super::{
 use super::super::{
     anthropic_to_responses, chat_to_responses, kiro_to_anthropic, responses_error,
     responses_to_anthropic, responses_to_chat, streaming, upstream_stream,
-    NonRetryableSemanticResponse, RetryableStreamResponse, PROVIDER_CODEX, PROVIDER_GEMINI,
-    PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES, PROVIDER_XAI,
+    NonRetryableSemanticResponse, RetryableStreamResponse, PROVIDER_AZUREGPT, PROVIDER_CODEX,
+    PROVIDER_GEMINI, PROVIDER_OPENAI, PROVIDER_OPENAI_RESPONSES, PROVIDER_XAI,
 };
 use super::buffered;
 use token_proxy_protocol::xai_forbidden::{
@@ -1302,7 +1302,11 @@ fn responses_prelude_inspector(
         && is_openai_responses_stream_path(&context.path)
         && matches!(
             context.provider.as_str(),
-            PROVIDER_OPENAI | PROVIDER_OPENAI_RESPONSES | PROVIDER_CODEX | PROVIDER_XAI
+            PROVIDER_OPENAI
+                | PROVIDER_OPENAI_RESPONSES
+                | PROVIDER_AZUREGPT
+                | PROVIDER_CODEX
+                | PROVIDER_XAI
         );
 
     // 只缓冲 Responses 生命周期 prelude；首个业务事件放行后，后续错误绝不再拼接第二条流。
@@ -2308,6 +2312,7 @@ where
 fn should_rewrite_sse_model(provider: &str) -> bool {
     provider == PROVIDER_OPENAI
         || provider == PROVIDER_OPENAI_RESPONSES
+        || provider == PROVIDER_AZUREGPT
         || provider == PROVIDER_GEMINI
         || provider == PROVIDER_CODEX
         || provider == PROVIDER_XAI
@@ -2317,6 +2322,7 @@ fn openai_semantic_timeout(provider: &str, path: &str, timeout: Duration) -> Opt
     if is_openai_responses_stream_path(path)
         && (provider == PROVIDER_OPENAI
             || provider == PROVIDER_OPENAI_RESPONSES
+            || provider == PROVIDER_AZUREGPT
             || provider == PROVIDER_CODEX
             || provider == PROVIDER_XAI)
     {

@@ -39,6 +39,7 @@ const MIN_PARALLEL_ATTEMPTS = 2;
 const SUPPORTED_PROVIDERS = new Set([
   "openai",
   "openai-response",
+  "azuregpt",
   "anthropic",
   "gemini",
   ...ACCOUNT_BACKED_PROVIDERS,

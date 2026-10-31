@@ -23,6 +23,7 @@ const PROVIDER_OPENAI: &str = "openai";
 #[derive(Clone, Copy)]
 pub(crate) struct TransientModelCapacity;
 const PROVIDER_OPENAI_RESPONSES: &str = "openai-response";
+const PROVIDER_AZUREGPT: &str = "azuregpt";
 const PROVIDER_ANTHROPIC: &str = "anthropic";
 const PROVIDER_GEMINI: &str = "gemini";
 const PROVIDER_CODEX: &str = "codex";

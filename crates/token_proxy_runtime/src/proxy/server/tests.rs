@@ -111,6 +111,7 @@ fn config_with_runtime_upstreams(
             filter_prompt_cache_retention: false,
             filter_safety_identifier: false,
             rewrite_developer_role_to_system: false,
+            allow_extended_encrypted_history_repair: false,
             kiro_account_id: (*provider == PROVIDER_KIRO).then(|| format!("kiro-{id}.json")),
             codex_account_id: (*provider == PROVIDER_CODEX).then(|| format!("codex-{id}.json")),
             xai_account_id: (*provider == PROVIDER_XAI).then(|| format!("xai-{id}")),

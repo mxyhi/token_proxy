@@ -245,6 +245,48 @@ fn build_runtime_config_keeps_openai_responses_provider_when_chat_compat_disable
 }
 
 #[test]
+fn build_runtime_config_maps_azuregpt_as_responses_with_extended_repair_scope() {
+    let mut config = ProxyConfigFile::default();
+    config.upstreams = vec![sample_upstream(
+        "azure-gpt",
+        &["azuregpt"],
+        "https://example.services.ai.azure.com",
+        UpstreamCredential::api_keys(["test-key"]),
+    )];
+
+    let runtime = build_runtime_config(config).expect("runtime config");
+    let azure = runtime
+        .provider_upstreams("azuregpt")
+        .expect("azuregpt runtime upstream");
+    let item = azure
+        .groups
+        .first()
+        .and_then(|group| group.items.first())
+        .expect("runtime item");
+    assert!(item.supports_inbound(InboundApiFormat::OpenaiResponses));
+    assert!(item.allow_extended_encrypted_history_repair);
+
+    let mut chat_config = ProxyConfigFile::default();
+    let mut chat_upstream = sample_upstream(
+        "azure-gpt-chat",
+        &["azuregpt"],
+        "https://example.services.ai.azure.com",
+        UpstreamCredential::api_keys(["test-key"]),
+    );
+    chat_upstream.use_chat_completions_for_responses = true;
+    chat_config.upstreams = vec![chat_upstream];
+    let chat_runtime = build_runtime_config(chat_config).expect("chat-compatible runtime config");
+    let openai = chat_runtime
+        .provider_upstreams("openai")
+        .expect("chat-compatible runtime upstream");
+    assert!(openai
+        .groups
+        .first()
+        .and_then(|group| group.items.first())
+        .is_some_and(|item| item.allow_extended_encrypted_history_repair));
+}
+
+#[test]
 fn build_runtime_config_normalizes_available_models() {
     let mut config = ProxyConfigFile::default();
     let mut upstream = sample_upstream(

@@ -26,6 +26,7 @@ const PROVIDER_NATIVE_INBOUND_FORMATS: Readonly<
 > = {
   openai: ["openai_chat"],
   "openai-response": ["openai_responses"],
+  azuregpt: ["openai_responses"],
   anthropic: ["anthropic_messages"],
   gemini: ["gemini"],
   kiro: ["anthropic_messages"],

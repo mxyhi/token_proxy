@@ -100,7 +100,7 @@ fn codex_repair_requires_unambiguous_structured_rejection() {
 
 #[test]
 fn codex_repair_caps_multi_item_history_loss() {
-    let items = (0..257)
+    let items = (0..65)
         .map(|index| {
             json!({
                 "type": "reasoning",
@@ -111,13 +111,44 @@ fn codex_repair_caps_multi_item_history_loss() {
         .collect::<Vec<_>>();
     let mut body = request(json!(items));
     let mut state = RequestRepairState::new(&body);
-    for index in 0..256 {
+    for index in 0..64 {
         let error = rejection(&format!(
             "The encrypted content for item rs_{index} could not be verified. Reason: Encrypted content could not be decrypted or parsed."
         ));
         body = repair_codex_encrypted_body(&body, &error, &mut state)
             .unwrap()
             .expect("repair within bounded loss")
+            .body;
+    }
+    let error = rejection(
+        "The encrypted content for item rs_64 could not be verified. Reason: Encrypted content could not be decrypted or parsed.",
+    );
+    assert!(repair_codex_encrypted_body(&body, &error, &mut state)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn azuregpt_repair_allows_long_history_migration() {
+    let items = (0..257)
+        .map(|index| {
+            json!({
+                "type": "reasoning",
+                "id": format!("rs_{index}"),
+                "encrypted_content": format!("cipher-{index}"),
+                "summary": []
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut body = request(json!(items));
+    let mut state = RequestRepairState::new_for_provider(&body, "azuregpt");
+    for index in 0..256 {
+        let error = rejection(&format!(
+            "The encrypted content for item rs_{index} could not be verified. Reason: Encrypted content could not be decrypted or parsed."
+        ));
+        body = repair_codex_encrypted_body(&body, &error, &mut state)
+            .unwrap()
+            .expect("Azure GPT should repair the rejected item")
             .body;
     }
     let error = rejection(

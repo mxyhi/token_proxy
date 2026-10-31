@@ -65,6 +65,7 @@ export function createDefaultColumnVisibility() {
 const DEFAULT_PROVIDER_OPTIONS = [
   "openai",
   "openai-response",
+  "azuregpt",
   "anthropic",
   "gemini",
 ] as const;

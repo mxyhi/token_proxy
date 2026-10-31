@@ -14,7 +14,10 @@ pub(super) use codex_encrypted::repair_codex_encrypted_body;
 const MAX_REJECTED_FIELD_REPAIRS: usize = 6;
 // Each removal must be named by the upstream error. Cap the total loss while
 // allowing long histories to migrate when several old items are rejected.
-const MAX_CODEX_ENCRYPTED_REPAIRS: usize = 64;
+// Long-running Codex sessions can legitimately contain more than 64 historical
+// reasoning items. Keep a hard upper bound to avoid an unbounded replay loop,
+// while allowing normal context migration to finish.
+const MAX_CODEX_ENCRYPTED_REPAIRS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RequestRepairKind {

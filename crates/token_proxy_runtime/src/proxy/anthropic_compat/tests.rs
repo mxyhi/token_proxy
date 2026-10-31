@@ -5,6 +5,76 @@ use serde_json::{json, Value};
 
 use crate::proxy::http_client::ProxyHttpClients;
 
+#[test]
+fn commentary_round_trip_preserves_phase_and_keeps_real_signatures_separate() {
+    let input = bytes_from_json(json!({"id":"r","model":"gpt","output":[
+        {"type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"working"}]},
+        {"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]}
+    ]}));
+    let response = json_from_bytes(responses_response_to_anthropic(&input, None).unwrap());
+    assert_eq!(response["content"][0]["type"], "thinking");
+    assert_eq!(
+        response["content"][0]["signature"],
+        crate::proxy::claude_reasoning::COMMENTARY_MARKER
+    );
+    assert_eq!(response["content"][1]["type"], "text");
+    let replay = run_async(async {
+        anthropic_request_to_responses(
+            &bytes_from_json(json!({"model":"gpt","messages":[response]})),
+            &ProxyHttpClients::new().unwrap(),
+        )
+        .await
+        .unwrap()
+    });
+    let replay = json_from_bytes(replay);
+    assert_eq!(replay["input"][0]["phase"], "commentary");
+    assert_eq!(replay["input"][1]["content"][0]["text"], "done");
+    assert!(!replay
+        .to_string()
+        .contains(crate::proxy::claude_reasoning::COMMENTARY_MARKER));
+}
+
+#[test]
+fn claude_tool_additions_keep_top_level_tools_and_result_adjacency() {
+    let input = bytes_from_json(
+        json!({"model":"gpt","tools":[{"name":"read","input_schema":{"type":"object"}}],"messages":[
+            {"role":"assistant","content":[{"type":"tool_use","id":"call","name":"read","input":{}}]},
+            {"role":"system","content":[{"type":"text","text":"tools ready"},{"type":"tool_addition","tool":{"type":"tool_definition","definition":{"name":"new_tool","input_schema":{"type":"object"}}}},{"type":"tool_addition","tool":{"type":"tool_reference","name":"read"}}]},
+            {"role":"user","content":[{"type":"tool_result","tool_use_id":"call","content":"ok"}]}
+        ]}),
+    );
+    let output = run_async(async {
+        anthropic_request_to_responses(&input, &ProxyHttpClients::new().unwrap())
+            .await
+            .unwrap()
+    });
+    let output = json_from_bytes(output);
+    assert_eq!(output["tools"].as_array().unwrap().len(), 1);
+    assert_eq!(output["input"][0]["type"], "function_call");
+    assert_eq!(output["input"][1]["type"], "function_call_output");
+    assert_eq!(output["input"][2]["type"], "additional_tools");
+    assert_eq!(output["input"][2]["tools"][0]["name"], "new_tool");
+    assert_eq!(output["input"][2]["tools"][1]["name"], "read");
+    assert_eq!(output["input"][3]["role"], "developer");
+}
+
+#[test]
+fn claude_thinking_token_usage_is_optional_and_preserves_zero() {
+    for tokens in [None, Some(0), Some(9)] {
+        let mut usage = json!({"input_tokens":2,"output_tokens":12});
+        if let Some(tokens) = tokens {
+            usage["output_tokens_details"] = json!({"thinking_tokens":tokens});
+        }
+        let output=json_from_bytes(anthropic_response_to_responses(&bytes_from_json(json!({"id":"m","role":"assistant","model":"claude","content":[{"type":"text","text":"ok"}],"usage":usage}))).unwrap());
+        assert_eq!(
+            output
+                .pointer("/usage/output_tokens_details/reasoning_tokens")
+                .and_then(Value::as_u64),
+            tokens
+        );
+    }
+}
+
 fn run_async<T>(future: impl std::future::Future<Output = T>) -> T {
     tokio::runtime::Runtime::new()
         .expect("create tokio runtime")

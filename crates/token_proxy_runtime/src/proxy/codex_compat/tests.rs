@@ -731,6 +731,12 @@ async fn stream_codex_to_responses_emits_error_event_for_invalid_json_event() {
 async fn stream_codex_to_responses_filters_private_events_for_regular_clients() {
     let upstream = futures_util::stream::iter(vec![
         Ok::<Bytes, std::io::Error>(Bytes::from(
+            "data: {\"type\":\"response.metadata\",\"metadata\":{}}\n\n",
+        )),
+        Ok(Bytes::from(
+            "data: {\"type\":\"response.subscription_usage\",\"usage\":{}}\n\n",
+        )),
+        Ok::<Bytes, std::io::Error>(Bytes::from(
             "data: {\"type\":\"codex.response.metadata\",\"metadata\":{\"x\":1}}\n\n",
         )),
         Ok(Bytes::from(
@@ -755,6 +761,11 @@ async fn stream_codex_to_responses_filters_private_events_for_regular_clients() 
     assert!(!text.contains("codex.response.metadata"), "chunks: {text}");
     assert!(!text.contains("codex.rate_limits"), "chunks: {text}");
     assert!(!text.contains("responsesapi.telemetry"), "chunks: {text}");
+    assert!(!text.contains("\"response.metadata\""), "chunks: {text}");
+    assert!(
+        !text.contains("response.subscription_usage"),
+        "chunks: {text}"
+    );
     assert!(text.contains("response.completed"), "chunks: {text}");
     assert!(text.contains("data: [DONE]"), "chunks: {text}");
 }

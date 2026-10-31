@@ -18,7 +18,7 @@ use token_proxy_account_store::oauth_util::{
 };
 use token_proxy_account_store::paths::TokenProxyPaths;
 
-use super::error::{error_is_invalid_grant, error_requires_relogin};
+use super::error::error_requires_relogin;
 use super::oauth::{CodexOAuthClient, CodexRefreshTokenClient};
 use super::types::{CodexAccountStatus, CodexAccountSummary, CodexCredential, CodexTokenRecord};
 
@@ -31,6 +31,9 @@ pub struct CodexAccountStore {
     token_refresh_cooldowns: Mutex<HashMap<String, TokenRefreshCooldown>>,
     /// 已被上游拒绝的凭据仅用于内存内比较，禁止记录 token 内容。
     rejected_access_tokens: StdMutex<HashMap<String, String>>,
+    /// 续期已被永久拒绝的 refresh token 与 access token 健康状态独立。
+    /// 仅换新 refresh token 后解除；不得记录凭据正文。
+    rejected_refresh_tokens: StdMutex<HashMap<String, String>>,
     agent_task_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
     /// Provider 级 mutation gate：所有持久化写、cache 更新、snapshot/restore 共享。
     provider_mutation: Mutex<()>,
@@ -109,7 +112,6 @@ const CODEX_TOKEN_REFRESH_WAIT_TIMEOUT: std::time::Duration = std::time::Duratio
 
 struct TokenRefreshCooldown {
     retry_at: tokio::time::Instant,
-    invalid_grant_count: u32,
     error: Option<String>,
 }
 
@@ -136,6 +138,7 @@ impl CodexAccountStore {
             token_refreshing: StdMutex::new(HashSet::new()),
             token_refresh_cooldowns: Mutex::new(HashMap::new()),
             rejected_access_tokens: StdMutex::new(HashMap::new()),
+            rejected_refresh_tokens: StdMutex::new(HashMap::new()),
             agent_task_locks: Mutex::new(HashMap::new()),
             provider_mutation: Mutex::new(()),
             #[cfg(any(test, feature = "test-support"))]
@@ -578,6 +581,17 @@ impl CodexAccountStore {
         }) {
             rejected.remove(&account_id);
         }
+        let mut rejected_refresh = self
+            .rejected_refresh_tokens
+            .lock()
+            .expect("codex rejected refresh token lock poisoned");
+        if rejected_refresh.get(&account_id).is_some_and(|token| {
+            record
+                .oauth()
+                .is_none_or(|oauth| oauth.refresh_token != token)
+        }) {
+            rejected_refresh.remove(&account_id);
+        }
         cache.insert(account_id.clone(), record.clone());
         Ok(account_summary(account_id, &record))
     }
@@ -760,6 +774,10 @@ impl CodexAccountStore {
             .lock()
             .expect("codex rejected token lock poisoned")
             .remove(account_id);
+        self.rejected_refresh_tokens
+            .lock()
+            .expect("codex rejected refresh token lock poisoned")
+            .remove(account_id);
         tracing::debug!(account_id, "codex account deleted for orchestration");
         Ok(())
     }
@@ -879,6 +897,16 @@ impl CodexAccountStore {
             .is_some_and(|token| token == oauth.access_token)
     }
 
+    fn refresh_token_was_rejected(&self, account_id: &str, record: &CodexTokenRecord) -> bool {
+        record.oauth().is_some_and(|oauth| {
+            self.rejected_refresh_tokens
+                .lock()
+                .expect("codex rejected refresh token lock poisoned")
+                .get(account_id)
+                .is_some_and(|token| token == oauth.refresh_token)
+        })
+    }
+
     async fn refresh_if_needed(
         &self,
         account_id: &str,
@@ -946,7 +974,10 @@ impl CodexAccountStore {
                 continue;
             }
             let record = self.load_account(&account_id).await?;
-            if !record_can_auto_refresh(&record) || !record_needs_refresh(&record) {
+            if !record_can_auto_refresh(&record)
+                || !record_needs_refresh(&record)
+                || self.refresh_token_was_rejected(&account_id, &record)
+            {
                 continue;
             }
             if self.token_refresh_cooldown(&account_id).await.is_some() {
@@ -996,6 +1027,9 @@ impl CodexAccountStore {
         if current.status == CodexAccountStatus::Invalid {
             return Err("Codex 登录已失效，请重新登录该账户。".to_string());
         }
+        if self.refresh_token_was_rejected(account_id, &current) {
+            return Err("Codex 登录已失效，请重新登录该账户。".to_string());
+        }
         if let Some(error) = self.token_refresh_cooldown(account_id).await {
             if let Some(error) = error {
                 return Err(error);
@@ -1016,28 +1050,15 @@ impl CodexAccountStore {
                     account_id.to_string(),
                     TokenRefreshCooldown {
                         retry_at: tokio::time::Instant::now() + std::time::Duration::from_secs(30),
-                        invalid_grant_count: 0,
                         error: None,
                     },
                 );
             }
             Err(error) if !error_requires_relogin(error) => {
-                let invalid_grant_count = if error_is_invalid_grant(error) {
-                    failures
-                        .get(account_id)
-                        .map_or(1, |failure| failure.invalid_grant_count.saturating_add(1))
-                } else {
-                    0
-                };
-                let delay_seconds = if invalid_grant_count > 0 {
-                    (60u64 << (invalid_grant_count - 1).min(5)).min(30 * 60)
-                } else {
-                    5 * 60
-                };
+                let delay_seconds = 5 * 60;
                 tracing::warn!(
                     account_id,
                     delay_seconds,
-                    invalid_grant_count,
                     "codex token refresh deferred after failure"
                 );
                 failures.insert(
@@ -1045,7 +1066,6 @@ impl CodexAccountStore {
                     TokenRefreshCooldown {
                         retry_at: tokio::time::Instant::now()
                             + std::time::Duration::from_secs(delay_seconds),
-                        invalid_grant_count,
                         error: Some(error.clone()),
                     },
                 );
@@ -1095,15 +1115,27 @@ impl CodexAccountStore {
                     return Ok(current);
                 }
                 if error_requires_relogin(&err) {
-                    if let Err(mark_err) = self
-                        .mark_invalid_if_credential_matches(account_id, &record)
-                        .await
+                    self.rejected_refresh_tokens
+                        .lock()
+                        .expect("codex rejected refresh token lock poisoned")
+                        .insert(account_id.to_string(), refresh_token.clone());
+                    tracing::warn!(
+                        account_id,
+                        recovery = "relogin",
+                        access_usable = current.is_usable(),
+                        "codex renewal permanently rejected; suppressing this refresh credential"
+                    );
+                    // 续期失败与推理鉴权失败分开：尚有效且未被拒绝的 access token
+                    // 可继续使用，避免一次提前续期就使账户立即退出轮换。
+                    if !current.is_usable() || self.access_token_was_rejected(account_id, &current)
                     {
-                        tracing::warn!(
-                            account_id,
-                            error = %mark_err,
-                            "codex account invalid mark failed"
-                        );
+                        if let Err(mark_err) = self
+                            .mark_invalid_if_credential_matches(account_id, &record)
+                            .await
+                        {
+                            tracing::warn!(account_id, error = %mark_err,
+                                "codex account invalid mark failed");
+                        }
                     }
                 }
                 return Err(err);
@@ -4448,7 +4480,7 @@ mod tests {
     }
 
     #[test]
-    fn refresh_account_persists_invalid_after_relogin_error() {
+    fn expired_account_persists_invalid_after_relogin_error() {
         run_async(async {
             let (store, data_dir) = create_test_store();
             let account_id = "codex-refresh-invalid.json".to_string();
@@ -4463,7 +4495,7 @@ mod tests {
                         CodexAccountStatus::Active,
                         "acct-invalid",
                         "refresh-invalid@example.com",
-                        future_rfc3339(24),
+                        past_rfc3339(1),
                     ),
                 )
                 .await

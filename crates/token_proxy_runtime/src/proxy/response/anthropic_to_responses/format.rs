@@ -34,7 +34,11 @@ pub(super) enum OutputItemSnapshot {
     },
 }
 
-pub(super) fn usage_to_value(usage: TokenUsage, cache_usage: Option<AnthropicCacheUsage>) -> Value {
+pub(super) fn usage_to_value(
+    usage: TokenUsage,
+    cache_usage: Option<AnthropicCacheUsage>,
+    thinking_tokens: Option<u64>,
+) -> Value {
     let input_tokens = usage.input_tokens.unwrap_or(0);
     let output_tokens = usage.output_tokens.unwrap_or(0);
     let (cache_read_tokens, cache_creation_tokens) = cache_usage
@@ -48,9 +52,11 @@ pub(super) fn usage_to_value(usage: TokenUsage, cache_usage: Option<AnthropicCac
     let mut value = json!({
         "input_tokens": total_input_tokens,
         "output_tokens": output_tokens,
-        "output_tokens_details": { "reasoning_tokens": 0 },
         "total_tokens": total_tokens
     });
+    if let Some(tokens) = thinking_tokens {
+        value["output_tokens_details"] = json!({"reasoning_tokens":tokens});
+    }
     if cache_read_tokens > 0 || cache_creation_tokens > 0 {
         let mut details = Map::new();
         if cache_read_tokens > 0 {

@@ -100,6 +100,26 @@ fn visit(
     } else {
         Map::new()
     };
+    let has_closed_boundary = [&output, object].iter().any(|schema| {
+        schema
+            .get("additionalProperties")
+            .is_some_and(|value| value != &Value::Bool(true))
+    });
+    let has_sibling_assertion = object.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "$ref" | "$defs" | "definitions" | "description" | "title" | "default" | "examples"
+        )
+    });
+    if object.contains_key("$ref") && has_closed_boundary && has_sibling_assertion {
+        // additionalProperties is evaluated against its own properties set.
+        // Hoisting sibling properties across that boundary would permit keys
+        // the reference forbids (or vice versa).
+        let mut siblings = object.clone();
+        siblings.remove("$ref");
+        let siblings = visit(&Value::Object(siblings), root, stack, budget, depth + 1)?;
+        return Ok(serde_json::json!({"allOf":[output,siblings]}));
+    }
     for (key, child) in object {
         budget.bytes = budget
             .bytes
@@ -157,10 +177,9 @@ fn visit(
             if key == "properties" {
                 if let (Some(left), Some(right)) = (previous.as_object_mut(), child.as_object()) {
                     for (name, schema) in right {
-                        if left.get(name).is_some_and(|old| old != schema) {
-                            return Err(
-                                "Gemini tool schema reference has conflicting properties.".into()
-                            );
+                        if let Some(old) = left.get(name).filter(|old| *old != schema) {
+                            left.insert(name.clone(), serde_json::json!({"allOf":[old,schema]}));
+                            continue;
                         }
                         left.insert(name.clone(), schema.clone());
                     }
@@ -181,9 +200,16 @@ fn visit(
                 key.as_str(),
                 "description" | "title" | "default" | "examples"
             ) {
-                return Err(
-                    "Gemini tool schema reference has conflicting sibling constraints.".into(),
-                );
+                // A sibling constrains the referenced schema; it never replaces
+                // the reference's assertion. Preserve conjunction for the cleaner.
+                let constraint = serde_json::json!({key.clone():child});
+                output
+                    .entry("allOf".to_string())
+                    .or_insert_with(|| Value::Array(Vec::new()))
+                    .as_array_mut()
+                    .ok_or("Gemini tool schema allOf must be an array.")?
+                    .push(constraint);
+                continue;
             }
         }
         output.insert(key.clone(), child);
@@ -203,6 +229,27 @@ mod tests {
         assert_eq!(resolved["properties"]["x"]["minimum"], 2);
         assert_eq!(resolved["default"], literal);
         assert!(resolved.get("$defs").is_none());
+    }
+
+    #[test]
+    fn refs_keep_sibling_conjunction_without_overwriting_constraints() {
+        let schema = json!({"$defs":{"base":{"type":"object","properties":{"x":{"type":"integer","minimum":2}},"required":["x"]}},"$ref":"#/$defs/base","properties":{"x":{"maximum":5}},"required":["y"]});
+        let resolved = resolve(&schema).unwrap();
+        assert_eq!(
+            resolved["properties"]["x"]["allOf"],
+            json!([{"type":"integer","minimum":2},{"maximum":5}])
+        );
+        assert_eq!(resolved["required"], json!(["x", "y"]));
+        let ranged = resolve(
+            &json!({"$defs":{"n":{"type":"number","minimum":2}},"$ref":"#/$defs/n","minimum":5}),
+        )
+        .unwrap();
+        assert_eq!(ranged["minimum"], 2);
+        assert_eq!(ranged["allOf"], json!([{"minimum":5}]));
+        let closed = resolve(&json!({"$defs":{"closed":{"type":"object","properties":{"a":{"type":"string"}},"additionalProperties":false}},"$ref":"#/$defs/closed","properties":{"b":{"type":"string"}},"required":["b"]})).unwrap();
+        assert!(closed.get("properties").is_none());
+        assert!(closed["allOf"][0]["properties"].get("b").is_none());
+        assert_eq!(closed["allOf"][1]["required"], json!(["b"]));
     }
     #[test]
     fn refs_bound_depth_and_literal_expansion_and_merge_siblings() {

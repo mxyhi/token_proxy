@@ -872,8 +872,8 @@ async fn sanitizes_native_openai_responses_input_metadata() {
             "tools":[{"type":"namespace","name":"team","namespace":"keep-tool"}],
             "input":[
                 {"type":"message","id":"item_message","namespace":"remove-message","role":"user","content":[{"type":"input_text","text":"hi","namespace":"keep-content"}]},
-                {"type":"function_call","id":"item_call","namespace":"remove-call","call_id":"call_1","name":"exec","arguments":"{}"},
-                {"type":"custom_tool_call","id":"fc_valid","namespace":"remove-custom","call_id":"call_2","name":"shell","input":"pwd"},
+                {"type":"function_call","id":"item_call","namespace":"team","call_id":"call_1","name":"exec","arguments":"{}"},
+                {"type":"custom_tool_call","id":"fc_valid","namespace":"team","call_id":"call_2","name":"shell","input":"pwd"},
                 {"type":"function_call_output","id":"item_output","namespace":"remove-output","call_id":"call_1","output":"ok"},
                 {"type":"reasoning","id":"rs_valid","namespace":"remove-reasoning","summary":[]}
             ]
@@ -906,12 +906,75 @@ async fn sanitizes_native_openai_responses_input_metadata() {
     assert_eq!(value["input"][2]["id"], "fc_valid");
     assert_eq!(value["input"][3]["id"], "item_output");
     assert_eq!(value["input"][4]["id"], "rs_valid");
-    for item in value["input"].as_array().expect("input array") {
-        assert!(item.get("namespace").is_none());
+    for index in [0, 3, 4] {
+        assert!(value["input"][index].get("namespace").is_none());
     }
+    assert_eq!(value["input"][1]["namespace"], "team");
+    assert_eq!(value["input"][2]["namespace"], "team");
     assert_eq!(value["input"][0]["content"][0]["namespace"], "keep-content");
     assert_eq!(value["tools"][0]["namespace"], "keep-tool");
     assert_eq!(value["large"], 9_007_199_254_740_993_u64);
+}
+
+#[tokio::test]
+async fn preserves_native_responses_tool_namespaces_without_other_rewrites() {
+    let upstream = test_upstream(false, false, false);
+    let meta = xai_meta("gpt-6-astra", false);
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"gpt-6-astra","tools":[{"type":"namespace","name":"team","tools":[{"type":"function","name":"exec","parameters":{"type":"object"}}]}],"input":[{"type":"function_call","id":"fc_valid","namespace":"team","call_id":"call_1","name":"exec","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}"#,
+    ));
+    for provider in ["openai", "openai-response"] {
+        let rewritten =
+            build_json_transformed_body(provider, &upstream, "/v1/responses", &body, &meta, None)
+                .await;
+        assert!(matches!(rewritten, Ok(None)), "namespace must round-trip");
+    }
+}
+
+#[tokio::test]
+async fn preserves_native_responses_typed_tool_item_ids() {
+    let upstream = test_upstream(false, false, false);
+    let meta = xai_meta("gpt-6-astra", false);
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"gpt-6-astra","input":[{"type":"tool_search_call","id":"tsc_search","call_id":"call_search","arguments":"{}"},{"type":"custom_tool_call","id":"ctc_exec","namespace":"shell","call_id":"call_exec","name":"exec","input":"pwd"}]}"#,
+    ));
+    for provider in ["openai", "openai-response"] {
+        let rewritten =
+            build_json_transformed_body(provider, &upstream, "/v1/responses", &body, &meta, None)
+                .await;
+        assert!(
+            matches!(rewritten, Ok(None)),
+            "typed item IDs must round-trip"
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_anthropic_restores_internal_commentary_before_forwarding() {
+    let upstream = test_upstream(false, false, false);
+    let meta = xai_meta("claude-sonnet-4-5", false);
+    let body = ReplayableBody::from_bytes(Bytes::from_static(
+        br#"{"model":"claude-sonnet-4-5","messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"checking files","signature":"cpa:commentary:v1"},{"type":"thinking","thinking":"real reasoning","signature":"provider-signature"}]}]}"#,
+    ));
+    for path in ["/v1/messages", "/v1/messages/count_tokens"] {
+        let rewritten =
+            match build_json_transformed_body("anthropic", &upstream, path, &body, &meta, None)
+                .await
+            {
+                Ok(Some(body)) => body,
+                _ => panic!("internal commentary must be restored"),
+            };
+        let bytes = rewritten.read_bytes_if_small(4096).await.unwrap().unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value["messages"][0]["content"][0],
+            json!({"type":"text","text":"checking files"})
+        );
+        assert_eq!(
+            value["messages"][0]["content"][1]["signature"],
+            "provider-signature"
+        );
+    }
 }
 
 #[tokio::test]

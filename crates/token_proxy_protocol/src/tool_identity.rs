@@ -460,3 +460,73 @@ mod tests {
         );
     }
 }
+/// Merge historical declarations for providers without Responses additional_tools.
+/// Top-level definitions win; repeated namespaces retain the first definition of
+/// each child, so response restoration uses exactly the declarations sent upstream.
+pub fn promote_additional_tools(object: &mut serde_json::Map<String, serde_json::Value>) -> bool {
+    use serde_json::Value;
+    fn merge(output: &mut Vec<Value>, incoming: &Value) {
+        let Some(name) = incoming.get("name").and_then(Value::as_str) else {
+            if !output.contains(incoming) {
+                output.push(incoming.clone());
+            }
+            return;
+        };
+        if let Some(existing) = output
+            .iter_mut()
+            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+        {
+            if existing.get("type").and_then(Value::as_str) == Some("namespace")
+                && incoming.get("type").and_then(Value::as_str) == Some("namespace")
+            {
+                let children_key = if existing.get("tools").is_some() {
+                    "tools"
+                } else {
+                    "children"
+                };
+                if let (Some(target), Some(children)) = (
+                    existing.get_mut(children_key).and_then(Value::as_array_mut),
+                    incoming
+                        .get("tools")
+                        .or_else(|| incoming.get("children"))
+                        .and_then(Value::as_array),
+                ) {
+                    for child in children {
+                        merge(target, child);
+                    }
+                }
+            }
+            return;
+        }
+        output.push(incoming.clone());
+    }
+    let original = object
+        .get("tools")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut merged = Vec::new();
+    for tool in &original {
+        merge(&mut merged, tool);
+    }
+    let mut removed = false;
+    if let Some(input) = object.get_mut("input").and_then(Value::as_array_mut) {
+        input.retain(|item| {
+            if item.get("type").and_then(Value::as_str) != Some("additional_tools") {
+                return true;
+            }
+            if let Some(tools) = item.get("tools").and_then(Value::as_array) {
+                for tool in tools {
+                    merge(&mut merged, tool);
+                }
+            }
+            removed = true;
+            false
+        });
+    }
+    let changed = removed || merged != original;
+    if changed {
+        object.insert("tools".to_string(), Value::Array(merged));
+    }
+    changed
+}

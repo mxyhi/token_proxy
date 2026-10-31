@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -33,14 +33,23 @@ struct AccountCooldown {
 
 pub(crate) struct AccountSelectorRuntime {
     retryable_failure_cooldown: Duration,
-    cooldowns: Mutex<HashMap<AccountCooldownKey, AccountCooldown>>,
+    cooldowns: Arc<Mutex<HashMap<AccountCooldownKey, AccountCooldown>>>,
 }
 
 impl AccountSelectorRuntime {
+    /// 配置热加载与重新登录可清除短失败状态，但不能提前解除上游要求的等待。
+    pub(crate) fn inherit_mandatory_waits(&mut self, previous: &Self) {
+        self.cooldowns = previous.cooldowns.clone();
+        let now = Instant::now();
+        self.cooldowns
+            .lock()
+            .expect("account selector cooldown lock poisoned")
+            .retain(|_, entry| entry.mandatory && entry.until > now);
+    }
     pub(crate) fn new_with_cooldown(retryable_failure_cooldown: Duration) -> Self {
         Self {
             retryable_failure_cooldown,
-            cooldowns: Mutex::new(HashMap::new()),
+            cooldowns: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -230,10 +239,17 @@ fn prune_expired_cooldowns(
     cooldowns.retain(|_, entry| entry.until > now);
 }
 
-fn retry_after_deadline(now: Instant, headers: &HeaderMap) -> Option<Instant> {
+pub(super) fn retry_after_deadline(now: Instant, headers: &HeaderMap) -> Option<Instant> {
     let raw_value = headers.get(RETRY_AFTER)?.to_str().ok()?.trim();
-    let seconds = raw_value.parse::<u64>().ok()?;
-    now.checked_add(Duration::from_secs(seconds))
+    let duration = if let Ok(seconds) = raw_value.parse::<u64>() {
+        Duration::from_secs(seconds)
+    } else {
+        httpdate::parse_http_date(raw_value)
+            .ok()?
+            .duration_since(SystemTime::now())
+            .ok()?
+    };
+    now.checked_add(duration)
 }
 
 fn instant_to_epoch_ms(until: Instant) -> Option<u128> {

@@ -172,6 +172,12 @@ pub(super) fn responses_response_to_anthropic(
                         match part.get("type").and_then(Value::as_str) {
                             Some("output_text") => {
                                 if let Some(text) = part.get("text").and_then(Value::as_str) {
+                                    if item.get("phase").and_then(Value::as_str)
+                                        == Some("commentary")
+                                    {
+                                        content.push(json!({"type":"thinking","thinking":text,"signature":claude_reasoning::COMMENTARY_MARKER}));
+                                        continue;
+                                    }
                                     combined_text.push_str(text);
                                     let mut block = json!({ "type": "text", "text": text });
                                     let citations = web_search::annotations_to_citations(
@@ -552,7 +558,7 @@ fn map_anthropic_usage_to_openai_usage(usage: &Map<String, Value>) -> Value {
             "mapped Anthropic cache creation usage"
         );
     }
-    json!({
+    let mut mapped = json!({
         "input_tokens": total_input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_input_tokens + output_tokens,
@@ -560,5 +566,13 @@ fn map_anthropic_usage_to_openai_usage(usage: &Map<String, Value>) -> Value {
             "cached_tokens": cache_read_tokens,
             "cached_creation_tokens": cache_creation_tokens
         }
-    })
+    });
+    if let Some(tokens) = usage
+        .get("output_tokens_details")
+        .and_then(|details| details.get("thinking_tokens"))
+        .and_then(Value::as_u64)
+    {
+        mapped["output_tokens_details"] = json!({"reasoning_tokens":tokens});
+    }
+    mapped
 }

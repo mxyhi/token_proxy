@@ -238,11 +238,16 @@ fn responses_tool_output_item_to_chat_message(item: &Map<String, Value>) -> Opti
         return None;
     }
     let call_id = item.get("call_id").and_then(Value::as_str).unwrap_or("");
-    Some(json!({
+    let mut message = json!({
         "role": "tool",
         "tool_call_id": call_id,
         "content": normalize_tool_output_to_chat_content(item.get("output"))
-    }))
+    });
+    // Chat 同时是 Claude→Gemini 的中间格式，保留失败标记供 functionResponse 转换。
+    if item.get("is_error").and_then(Value::as_bool) == Some(true) {
+        message["is_error"] = Value::Bool(true);
+    }
+    Some(message)
 }
 
 fn normalize_tool_output_to_chat_content(output: Option<&Value>) -> Value {

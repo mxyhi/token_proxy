@@ -160,3 +160,33 @@ fn malformed_gemini_tool_call_is_not_a_successful_completion() {
     let input = json!({"candidates":[{"finishReason":"MALFORMED_FUNCTION_CALL","content":{"parts":[{"functionCall":{"name":"broken","args":{}}}]}}]});
     assert!(gemini_response_to_chat(&Bytes::from(input.to_string()), None).is_err());
 }
+
+#[test]
+fn gemini_blocked_or_malformed_outputs_are_not_successful() {
+    for input in [
+        json!({"promptFeedback":{"blockReason":"SAFETY"}}),
+        json!({"error":{"message":"private detail"}}),
+        json!({"candidates":[{"finishReason":"MALFORMED_RESPONSE"}]}),
+    ] {
+        assert!(gemini_response_to_chat(&Bytes::from(input.to_string()), None).is_err());
+    }
+}
+
+#[test]
+fn gemini_terminal_reason_survives_missing_content_and_tool_calls() {
+    for (reason, expected) in [
+        ("SAFETY", "content_filter"),
+        ("IMAGE_SAFETY", "content_filter"),
+        ("MAX_TOKENS", "length"),
+    ] {
+        for content in [
+            Value::Null,
+            json!({"parts":[{"functionCall":{"name":"f","args":{}}}]}),
+        ] {
+            let input = json!({"candidates":[{"finishReason":reason,"content":content}]});
+            let output = gemini_response_to_chat(&Bytes::from(input.to_string()), None).unwrap();
+            let output: Value = serde_json::from_slice(&output).unwrap();
+            assert_eq!(output["choices"][0]["finish_reason"], expected);
+        }
+    }
+}

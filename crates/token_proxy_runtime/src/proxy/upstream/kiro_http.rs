@@ -120,6 +120,7 @@ pub(super) async fn handle_send_error(
                 meta,
                 "kiro",
                 &upstream.id,
+                &upstream.selector_key,
                 account_id.clone(),
                 inbound_path,
                 state.log.clone(),

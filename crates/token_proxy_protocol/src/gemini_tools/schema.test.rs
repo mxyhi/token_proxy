@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn all_of_keeps_required_closed_objects_and_delays_array_placeholders() {
+    let schema = json!({"type":"object","properties":{"list":{"type":"array","allOf":[{"type":"array"},{"items":{"type":"integer"}}]}},"allOf":[{"type":"object","properties":{"x":{"type":"integer"}},"required":["x"],"additionalProperties":false}]});
+    let cleaned = clean_tool_schema(&schema);
+    assert_eq!(cleaned["allOf"][0]["required"], json!(["x"]));
+    assert_eq!(cleaned["allOf"][0]["additionalProperties"], false);
+    let list = &cleaned["properties"]["list"];
+    assert!(list.get("items").is_none());
+    assert!(list["allOf"][0].get("items").is_none());
+    assert_eq!(list["allOf"][1]["items"]["type"], "integer");
+}
+
+#[test]
 fn clean_schema_preserves_numeric_constraints() {
     let schema = json!({
         "type": "object",

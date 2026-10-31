@@ -44,6 +44,8 @@ fn transform_response_value(
 }
 
 // Split the test suite to keep each file below the project's line limit.
+#[path = "cpa_v8.test.rs"]
+mod cpa_v8;
 #[path = "local_shell.test.rs"]
 mod local_shell;
 #[path = "tests_part1.rs"]

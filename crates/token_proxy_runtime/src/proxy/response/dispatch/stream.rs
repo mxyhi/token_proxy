@@ -1373,8 +1373,13 @@ fn responses_prelude_retry_response(
 
     let body = Body::from(responses_prelude_error_body(response_transform, &error));
     let mut response = http::build_response(status, headers.clone(), body);
-    // capacity 类错误不触发跨请求冷却，但仍可原地/跨上游重试。
-    let is_capacity = buffered::is_capacity_retry_error(&message, &message);
+    // 容量错误不冷却整个账户；明确 Retry-After 由调度层按模型记录。
+    let is_capacity = buffered::is_capacity_retry_error(&message, &responses_error_payload(&error));
+    if is_capacity {
+        response
+            .extensions_mut()
+            .insert(crate::proxy::response::TransientModelCapacity);
+    }
     let cooldown_hint = buffered::xai_account_cooldown_hint(
         &context.provider,
         error.status,
@@ -1591,6 +1596,40 @@ mod tests {
     use futures_util::stream;
     use std::io;
     use tokio::time::sleep;
+
+    #[tokio::test]
+    async fn sse_capacity_keeps_retry_after_without_classifying_quota_as_capacity() {
+        for (code, should_cooldown) in [
+            ("turn_rate_limit_exceeded", false),
+            ("rate_limit_exceeded", true),
+            ("usage_limit_reached", true),
+        ] {
+            let error = responses_error::responses_stream_error(&serde_json::json!({
+                "type":"response.failed", "response":{"error":{
+                    "code":code,"type":"rate_limit_error","message":"Selected model is at capacity"
+                }}
+            }))
+            .unwrap();
+            let mut headers = HeaderMap::new();
+            headers.insert("retry-after", axum::http::HeaderValue::from_static("12"));
+            let mut context = test_context();
+            context.provider = PROVIDER_CODEX.to_string();
+            let response = responses_prelude_retry_response(
+                StatusCode::OK,
+                &headers,
+                FormatTransform::None,
+                error,
+                &mut context,
+                &Arc::new(LogWriter::new(None)),
+            );
+            assert_eq!(response.headers()["retry-after"], "12");
+            let retry = response
+                .extensions()
+                .get::<RetryableStreamResponse>()
+                .unwrap();
+            assert_eq!(retry.should_cooldown, should_cooldown, "{code}");
+        }
+    }
 
     fn test_context() -> LogContext {
         LogContext {

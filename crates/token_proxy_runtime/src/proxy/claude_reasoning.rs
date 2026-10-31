@@ -8,6 +8,35 @@ pub(crate) const REDACTED_THINKING_PREFIX: &str = "claude-redacted-thinking:";
 /// Marker for an opaque Claude thinking block carried through Responses.
 pub(crate) const SIGNED_THINKING_PREFIX: &str = "anthropic-thinking-v1:";
 
+/// Local history marker, never a provider signature or trusted encrypted payload.
+pub(crate) const COMMENTARY_MARKER: &str = "cpa:commentary:v1";
+
+pub(crate) fn is_commentary_marker(signature: Option<&str>) -> bool {
+    signature.is_some_and(|value| value.trim() == COMMENTARY_MARKER)
+}
+
+/// Native Claude requests must restore this internal marker before provider validation.
+pub(crate) fn restore_commentary_markers(body: &mut Value) -> bool {
+    let Some(messages) = body.get_mut("messages").and_then(Value::as_array_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    for message in messages {
+        let Some(blocks) = message.get_mut("content").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for block in blocks {
+            if block.get("type").and_then(Value::as_str) == Some("thinking")
+                && is_commentary_marker(block.get("signature").and_then(Value::as_str))
+            {
+                *block = serde_json::json!({"type":"text","text":block.get("thinking").and_then(Value::as_str).unwrap_or("")});
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 /// Wrap redacted Claude data in the Responses carrier without changing payload bytes.
 pub(crate) fn redacted_thinking_carrier(data: &str) -> Option<String> {
     (!data.is_empty()).then(|| format!("{REDACTED_THINKING_PREFIX}{data}"))

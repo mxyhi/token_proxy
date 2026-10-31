@@ -58,6 +58,36 @@ pub(super) async fn prepare_upstream_request_with_body(
     cooldown_scope: &CooldownScope,
 ) -> Result<PreparedUpstreamRequest, AttemptOutcome> {
     let mapped_meta = build_mapped_meta(meta, upstream);
+    if let Some(model) = mapped_meta
+        .mapped_model
+        .as_deref()
+        .or(mapped_meta.original_model.as_deref())
+    {
+        if let Some(seconds) =
+            state
+                .upstream_selector
+                .model_wait_seconds(provider, &upstream.selector_key, model)
+        {
+            let message =
+                "Upstream model is temporarily at capacity; retry after the indicated wait.";
+            let mut response = http::error_response(StatusCode::TOO_MANY_REQUESTS, message);
+            response.headers_mut().insert(
+                axum::http::header::RETRY_AFTER,
+                HeaderValue::from_str(&seconds.to_string()).expect("numeric Retry-After"),
+            );
+            response.extensions_mut().insert(RetryDirective {
+                scope: RetryScope::NextOnly,
+                effective_body: None,
+            });
+            tracing::debug!(provider, upstream_id = %upstream.id, model, retry_after_seconds = seconds, "skipped upstream model during capacity wait");
+            return Err(AttemptOutcome::Retryable {
+                message: message.into(),
+                response: Some(response),
+                is_timeout: false,
+                should_cooldown: false,
+            });
+        }
+    }
     let upstream_path_with_query =
         resolve_upstream_path_with_query(provider, upstream_path_with_query, &mapped_meta)
             .map_err(|message| {

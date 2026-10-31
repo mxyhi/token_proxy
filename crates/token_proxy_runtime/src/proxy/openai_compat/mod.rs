@@ -472,6 +472,7 @@ fn responses_request_to_chat(body: &Bytes) -> Result<Bytes, String> {
         return Err("Request body must be a JSON object.".to_string());
     };
     token_proxy_protocol::tool_identity::local_shell::prepare_request(object)?;
+    token_proxy_protocol::tool_identity::promote_additional_tools(object);
     token_proxy_protocol::tool_identity::normalize_responses_tool_names(object, &[])?;
     tools::restrict_allowed_tools_for_chat(object)?;
 

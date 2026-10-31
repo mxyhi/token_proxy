@@ -103,6 +103,7 @@ pub(super) async fn finalize_response(
         meta,
         "kiro",
         &upstream.id,
+        &upstream.selector_key,
         account_id,
         inbound_path,
         state.log.clone(),

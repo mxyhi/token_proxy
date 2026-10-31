@@ -1,6 +1,50 @@
 use super::*;
 
 #[test]
+fn reloaded_selector_keeps_mandatory_waits_but_clears_soft_failures() {
+    let old = AccountSelectorRuntime::new_with_cooldown(Duration::from_secs(15));
+    old.mark_retryable_failure_scoped("codex", "soft", &CooldownScope::Global);
+    old.mark_explicit_cooldown_scoped(
+        "codex",
+        "quota",
+        Duration::from_secs(60),
+        &CooldownScope::Global,
+    );
+    let mut next = AccountSelectorRuntime::new_with_cooldown(Duration::from_secs(30));
+    next.inherit_mandatory_waits(&old);
+    assert!(!next.is_cooling_down("codex", "soft"));
+    assert!(next.is_cooling_down("codex", "quota"));
+    old.mark_explicit_cooldown_scoped(
+        "codex",
+        "late",
+        Duration::from_secs(60),
+        &CooldownScope::Global,
+    );
+    assert!(next.is_cooling_down("codex", "late"));
+}
+
+#[test]
+fn retry_after_accepts_http_date_without_extending_past_dates() {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        RETRY_AFTER,
+        httpdate::fmt_http_date(SystemTime::now() + Duration::from_secs(60))
+            .parse()
+            .unwrap(),
+    );
+    let now = Instant::now();
+    let remaining = retry_after_deadline(now, &headers)
+        .unwrap()
+        .duration_since(now);
+    assert!(remaining >= Duration::from_secs(58) && remaining <= Duration::from_secs(60));
+    headers.insert(
+        RETRY_AFTER,
+        "Wed, 21 Oct 2015 07:28:00 GMT".parse().unwrap(),
+    );
+    assert!(retry_after_deadline(now, &headers).is_none());
+}
+
+#[test]
 fn cooled_account_is_reported_while_ready_accounts_are_not() {
     // 覆盖：cooldown 写入后 is_cooling_down 查询（原 order 过滤语义）。
     let selector = AccountSelectorRuntime::new_with_cooldown(Duration::from_secs(15));

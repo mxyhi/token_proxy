@@ -291,6 +291,19 @@ fn chat_messages_to_gemini_contents(
                     })
                     .unwrap_or_else(|| "function".to_string());
                 let (response, media) = tool_response_with_media(message.get("content"))?;
+                let response = if message.get("is_error").and_then(Value::as_bool) == Some(true) {
+                    let error = match response {
+                        Value::Object(mut object)
+                            if object.len() == 1 && object.contains_key("result") =>
+                        {
+                            object.remove("result").unwrap_or(Value::Null)
+                        }
+                        value => value,
+                    };
+                    json!({"error":error})
+                } else {
+                    response
+                };
                 let mut parts = vec![json!({"functionResponse":{"name":name,"response":response}})];
                 parts.extend(media);
                 contents.push(json!({"role":"user","parts":parts}));

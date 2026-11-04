@@ -15,6 +15,12 @@ pub(super) struct ToolEventOrder {
 
 impl ToolEventOrder {
     pub(super) fn push(&mut self, event: Value) -> Result<Vec<Value>, ()> {
+        // 空文本 delta 不携带内容，不应占用交错缓冲；上游可能随工具参数大量附带。
+        if event["type"].as_str() == Some("response.output_text.delta")
+            && event["delta"].as_str() == Some("")
+        {
+            return Ok(Vec::new());
+        }
         let terminal = matches!(
             event["type"].as_str(),
             Some("response.completed" | "response.incomplete")
@@ -160,5 +166,19 @@ mod tests {
         assert!(order
             .push(json!({"type":"response.output_text.delta","delta":"x"}))
             .is_err());
+    }
+
+    #[test]
+    fn empty_text_deltas_do_not_consume_the_interleaving_budget() {
+        let mut order = ToolEventOrder::default();
+        order.push(json!({"type":"response.output_item.added","item":{"type":"function_call","id":"a"}})).unwrap();
+        // 上游可能随每个工具参数 delta 附带一条空文本 delta；它们不应占用交错缓冲。
+        for _ in 0..(MAX_PENDING_EVENTS * 2) {
+            assert!(order
+                .push(json!({"type":"response.output_text.delta","delta":""}))
+                .unwrap()
+                .is_empty());
+        }
+        assert!(order.finish().is_empty());
     }
 }

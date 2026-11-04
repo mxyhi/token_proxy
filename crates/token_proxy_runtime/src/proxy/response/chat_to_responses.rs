@@ -277,10 +277,13 @@ where
     }
 
     fn handle_text_delta(&mut self, delta: &str) {
-        if !delta.is_empty() {
-            self.context.mark_first_output();
-            self.close_reasoning_output();
+        // 上游常在工具参数 delta 中附带 `content: ""`。空文本不携带任何内容，
+        // 若仍发出 response.output_text.delta，会在下游 ToolEventOrder 中堆积并耗尽交错缓冲。
+        if delta.is_empty() {
+            return;
         }
+        self.context.mark_first_output();
+        self.close_reasoning_output();
         self.ensure_message_output();
         self.ensure_message_text_part();
         let (item_id, output_index) = {

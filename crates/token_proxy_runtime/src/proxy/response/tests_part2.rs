@@ -113,6 +113,52 @@ fn stream_chat_to_responses_does_not_complete_partial_tool_without_finish_reason
 }
 
 #[test]
+fn stream_chat_to_responses_skips_empty_text_deltas_interleaved_with_tool_arguments() {
+    super::run_async(async {
+        // 上游常在与 tool_calls 相同的 delta 中附带 content:""；空文本不应产生任何事件，
+        // 否则会在后续 Anthropic 转换的交错缓冲中堆积。
+        let arguments = "{\"x\":\"01234567\"}";
+        let mut events = Vec::new();
+        for i in 0..8 {
+            let fragment = match i {
+                0 => "{\"x\":\"0".to_string(),
+                7 => "7\"}".to_string(),
+                _ => i.to_string(),
+            };
+            let mut tool_call = json!({"index":0,"function":{"arguments":fragment}});
+            if i == 0 {
+                tool_call["id"] = json!("call_foo");
+                tool_call["type"] = json!("function");
+                tool_call["function"]["name"] = json!("getRandomNumber");
+            }
+            events.push(
+                json!({"choices":[{"delta":{"content":"","tool_calls":[tool_call]},"finish_reason":null}]})
+                    .to_string(),
+            );
+        }
+        events.push(json!({"choices":[{"delta":{},"finish_reason":"tool_calls"}]}).to_string());
+        events.push("[DONE]".to_string());
+        let payloads = collect_chat_to_responses_payloads(events).await;
+
+        assert!(!payloads
+            .iter()
+            .any(|payload| payload["type"] == "response.output_text.delta"));
+        let accumulated: String = payloads
+            .iter()
+            .filter(|payload| payload["type"] == "response.function_call_arguments.delta")
+            .filter_map(|payload| payload["delta"].as_str())
+            .collect();
+        assert_eq!(accumulated, arguments);
+        let terminal = payloads
+            .iter()
+            .find(|payload| payload["type"] == "response.completed")
+            .expect("completed event");
+        assert_eq!(terminal["response"]["output"][0]["type"], "function_call");
+        assert_eq!(terminal["response"]["output"][0]["arguments"], arguments);
+    });
+}
+
+#[test]
 fn stream_chat_to_responses_synthesizes_terminal_empty_tool_name() {
     super::run_async(async {
         let payloads = collect_chat_to_responses_payloads(vec![

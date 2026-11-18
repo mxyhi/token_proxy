@@ -12,6 +12,8 @@ export type ModelPricingProfile = {
   cacheWriteNanoUsdPerToken: number | null;
   cacheWrite5mNanoUsdPerToken: number | null;
   cacheWrite1hNanoUsdPerToken: number | null;
+  cacheWrite30mNanoUsdPerToken?: number | null;
+  cacheWrite12hNanoUsdPerToken?: number | null;
   imageInputNanoUsdPerToken: number | null;
   imageOutputNanoUsdPerToken: number | null;
 };

@@ -30,6 +30,8 @@ pub struct RequestLogDetail {
     pub cache_write_tokens: Option<i64>,
     pub cache_write_5m_tokens: Option<i64>,
     pub cache_write_1h_tokens: Option<i64>,
+    pub cache_write_30m_tokens: Option<i64>,
+    pub cache_write_12h_tokens: Option<i64>,
     pub service_tier: Option<String>,
     pub cost_nano_usd: Option<i64>,
     pub pricing_version: Option<String>,
@@ -87,6 +89,8 @@ SELECT
   cache_write_tokens,
   cache_write_5m_tokens,
   cache_write_1h_tokens,
+  cache_write_30m_tokens,
+  cache_write_12h_tokens,
   service_tier,
   cost_nano_usd,
   pricing_version,
@@ -153,11 +157,21 @@ LIMIT 1;
         .try_get::<Option<i64>, _>("cache_write_1h_tokens")
         .ok()
         .flatten();
+    let cache_write_30m_tokens = row
+        .try_get::<Option<i64>, _>("cache_write_30m_tokens")
+        .ok()
+        .flatten();
+    let cache_write_12h_tokens = row
+        .try_get::<Option<i64>, _>("cache_write_12h_tokens")
+        .ok()
+        .flatten();
     let cache_components = [
         cache_read_tokens,
         cache_write_tokens,
         cache_write_5m_tokens,
         cache_write_1h_tokens,
+        cache_write_30m_tokens,
+        cache_write_12h_tokens,
     ];
     // 历史行没有缓存分量时保留 null；显式记录的零值仍返回 Some(0)。
     let cached_tokens = cache_components
@@ -225,6 +239,8 @@ LIMIT 1;
         cache_write_tokens,
         cache_write_5m_tokens,
         cache_write_1h_tokens,
+        cache_write_30m_tokens,
+        cache_write_12h_tokens,
         service_tier: row
             .try_get::<Option<String>, _>("service_tier")
             .ok()

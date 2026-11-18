@@ -4,9 +4,9 @@
 
 运行时来源：https://raw.githubusercontent.com/mxyhi/token_proxy/main/crates/token_proxy_runtime/resources/codex-models.json
 
-初始官方元数据来自 OpenAI Codex 提交 `126a0ee92ed2c5e73cd8a8f7e37563e8527552d7`（2026-10-26，新增 `gpt-6.1-terra`）：
-https://github.com/openai/codex/blob/126a0ee92ed2c5e73cd8a8f7e37563e8527552d7/codex-rs/models-manager/models.json
-原始文件 SHA-256：`1384625c0b6b3e67d3c60da29becea2b017f2c283fc1e2d05b8edafb4698eb10`。许可证见 CODEX-LICENSE。
+当前官方元数据来自 OpenAI Codex 提交 `6c0cee502d215e5df2dd9a303cf2e252229c9e12`（2026-11-17，新增 `gpt-6.2-astra`、`gpt-6.2-sol`，`gpt-6.1-sol` 上下文更新为 500,000）：
+https://github.com/openai/codex/blob/6c0cee502d215e5df2dd9a303cf2e252229c9e12/codex-rs/models-manager/models.json
+原始文件 SHA-256：`d50b6749506d97e5f334dbabcb666eb1689f423cf3e88cfabdcf3c536b873068`。许可证见 CODEX-LICENSE。
 
 TP 仅调整数组顺序和 `priority`（版本递减、同版本价格由高到低），移除 `gpt-5.5`；其余元数据和未知字段保留。隐藏内部模型不出现在普通菜单。
 

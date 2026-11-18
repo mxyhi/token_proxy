@@ -55,7 +55,7 @@ describe("CodexModelMenuCard", () => {
   });
 
   it("lists channel candidates without official models and toggles them", async () => {
-    invokeMock.mockResolvedValue(["qwen3.8-27b-uncensored", "gpt-5.5", "deepseek-v4"]);
+    invokeMock.mockResolvedValue(["qwen3.8-27b-uncensored", "gpt-6.2-sol", "deepseek-v4"]);
     const onChange = vi.fn();
     render(<CodexModelMenuCard models={["custom-model"]} onChange={onChange} isDirty={false} />);
 
@@ -63,7 +63,7 @@ describe("CodexModelMenuCard", () => {
       expect(candidateList().getByText("deepseek-v4")).toBeInTheDocument(),
     );
     expect(invokeMock).toHaveBeenCalledWith("read_codex_extra_model_candidates");
-    expect(candidateList().queryByText("gpt-5.5")).not.toBeInTheDocument();
+    expect(candidateList().queryByText("gpt-6.2-sol")).not.toBeInTheDocument();
     // 已添加的手工模型也在列表中，便于直接取消勾选。
     expect(candidateList().getByText("custom-model")).toBeInTheDocument();
 
@@ -191,13 +191,13 @@ describe("CodexModelMenuCard", () => {
     render(<CodexModelMenuCard models={[]} onChange={onChange} isDirty={false} />);
 
     fireEvent.change(screen.getByLabelText(m.codex_model_menu_input_label()), {
-      target: { value: "gpt-5.5" },
+      target: { value: "gpt-6.2-sol" },
     });
     fireEvent.click(screen.getByRole("button", { name: m.codex_model_menu_add() }));
 
     expect(onChange).not.toHaveBeenCalled();
     expect(
-      screen.getByText(m.codex_model_menu_already_official({ model: "gpt-5.5" })),
+      screen.getByText(m.codex_model_menu_already_official({ model: "gpt-6.2-sol" })),
     ).toBeInTheDocument();
   });
 

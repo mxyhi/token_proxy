@@ -97,6 +97,8 @@ fn contains_usage_fields(value: &Value) -> bool {
         "cache_creation_input_tokens",
         "cache_write_tokens",
         "cached_creation_tokens",
+        "ephemeral_30m_input_tokens",
+        "ephemeral_12h_input_tokens",
     ]
     .iter()
     .any(|field| value.get(*field).is_some())
@@ -201,17 +203,31 @@ fn snapshot_from_usage_value(value: &Value) -> UsageSnapshot {
         })
         .unwrap_or(0);
     let cache_creation = value.get("cache_creation");
-    let cache_write_5m_tokens = cache_creation
-        .and_then(|details| details.get("ephemeral_5m_input_tokens"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    let cache_write_1h_tokens = cache_creation
-        .and_then(|details| details.get("ephemeral_1h_input_tokens"))
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
+    let cache_write_5m_tokens =
+        cache_write_bucket(value, cache_creation, &["ephemeral_5m_input_tokens"]);
+    let cache_write_1h_tokens =
+        cache_write_bucket(value, cache_creation, &["ephemeral_1h_input_tokens"]);
+    let cache_write_30m_tokens = cache_write_bucket(
+        value,
+        cache_creation,
+        &["ephemeral_30m_input_tokens", "cache_write_30m_tokens"],
+    );
+    let cache_write_12h_tokens = cache_write_bucket(
+        value,
+        cache_creation,
+        &["ephemeral_12h_input_tokens", "cache_write_12h_tokens"],
+    );
+    let aggregate_cache_write = aggregate_cache_write.max(
+        cache_write_5m_tokens
+            .saturating_add(cache_write_1h_tokens)
+            .saturating_add(cache_write_30m_tokens)
+            .saturating_add(cache_write_12h_tokens),
+    );
     let cache_write_tokens = aggregate_cache_write
         .saturating_sub(cache_write_5m_tokens)
-        .saturating_sub(cache_write_1h_tokens);
+        .saturating_sub(cache_write_1h_tokens)
+        .saturating_sub(cache_write_30m_tokens)
+        .saturating_sub(cache_write_12h_tokens);
     let image_input_tokens = detail_tokens(
         value,
         &["input_tokens_details", "prompt_tokens_details"],
@@ -239,6 +255,8 @@ fn snapshot_from_usage_value(value: &Value) -> UsageSnapshot {
         cache_write_tokens,
         cache_write_5m_tokens,
         cache_write_1h_tokens,
+        cache_write_30m_tokens,
+        cache_write_12h_tokens,
         output_tokens,
         image_input_tokens,
         image_output_tokens,
@@ -249,6 +267,14 @@ fn snapshot_from_usage_value(value: &Value) -> UsageSnapshot {
         || value.get("prompt_tokens").is_some()
         || value.get("cache_read_input_tokens").is_some()
         || value.get("cache_creation_input_tokens").is_some()
+        || value
+            .get("cache_creation")
+            .and_then(|details| details.get("ephemeral_30m_input_tokens"))
+            .is_some()
+        || value
+            .get("cache_creation")
+            .and_then(|details| details.get("ephemeral_12h_input_tokens"))
+            .is_some()
         || value
             .get("input_tokens_details")
             .and_then(|details| details.get("cache_write_tokens"))
@@ -354,6 +380,26 @@ fn cache_read_tokens_from_usage_value(value: &Value) -> u64 {
         })
         .or_else(|| value.get("cached_tokens").and_then(Value::as_u64))
         .unwrap_or(0)
+}
+
+fn cache_write_bucket(value: &Value, cache_creation: Option<&Value>, keys: &[&str]) -> u64 {
+    [
+        cache_creation,
+        value.get("cache_creation_input_tokens_details"),
+        value.get("input_tokens_details"),
+        value.get("prompt_tokens_details"),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|details| {
+        keys.iter()
+            .find_map(|key| details.get(*key).and_then(Value::as_u64))
+    })
+    .or_else(|| {
+        keys.iter()
+            .find_map(|key| value.get(*key).and_then(Value::as_u64))
+    })
+    .unwrap_or(0)
 }
 
 fn detail_tokens(value: &Value, detail_fields: &[&str], token_field: &str) -> u64 {

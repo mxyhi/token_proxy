@@ -369,6 +369,19 @@ fn anthropic_cache_breakdown_does_not_double_count_aggregate_write() {
 }
 
 #[test]
+fn openai_cache_write_30m_and_12h_are_separate_from_aggregate() {
+    let bytes = Bytes::from_static(
+        br#"{"usage":{"input_tokens":30,"output_tokens":2,"cache_creation":{"ephemeral_30m_input_tokens":5,"ephemeral_12h_input_tokens":4}}}"#,
+    );
+    let snapshot = extract_usage_from_response(&bytes);
+
+    assert_eq!(snapshot.billable_usage.cache_write_tokens, 0);
+    assert_eq!(snapshot.billable_usage.cache_write_30m_tokens, 5);
+    assert_eq!(snapshot.billable_usage.cache_write_12h_tokens, 4);
+    assert_eq!(snapshot.billable_usage.total_input_tokens(), 30);
+}
+
+#[test]
 fn sse_collector_uses_latest_anthropic_usage_event() {
     let mut collector = SseUsageCollector::new();
     collector.push_chunk(

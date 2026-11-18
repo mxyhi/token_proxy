@@ -777,6 +777,166 @@
           "outputMultiplierScaled": 1500000000000
         }
       }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-11-17"
+      },
+      "model": {
+        "modelId": "gpt-6.2-sol",
+        "aliases": [
+          "openai/gpt-6.2-sol"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 2000,
+          "outputNanoUsdPerToken": 10000,
+          "cacheReadNanoUsdPerToken": 100,
+          "cacheWriteNanoUsdPerToken": 2500,
+          "cacheWrite5mNanoUsdPerToken": 2500,
+          "cacheWrite1hNanoUsdPerToken": 5000,
+          "cacheWrite30mNanoUsdPerToken": 2500,
+          "cacheWrite12hNanoUsdPerToken": 5000
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 4000,
+            "outputNanoUsdPerToken": 20000,
+            "cacheReadNanoUsdPerToken": 200,
+            "cacheWriteNanoUsdPerToken": 5000,
+            "cacheWrite5mNanoUsdPerToken": 5000,
+            "cacheWrite1hNanoUsdPerToken": 10000,
+            "cacheWrite30mNanoUsdPerToken": 5000,
+            "cacheWrite12hNanoUsdPerToken": 10000
+          },
+          "fast": {
+            "inputNanoUsdPerToken": 4000,
+            "outputNanoUsdPerToken": 20000,
+            "cacheReadNanoUsdPerToken": 200,
+            "cacheWriteNanoUsdPerToken": 5000,
+            "cacheWrite5mNanoUsdPerToken": 5000,
+            "cacheWrite1hNanoUsdPerToken": 10000,
+            "cacheWrite30mNanoUsdPerToken": 5000,
+            "cacheWrite12hNanoUsdPerToken": 10000
+          },
+          "flex": {
+            "inputNanoUsdPerToken": 1000,
+            "outputNanoUsdPerToken": 5000,
+            "cacheReadNanoUsdPerToken": 50,
+            "cacheWriteNanoUsdPerToken": 1250,
+            "cacheWrite5mNanoUsdPerToken": 1250,
+            "cacheWrite1hNanoUsdPerToken": 2500,
+            "cacheWrite30mNanoUsdPerToken": 1250,
+            "cacheWrite12hNanoUsdPerToken": 2500
+          },
+          "batch": {
+            "inputNanoUsdPerToken": 1000,
+            "outputNanoUsdPerToken": 5000,
+            "cacheReadNanoUsdPerToken": 50,
+            "cacheWriteNanoUsdPerToken": 1250,
+            "cacheWrite5mNanoUsdPerToken": 1250,
+            "cacheWrite1hNanoUsdPerToken": 2500,
+            "cacheWrite30mNanoUsdPerToken": 1250,
+            "cacheWrite12hNanoUsdPerToken": 2500
+          },
+          "ultrafast": {
+            "inputNanoUsdPerToken": 6000,
+            "outputNanoUsdPerToken": 30000,
+            "cacheReadNanoUsdPerToken": 300,
+            "cacheWriteNanoUsdPerToken": 7500,
+            "cacheWrite5mNanoUsdPerToken": 7500,
+            "cacheWrite1hNanoUsdPerToken": 15000,
+            "cacheWrite30mNanoUsdPerToken": 7500,
+            "cacheWrite12hNanoUsdPerToken": 15000
+          }
+        },
+        "longContext": {
+          "threshold": 272000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
+    },
+    {
+      "source": {
+        "pricingUrl": "https://developers.openai.com/api/docs/pricing",
+        "verifiedAt": "2026-11-17"
+      },
+      "model": {
+        "modelId": "gpt-6.2-astra",
+        "aliases": [
+          "openai/gpt-6.2-astra"
+        ],
+        "priceMultiplierScaled": 1000000000000,
+        "standard": {
+          "inputNanoUsdPerToken": 8000,
+          "outputNanoUsdPerToken": 40000,
+          "cacheReadNanoUsdPerToken": 400,
+          "cacheWriteNanoUsdPerToken": 10000,
+          "cacheWrite5mNanoUsdPerToken": 10000,
+          "cacheWrite1hNanoUsdPerToken": 20000,
+          "cacheWrite30mNanoUsdPerToken": 10000,
+          "cacheWrite12hNanoUsdPerToken": 20000
+        },
+        "serviceTierProfiles": {
+          "priority": {
+            "inputNanoUsdPerToken": 16000,
+            "outputNanoUsdPerToken": 80000,
+            "cacheReadNanoUsdPerToken": 800,
+            "cacheWriteNanoUsdPerToken": 20000,
+            "cacheWrite5mNanoUsdPerToken": 20000,
+            "cacheWrite1hNanoUsdPerToken": 40000,
+            "cacheWrite30mNanoUsdPerToken": 20000,
+            "cacheWrite12hNanoUsdPerToken": 40000
+          },
+          "fast": {
+            "inputNanoUsdPerToken": 16000,
+            "outputNanoUsdPerToken": 80000,
+            "cacheReadNanoUsdPerToken": 800,
+            "cacheWriteNanoUsdPerToken": 20000,
+            "cacheWrite5mNanoUsdPerToken": 20000,
+            "cacheWrite1hNanoUsdPerToken": 40000,
+            "cacheWrite30mNanoUsdPerToken": 20000,
+            "cacheWrite12hNanoUsdPerToken": 40000
+          },
+          "flex": {
+            "inputNanoUsdPerToken": 4000,
+            "outputNanoUsdPerToken": 20000,
+            "cacheReadNanoUsdPerToken": 200,
+            "cacheWriteNanoUsdPerToken": 5000,
+            "cacheWrite5mNanoUsdPerToken": 5000,
+            "cacheWrite1hNanoUsdPerToken": 10000,
+            "cacheWrite30mNanoUsdPerToken": 5000,
+            "cacheWrite12hNanoUsdPerToken": 10000
+          },
+          "batch": {
+            "inputNanoUsdPerToken": 4000,
+            "outputNanoUsdPerToken": 20000,
+            "cacheReadNanoUsdPerToken": 200,
+            "cacheWriteNanoUsdPerToken": 5000,
+            "cacheWrite5mNanoUsdPerToken": 5000,
+            "cacheWrite1hNanoUsdPerToken": 10000,
+            "cacheWrite30mNanoUsdPerToken": 5000,
+            "cacheWrite12hNanoUsdPerToken": 10000
+          },
+          "ultrafast": {
+            "inputNanoUsdPerToken": 24000,
+            "outputNanoUsdPerToken": 120000,
+            "cacheReadNanoUsdPerToken": 1200,
+            "cacheWriteNanoUsdPerToken": 30000,
+            "cacheWrite5mNanoUsdPerToken": 30000,
+            "cacheWrite1hNanoUsdPerToken": 60000,
+            "cacheWrite30mNanoUsdPerToken": 30000,
+            "cacheWrite12hNanoUsdPerToken": 60000
+          }
+        },
+        "longContext": {
+          "threshold": 272000,
+          "inputMultiplierScaled": 2000000000000,
+          "outputMultiplierScaled": 1500000000000
+        }
+      }
     }
   ]
 }

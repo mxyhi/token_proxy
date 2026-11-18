@@ -268,6 +268,8 @@ CREATE TABLE IF NOT EXISTS request_logs (
   cache_write_tokens INTEGER,
   cache_write_5m_tokens INTEGER,
   cache_write_1h_tokens INTEGER,
+  cache_write_30m_tokens INTEGER,
+  cache_write_12h_tokens INTEGER,
   image_input_tokens INTEGER,
   image_output_tokens INTEGER,
   service_tier TEXT,
@@ -400,6 +402,7 @@ CREATE INDEX IF NOT EXISTS idx_request_logs_dashboard ON request_logs(
   ts_ms, upstream_id, model, mapped_model, provider, status, latency_ms,
   input_tokens, output_tokens, total_tokens, uncached_input_tokens,
   cache_read_tokens, cache_write_tokens, cache_write_5m_tokens, cache_write_1h_tokens,
+  cache_write_30m_tokens, cache_write_12h_tokens,
   image_input_tokens, image_output_tokens, cost_nano_usd
 ) WHERE is_billable = 1;
 "#,
@@ -456,6 +459,18 @@ async fn ensure_request_logs_columns(pool: &SqlitePool) -> Result<(), String> {
             .execute(pool)
             .await
             .map_err(|err| format!("Failed to add cache_write_1h_tokens column: {err}"))?;
+    }
+    if !columns.contains("cache_write_30m_tokens") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN cache_write_30m_tokens INTEGER;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add cache_write_30m_tokens column: {err}"))?;
+    }
+    if !columns.contains("cache_write_12h_tokens") {
+        sqlx::query("ALTER TABLE request_logs ADD COLUMN cache_write_12h_tokens INTEGER;")
+            .execute(pool)
+            .await
+            .map_err(|err| format!("Failed to add cache_write_12h_tokens column: {err}"))?;
     }
 
     if !columns.contains("image_input_tokens") {
@@ -920,6 +935,8 @@ FROM request_logs WHERE id = ?;
         assert!(columns.contains("uncached_input_tokens"));
         assert!(columns.contains("cache_write_5m_tokens"));
         assert!(columns.contains("cache_write_1h_tokens"));
+        assert!(columns.contains("cache_write_30m_tokens"));
+        assert!(columns.contains("cache_write_12h_tokens"));
         assert!(columns.contains("image_input_tokens"));
         assert!(columns.contains("image_output_tokens"));
         assert!(columns.contains("service_tier"));

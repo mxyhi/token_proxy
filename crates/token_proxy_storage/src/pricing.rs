@@ -33,6 +33,8 @@ const FALLBACK_PRICING_PROFILE: ModelPricingProfile = ModelPricingProfile {
     cache_write_nano_usd_per_token: Some(2_500),
     cache_write_5m_nano_usd_per_token: Some(2_500),
     cache_write_1h_nano_usd_per_token: Some(4_000),
+    cache_write_30m_nano_usd_per_token: Some(2_500),
+    cache_write_12h_nano_usd_per_token: Some(4_000),
     image_input_nano_usd_per_token: None,
     image_output_nano_usd_per_token: None,
 };
@@ -55,6 +57,8 @@ pub struct ModelPricingProfile {
     pub cache_write_nano_usd_per_token: Option<u64>,
     pub cache_write_5m_nano_usd_per_token: Option<u64>,
     pub cache_write_1h_nano_usd_per_token: Option<u64>,
+    pub cache_write_30m_nano_usd_per_token: Option<u64>,
+    pub cache_write_12h_nano_usd_per_token: Option<u64>,
     pub image_input_nano_usd_per_token: Option<u64>,
     pub image_output_nano_usd_per_token: Option<u64>,
 }
@@ -162,6 +166,8 @@ pub struct BillableUsage {
     pub cache_write_tokens: u64,
     pub cache_write_5m_tokens: u64,
     pub cache_write_1h_tokens: u64,
+    pub cache_write_30m_tokens: u64,
+    pub cache_write_12h_tokens: u64,
     pub output_tokens: u64,
     pub image_input_tokens: u64,
     pub image_output_tokens: u64,
@@ -174,6 +180,8 @@ impl BillableUsage {
             .saturating_add(self.cache_write_tokens)
             .saturating_add(self.cache_write_5m_tokens)
             .saturating_add(self.cache_write_1h_tokens)
+            .saturating_add(self.cache_write_30m_tokens)
+            .saturating_add(self.cache_write_12h_tokens)
             .saturating_add(self.image_input_tokens)
     }
 }
@@ -185,6 +193,8 @@ pub struct RequestCostBreakdown {
     pub cache_write_nano_usd: u64,
     pub cache_write_5m_nano_usd: u64,
     pub cache_write_1h_nano_usd: u64,
+    pub cache_write_30m_nano_usd: u64,
+    pub cache_write_12h_nano_usd: u64,
     pub output_nano_usd: u64,
     pub image_input_nano_usd: u64,
     pub image_output_nano_usd: u64,
@@ -197,6 +207,8 @@ impl RequestCostBreakdown {
             .saturating_add(self.cache_write_nano_usd)
             .saturating_add(self.cache_write_5m_nano_usd)
             .saturating_add(self.cache_write_1h_nano_usd)
+            .saturating_add(self.cache_write_30m_nano_usd)
+            .saturating_add(self.cache_write_12h_nano_usd)
             .saturating_add(self.output_nano_usd)
             .saturating_add(self.image_input_nano_usd)
             .saturating_add(self.image_output_nano_usd)
@@ -463,6 +475,16 @@ pub fn calculate_request_cost(
             profile.cache_write_1h(),
             input_long_multiplier,
         )?,
+        cache_write_30m_nano_usd: price_component(
+            usage.cache_write_30m_tokens,
+            profile.cache_write_30m(),
+            input_long_multiplier,
+        )?,
+        cache_write_12h_nano_usd: price_component(
+            usage.cache_write_12h_tokens,
+            profile.cache_write_12h(),
+            input_long_multiplier,
+        )?,
         output_nano_usd: price_component(
             usage.output_tokens,
             profile.output(),
@@ -559,6 +581,28 @@ impl<'a> ResolvedProfile<'a> {
                     .and_then(|profile| profile.cache_write_nano_usd_per_token)
             })
             .or(self.standard.cache_write_1h_nano_usd_per_token)
+            .or(self.standard.cache_write_nano_usd_per_token)
+    }
+
+    fn cache_write_30m(&self) -> Option<u64> {
+        self.selected
+            .and_then(|profile| profile.cache_write_30m_nano_usd_per_token)
+            .or_else(|| {
+                self.selected
+                    .and_then(|profile| profile.cache_write_nano_usd_per_token)
+            })
+            .or(self.standard.cache_write_30m_nano_usd_per_token)
+            .or(self.standard.cache_write_nano_usd_per_token)
+    }
+
+    fn cache_write_12h(&self) -> Option<u64> {
+        self.selected
+            .and_then(|profile| profile.cache_write_12h_nano_usd_per_token)
+            .or_else(|| {
+                self.selected
+                    .and_then(|profile| profile.cache_write_nano_usd_per_token)
+            })
+            .or(self.standard.cache_write_12h_nano_usd_per_token)
             .or(self.standard.cache_write_nano_usd_per_token)
     }
 
@@ -913,6 +957,8 @@ SELECT
   cache_write_tokens,
   cache_write_5m_tokens,
   cache_write_1h_tokens,
+  cache_write_30m_tokens,
+  cache_write_12h_tokens,
   output_tokens,
   image_input_tokens,
   image_output_tokens
@@ -951,6 +997,8 @@ WHERE id > ? AND id <= ? AND (
             cache_write_tokens: row_u64(&row, "cache_write_tokens"),
             cache_write_5m_tokens: row_u64(&row, "cache_write_5m_tokens"),
             cache_write_1h_tokens: row_u64(&row, "cache_write_1h_tokens"),
+            cache_write_30m_tokens: row_u64(&row, "cache_write_30m_tokens"),
+            cache_write_12h_tokens: row_u64(&row, "cache_write_12h_tokens"),
             output_tokens: row_u64(&row, "output_tokens"),
             image_input_tokens: row_u64(&row, "image_input_tokens"),
             image_output_tokens: row_u64(&row, "image_output_tokens"),
@@ -1008,6 +1056,8 @@ fn apply_breakdown_multiplier(breakdown: &mut RequestCostBreakdown, multiplier_s
         &mut breakdown.cache_write_nano_usd,
         &mut breakdown.cache_write_5m_nano_usd,
         &mut breakdown.cache_write_1h_nano_usd,
+        &mut breakdown.cache_write_30m_nano_usd,
+        &mut breakdown.cache_write_12h_nano_usd,
         &mut breakdown.output_nano_usd,
         &mut breakdown.image_input_nano_usd,
         &mut breakdown.image_output_nano_usd,
@@ -1131,6 +1181,8 @@ mod tests {
             cache_write_tokens: 5,
             cache_write_5m_tokens: 3,
             cache_write_1h_tokens: 2,
+            cache_write_30m_tokens: 0,
+            cache_write_12h_tokens: 0,
             output_tokens: 10,
             image_input_tokens: 0,
             image_output_tokens: 0,
@@ -1149,6 +1201,8 @@ mod tests {
                 cache_write_nano_usd_per_token: Some(125),
                 cache_write_5m_nano_usd_per_token: Some(125),
                 cache_write_1h_nano_usd_per_token: Some(200),
+                cache_write_30m_nano_usd_per_token: None,
+                cache_write_12h_nano_usd_per_token: None,
                 image_input_nano_usd_per_token: None,
                 image_output_nano_usd_per_token: None,
             },
@@ -1178,10 +1232,10 @@ mod tests {
         let settings = default_model_pricing_settings();
         assert_eq!(
             settings.version,
-            "catalog.69854741.b88b66df+curated.20261027"
+            "catalog.6107cf17.407049cb+curated.20261027"
         );
         let source = settings.source.expect("catalog source");
-        assert_eq!(source.commit, "698547418fc8b8fc5f597fd34516e7026e706d82");
+        assert_eq!(source.commit, "6107cf17487fe5cb0bd179457ede6b1fe8f7271e");
 
         let model = settings
             .models
@@ -1282,6 +1336,20 @@ mod tests {
             Some(&(
                 "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
                 "2026-09-29"
+            ))
+        );
+        assert_eq!(
+            sources.get("gpt-6.2-sol"),
+            Some(&(
+                "https://developers.openai.com/api/docs/pricing",
+                "2026-11-17"
+            ))
+        );
+        assert_eq!(
+            sources.get("gpt-6.2-astra"),
+            Some(&(
+                "https://developers.openai.com/api/docs/pricing",
+                "2026-11-17"
             ))
         );
         assert_eq!(
@@ -1480,6 +1548,8 @@ mod tests {
             cache_read_tokens: 1,
             cache_write_5m_tokens: 1,
             cache_write_1h_tokens: 1,
+            cache_write_30m_tokens: 0,
+            cache_write_12h_tokens: 0,
             output_tokens: 1,
             ..BillableUsage::default()
         };
@@ -1694,6 +1764,43 @@ mod tests {
             assert_eq!(long.breakdown.cache_read_nano_usd, 100);
             assert_eq!(long.breakdown.cache_write_nano_usd, 2_500);
             assert_eq!(long.cost_nano_usd, 544_008_100);
+        }
+    }
+
+    #[test]
+    fn gpt62_prices_cover_new_official_models_and_tiers() {
+        let settings = default_model_pricing_settings();
+        let usage = BillableUsage {
+            uncached_input_tokens: 1,
+            cache_read_tokens: 1,
+            cache_write_tokens: 1,
+            output_tokens: 1,
+            ..BillableUsage::default()
+        };
+        for (model, standard, fast, flex) in [
+            ("gpt-6.2-sol", 14_600, 29_200, 7_300),
+            ("gpt-6.2-astra", 58_400, 116_800, 29_200),
+        ] {
+            for alias in [model, &format!("openai/{model}")] {
+                assert_eq!(
+                    calculate_request_cost(&settings, Some(alias), None, None, &usage)
+                        .unwrap()
+                        .cost_nano_usd,
+                    standard
+                );
+                assert_eq!(
+                    calculate_request_cost(&settings, Some(alias), None, Some("fast"), &usage)
+                        .unwrap()
+                        .cost_nano_usd,
+                    fast
+                );
+                assert_eq!(
+                    calculate_request_cost(&settings, Some(alias), None, Some("flex"), &usage)
+                        .unwrap()
+                        .cost_nano_usd,
+                    flex
+                );
+            }
         }
     }
 
@@ -2097,6 +2204,8 @@ mod tests {
             cache_write_tokens: 1,
             cache_write_5m_tokens: 1,
             cache_write_1h_tokens: 1,
+            cache_write_30m_tokens: 0,
+            cache_write_12h_tokens: 0,
             output_tokens: 1,
             image_input_tokens: 1,
             image_output_tokens: 1,
@@ -2121,6 +2230,8 @@ mod tests {
                     cache_write_nano_usd: 2_500,
                     cache_write_5m_nano_usd: 2_500,
                     cache_write_1h_nano_usd: 4_000,
+                    cache_write_30m_nano_usd: 0,
+                    cache_write_12h_nano_usd: 0,
                     output_nano_usd: 10_000,
                     image_input_nano_usd: 2_000,
                     image_output_nano_usd: 10_000,
@@ -2128,6 +2239,36 @@ mod tests {
             );
         }
         assert!(calculate_request_cost(&settings, None, Some(" "), None, &usage).is_none());
+    }
+
+    #[test]
+    fn cache_write_30m_and_12h_use_independent_prices() {
+        let settings = ModelPricingSettings {
+            version: "test".to_string(),
+            source: None,
+            models: vec![ModelPricingModel {
+                model_id: "cache-model".to_string(),
+                aliases: vec![],
+                price_multiplier_scaled: PRICE_MULTIPLIER_SCALE,
+                standard: ModelPricingProfile {
+                    cache_write_30m_nano_usd_per_token: Some(10),
+                    cache_write_12h_nano_usd_per_token: Some(20),
+                    ..ModelPricingProfile::default()
+                },
+                service_tier_profiles: BTreeMap::new(),
+                long_context: None,
+            }],
+        };
+        let usage = BillableUsage {
+            cache_write_30m_tokens: 3,
+            cache_write_12h_tokens: 4,
+            ..BillableUsage::default()
+        };
+        let cost = calculate_request_cost(&settings, Some("cache-model"), None, None, &usage)
+            .expect("priced cache write");
+        assert_eq!(cost.breakdown.cache_write_30m_nano_usd, 30);
+        assert_eq!(cost.breakdown.cache_write_12h_nano_usd, 80);
+        assert_eq!(cost.cost_nano_usd, 110);
     }
 
     #[test]

@@ -9,6 +9,14 @@ fn default_hot_model_mappings_include_popular_namespaced_aliases() {
         Some(&"gpt-reserve".to_string())
     );
     assert_eq!(
+        mappings.get("openai/gpt-6.2-sol"),
+        Some(&"gpt-6.2-sol".to_string())
+    );
+    assert_eq!(
+        mappings.get("openai/gpt-6.2-astra"),
+        Some(&"gpt-6.2-astra".to_string())
+    );
+    assert_eq!(
         mappings.get("openai/gpt-6-astra"),
         Some(&"gpt-6-astra".to_string())
     );

@@ -85,6 +85,8 @@ pub struct DashboardUsageBreakdown {
     pub cache_write_tokens: u64,
     pub cache_write_5m_tokens: u64,
     pub cache_write_1h_tokens: u64,
+    pub cache_write_30m_tokens: u64,
+    pub cache_write_12h_tokens: u64,
     pub image_input_tokens: u64,
     pub image_output_tokens: u64,
 }
@@ -185,6 +187,8 @@ pub struct DashboardRequestItem {
     pub cache_write_tokens: Option<u64>,
     pub cache_write_5m_tokens: Option<u64>,
     pub cache_write_1h_tokens: Option<u64>,
+    pub cache_write_30m_tokens: Option<u64>,
+    pub cache_write_12h_tokens: Option<u64>,
     pub image_input_tokens: Option<u64>,
     pub image_output_tokens: Option<u64>,
     pub service_tier: Option<String>,
@@ -678,6 +682,8 @@ async fn query_recent(
             let cache_write_tokens: Option<i64> = row.try_get("cache_write_tokens").ok()?;
             let cache_write_5m_tokens: Option<i64> = row.try_get("cache_write_5m_tokens").ok()?;
             let cache_write_1h_tokens: Option<i64> = row.try_get("cache_write_1h_tokens").ok()?;
+            let cache_write_30m_tokens: Option<i64> = row.try_get("cache_write_30m_tokens").ok()?;
+            let cache_write_12h_tokens: Option<i64> = row.try_get("cache_write_12h_tokens").ok()?;
             let image_input_tokens: Option<i64> = row.try_get("image_input_tokens").ok()?;
             let image_output_tokens: Option<i64> = row.try_get("image_output_tokens").ok()?;
             let service_tier: Option<String> = row.try_get("service_tier").ok()?;
@@ -718,6 +724,8 @@ async fn query_recent(
                 cache_write_tokens: cache_write_tokens.map(i64_to_u64),
                 cache_write_5m_tokens: cache_write_5m_tokens.map(i64_to_u64),
                 cache_write_1h_tokens: cache_write_1h_tokens.map(i64_to_u64),
+                cache_write_30m_tokens: cache_write_30m_tokens.map(i64_to_u64),
+                cache_write_12h_tokens: cache_write_12h_tokens.map(i64_to_u64),
                 image_input_tokens: image_input_tokens.map(i64_to_u64),
                 image_output_tokens: image_output_tokens.map(i64_to_u64),
                 service_tier,
@@ -813,12 +821,16 @@ fn usage_breakdown_from_row(row: &sqlx::sqlite::SqliteRow) -> DashboardUsageBrea
         cached_tokens: value("cache_read_tokens")
             .saturating_add(value("cache_write_tokens"))
             .saturating_add(value("cache_write_5m_tokens"))
-            .saturating_add(value("cache_write_1h_tokens")),
+            .saturating_add(value("cache_write_1h_tokens"))
+            .saturating_add(value("cache_write_30m_tokens"))
+            .saturating_add(value("cache_write_12h_tokens")),
         uncached_input_tokens: value("uncached_input_tokens"),
         cache_read_tokens: value("cache_read_tokens"),
         cache_write_tokens: value("cache_write_tokens"),
         cache_write_5m_tokens: value("cache_write_5m_tokens"),
         cache_write_1h_tokens: value("cache_write_1h_tokens"),
+        cache_write_30m_tokens: value("cache_write_30m_tokens"),
+        cache_write_12h_tokens: value("cache_write_12h_tokens"),
         image_input_tokens: value("image_input_tokens"),
         image_output_tokens: value("image_output_tokens"),
     }

@@ -17,6 +17,8 @@ export type DashboardSummary = {
   cacheWriteTokens?: number;
   cacheWrite5mTokens?: number;
   cacheWrite1hTokens?: number;
+  cacheWrite30mTokens?: number;
+  cacheWrite12hTokens?: number;
   imageInputTokens?: number;
   imageOutputTokens?: number;
   avgLatencyMs: number;
@@ -34,6 +36,8 @@ export type DashboardProviderStat = {
   cacheWriteTokens?: number;
   cacheWrite5mTokens?: number;
   cacheWrite1hTokens?: number;
+  cacheWrite30mTokens?: number;
+  cacheWrite12hTokens?: number;
   imageInputTokens?: number;
   imageOutputTokens?: number;
 };
@@ -52,6 +56,8 @@ export type DashboardModelStat = {
   cacheWriteTokens?: number;
   cacheWrite5mTokens?: number;
   cacheWrite1hTokens?: number;
+  cacheWrite30mTokens?: number;
+  cacheWrite12hTokens?: number;
   imageInputTokens?: number;
   imageOutputTokens?: number;
 };
@@ -66,6 +72,8 @@ export type DashboardUpstreamOption = {
   cacheWriteTokens?: number;
   cacheWrite5mTokens?: number;
   cacheWrite1hTokens?: number;
+  cacheWrite30mTokens?: number;
+  cacheWrite12hTokens?: number;
   imageInputTokens?: number;
   imageOutputTokens?: number;
 };
@@ -99,6 +107,8 @@ export type DashboardSeriesPoint = {
   cacheWriteTokens?: number;
   cacheWrite5mTokens?: number;
   cacheWrite1hTokens?: number;
+  cacheWrite30mTokens?: number;
+  cacheWrite12hTokens?: number;
   imageInputTokens?: number;
   imageOutputTokens?: number;
   totalTokens: number;
@@ -126,6 +136,8 @@ export type DashboardRequestItem = {
   cacheWriteTokens?: number | null;
   cacheWrite5mTokens?: number | null;
   cacheWrite1hTokens?: number | null;
+  cacheWrite30mTokens?: number | null;
+  cacheWrite12hTokens?: number | null;
   imageInputTokens?: number | null;
   imageOutputTokens?: number | null;
   serviceTier?: string | null;

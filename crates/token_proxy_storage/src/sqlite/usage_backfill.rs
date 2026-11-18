@@ -6,7 +6,7 @@ use super::backfill_mark;
 const BATCH_SIZE: i64 = 2_000;
 const MARK_NAME: &str = "request_log_usage";
 /// 解析规则变化时递增，让仍缺规范用量列的历史日志重新回填。
-const MARK_VERSION: &str = "usage.v1";
+const MARK_VERSION: &str = "usage.v2";
 
 struct UsageBackfillRow {
     id: i64,
@@ -18,6 +18,8 @@ struct UsageBackfillRow {
     cache_write_tokens: i64,
     cache_write_5m_tokens: i64,
     cache_write_1h_tokens: i64,
+    cache_write_30m_tokens: i64,
+    cache_write_12h_tokens: i64,
     image_input_tokens: i64,
     image_output_tokens: i64,
     service_tier: Option<String>,
@@ -90,6 +92,8 @@ CREATE TEMP TABLE IF NOT EXISTS request_log_usage_backfill (
   cache_write_tokens INTEGER NOT NULL,
   cache_write_5m_tokens INTEGER NOT NULL,
   cache_write_1h_tokens INTEGER NOT NULL,
+  cache_write_30m_tokens INTEGER NOT NULL,
+  cache_write_12h_tokens INTEGER NOT NULL,
   image_input_tokens INTEGER NOT NULL,
   image_output_tokens INTEGER NOT NULL,
   service_tier TEXT
@@ -120,6 +124,8 @@ WHERE id > ?
   AND cache_write_tokens IS NULL
   AND cache_write_5m_tokens IS NULL
   AND cache_write_1h_tokens IS NULL
+  AND cache_write_30m_tokens IS NULL
+  AND cache_write_12h_tokens IS NULL
   AND image_input_tokens IS NULL
   AND image_output_tokens IS NULL
 ORDER BY id ASC;
@@ -146,6 +152,8 @@ fn parse_update(id: i64, raw: &str) -> Option<UsageBackfillRow> {
         cache_write_tokens: u64_to_i64(billable.cache_write_tokens),
         cache_write_5m_tokens: u64_to_i64(billable.cache_write_5m_tokens),
         cache_write_1h_tokens: u64_to_i64(billable.cache_write_1h_tokens),
+        cache_write_30m_tokens: u64_to_i64(billable.cache_write_30m_tokens),
+        cache_write_12h_tokens: u64_to_i64(billable.cache_write_12h_tokens),
         image_input_tokens: u64_to_i64(billable.image_input_tokens),
         image_output_tokens: u64_to_i64(billable.image_output_tokens),
         service_tier: snapshot.service_tier,
@@ -168,6 +176,7 @@ INSERT INTO request_log_usage_backfill (
   id, input_tokens, output_tokens, total_tokens,
   uncached_input_tokens, cache_read_tokens, cache_write_tokens,
   cache_write_5m_tokens, cache_write_1h_tokens,
+  cache_write_30m_tokens, cache_write_12h_tokens,
   image_input_tokens, image_output_tokens, service_tier
 ) "#,
     );
@@ -181,6 +190,8 @@ INSERT INTO request_log_usage_backfill (
             .push_bind(update.cache_write_tokens)
             .push_bind(update.cache_write_5m_tokens)
             .push_bind(update.cache_write_1h_tokens)
+            .push_bind(update.cache_write_30m_tokens)
+            .push_bind(update.cache_write_12h_tokens)
             .push_bind(update.image_input_tokens)
             .push_bind(update.image_output_tokens)
             .push_bind(update.service_tier.as_deref());
@@ -198,12 +209,14 @@ SET (
   input_tokens, output_tokens, total_tokens,
   uncached_input_tokens, cache_read_tokens, cache_write_tokens,
   cache_write_5m_tokens, cache_write_1h_tokens,
+  cache_write_30m_tokens, cache_write_12h_tokens,
   image_input_tokens, image_output_tokens, service_tier
 ) = (
   SELECT
     source.input_tokens, source.output_tokens, source.total_tokens,
     source.uncached_input_tokens, source.cache_read_tokens, source.cache_write_tokens,
     source.cache_write_5m_tokens, source.cache_write_1h_tokens,
+    source.cache_write_30m_tokens, source.cache_write_12h_tokens,
     source.image_input_tokens, source.image_output_tokens, source.service_tier
   FROM request_log_usage_backfill AS source
   WHERE source.id = request_logs.id

@@ -213,6 +213,8 @@ INSERT INTO request_logs (
   cache_write_tokens,
   cache_write_5m_tokens,
   cache_write_1h_tokens,
+  cache_write_30m_tokens,
+  cache_write_12h_tokens,
   image_input_tokens,
   image_output_tokens,
   service_tier,
@@ -236,7 +238,7 @@ INSERT INTO request_logs (
   attempt_index,
   local_api_key_id,
   is_billable
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
 "#,
     )
     .bind(to_i64_u128(entry.ts_ms))
@@ -258,6 +260,8 @@ INSERT INTO request_logs (
     .bind(billable_value(billable.cache_write_tokens))
     .bind(billable_value(billable.cache_write_5m_tokens))
     .bind(billable_value(billable.cache_write_1h_tokens))
+    .bind(billable_value(billable.cache_write_30m_tokens))
+    .bind(billable_value(billable.cache_write_12h_tokens))
     .bind(billable_value(billable.image_input_tokens))
     .bind(billable_value(billable.image_output_tokens))
     .bind(entry.service_tier.as_deref())

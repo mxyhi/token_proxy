@@ -23,6 +23,8 @@ import { CodexModelCapabilitiesEditor } from "./codex-model-capabilities-editor"
 
 /** 官方 Codex 目录 slug；官方模型始终保留，不允许作为“额外模型”重复添加。 */
 const OFFICIAL_CODEX_MODEL_IDS: ReadonlySet<string> = new Set([
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
   "gpt-6-astra",
   "gpt-6.1-sol",
   "gpt-6.1-terra",

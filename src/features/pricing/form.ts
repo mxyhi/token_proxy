@@ -24,6 +24,8 @@ export type ModelPricingProfileForm = {
   cacheWrite: string;
   cacheWrite5m: string;
   cacheWrite1h: string;
+  cacheWrite30m: string;
+  cacheWrite12h: string;
   imageInput: string;
   imageOutput: string;
 };
@@ -62,6 +64,8 @@ function emptyProfile(): ModelPricingProfileForm {
     cacheWrite: "",
     cacheWrite5m: "",
     cacheWrite1h: "",
+    cacheWrite30m: "",
+    cacheWrite12h: "",
     imageInput: "",
     imageOutput: "",
   };
@@ -192,6 +196,8 @@ function profileToForm(profile: ModelPricingProfile): ModelPricingProfileForm {
     cacheWrite: formatPrice(profile.cacheWriteNanoUsdPerToken),
     cacheWrite5m: formatPrice(profile.cacheWrite5mNanoUsdPerToken),
     cacheWrite1h: formatPrice(profile.cacheWrite1hNanoUsdPerToken),
+    cacheWrite30m: formatPrice(profile.cacheWrite30mNanoUsdPerToken ?? null),
+    cacheWrite12h: formatPrice(profile.cacheWrite12hNanoUsdPerToken ?? null),
     imageInput: formatPrice(profile.imageInputNanoUsdPerToken),
     imageOutput: formatPrice(profile.imageOutputNanoUsdPerToken),
   };
@@ -207,6 +213,8 @@ function parseProfile(
     cacheWriteNanoUsdPerToken: parseOptionalPrice(form.cacheWrite),
     cacheWrite5mNanoUsdPerToken: parseOptionalPrice(form.cacheWrite5m),
     cacheWrite1hNanoUsdPerToken: parseOptionalPrice(form.cacheWrite1h),
+    cacheWrite30mNanoUsdPerToken: parseOptionalPrice(form.cacheWrite30m),
+    cacheWrite12hNanoUsdPerToken: parseOptionalPrice(form.cacheWrite12h),
     imageInputNanoUsdPerToken: parseOptionalPrice(form.imageInput),
     imageOutputNanoUsdPerToken: parseOptionalPrice(form.imageOutput),
   };

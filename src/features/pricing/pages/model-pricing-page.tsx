@@ -108,6 +108,8 @@ function ProfileEditor({ profile, disabled, onChange }: ProfileEditorProps) {
     { key: "output", label: m.model_pricing_column_standard_output() },
     { key: "cacheWrite5m", label: m.model_pricing_cache_write_5m() },
     { key: "cacheWrite1h", label: m.model_pricing_cache_write_1h() },
+    { key: "cacheWrite30m", label: "缓存写入 30 分钟" },
+    { key: "cacheWrite12h", label: "缓存写入 12 小时" },
     { key: "imageInput", label: m.model_pricing_image_input() },
     { key: "imageOutput", label: m.model_pricing_image_output() },
   ];

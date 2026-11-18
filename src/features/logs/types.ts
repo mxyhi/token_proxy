@@ -29,6 +29,8 @@ export type RequestLogDetail = {
   cacheWriteTokens?: number | null;
   cacheWrite5mTokens?: number | null;
   cacheWrite1hTokens?: number | null;
+  cacheWrite30mTokens?: number | null;
+  cacheWrite12hTokens?: number | null;
   serviceTier?: string | null;
   costNanoUsd: number | null;
   pricingVersion: string | null;

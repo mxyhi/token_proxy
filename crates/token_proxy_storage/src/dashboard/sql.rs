@@ -23,6 +23,8 @@ SELECT
   COALESCE(SUM(COALESCE(cache_write_tokens, 0)), 0) AS cache_write_tokens,
   COALESCE(SUM(COALESCE(cache_write_5m_tokens, 0)), 0) AS cache_write_5m_tokens,
   COALESCE(SUM(COALESCE(cache_write_1h_tokens, 0)), 0) AS cache_write_1h_tokens,
+  COALESCE(SUM(COALESCE(cache_write_30m_tokens, 0)), 0) AS cache_write_30m_tokens,
+  COALESCE(SUM(COALESCE(cache_write_12h_tokens, 0)), 0) AS cache_write_12h_tokens,
   COALESCE(SUM(COALESCE(image_input_tokens, 0)), 0) AS image_input_tokens,
   COALESCE(SUM(COALESCE(image_output_tokens, 0)), 0) AS image_output_tokens,
   COALESCE(SUM(latency_ms), 0) AS latency_sum_ms
@@ -86,6 +88,8 @@ SELECT
   COALESCE(SUM(COALESCE(cache_write_tokens, 0)), 0) AS cache_write_tokens,
   COALESCE(SUM(COALESCE(cache_write_5m_tokens, 0)), 0) AS cache_write_5m_tokens,
   COALESCE(SUM(COALESCE(cache_write_1h_tokens, 0)), 0) AS cache_write_1h_tokens,
+  COALESCE(SUM(COALESCE(cache_write_30m_tokens, 0)), 0) AS cache_write_30m_tokens,
+  COALESCE(SUM(COALESCE(cache_write_12h_tokens, 0)), 0) AS cache_write_12h_tokens,
   COALESCE(SUM(COALESCE(image_input_tokens, 0)), 0) AS image_input_tokens,
   COALESCE(SUM(COALESCE(image_output_tokens, 0)), 0) AS image_output_tokens
 FROM billable_request_logs
@@ -122,6 +126,8 @@ SELECT
   COALESCE(SUM(COALESCE(cache_write_tokens, 0)), 0) AS cache_write_tokens,
   COALESCE(SUM(COALESCE(cache_write_5m_tokens, 0)), 0) AS cache_write_5m_tokens,
   COALESCE(SUM(COALESCE(cache_write_1h_tokens, 0)), 0) AS cache_write_1h_tokens,
+  COALESCE(SUM(COALESCE(cache_write_30m_tokens, 0)), 0) AS cache_write_30m_tokens,
+  COALESCE(SUM(COALESCE(cache_write_12h_tokens, 0)), 0) AS cache_write_12h_tokens,
   COALESCE(SUM(COALESCE(image_input_tokens, 0)), 0) AS image_input_tokens,
   COALESCE(SUM(COALESCE(image_output_tokens, 0)), 0) AS image_output_tokens
 FROM billable_request_logs
@@ -176,6 +182,8 @@ SELECT
   COALESCE(SUM(COALESCE(cache_write_tokens, 0)), 0) AS cache_write_tokens,
   COALESCE(SUM(COALESCE(cache_write_5m_tokens, 0)), 0) AS cache_write_5m_tokens,
   COALESCE(SUM(COALESCE(cache_write_1h_tokens, 0)), 0) AS cache_write_1h_tokens,
+  COALESCE(SUM(COALESCE(cache_write_30m_tokens, 0)), 0) AS cache_write_30m_tokens,
+  COALESCE(SUM(COALESCE(cache_write_12h_tokens, 0)), 0) AS cache_write_12h_tokens,
   COALESCE(SUM(COALESCE(image_input_tokens, 0)), 0) AS image_input_tokens,
   COALESCE(SUM(COALESCE(image_output_tokens, 0)), 0) AS image_output_tokens
 FROM billable_request_logs
@@ -199,6 +207,8 @@ SELECT
   COALESCE(SUM(COALESCE(cache_write_tokens, 0)), 0) AS cache_write_tokens,
   COALESCE(SUM(COALESCE(cache_write_5m_tokens, 0)), 0) AS cache_write_5m_tokens,
   COALESCE(SUM(COALESCE(cache_write_1h_tokens, 0)), 0) AS cache_write_1h_tokens,
+  COALESCE(SUM(COALESCE(cache_write_30m_tokens, 0)), 0) AS cache_write_30m_tokens,
+  COALESCE(SUM(COALESCE(cache_write_12h_tokens, 0)), 0) AS cache_write_12h_tokens,
   COALESCE(SUM(COALESCE(image_input_tokens, 0)), 0) AS image_input_tokens,
   COALESCE(SUM(COALESCE(image_output_tokens, 0)), 0) AS image_output_tokens,
   COALESCE(SUM(CASE
@@ -242,8 +252,10 @@ SELECT
   CASE
     WHEN cache_read_tokens IS NOT NULL OR cache_write_tokens IS NOT NULL
       OR cache_write_5m_tokens IS NOT NULL OR cache_write_1h_tokens IS NOT NULL
+      OR cache_write_30m_tokens IS NOT NULL OR cache_write_12h_tokens IS NOT NULL
     THEN COALESCE(cache_read_tokens, 0) + COALESCE(cache_write_tokens, 0)
       + COALESCE(cache_write_5m_tokens, 0) + COALESCE(cache_write_1h_tokens, 0)
+      + COALESCE(cache_write_30m_tokens, 0) + COALESCE(cache_write_12h_tokens, 0)
     ELSE NULL
   END AS cached_tokens,
   uncached_input_tokens,
@@ -251,6 +263,8 @@ SELECT
   cache_write_tokens,
   cache_write_5m_tokens,
   cache_write_1h_tokens,
+  cache_write_30m_tokens,
+  cache_write_12h_tokens,
   image_input_tokens,
   image_output_tokens,
   service_tier,

@@ -52,3 +52,5 @@ token-proxy migrate-tauri --source "$HOME/Library/Application Support/com.mxyhi.
 未等价移植的项目会显示在迁移报告中：旧 convert_from_map 白名单、请求超时、请求体上限、CORS、热模型展示、会话冷却及历史用量。原 JSONC 保留为 `tauri-config.original.jsonc`（0600），历史数据库单独归档；不能把归档说成新版统计已导入。先验证新版的鉴权、模型列表和实际请求，再删除旧应用。
 
 迁移后的 `localKeyID` 指向启用的本地密钥（优先 auto 作用域），用于新版连接 Agent 和本机工具请求。禁用或删除它后，这些入口不自动换用另一把权限不同的密钥；现有客户端的原密钥保持不变。
+
+旧版 `available_models` 同时是请求白名单：迁移为每个密钥的明确模型权限，不能放宽为上游通配符。Codex 请求限制到旧配置绑定的账户，避免新基座自动发现的其他账户参与回退。

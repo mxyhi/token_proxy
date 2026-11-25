@@ -308,8 +308,16 @@ func convert(c config) (*plan, error) {
 				continue
 			}
 			id := ids[u.ID]
-			key.Models = append(key.Models, id+"/*")
+			// Tauri's available_models is an allow-list, not just catalog picks.
+			// A provider-wide wildcard would grant models the old gateway denied.
+			if u.Credential.Type == "account" {
+				key.Accounts = append(key.Accounts, id+"/"+u.Credential.AccountID)
+			}
 			for _, m := range u.Models {
+				if strings.Contains(m, "*") {
+					return nil, errors.New("模型列表含通配符，无法等价迁移权限")
+				}
+				key.Models = append(key.Models, id+"/"+m)
 				members[m] = append(members[m], id+"/"+m)
 				if id != u.ID {
 					key.Aliases[u.ID+"/"+m] = id + "/" + m
@@ -332,6 +340,9 @@ func convert(c config) (*plan, error) {
 		// selected scope denied, including when all its upstreams are disabled.
 		if len(key.Models) == 0 {
 			key.Models = []string{"group/tp-no-permitted-models"}
+		}
+		if _, err := access.CleanModels(key.Models); err != nil {
+			return nil, errors.New("模型权限列表超出新基座限制；拒绝截断")
 		}
 		if _, err := access.CleanAliases(key.Aliases); err != nil {
 			return nil, errors.New("模型别名数量或格式超出新基座限制；拒绝截断")

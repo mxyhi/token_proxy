@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tidwall/jsonc"
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/provider"
@@ -200,5 +201,32 @@ func TestTauriDefaultsRemainEnabled(t *testing.T) {
 	}
 	if json.Unmarshal([]byte(`{"id":"k"}`), &k) != nil || !k.Enabled {
 		t.Fatal("omitted key enabled became false")
+	}
+}
+
+func TestMigrationDoesNotWidenModelsOrAccounts(t *testing.T) {
+	var c config
+	if err := json.Unmarshal(jsonc.ToJSON([]byte(fixture)), &c); err != nil {
+		t.Fatal(err)
+	}
+	u := upstream{ID: "bound-codex", Providers: []string{"codex"}, Enabled: true, Models: []string{"codex-model"}}
+	u.Credential.Type = "account"
+	u.Credential.Provider = "codex"
+	u.Credential.AccountID = "saved-account"
+	c.Upstreams = append(c.Upstreams, u)
+	p, err := convert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := p.keys[0]
+	who := access.Identity{Models: key.Models, Accounts: key.Accounts}
+	if !who.Allows("low/deepseek-flash") || who.Allows("low/unlisted-model") {
+		t.Fatal("upstream model allow-list changed")
+	}
+	if !who.AllowsAccount("codex", "saved-account") || who.AllowsAccount("codex", "other-account") {
+		t.Fatal("bound Codex account widened to the whole pool")
+	}
+	if !who.AllowsAccount("low", "api-key-account") {
+		t.Fatal("Codex restriction blocked an API-key provider")
 	}
 }

@@ -147,6 +147,10 @@ func TestUpdateRestartsTheGatewayItFindsWithoutMagpieAddr(t *testing.T) {
 	if got := restartRunning(gateway.ClientURL(), "v9.9.10"); !strings.Contains(got, "restarts into v9.9.10") {
 		t.Errorf("update found no running magpie: %q", got)
 	}
+	// 负例也使用测试服务器，不能向用户真实的默认端口发送重启请求。
+	other := httptest.NewServer(http.NotFoundHandler())
+	other.Close()
+	t.Setenv("MAGPIE_ADDR", strings.TrimPrefix(other.URL, "http://"))
 	if got := restartRunning(gateway.URL(), "v9.9.10"); !strings.Contains(got, "isn't running") {
 		t.Errorf("the address Settings has is not where the fake serves: %q", got)
 	}

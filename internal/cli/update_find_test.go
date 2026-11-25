@@ -22,7 +22,8 @@ func TestUpdateFindsAMagpieThatWroteNoRecord(t *testing.T) {
 	defer ts.Close()
 	oldProbe, oldCands := updateProbe, updateCandidates
 	t.Cleanup(func() { updateProbe, updateCandidates = oldProbe, oldCands })
-	updateProbe = func(u string) bool { return gateway.ServedAt(u).Running }
+	// 只探测测试服务器，默认端口上可能正运行用户自己的 Magpie。
+	updateProbe = func(u string) bool { return u == ts.URL && gateway.ServedAt(u).Running }
 	updateCandidates = func() []string { return []string{"http://127.0.0.1:1", ts.URL} }
 
 	if got := updateBase(""); got != ts.URL {

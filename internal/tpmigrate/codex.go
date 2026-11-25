@@ -10,6 +10,7 @@ import (
 )
 
 type codexRecord struct {
+	Status     string `json:"status"`
 	AccountID  string `json:"account_id"`
 	Email      string `json:"email"`
 	Credential struct {
@@ -53,5 +54,9 @@ func readCodex(source, id string, on bool) (login, error) {
 	if err != nil {
 		return login{}, err
 	}
-	return login{ID: id, Agent: "codex", User: a.Email, On: on, Seen: time.Now().UTC(), Auth: auth, AccessOnly: c.AutoRefresh != nil && !*c.AutoRefresh}, nil
+	lapsed := ""
+	if a.Status == "invalid" {
+		lapsed = "Imported Tauri Codex account is invalid; sign in again"
+	}
+	return login{Lapsed: lapsed, TauriImported: true, ID: id, Agent: "codex", User: a.Email, On: on, Seen: time.Now().UTC(), Auth: auth, AccessOnly: c.AutoRefresh != nil && !*c.AutoRefresh}, nil
 }

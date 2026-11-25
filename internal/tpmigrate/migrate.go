@@ -90,13 +90,15 @@ type providerFile struct {
 	Order        []string            `json:"order"`
 }
 type login struct {
-	ID         string          `json:"id"`
-	Agent      string          `json:"agent"`
-	User       string          `json:"user"`
-	On         bool            `json:"on"`
-	Seen       time.Time       `json:"seen"`
-	Auth       json.RawMessage `json:"auth"`
-	AccessOnly bool            `json:"accessOnly,omitempty"`
+	Lapsed        string          `json:"lapsed,omitempty"`
+	TauriImported bool            `json:"tauriImported,omitempty"`
+	ID            string          `json:"id"`
+	Agent         string          `json:"agent"`
+	User          string          `json:"user"`
+	On            bool            `json:"on"`
+	Seen          time.Time       `json:"seen"`
+	Auth          json.RawMessage `json:"auth"`
+	AccessOnly    bool            `json:"accessOnly,omitempty"`
 }
 type report struct {
 	Upstreams     int      `json:"upstreams"`
@@ -174,6 +176,9 @@ func prepare(source string) (*plan, error) {
 			return nil, err
 		}
 		p.logins = append(p.logins, l)
+		if l.Lapsed != "" {
+			p.report.Warnings = append(p.report.Warnings, "旧 Codex 账户已标记 invalid；保留失效状态，需要重新登录后才能使用。")
+		}
 	}
 	p.report.CodexAccounts = len(p.logins)
 	return p, nil
@@ -216,7 +221,7 @@ func convert(c config) (*plan, error) {
 		if u.ID == "" || strings.ContainsAny(u.ID, "/\\\r\n") || ids[u.ID] != "" {
 			return nil, errors.New("上游 ID 为空、重复或含路径分隔符")
 		}
-		id := u.ID
+		id := strings.ToLower(u.ID)
 		if u.Credential.Type == "account" {
 			if u.Credential.Provider != "codex" || !slices.Equal(u.Providers, []string{"codex"}) {
 				return nil, errors.New("当前仅支持 Codex OAuth 账户迁移")
@@ -227,10 +232,22 @@ func convert(c config) (*plan, error) {
 			return nil, errors.New("迁移后的上游 ID 冲突")
 		}
 		ids[u.ID] = id
-		if err := settings.CheckProxy(u.Proxy); err != nil {
+		// Tauri: empty means direct, $app_proxy_url means the global proxy.
+		// Magpie: empty inherits the global proxy, so these cannot be copied.
+		proxy := strings.TrimSpace(u.Proxy)
+		switch proxy {
+		case "":
+			proxy = "direct"
+		case "$app_proxy_url":
+			if strings.TrimSpace(c.Proxy) == "" {
+				return nil, errors.New("上游引用全局代理，但全局代理为空")
+			}
+			proxy = c.Proxy
+		}
+		if err := settings.CheckProxy(proxy); err != nil {
 			return nil, errors.New("上游代理无效")
 		}
-		v := provider.Provider{ID: id, Name: u.ID, Proxy: u.Proxy, Off: !u.Enabled, Models: slices.Clone(u.Models), Routing: provider.Ordered, Affinity: provider.AffinityOff, NoBalanceProbe: true}
+		v := provider.Provider{ID: id, Name: u.ID, Proxy: proxy, Off: !u.Enabled, Models: slices.Clone(u.Models), Routing: provider.Ordered, Affinity: provider.AffinityOff, NoBalanceProbe: true}
 		switch u.Credential.Type {
 		case "api_keys":
 			if len(u.Credential.Keys) == 0 {
@@ -319,7 +336,7 @@ func convert(c config) (*plan, error) {
 				}
 				key.Models = append(key.Models, id+"/"+m)
 				members[m] = append(members[m], id+"/"+m)
-				if id != u.ID {
+				if !strings.EqualFold(id, u.ID) {
 					key.Aliases[u.ID+"/"+m] = id + "/" + m
 				}
 			}

@@ -162,6 +162,13 @@ func TestReadCodexUsesCurrentDatabase(t *testing.T) {
 	if json.Unmarshal(l.Auth, &auth) != nil || auth.Tokens["access_token"] != "new-access" || !l.On {
 		t.Fatal("lost current OAuth credentials")
 	}
+	if _, err = db.Exec("UPDATE provider_accounts SET record_json=?", strings.Replace(record, `"credential":`, `"status":"invalid","credential":`, 1)); err != nil {
+		t.Fatal(err)
+	}
+	invalid, err := readCodex(dir, "bound-account", true)
+	if err != nil || invalid.Lapsed == "" {
+		t.Fatal("source invalid state lost")
+	}
 	if _, err = readCodex(dir, "missing-account", true); err == nil {
 		t.Fatal("missing account guessed")
 	}
@@ -228,5 +235,46 @@ func TestMigrationDoesNotWidenModelsOrAccounts(t *testing.T) {
 	}
 	if !who.AllowsAccount("low", "api-key-account") {
 		t.Fatal("Codex restriction blocked an API-key provider")
+	}
+}
+
+func TestTauriProxySemantics(t *testing.T) {
+	var c config
+	if err := json.Unmarshal(jsonc.ToJSON([]byte(fixture)), &c); err != nil {
+		t.Fatal(err)
+	}
+	c.Proxy = "http://127.0.0.1:7890"
+	c.Upstreams[0].Proxy = "$app_proxy_url"
+	p, err := convert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range p.providers.Providers {
+		if v.ID == "low" && v.Proxy != c.Proxy {
+			t.Fatal("global proxy placeholder not resolved")
+		}
+		if v.ID == "high" && v.Proxy != "direct" {
+			t.Fatal("empty upstream proxy inherited global proxy")
+		}
+	}
+	c.Proxy = ""
+	if _, err := convert(c); err == nil {
+		t.Fatal("accepted missing global proxy")
+	}
+}
+
+func TestMigrationKeepsMixedCaseProviderRefs(t *testing.T) {
+	var c config
+	if err := json.Unmarshal(jsonc.ToJSON([]byte(fixture)), &c); err != nil {
+		t.Fatal(err)
+	}
+	c.Upstreams[0].ID = "MixedCase"
+	c.Keys[1].Scope.IDs = []string{"MixedCase"}
+	p, err := convert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !access.ModelAllowed(p.keys[0].Models, "MixedCase/deepseek-flash") {
+		t.Fatal("original provider/model spelling not permitted")
 	}
 }

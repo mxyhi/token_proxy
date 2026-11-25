@@ -238,6 +238,11 @@ func renewSaved(ctx context.Context, agent, user string, force bool, stale strin
 	if l == nil {
 		return "", "", fmt.Errorf("no saved %s account %q", agent, user)
 	}
+	// An invalid imported account stays invalid; a background read must not
+	// attempt to reuse a credential the source gateway already rejected.
+	if l.TauriImported && l.Lapsed != "" {
+		return "", "", errors.New(l.Lapsed)
+	}
 	if agent == "codex" && heldByCodex(*l) {
 		// the account Codex is signed in to now (switched to since this
 		// was asked for, or the copy kept of it as it was): one sign-in in

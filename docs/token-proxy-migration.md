@@ -45,7 +45,7 @@ token-proxy migrate-tauri --source "$HOME/Library/Application Support/com.mxyhi.
 
 确认检查结果后，关闭新版进程，添加 `--output "$HOME/.config/token-proxy-magpie" --apply`，写入一个**尚不存在**的新配置目录。不能合并到已运行的新实例。迁移程序离线读取 JSONC 和只读 SQLite，不调用旧 OAuth 登录文件，也不刷新 token。正式切换前应备份源目录和 SQLite（包括 WAL 或使用 SQLite backup），先在备用端口验证，再停旧版释放 9208。
 
-保留：监听端口、LAN 开关、全局和上游代理、API keys、禁用状态、本地密钥及作用域、上游模型映射、一个 Codex OAuth 账户。每个密钥的裸模型名映射到独立路由组，成员按旧版 priority 降序排列，使用 order/serial 回退。旧上游 ID 保留；Codex 上游映射到内置 codex，通过密钥别名保留旧的完整模型引用。本地请求也必须携带有效密钥，错误、禁用、删除的密钥被拒绝（公共 `/` 健康探测除外）。
+保留：监听端口、LAN 开关、全局和上游代理、API keys、禁用状态、本地密钥及作用域、上游模型映射、一个 Codex OAuth 账户。每个密钥的裸模型名映射到独立路由组，成员按旧版 priority 降序排列，使用 order/serial 回退。内部上游 ID 转小写，原大小写引用按新基座的不区分大小写规则继续解析；Codex 上游映射到内置 codex，通过密钥别名保留旧的完整模型引用。本地请求也必须携带有效密钥，错误、禁用、删除的密钥被拒绝（公共 `/` 健康探测除外）。
 
 本阶段要求旧策略为 fill_first + serial，启用的上游有明确模型列表；不支持的账户类型、启用的 passthrough、多个 Codex 账户上游或无本地密钥配置会拒绝迁移，避免静默改变路由。禁用的 passthrough 只保留禁用占位。转换后的路由是迁移时快照，后续新增模型和修改优先级需编辑路由组与密钥别名。
 
@@ -54,3 +54,7 @@ token-proxy migrate-tauri --source "$HOME/Library/Application Support/com.mxyhi.
 迁移后的 `localKeyID` 指向启用的本地密钥（优先 auto 作用域），用于新版连接 Agent 和本机工具请求。禁用或删除它后，这些入口不自动换用另一把权限不同的密钥；现有客户端的原密钥保持不变。
 
 旧版 `available_models` 同时是请求白名单：迁移为每个密钥的明确模型权限，不能放宽为上游通配符。Codex 请求限制到旧配置绑定的账户，避免新基座自动发现的其他账户参与回退。
+
+上游代理空值迁移为 direct，`$app_proxy_url` 展开为旧全局代理地址。导入的 Codex 账户标记 `tauriImported`，即使 Codex 客户端没有订阅登录也由网关独立提供，不修改客户端 auth.json。
+
+旧数据库中的 invalid Codex 账户保留失效标记，后台读取和请求不重用该凭据；账户仍可见，重新登录才能恢复。

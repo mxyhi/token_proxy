@@ -86,6 +86,8 @@ type Login struct {
 }
 
 type savedLogin struct {
+	// TauriImported accounts are served without signing the Codex client in.
+	TauriImported bool `json:"tauriImported,omitempty"`
 	// ID is the account's stable id (#905): set once it is written, and
 	// kept as it is when the account is renamed or its plan changes — a
 	// gateway key held to accounts names it by this, not by a name that
@@ -812,7 +814,8 @@ func savedButSignedOut() []Exclusion {
 	for _, a := range loginAgents {
 		// Claude Code signed out, its saved accounts are served all the
 		// same (claudeStandIn)
-		if saved[a] == 0 || a == "claude" {
+		_, savedCodex := codexSavedFirst()
+		if saved[a] == 0 || a == "claude" || a == "codex" && savedCodex {
 			continue
 		}
 		if _, ok := liveLogin(a); ok {
@@ -1280,6 +1283,12 @@ func loginsNow(agent string) []Login {
 		// signed-out one too, which the row then says is signed out
 		standIn = claudeListed(ls)
 	}
+	codexStandIn := ""
+	if _, ok := active["codex"]; !ok {
+		if l, ok := codexSavedFirst(); ok {
+			codexStandIn = l.User
+		}
+	}
 	back := map[string]string{}
 	for a, user := range active {
 		// only where magpie goes back to it (returnsToFirst): a return
@@ -1293,7 +1302,7 @@ func loginsNow(agent string) []Login {
 			continue
 		}
 		using := strings.EqualFold(active[l.Agent], l.User)
-		first := l.Agent == "claude" && strings.EqualFold(standIn, l.User)
+		first := l.Agent == "claude" && strings.EqualFold(standIn, l.User) || l.Agent == "codex" && codexStandIn != "" && strings.EqualFold(codexStandIn, l.User)
 		lg := Login{Agent: l.Agent, User: l.User, Plan: l.Plan, Seen: l.Seen, Active: using, On: using || first || l.On,
 			Paused: (using || first) && pausedOwn(ls, l.Agent, l.User), first: first}
 		if !using && l.Agent == "codex" {

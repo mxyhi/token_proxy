@@ -1110,7 +1110,7 @@ func codexAccount(home string) (Provider, bool) {
 	b, _, err := readCodexLogin(dir, false)
 	var a codexAuth
 	if err != nil || json.Unmarshal(b, &a) != nil || a.Tokens.AccessToken == "" || a.AuthMode == "apikey" {
-		return Provider{}, false
+		return codexSavedStandIn()
 	}
 	id := jwtClaims(a.Tokens.IDToken)
 	acct := &Account{Agent: "codex", Stream: true,

@@ -237,7 +237,7 @@ func Main(v string) {
 		if len(os.Args) > 1 {
 			switch os.Args[1] {
 			case "-v", "--version", "version":
-				fmt.Println("magpie", version)
+				fmt.Println("Token Proxy", version)
 				return
 			case "-h", "--help", "help":
 				fmt.Print(usage)
@@ -403,7 +403,7 @@ func run(args []string) error {
 	if len(args) > 0 {
 		switch args[0] {
 		case "-v", "--version", "version":
-			fmt.Println("magpie", version)
+			fmt.Println("Token Proxy", version)
 			return nil
 		case "licenses":
 			fmt.Print(notices.Text)

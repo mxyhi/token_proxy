@@ -11,6 +11,7 @@ case "$target" in
   darwin-arm64|darwin-amd64)
     make app VERSION="$version"
     # 不修改内部 executable，保留上游 CLI、自启动与 helper 的约定。
+    rm -rf 'Token Proxy.app'
     mv magpie.app 'Token Proxy.app'
     codesign --force --deep --sign - 'Token Proxy.app'
     ditto -c -k --sequesterRsrc --keepParent 'Token Proxy.app' "dist/token-proxy-$target.zip"

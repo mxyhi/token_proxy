@@ -4,16 +4,20 @@
 下载：[Token Proxy 预发布](https://github.com/mxyhi/token_proxy/releases)；源码与反馈：[mxyhi/token_proxy](https://github.com/mxyhi/token_proxy)。
 
 每次推送 `prelease` 自动测试并构建 macOS、Windows、Linux 安装包，全部成功后发布 GitHub 预发布。
-当前包未做 Apple 开发者签名/公证，升级需手动下载；配置保存在 `~/.config/token-proxy-magpie`，不自动导入旧版 Tauri 数据。
-内部 Go 模块路径、`magpie` 命令及协议暂时保留，详见 [迁移说明](docs/token-proxy-migration.md)。
+当前包未做 Apple 开发者签名/公证；可重新运行安装脚本升级，也可手动下载；配置保存在 `~/.config/token-proxy-magpie`，不自动导入旧版 Tauri 数据。
+内部 Go 模块路径、可执行文件名和协议暂时保留；Unix 安装脚本提供 `token-proxy` 命令，Windows 包内仍为 `magpie.exe`，详见 [迁移说明](docs/token-proxy-migration.md)。
 
-以下保留上游功能文档，其中官方安装命令与官网链接属于上游 Magpie；本分支安装请使用上面的 Token Proxy Releases。
+以下保留上游功能文档，其中官方安装命令与官网链接属于上游 Magpie。本分支 macOS/Linux 安装 `curl` 和 `jq` 后可运行下面的 Token Proxy 安装命令；Windows 请从上面的 Releases 手动下载。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh
+```
 
 ---
 
 <div align="center">
 
-<a href="https://usemagpie.ai/zh/"><img src="site/public/img/icon-256.png" width="112" alt="magpie"></a>
+<a href="https://github.com/mxyhi/token_proxy/releases"><img src="site/public/img/icon-256.png" width="112" alt="magpie"></a>
 
 # magpie
 
@@ -23,8 +27,8 @@
 在菜单栏一点就能切换。所有 Agent 共用一个本地网关，<br>
 额度用完时，它会悄悄切到你的下一个账号。
 
-[![Release](https://img.shields.io/github/v/release/yetone/magpie-releases?label=release&color=111111)](https://github.com/yetone/magpie-releases/releases/latest) [![Stars](https://img.shields.io/github/stars/yetone/magpie?style=flat&color=111111)](https://github.com/yetone/magpie/stargazers) [![Discord](https://img.shields.io/badge/Discord-加入社区-5865F2?logo=discord&logoColor=white)](https://discord.gg/vGSnD3ZKQF) [![License](https://img.shields.io/badge/license-MIT-111111)](LICENSE)<br>
-![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white) ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white) ![Termux](https://img.shields.io/badge/Termux-000000?logo=android&logoColor=white)
+[![Token Proxy 预发布](https://img.shields.io/badge/Token_Proxy-pre--release-111111)](https://github.com/mxyhi/token_proxy/releases) [![Stars](https://img.shields.io/github/stars/yetone/magpie?style=flat&color=111111)](https://github.com/yetone/magpie/stargazers) [![Discord](https://img.shields.io/badge/Discord-加入社区-5865F2?logo=discord&logoColor=white)](https://discord.gg/vGSnD3ZKQF) [![License](https://img.shields.io/badge/license-MIT-111111)](LICENSE)<br>
+![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white) ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
 
 Thanks to [Kimi](https://usemagpie.ai/go/kimi-cn/readme) for supporting magpie and the open source community.
 
@@ -34,7 +38,7 @@ Thanks to [Kimi](https://usemagpie.ai/go/kimi-cn/readme) for supporting magpie a
 <a href="https://usemagpie.ai/go/modelgo/readme"><picture><source media="(prefers-color-scheme: dark)" srcset="site/public/img/sponsor-modelgo-dark.svg"><img src="site/public/img/sponsor-modelgo.svg" width="200" height="50" alt="ModelGo"></picture></a>&emsp;&emsp;<a href="https://usemagpie.ai/go/x6ai/readme"><picture><source media="(prefers-color-scheme: dark)" srcset="site/public/img/sponsor-x6ai-dark.svg"><img src="site/public/img/sponsor-x6ai.svg" width="200" height="50" alt="x6.ai"></picture></a><br>
 <a href="https://usemagpie.ai/go/ccodes/readme"><picture><source media="(prefers-color-scheme: dark)" srcset="site/public/img/sponsor-ccodes-dark.png"><img src="site/public/img/sponsor-ccodes.png" width="200" height="50" alt="Ccode-AI"></picture></a>
 
-**[下载](https://usemagpie.ai/zh/)** &nbsp;·&nbsp; **[文档](https://usemagpie.ai/docs/zh/start)** &nbsp;·&nbsp; **[完整参考（英文）](docs/reference.md)** &nbsp;·&nbsp; **[插件](https://github.com/magpie-community/plugins)** &nbsp;·&nbsp; **[Discord](https://discord.gg/vGSnD3ZKQF)** &nbsp;·&nbsp; [English](README.md) · **简体中文**
+**[下载 Token Proxy 预发布](https://github.com/mxyhi/token_proxy/releases)** &nbsp;·&nbsp; **[上游文档](https://usemagpie.ai/docs/zh/start)** &nbsp;·&nbsp; **[完整参考（英文）](docs/reference.md)** &nbsp;·&nbsp; **[插件](https://github.com/magpie-community/plugins)** &nbsp;·&nbsp; **[Discord](https://discord.gg/vGSnD3ZKQF)** &nbsp;·&nbsp; [English](README.md) · **简体中文**
 
 <br>
 
@@ -58,38 +62,38 @@ Thanks to [Kimi](https://usemagpie.ai/go/kimi-cn/readme) for supporting magpie a
 
 如果你用不止一个 Agent、不止一个 provider 或不止一个账号，它就适合你。如果你只用一个 Agent、只用它自家的订阅，而且够用，那就不需要 magpie。
 
-支持 macOS、Windows 和 Linux（菜单栏应用、窗口、TUI、Web 界面和 CLI），也能跑在 Docker 和 Termux 上。
+本预发布提供 macOS、Windows 和 Linux 安装包。上游文档中的 Docker、Nix、Termux 安装方式属于官方 Magpie，本分支尚未发布这些产物。
 
 ## 快速开始
 
-**1 · 安装**。从 **[usemagpie.ai](https://usemagpie.ai/zh/)** 下载应用，或者运行：
+**1 · 安装**。从 **[Token Proxy 预发布](https://github.com/mxyhi/token_proxy/releases)** 下载，或在 macOS/Linux 上安装 `curl`、`jq` 后运行：
 
 ```sh
-curl -fsSL https://usemagpie.ai/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh
 ```
 
-<sub>Mac 版已签名并公证，每个发布文件都带 GitHub Actions 构建证明（`gh attestation verify <file> -R yetone/magpie-releases`），每个版本都会自动更新。Linux 上脚本装桌面版，桌面上没装 WebKitGTK 4.1 时会先用系统的包管理器装上（sudo 会要密码）；没有桌面或没有终端可问时装终端版，并告诉你该装哪个包。用 `--gui` 或 `--tui` 可以自己选。网络受限时可用 `--proxy` 或 `--mirror`。用 Nix 的话：`nix profile install github:yetone/magpie-releases`（终端版用 `#magpie-cli`；支持 Linux 和 Apple 芯片的 Mac，每个版本自动跟上）。也可以 `go install github.com/yetone/magpie@latest`，或者用 [Docker 镜像](https://usemagpie.ai/docs/zh/docker)。 用 `curl -fsSL https://usemagpie.ai/install.sh | sh -s -- --uninstall` 卸载：先把 Agent 恢复成原来的配置，再拿掉脚本装上的东西（magpie 已被删掉时会临时下载一个来恢复）；`~/.config/magpie` 里的设置会保留，加 `--purge` 才一起删除。</sub>
+<sub>预发布包未做 Apple 开发者签名/公证，不支持自动更新；安装脚本会按 GitHub Release 的 SHA-256 校验文件。macOS 安装到 /Applications（不可写时使用 ~/Applications）；若有同名旧版应用，请设置 TOKEN_PROXY_APP_DIR 指向其他目录。Unix 命令为 ~/.local/bin/token-proxy。Linux 安装桌面程序；Linux 运行需要 GTK 3 和 WebKitGTK 4.1。配置目录为 ~/.config/token-proxy-magpie，不会自动迁移旧版 Tauri 或官方 Magpie 数据。</sub>
 
-**2 · 添加 provider**。打开 magpie，进入 **Providers → 添加 provider**。选一个预设、粘贴 key，或者登录一个订阅。
+**2 · 添加 provider**。打开 Token Proxy，进入 **Providers → 添加 provider**。选一个预设、粘贴 key，或者登录一个订阅。
 
 **3 · 选模型**。在 **Agents** 页给每个 Agent 选一个模型。开一个新会话就用上了。
 
 也可以全程在终端里操作：
 
 ```sh
-magpie provider add deepseek sk-…              # 预设只需要 key
-magpie claude deepseek/deepseek-v4-pro          # Claude Code 用 DeepSeek
-magpie codex moonshot/kimi-k2.5                 # Codex 用 Kimi
-magpie group add "Opus anywhere" models=claude/claude-opus-5-5,copilot/claude-opus-5.5 routing=smart
-magpie claude group/opus-anywhere               # 在多个订阅间自动切换
-magpie save work && magpie use work             # 方案
-magpie quota                                    # 每个套餐还剩多少
-magpie settings set theme dark                  # 设置里的每一项，也能在终端改
-magpie tool generate_image "一只喜鹊，水彩" -o hero.png   # 直接调用 magpie 的生图、识图、搜索工具
-magpie tui                                      # 全部功能，在终端里
+token-proxy provider add deepseek sk-…              # 预设只需要 key
+token-proxy claude deepseek/deepseek-v4-pro          # Claude Code 用 DeepSeek
+token-proxy codex moonshot/kimi-k2.5                 # Codex 用 Kimi
+token-proxy group add "Opus anywhere" models=claude/claude-opus-5-5,copilot/claude-opus-5.5 routing=smart
+token-proxy claude group/opus-anywhere               # 在多个订阅间自动切换
+token-proxy save work && token-proxy use work             # 方案
+token-proxy quota                                    # 每个套餐还剩多少
+token-proxy settings set theme dark                  # 设置里的每一项，也能在终端改
+token-proxy tool generate_image "一只喜鹊，水彩" -o hero.png   # 直接调用 magpie 的生图、识图、搜索工具
+token-proxy tui                                      # 全部功能，在终端里
 ```
 
-magpie 通过读取智能体的登录信息（Claude Code 和 Codex 的文件、钥匙串）找到它们登录的订阅。不想让它读取，可以在 设置 → 隐私 里关闭「订阅账号」，或运行 `magpie accounts discovery off`（`on` 重新开启）。`MAGPIE_NO_ACCOUNTS=1` 只对这一次运行关闭，不改动保存的设置。API Key 服务商不受影响。
+magpie 通过读取智能体的登录信息（Claude Code 和 Codex 的文件、钥匙串）找到它们登录的订阅。不想让它读取，可以在 设置 → 隐私 里关闭「订阅账号」，或运行 `token-proxy accounts discovery off`（`on` 重新开启）。`MAGPIE_NO_ACCOUNTS=1` 只对这一次运行关闭，不改动保存的设置。API Key 服务商不受影响。
 
 ## 支持的 Agent
 
@@ -225,8 +229,8 @@ Agent 会把读到的东西放进提示词：一个 `.env`、一份配置、一�
 ### 插件
 
 ```sh
-magpie plugin add opencode-gemini-auth   # npm 上的 OpenCode 插件
-magpie plugin login google-plugin        # 在 magpie 里走它自己的登录流程
+token-proxy plugin add opencode-gemini-auth   # npm 上的 OpenCode 插件
+token-proxy plugin login google-plugin        # 在 magpie 里走它自己的登录流程
 ```
 
 插件运行在 [Bun](https://bun.sh) 上，第一次需要时自动下载。插件负责登录、列出模型和发送请求，Agent 像用其他 provider 一样用它的模型。去 **[magpie-community/plugins](https://github.com/magpie-community/plugins)** 逛逛，或者[自己写一个](https://usemagpie.ai/docs/zh/plugins)。
@@ -254,8 +258,8 @@ export function onRequest(body, ctx) {
 | `think-tags` | 去掉回复里的 `<think>…</think>`，或把 `reasoning_content` 放进回复 |
 
 ```sh
-magpie plugin add @magpie-community/middleware-model-map
-magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}'
+token-proxy plugin add @magpie-community/middleware-model-map
+token-proxy plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}'
 ```
 
 在「插件 › 发现 › 网关中间件」里可以找到它们。详见[网关中间件](https://usemagpie.ai/docs/zh/plugins#middleware)。
@@ -272,7 +276,7 @@ magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}
 | | |
 | :-- | :-- |
 | **token 和花费** | token、缓存读写、推理和调用次数，按官方价格算花费，美元或人民币；任何模型都能自定义价格 |
-| **额度** | 每个 key、套餐和账号的余额和额度窗口（`magpie quota`），窗口还剩很多就要重置时提醒你 |
+| **额度** | 每个 key、套餐和账号的余额和额度窗口（`token-proxy quota`），窗口还剩很多就要重置时提醒你 |
 | **会话** | 每个 Agent 对话的花费和标题，一键在终端里重新打开 |
 | **上下文** | 每个请求的上下文窗口用了多满、多少来自缓存、被什么占着 |
 | **账单** | 按账号、按上游 key 统计，还能 OTLP 导出到你自己的可观测性系统 |
@@ -283,13 +287,13 @@ magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}
 | :-- | :-- |
 | **局域网** | 打开「局域网共享」，给每个客户端一个命名的网关 key，各自设每天、每周或每月的 token 和花费上限 |
 | **[远程 magpie](https://usemagpie.ai/docs/zh/remote)** | 笔记本用台式机上那个 magpie 的 provider、账号和路由组，同时照样配置自己的 Agent |
-| **[Docker](https://usemagpie.ai/docs/zh/docker)** | 在服务器或 NAS 上跑 `ghcr.io/yetone/magpie`，用 Web 界面管理 |
+| **[Docker（上游发行版）](https://usemagpie.ai/docs/zh/docker)** | 在服务器或 NAS 上跑 `ghcr.io/yetone/magpie`，用 Web 界面管理 |
 | **同步** | 备份到文件，或者通过 WebDAV（坚果云、Nextcloud……）或 S3 在多台机器间同步 |
 
 ### 还有
 
 - **资料库**：指令、MCP 服务器、技能和子代理只写一次，magpie 按每个 Agent 的格式写进它的文件，删除时只删自己写的部分。
-- **任何模型都能联网搜索**：不能搜索的模型由 magpie 代为搜索，用能搜索的 provider 或搜索 API（Tavily、Brave、Exa、Firecrawl、You.com、DeepSeek、火山引擎豆包搜索、腾讯云元宝搜索、TinyFish、SearXNG），按你拖好的顺序调用，每个都能单独关闭而不删除密钥。一个 API 可以填多个密钥：搜索默认轮流使用（`pick=order` 则按顺序），最近被拒的密钥最后才用；Tavily 的每个密钥用了多少额度，在设置页和 `magpie search` 里都能看到。任何 Agent 都能把同一个搜索挂成 MCP 服务器，提供 `web_search` 工具和按 URL 读取网页的 `web_fetch` 工具。
+- **任何模型都能联网搜索**：不能搜索的模型由 magpie 代为搜索，用能搜索的 provider 或搜索 API（Tavily、Brave、Exa、Firecrawl、You.com、DeepSeek、火山引擎豆包搜索、腾讯云元宝搜索、TinyFish、SearXNG），按你拖好的顺序调用，每个都能单独关闭而不删除密钥。一个 API 可以填多个密钥：搜索默认轮流使用（`pick=order` 则按顺序），最近被拒的密钥最后才用；Tavily 的每个密钥用了多少额度，在设置页和 `token-proxy search` 里都能看到。任何 Agent 都能把同一个搜索挂成 MCP 服务器，提供 `web_search` 工具和按 URL 读取网页的 `web_fetch` 工具。
 - **图片和视频**：通过 MCP 给任何 Agent 一个生图工具，用你选的模型；有 Grok 订阅或 MiniMax API Key（MiniMax H3）还能生成视频。
 - **Agent 保持最新**：Agents 页显示每个 CLI 的版本，按当初的安装方式更新，没装的也给出安装命令。
 - **WSL**：在 Windows 上，WSL 发行版里的 Agent 一样能配置，会话也一样统计。
@@ -299,13 +303,13 @@ magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}
 
 | | |
 | :-- | :-- |
-| **[快速上手](https://usemagpie.ai/docs/zh/start)** | 入门导览 |
+| **[Token Proxy 安装](docs/token-proxy-migration.md#安装与升级)** | 入门导览 |
 | **[完整参考](docs/reference.md)**（英文） | 每个 Agent、provider 选项、网关接口、CLI 命令和文件 |
 | **[插件](https://usemagpie.ai/docs/zh/plugins)** | 使用插件和编写插件 |
 | **[意图路由](https://usemagpie.ai/docs/zh/intent)** | 按每轮对话的内容选择模型 |
 | **[导入链接](https://usemagpie.ai/docs/zh/import)** | 给 provider 网站用的「添加到 magpie」按钮 |
 | **[远程 magpie](https://usemagpie.ai/docs/zh/remote)** | 在其他电脑上用同一个 magpie 的 provider 和路由组 |
-| **[Docker](https://usemagpie.ai/docs/zh/docker)** | 在服务器或 NAS 上运行 magpie |
+| **[Docker（上游发行版）](https://usemagpie.ai/docs/zh/docker)** | 在服务器或 NAS 上运行 magpie |
 
 ## 隐私
 

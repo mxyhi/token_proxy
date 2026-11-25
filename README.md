@@ -4,16 +4,20 @@
 下载：[Token Proxy 预发布](https://github.com/mxyhi/token_proxy/releases)；源码与反馈：[mxyhi/token_proxy](https://github.com/mxyhi/token_proxy)。
 
 每次推送 `prelease` 自动测试并构建 macOS、Windows、Linux 安装包，全部成功后发布 GitHub 预发布。
-当前包未做 Apple 开发者签名/公证，升级需手动下载；配置保存在 `~/.config/token-proxy-magpie`，不自动导入旧版 Tauri 数据。
-内部 Go 模块路径、`magpie` 命令及协议暂时保留，详见 [迁移说明](docs/token-proxy-migration.md)。
+当前包未做 Apple 开发者签名/公证；可重新运行安装脚本升级，也可手动下载；配置保存在 `~/.config/token-proxy-magpie`，不自动导入旧版 Tauri 数据。
+内部 Go 模块路径、可执行文件名和协议暂时保留；Unix 安装脚本提供 `token-proxy` 命令，Windows 包内仍为 `magpie.exe`，详见 [迁移说明](docs/token-proxy-migration.md)。
 
-以下保留上游功能文档，其中官方安装命令与官网链接属于上游 Magpie；本分支安装请使用上面的 Token Proxy Releases。
+以下保留上游功能文档，其中官方安装命令与官网链接属于上游 Magpie。本分支 macOS/Linux 安装 `curl` 和 `jq` 后可运行下面的 Token Proxy 安装命令；Windows 请从上面的 Releases 手动下载。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh
+```
 
 ---
 
 <div align="center">
 
-<a href="https://usemagpie.ai"><img src="site/public/img/icon-256.png" width="112" alt="magpie"></a>
+<a href="https://github.com/mxyhi/token_proxy/releases"><img src="site/public/img/icon-256.png" width="112" alt="magpie"></a>
 
 # magpie
 
@@ -23,8 +27,8 @@
 Switch any of them from the menu bar. One local gateway serves them all,<br>
 and when a quota runs out, it quietly moves on to your next account.
 
-[![Release](https://img.shields.io/github/v/release/yetone/magpie-releases?label=release&color=111111)](https://github.com/yetone/magpie-releases/releases/latest) [![Stars](https://img.shields.io/github/stars/yetone/magpie?style=flat&color=111111)](https://github.com/yetone/magpie/stargazers) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/vGSnD3ZKQF) [![License](https://img.shields.io/badge/license-MIT-111111)](LICENSE)<br>
-![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white) ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black) ![Docker](https://img.shields.io/badge/Docker-2496ED?logo=docker&logoColor=white) ![Termux](https://img.shields.io/badge/Termux-000000?logo=android&logoColor=white)
+[![Token Proxy pre-release](https://img.shields.io/badge/Token_Proxy-pre--release-111111)](https://github.com/mxyhi/token_proxy/releases) [![Stars](https://img.shields.io/github/stars/yetone/magpie?style=flat&color=111111)](https://github.com/yetone/magpie/stargazers) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/vGSnD3ZKQF) [![License](https://img.shields.io/badge/license-MIT-111111)](LICENSE)<br>
+![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white) ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
 
 Thanks to [Kimi](https://usemagpie.ai/go/kimi/readme) for supporting magpie and the open source community.
 
@@ -34,7 +38,7 @@ Thanks to [Kimi](https://usemagpie.ai/go/kimi/readme) for supporting magpie and 
 <a href="https://usemagpie.ai/go/modelgo/readme"><picture><source media="(prefers-color-scheme: dark)" srcset="site/public/img/sponsor-modelgo-dark.svg"><img src="site/public/img/sponsor-modelgo.svg" width="200" height="50" alt="ModelGo"></picture></a>&emsp;&emsp;<a href="https://usemagpie.ai/go/x6ai/readme"><picture><source media="(prefers-color-scheme: dark)" srcset="site/public/img/sponsor-x6ai-dark.svg"><img src="site/public/img/sponsor-x6ai.svg" width="200" height="50" alt="x6.ai"></picture></a><br>
 <a href="https://usemagpie.ai/go/ccodes/readme"><picture><source media="(prefers-color-scheme: dark)" srcset="site/public/img/sponsor-ccodes-dark.png"><img src="site/public/img/sponsor-ccodes.png" width="200" height="50" alt="Ccode-AI"></picture></a>
 
-**[Download](https://usemagpie.ai)** &nbsp;·&nbsp; **[Docs](https://usemagpie.ai/docs/start)** &nbsp;·&nbsp; **[Reference](docs/reference.md)** &nbsp;·&nbsp; **[Plugins](https://github.com/magpie-community/plugins)** &nbsp;·&nbsp; **[Discord](https://discord.gg/vGSnD3ZKQF)** &nbsp;·&nbsp; **English** · [简体中文](README.zh-CN.md)
+**[Download Token Proxy pre-release](https://github.com/mxyhi/token_proxy/releases)** &nbsp;·&nbsp; **[Upstream docs](https://usemagpie.ai/docs/start)** &nbsp;·&nbsp; **[Reference](docs/reference.md)** &nbsp;·&nbsp; **[Plugins](https://github.com/magpie-community/plugins)** &nbsp;·&nbsp; **[Discord](https://discord.gg/vGSnD3ZKQF)** &nbsp;·&nbsp; **English** · [简体中文](README.zh-CN.md)
 
 <br>
 
@@ -58,38 +62,38 @@ Each agent keeps its model in its own file, in its own format, with its own keys
 
 It's for you if you use more than one agent, more than one provider, or more than one account. If you use one agent on its vendor's own plan and that's enough, you don't need it.
 
-Runs on macOS, Windows and Linux (menu bar app, window, TUI, web UI and CLI), in Docker, and on Termux.
+This prerelease ships macOS, Windows and Linux packages. Docker, Nix and Termux instructions in upstream documentation refer to official Magpie; this fork does not publish those distributions.
 
 ## Quick start
 
-**1 · Install.** Download the app from **[usemagpie.ai](https://usemagpie.ai)**, or run:
+**1 · Install.** Download Token Proxy from **[its pre-release](https://github.com/mxyhi/token_proxy/releases)**, or on macOS/Linux install `curl` and `jq`, then run:
 
 ```sh
-curl -fsSL https://usemagpie.ai/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh
 ```
 
-<sub>Mac builds are signed and notarised, every release file carries a GitHub Actions build attestation (`gh attestation verify <file> -R yetone/magpie-releases`), and every build updates itself. On Linux the script installs the desktop app, and on a desktop without WebKitGTK 4.1 installs it first with your package manager (sudo asks for your password); with no desktop, or no terminal to ask at, it installs the terminal build and says which package to add. `--gui` or `--tui` chooses. Behind a firewall, use `--proxy` or `--mirror`. With Nix, `nix profile install github:yetone/magpie-releases` (`#magpie-cli` for the terminal build; Linux and Apple silicon Macs, updated with each release). Or `go install github.com/yetone/magpie@latest`, or the [Docker image](https://usemagpie.ai/docs/docker). Remove magpie with `curl -fsSL https://usemagpie.ai/install.sh | sh -s -- --uninstall`: it puts your agents back as they were, then takes off what the script installed (with magpie deleted already, it downloads one to put them back); your settings in `~/.config/magpie` stay unless you add `--purge`.</sub>
+<sub>预发布包未做 Apple 开发者签名/公证，不支持自动更新；安装脚本会按 GitHub Release 的 SHA-256 校验文件。macOS 安装到 /Applications（不可写时使用 ~/Applications）；若有同名旧版应用，请设置 TOKEN_PROXY_APP_DIR 指向其他目录。Unix 命令为 ~/.local/bin/token-proxy。Linux 安装桌面程序；Linux 运行需要 GTK 3 和 WebKitGTK 4.1。配置目录为 ~/.config/token-proxy-magpie，不会自动迁移旧版 Tauri 或官方 Magpie 数据。</sub>
 
-**2 · Add a provider.** Open magpie and go to **Providers → Add provider**. Pick a preset and paste a key, or sign in with a subscription.
+**2 · Add a provider.** Open Token Proxy and go to **Providers → Add provider**. Pick a preset and paste a key, or sign in with a subscription.
 
 **3 · Pick a model** for each agent on the **Agents** page. Start a new session and it's on the new model.
 
 Or do it all from the terminal:
 
 ```sh
-magpie provider add deepseek sk-…              # a preset needs only the key
-magpie claude deepseek/deepseek-v4-pro          # Claude Code on DeepSeek
-magpie codex moonshot/kimi-k2.5                 # Codex on Kimi
-magpie group add "Opus anywhere" models=claude/claude-opus-5-5,copilot/claude-opus-5.5 routing=smart
-magpie claude group/opus-anywhere               # fails over between subscriptions
-magpie save work && magpie use work             # profiles
-magpie quota                                    # what's left on every plan
-magpie settings set theme dark                  # every Settings switch, from the terminal
-magpie tool generate_image "a magpie, watercolour" -o hero.png   # magpie's image, vision and search tools, called directly
-magpie tui                                      # the whole thing, in a terminal
+token-proxy provider add deepseek sk-…              # a preset needs only the key
+token-proxy claude deepseek/deepseek-v4-pro          # Claude Code on DeepSeek
+token-proxy codex moonshot/kimi-k2.5                 # Codex on Kimi
+token-proxy group add "Opus anywhere" models=claude/claude-opus-5-5,copilot/claude-opus-5.5 routing=smart
+token-proxy claude group/opus-anywhere               # fails over between subscriptions
+token-proxy save work && token-proxy use work             # profiles
+token-proxy quota                                    # what's left on every plan
+token-proxy settings set theme dark                  # every Settings switch, from the terminal
+token-proxy tool generate_image "a magpie, watercolour" -o hero.png   # magpie's image, vision and search tools, called directly
+token-proxy tui                                      # the whole thing, in a terminal
 ```
 
-magpie finds the subscriptions your agents are signed in to by reading their sign-ins (Claude Code's and Codex's files, the Keychain). To keep it from reading them, turn off Settings → Privacy → *Subscription accounts*, or run `magpie accounts discovery off` (`on` turns it back on). `MAGPIE_NO_ACCOUNTS=1` turns it off for one run without changing the saved setting. API-key providers work either way.
+magpie finds the subscriptions your agents are signed in to by reading their sign-ins (Claude Code's and Codex's files, the Keychain). To keep it from reading them, turn off Settings → Privacy → *Subscription accounts*, or run `token-proxy accounts discovery off` (`on` turns it back on). `MAGPIE_NO_ACCOUNTS=1` turns it off for one run without changing the saved setting. API-key providers work either way.
 
 ## Supported agents
 
@@ -225,8 +229,8 @@ A conversation **stays with the account that answered it** while the vendor's pr
 ### Plugins
 
 ```sh
-magpie plugin add opencode-gemini-auth   # an OpenCode plugin from npm
-magpie plugin login google-plugin        # its own sign-in flow, in magpie
+token-proxy plugin add opencode-gemini-auth   # an OpenCode plugin from npm
+token-proxy plugin login google-plugin        # its own sign-in flow, in magpie
 ```
 
 Plugins run on [Bun](https://bun.sh), downloaded the first time one needs it. A plugin signs in, lists its models and makes each request; agents use those models like any other provider's. Browse **[magpie-community/plugins](https://github.com/magpie-community/plugins)**, or [write your own](https://usemagpie.ai/docs/plugins).
@@ -254,8 +258,8 @@ export function onRequest(body, ctx) {
 | `think-tags` | Take `<think>…</think>` out of replies, or put `reasoning_content` into them |
 
 ```sh
-magpie plugin add @magpie-community/middleware-model-map
-magpie plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}'
+token-proxy plugin add @magpie-community/middleware-model-map
+token-proxy plugin options model-map '{"mapping": {"fast": "deepseek/deepseek-chat"}}'
 ```
 
 Find them under Plugins › Discover › Gateway middleware. See [Gateway middleware](https://usemagpie.ai/docs/plugins#middleware).
@@ -272,7 +276,7 @@ Find them under Plugins › Discover › Gateway middleware. See [Gateway middle
 | | |
 | :-- | :-- |
 | **Tokens and cost** | Tokens, cache reads and writes, reasoning and calls, with cost at list price in dollars or yuan; set your own price for any model |
-| **Quota** | Balances and quota windows for every key, plan and account (`magpie quota`), and a reminder before a window renews with much of it unused |
+| **Quota** | Balances and quota windows for every key, plan and account (`token-proxy quota`), and a reminder before a window renews with much of it unused |
 | **Sessions** | Every agent conversation with its cost and title, reopened in your terminal with one click |
 | **Context** | How full each request's context window is, how much came from the cache, and what fills it |
 | **Bills** | By account and by upstream key, and OTLP export to your own observability stack |
@@ -283,13 +287,13 @@ Find them under Plugins › Discover › Gateway middleware. See [Gateway middle
 | :-- | :-- |
 | **Local network** | Turn on *Share on local network* and give each client a named gateway key with its own daily, weekly or monthly token and cost limit |
 | **[Remote magpie](https://usemagpie.ai/docs/remote)** | A laptop uses the providers, accounts and groups of the magpie on your desktop, and still wires its own agents |
-| **[Docker](https://usemagpie.ai/docs/docker)** | Run `ghcr.io/yetone/magpie` on a server or a NAS and manage it from the web UI |
+| **[Docker（上游发行版）](https://usemagpie.ai/docs/docker)** | Run `ghcr.io/yetone/magpie` on a server or a NAS and manage it from the web UI |
 | **Sync** | Back up to a file, or sync machines over WebDAV (Nutstore, Nextcloud…), S3, or an encrypted GitHub repository backup |
 
 ### Also
 
 - **Library**: write instructions, MCP servers, skills and subagents once; magpie writes them into each agent's files in its format, and removes only what it wrote.
-- **Web search for any model**: a model that can't search gets magpie's search: a provider that can, or search APIs (Tavily, Brave, Exa, Firecrawl, You.com, DeepSeek, Doubao Search on Volcengine, Yuanbao Search on Tencent Cloud, TinyFish, SearXNG), asked in the order you drag them into, each one able to be switched off without losing its key. An API can hold several keys: searches take turns over them (or use them in order with `pick=order`), a key refused lately is asked last, and Tavily keys show what each has used of its limit, in Settings and in `magpie search`. Any agent can mount the same search as an MCP server, with a `web_search` tool and a `web_fetch` tool that reads a page by its URL.
+- **Web search for any model**: a model that can't search gets magpie's search: a provider that can, or search APIs (Tavily, Brave, Exa, Firecrawl, You.com, DeepSeek, Doubao Search on Volcengine, Yuanbao Search on Tencent Cloud, TinyFish, SearXNG), asked in the order you drag them into, each one able to be switched off without losing its key. An API can hold several keys: searches take turns over them (or use them in order with `pick=order`), a key refused lately is asked last, and Tavily keys show what each has used of its limit, in Settings and in `token-proxy search`. Any agent can mount the same search as an MCP server, with a `web_search` tool and a `web_fetch` tool that reads a page by its URL.
 - **Images and video**: an image tool for any agent over MCP, with the model you choose, and videos with a Grok subscription or a MiniMax API key (MiniMax H3).
 - **Agents kept current**: the Agents page shows each CLI's version, updates it the way it was installed, and gives the commands for the ones you don't have.
 - **WSL**: on Windows, agents inside WSL distros are wired too, and their sessions counted.
@@ -305,7 +309,7 @@ Find them under Plugins › Discover › Gateway middleware. See [Gateway middle
 | **[Intent routing](https://usemagpie.ai/docs/intent)** | Route each turn by what it asks for |
 | **[Import links](https://usemagpie.ai/docs/import)** | "Add to magpie" buttons for provider websites |
 | **[Remote magpie](https://usemagpie.ai/docs/remote)** | Use one magpie's providers and groups from your other computers |
-| **[Docker](https://usemagpie.ai/docs/docker)** | Run magpie on a server or a NAS |
+| **[Docker（上游发行版）](https://usemagpie.ai/docs/docker)** | Run magpie on a server or a NAS |
 
 ## Privacy
 

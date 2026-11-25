@@ -3457,6 +3457,18 @@ with a link builder: <https://usemagpie.ai/docs/import>.
 
 ## Install
 
+**Token Proxy 预发布：** 安装方式、依赖和升级限制以[迁移说明](token-proxy-migration.md#安装与升级)为准。macOS/Linux 安装 `curl`、`jq` 后运行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh
+```
+
+Unix 命令为 `token-proxy`；本参考保留的 `magpie` 命令示例需按此替换。Windows 包内仍为 `magpie.exe`。本发行版不使用上游自动更新源。
+
+<details>
+<summary>以下安装、卸载及自动更新说明仅适用于官方 Magpie（保留作上游参考）</summary>
+
+
 Download the app for macOS, Windows or Linux from
 [usemagpie.ai](https://usemagpie.ai), or install it from a terminal (on
 Linux, the desktop app, with WebKitGTK 4.1 installed for it on a desktop
@@ -4132,6 +4144,8 @@ HOME=/tmp/magpie-home XDG_CONFIG_HOME=/tmp/magpie-home/.config make dev
 
 `MAGPIE_THEME=light|dark` forces the palette and `MAGPIE_DEBUG=1` prints what the
 gateway translates.
+
+</details>
 
 ## Use
 

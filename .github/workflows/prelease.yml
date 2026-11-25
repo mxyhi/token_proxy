@@ -13,6 +13,22 @@ permissions:
   contents: read
 
 jobs:
+  installer:
+    name: Installer (${{ matrix.os }})
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Verify installer
+        run: |
+          sh -n install.sh
+          node --test build/token-proxy-install.test.mjs
+
   test:
     uses: ./.github/workflows/test.yml
 
@@ -53,7 +69,7 @@ jobs:
 
   publish:
     # 构建可与测试并行；只有同一提交的全部检查通过才对外发布。
-    needs: [test, build]
+    needs: [test, build, installer]
     if: github.ref == 'refs/heads/prelease' && github.repository == 'mxyhi/token_proxy'
     runs-on: ubuntu-latest
     permissions:
@@ -98,7 +114,7 @@ jobs:
                 tag_name: process.env.TAG,
                 target_commitish: context.sha,
                 name: `Token Proxy ${process.env.TAG}`,
-                body: `基于 Magpie 的迁移预发布。提交：${context.sha}\n\nmacOS 包未做开发者签名/公证；请手动下载安装升级。配置目录为 ~/.config/token-proxy-magpie，不自动迁移旧版 Tauri 数据。`,
+                body: `基于 Magpie 的迁移预发布。提交：${context.sha}\n\nmacOS/Linux 安装 curl、jq 后可运行：\n\n\`\`\`sh\ncurl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh\n\`\`\`\n\n脚本校验 SHA256SUMS，Unix 命令为 token-proxy。Linux 需要 GTK 3 和 WebKitGTK 4.1；Windows 请下载 ZIP。macOS 未做开发者签名/公证。应用不自动更新；可重新运行脚本或手动下载升级。配置目录为 ~/.config/token-proxy-magpie，不自动迁移旧版 Tauri 数据。`,
                 draft: true,
                 prerelease: true,
                 make_latest: "false",

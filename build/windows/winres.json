@@ -7,8 +7,8 @@
   "RT_MANIFEST": {
     "#1": {
       "0409": {
-        "identity": { "name": "ai.usemagpie.magpie", "version": "" },
-        "description": "magpie",
+        "identity": { "name": "com.mxyhi.token-proxy.magpie", "version": "" },
+        "description": "Token Proxy",
         "minimum-os": "win10",
         "execution-level": "as invoker",
         "ui-access": false,
@@ -32,11 +32,11 @@
         "fixed": { "file_version": "0.0.0.0", "product_version": "0.0.0.0" },
         "info": {
           "0409": {
-            "CompanyName": "magpie",
-            "FileDescription": "magpie",
+            "CompanyName": "Token Proxy",
+            "FileDescription": "Token Proxy",
             "LegalCopyright": "© 2026 yetone · MIT",
             "OriginalFilename": "magpie.exe",
-            "ProductName": "magpie"
+            "ProductName": "Token Proxy"
           }
         }
       }

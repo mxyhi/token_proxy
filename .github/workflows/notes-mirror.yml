@@ -17,6 +17,7 @@ permissions:
 
 jobs:
   mirror:
+    if: github.repository == 'yetone/magpie'
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

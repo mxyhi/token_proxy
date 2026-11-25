@@ -1,6 +1,6 @@
 {
-  "name": "magpie",
-  "short_name": "magpie",
+  "name": "Token Proxy",
+  "short_name": "Token Proxy",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

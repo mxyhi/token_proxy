@@ -1,3 +1,16 @@
+# Token Proxy · Magpie 基座预发布
+
+`prelease` 基于 [yetone/magpie](https://github.com/yetone/magpie)，逐步移植旧版 Token Proxy 的功能。
+下载：[Token Proxy 预发布](https://github.com/mxyhi/token_proxy/releases)；源码与反馈：[mxyhi/token_proxy](https://github.com/mxyhi/token_proxy)。
+
+每次推送 `prelease` 自动测试并构建 macOS、Windows、Linux 安装包，全部成功后发布 GitHub 预发布。
+当前包未做 Apple 开发者签名/公证，升级需手动下载；配置保存在 `~/.config/token-proxy-magpie`，不自动导入旧版 Tauri 数据。
+内部 Go 模块路径、`magpie` 命令及协议暂时保留，详见 [迁移说明](docs/token-proxy-migration.md)。
+
+以下保留上游功能文档，其中官方安装命令与官网链接属于上游 Magpie；本分支安装请使用上面的 Token Proxy Releases。
+
+---
+
 <div align="center">
 
 <a href="https://usemagpie.ai"><img src="site/public/img/icon-256.png" width="112" alt="magpie"></a>

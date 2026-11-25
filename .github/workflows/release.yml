@@ -20,6 +20,7 @@ on:
 
 jobs:
   trigger-release:
+    if: github.repository == 'yetone/magpie'
     runs-on: ubuntu-latest
     # room for the dispatch to wait out the owner's API rate limit (65 min)
     timeout-minutes: 75

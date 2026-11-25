@@ -47,7 +47,7 @@ import (
 // (-ldflags "-X main.version=…") and handed over by Main.
 var version = "dev"
 
-const usage = `magpie — one place to pick every agent's model
+const usage = `Token Proxy — one place to pick every agent's model
 
   magpie                          open the app: a window plus a menu bar icon
   magpie tray                     start in the menu bar only

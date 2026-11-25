@@ -46,7 +46,7 @@ func (h *host) makeMain(url string) *application.WebviewWindow {
 	onTop := settings.Load().OnTop && canOnTop(runtime.GOOS, os.Getenv)
 	w := h.app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Name:             "main",
-		Title:            "magpie",
+		Title:            "Token Proxy",
 		URL:              url,
 		Width:            width,
 		Height:           height,

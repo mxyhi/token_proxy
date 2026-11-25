@@ -7,6 +7,10 @@ with no binding generator and no bundler. `magpie web` serves the same page
 to a browser for a machine with no desktop. Package `internal/gui` hosts all
 three.
 
+## Token Proxy 发行边界
+
+本分支的启动入口隔离配置目录与上游自更新；应用外壳和项目链接使用 Token Proxy，内部协议仍沿用 Magpie。当前行为、迁移限制及验证命令见 [迁移说明](../token-proxy-migration.md)。
+
 ## Responsibilities and sources of truth
 
 | Part | Responsibility | Source |

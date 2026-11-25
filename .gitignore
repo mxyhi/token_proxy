@@ -11,3 +11,10 @@
 /.overlay/
 /internal/conptypair/amd64/
 /internal/conptypair/arm64/
+
+# Local migration notes
+/task_plan.md
+/findings.md
+/progress.md
+/.planning/
+/Token Proxy.app/

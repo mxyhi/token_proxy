@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 # On main a run finishes: a release waits for a green run, and one cancelled
 # by every next push left none to wait for (LESSONS.md). A newer push still

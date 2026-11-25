@@ -1,0 +1,110 @@
+name: Token Proxy prelease
+
+on:
+  push:
+    branches: [prelease]
+  workflow_dispatch:
+
+concurrency:
+  group: token-proxy-prelease-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    if: github.ref == 'refs/heads/prelease'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: macos-latest, target: darwin-arm64}
+          - {os: macos-15-intel, target: darwin-amd64}
+          - {os: ubuntu-latest, target: linux-amd64}
+          - {os: ubuntu-24.04-arm, target: linux-arm64}
+          - {os: ubuntu-latest, target: windows}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Install Linux desktop dependencies
+        if: startsWith(matrix.target, 'linux-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev
+      - name: Build installation packages
+        env:
+          VERSION: 0.2.0-prelease.${{ github.run_number }}
+          TARGET: ${{ matrix.target }}
+        run: sh build/token-proxy-release.sh "$TARGET" "$VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: token-proxy-${{ matrix.target }}
+          path: dist/token-proxy-*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    # 构建可与测试并行；只有同一提交的全部检查通过才对外发布。
+    needs: [test, build]
+    if: github.ref == 'refs/heads/prelease' && github.repository == 'mxyhi/token_proxy'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: prelease-0.2.0-${{ github.run_number }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: token-proxy-*
+          path: dist
+          merge-multiple: true
+      - name: Verify packages and create checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          for target in darwin-arm64 darwin-amd64; do
+            test -s "token-proxy-$target.dmg"
+            test -s "token-proxy-$target.zip"
+          done
+          for target in linux-amd64 linux-arm64; do
+            test -s "token-proxy-$target.tar.gz"
+          done
+          for target in windows-amd64 windows-arm64; do
+            test -s "token-proxy-$target.zip"
+          done
+          sha256sum token-proxy-* > SHA256SUMS
+      - name: Prepare release draft
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const params = {owner: context.repo.owner, repo: context.repo.repo};
+            try {
+              await github.rest.repos.getReleaseByTag({...params, tag: process.env.TAG});
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              await github.rest.repos.createRelease({
+                ...params,
+                tag_name: process.env.TAG,
+                target_commitish: context.sha,
+                name: `Token Proxy ${process.env.TAG}`,
+                body: `基于 Magpie 的迁移预发布。提交：${context.sha}\n\nmacOS 包未做开发者签名/公证；请手动下载安装升级。配置目录为 ~/.config/token-proxy-magpie，不自动迁移旧版 Tauri 数据。`,
+                draft: true,
+                prerelease: true,
+                make_latest: "false",
+              });
+            }
+      - name: Upload packages and publish prerelease
+        run: |
+          gh release upload "$TAG" dist/* --clobber
+          gh release edit "$TAG" --draft=false --prerelease --latest=false

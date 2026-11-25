@@ -4659,7 +4659,7 @@ function updateStuck(u) {
 // ---------- what's new ----------
 // After an update the window (or magpie web) shows each release's changes
 // since the one last run, once; Settings' version row opens it again.
-const ISSUES = "https://github.com/yetone/magpie/issues/";
+const ISSUES = "https://github.com/mxyhi/token_proxy/issues/";
 let whatsNewAsked = false;
 // cliBehindOnce: the terminal's magpie is a copy, not the installer's
 // link, so it can't follow updates (#531); advice once per load, window only
@@ -19893,7 +19893,7 @@ function applyPrefs(s, rate) {
   // MAGPIE_NAME; starballl on X), as boot.js did for the first paint; the
   // app's windows keep theirs
   const named = s.name || s.nameEnv;
-  if (web) document.title = named ? named + " · magpie" : "magpie";
+  if (web) document.title = named ? named + " · Token Proxy" : "Token Proxy";
   // accounts hidden while personal data is masked, until chosen otherwise
   window.hideAccounts?.follow(!!s.redactPersonal);
   // this browser's choice from before it was a setting, carried over once
@@ -20514,23 +20514,18 @@ function renderSettings() {
     row(who, t("MAGPIE_PUBLIC_URL: where other computers reach the gateway, with a gateway key"), s.publicURL, copyBtn(s.publicURL, who)).id = "publicURLRow";
   }
   const site = el("button", "text", t("Open"));
-  site.onclick = () => api("open", { url: "https://usemagpie.ai" }).catch(() => {});
-  row(t("Website"), t("downloads, docs and what's new"), "usemagpie.ai", site);
+  site.onclick = () => api("open", { url: "https://github.com/mxyhi/token_proxy/releases" }).catch(() => {});
+  row(t("Website"), t("downloads, docs and what's new"), "mxyhi/token_proxy", site);
   const lic = el("button", "text", t("View"));
   lic.onclick = showNotices;
   row(t("Open-source licenses"), t("the notices of the code and data magpie is built with"), "", lic);
-  const join = el("button", "discord");
-  join.innerHTML = DISCORD_SVG;
-  join.append(el("span", "", t("Join Discord")));
-  join.title = "discord.gg/vGSnD3ZKQF";
-  join.onclick = () => api("open", { url: "https://discord.gg/vGSnD3ZKQF" }).catch(() => {});
   // issues and the code are on GitHub, for those who'd rather not use Discord
   const repo = el("button", "github");
   repo.innerHTML = GITHUB_SVG;
   repo.append(el("span", "", "GitHub"));
-  repo.title = "github.com/yetone/magpie";
-  repo.onclick = () => api("open", { url: "https://github.com/yetone/magpie" }).catch(() => {});
-  row(t("Community"), t("questions, ideas and feedback, on Discord or GitHub"), "", join, repo);
+  repo.title = "github.com/mxyhi/token_proxy";
+  repo.onclick = () => api("open", { url: "https://github.com/mxyhi/token_proxy" }).catch(() => {});
+  row(t("Community"), t("questions, ideas and feedback, on Discord or GitHub"), "", repo);
   // the facts that help a fix, copied (never put in the link), then the
   // feedback post on X, to reply to there (River_WLan on X)
   const report = el("button", "text", t("Open"));
@@ -20538,7 +20533,7 @@ function renderSettings() {
     const f = await fetch("/api/feedback?surface=" + (web ? "browser" : "app")).then((r) => r.ok ? r.json() : null).catch(() => null);
     if (!f) return status(t("Couldn't read the details to copy"), "err");
     await copy(f.text, "", report, t("Details copied. Paste them in your reply"));
-    api("open", { url: f.url }).catch(statusErr);
+    api("open", { url: "https://github.com/mxyhi/token_proxy/issues/new" }).catch(statusErr);
   };
   row(t("Report a problem"), "", "", report);
   // magpie uninstall, from the app (Jevik_AI on X deleted magpie's folders

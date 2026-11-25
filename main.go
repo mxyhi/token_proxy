@@ -5,8 +5,10 @@ package main
 import (
 	_ "embed"
 
+	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/cli"
 	"github.com/yetone/magpie/internal/notices"
+	"github.com/yetone/magpie/internal/update"
 	// the built-in plugins, registered with the runtime (internal/pluginrt)
 	_ "github.com/yetone/magpie/plugins/all"
 )
@@ -23,6 +25,9 @@ var version = "dev"
 var thirdParty string
 
 func main() {
+	// 新基座与官方 Magpie、旧版 Tauri 的配置及更新通道隔离。
+	appdir.Name = "token-proxy-magpie"
+	update.ManualOnly = true
 	notices.Text = thirdParty
 	cli.Main(version)
 }

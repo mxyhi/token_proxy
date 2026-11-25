@@ -44,6 +44,16 @@ import (
 // Site is magpie's home; its /api/latest is the update feed.
 const Site = "https://usemagpie.ai"
 
+// ManualOnly is set once at startup by distributions without their own signed feed.
+// Keep the upstream signature checks intact; never install an upstream release over a fork.
+var ManualOnly bool
+
+const ManualReleases = "https://github.com/mxyhi/token_proxy/releases"
+
+func manualUpdateError() error {
+	return fmt.Errorf("Token Proxy 预发布版请从 %s 下载升级", ManualReleases)
+}
+
 // Feed is where the newest release is described. MAGPIE_UPDATE_FEED points
 // it elsewhere, for testing an update against a local server.
 func Feed() string {
@@ -149,6 +159,9 @@ func LatestEvery(ctx context.Context, lang string) (*Release, error) {
 // when it is Stable's version (the site's Stable download). Only the site
 // knows it, so a failed feed is never answered from GitHub.
 func LatestStable(ctx context.Context) (*Release, error) {
+	if ManualOnly {
+		return nil, manualUpdateError()
+	}
 	u, err := url.Parse(Feed())
 	if err != nil {
 		return nil, err
@@ -160,6 +173,9 @@ func LatestStable(ctx context.Context) (*Release, error) {
 }
 
 func latestAt(ctx context.Context, feed, lang string) (*Release, error) {
+	if ManualOnly {
+		return nil, manualUpdateError()
+	}
 	if githubOnly() {
 		return githubLatest(ctx, lang)
 	}
@@ -217,6 +233,9 @@ func latestFrom(ctx context.Context, feed, lang string) (*Release, error) {
 // source ("dev", "0bcb2cc-dirty", git describe's "v0.1.0-3-g0bcb2cc");
 // only releases update themselves.
 func Released(v string) bool {
+	if ManualOnly {
+		return false
+	}
 	s := parse(v)
 	return s != nil && !describe.MatchString(s.pre) && !strings.Contains(s.pre, "dirty")
 }

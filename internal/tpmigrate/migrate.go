@@ -20,7 +20,7 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
-	_ "modernc.org/sqlite"
+	_ "github.com/yetone/magpie/internal/sqlitedb"
 )
 
 type config struct {
@@ -281,6 +281,7 @@ func convert(c config) (*plan, error) {
 		p.providers.Providers = append(p.providers.Providers, v)
 		p.providers.Order = append(p.providers.Order, id)
 	}
+	localAuto := false
 	secrets := map[string]bool{}
 	keyIDs := map[string]bool{}
 	for _, k := range c.Keys {
@@ -334,6 +335,10 @@ func convert(c config) (*plan, error) {
 		}
 		if _, err := access.CleanAliases(key.Aliases); err != nil {
 			return nil, errors.New("模型别名数量或格式超出新基座限制；拒绝截断")
+		}
+		if k.Enabled && (p.settings.LocalKeyID == "" || k.Scope.Type == "auto" && !localAuto) {
+			p.settings.LocalKeyID = k.ID
+			localAuto = k.Scope.Type == "auto"
 		}
 		p.keys = append(p.keys, key)
 	}

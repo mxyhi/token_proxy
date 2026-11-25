@@ -56,7 +56,21 @@ const Token = "magpie"
 // TokenFor is the token an agent that says nothing of itself in its
 // User-Agent is told to use, so the gateway still knows it: Alma's requests
 // go out as the AI SDK's ("ai-sdk/openai/…"), with nothing of Alma's own.
-func TokenFor(agent string) string { return Token + "-" + agent }
+func TokenFor(agent string) string {
+	if settings.Shared().RequireLocalKey {
+		return access.LocalSecret()
+	}
+	return Token + "-" + agent
+}
+
+// ClientToken is for tools making local gateway requests, including after
+// migration enables authentication for loopback.
+func ClientToken() string {
+	if settings.Shared().RequireLocalKey {
+		return access.LocalSecret()
+	}
+	return Token
+}
 
 // agentOf is the agent a request came from: the one its token names
 // (TokenFor), else the one its User-Agent does.

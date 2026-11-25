@@ -280,9 +280,11 @@ type Settings struct {
 	// the folder: turned on on another computer, sharing there takes up the
 	// same key.
 	// RequireLocalKey preserves Tauri caller authentication on loopback too.
-	RequireLocalKey bool   `json:"requireLocalKey,omitempty"`
-	LAN             bool   `json:"lan,omitempty"`
-	LANKey          string `json:"lanKey,omitempty"`
+	RequireLocalKey bool `json:"requireLocalKey,omitempty"`
+	// LocalKeyID is the named key used when connecting agents after migration.
+	LocalKeyID string `json:"localKeyID,omitempty"`
+	LAN        bool   `json:"lan,omitempty"`
+	LANKey     string `json:"lanKey,omitempty"`
 	// CORSOrigins are the web pages (scheme://host[:port]) and browser
 	// extensions (chrome-extension://<id>, moz-extension://<uuid>,
 	// safari-web-extension://<uuid>) whose scripts may call the gateway
@@ -1886,7 +1888,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.QuotaReads = cur.QuotaReads
 	s.NoAccountDiscovery = cur.NoAccountDiscovery
 	s.LAN, s.AllowIPs, s.MTLS, s.HTTPS = cur.LAN, cur.AllowIPs, cur.MTLS, cur.HTTPS
-	s.RequireLocalKey = cur.RequireLocalKey
+	s.RequireLocalKey, s.LocalKeyID = cur.RequireLocalKey, cur.LocalKeyID
 	s.DesktopGateway = cur.DesktopGateway // an address of this computer
 	s.RouterNote, s.RouterAllTools, s.RouterNoCode = cur.RouterNote, cur.RouterAllTools, cur.RouterNoCode
 	s.Name = cur.Name // what this magpie is called

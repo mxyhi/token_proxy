@@ -50,3 +50,5 @@ token-proxy migrate-tauri --source "$HOME/Library/Application Support/com.mxyhi.
 本阶段要求旧策略为 fill_first + serial，启用的上游有明确模型列表；不支持的账户类型、启用的 passthrough、多个 Codex 账户上游或无本地密钥配置会拒绝迁移，避免静默改变路由。禁用的 passthrough 只保留禁用占位。转换后的路由是迁移时快照，后续新增模型和修改优先级需编辑路由组与密钥别名。
 
 未等价移植的项目会显示在迁移报告中：旧 convert_from_map 白名单、请求超时、请求体上限、CORS、热模型展示、会话冷却及历史用量。原 JSONC 保留为 `tauri-config.original.jsonc`（0600），历史数据库单独归档；不能把归档说成新版统计已导入。先验证新版的鉴权、模型列表和实际请求，再删除旧应用。
+
+迁移后的 `localKeyID` 指向启用的本地密钥（优先 auto 作用域），用于新版连接 Agent 和本机工具请求。禁用或删除它后，这些入口不自动换用另一把权限不同的密钥；现有客户端的原密钥保持不变。

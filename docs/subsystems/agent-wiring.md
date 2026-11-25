@@ -468,3 +468,7 @@ are added), its model list came from the gateway, and a chat went through
 it, counted as Cherry Studio's. A link that arrives while its first-run
 welcome page is up shows no dialog; after "set up later" it does.
 `magpie cherrystudio add` opens the link; the TUI leaves the row out.
+
+## Token Proxy 迁移后的本机鉴权
+
+`requireLocalKey` 开启时，`agent.keyAt`、`gateway.TokenFor` 与本机工具使用 `access.LocalSecret()` 对应的 `localKeyID`，不再发送占位 token。迁移优先选择启用的 auto 作用域密钥；关闭或删除该密钥后不自动改用另一个权限不同的密钥。现有客户端仍使用原密钥。

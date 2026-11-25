@@ -35,7 +35,13 @@ func synced(sync func() error) error {
 // the gateway's address (gateway.URL) and the LAN sharing key.
 type kept struct{ gateway, lan string }
 
-func keeping() kept { return kept{gateway.URL(), access.LANSecret()} }
+func keeping() kept {
+	k := access.LocalSecret()
+	if k == "" {
+		k = access.LANSecret()
+	}
+	return kept{gateway.URL(), k}
+}
 
 // ours says v, with any "Bearer " before it, is a key magpie gives an
 // agent: gateway.Token, one that names the agent (gateway.TokenFor), or the

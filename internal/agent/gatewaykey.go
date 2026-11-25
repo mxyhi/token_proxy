@@ -5,6 +5,7 @@ import (
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // keyAt is the key an agent that reaches the gateway at gw sends it. On
@@ -17,6 +18,9 @@ import (
 // it is on loopback, it is the WSL key (gateway.WSLKey), sharing or not
 // (zaidu259434 on X: Codex in WSL failed with sharing off).
 func keyAt(gw string) string {
+	if settings.Shared().RequireLocalKey {
+		return access.LocalSecret()
+	}
 	if onAnotherMachine(gw) {
 		if gateway.OnWSLNet(gw) {
 			if k := gateway.WSLKey(); k != "" {
@@ -66,7 +70,7 @@ func ourKey(k string) bool {
 	if k == gateway.Token {
 		return true
 	}
-	return k != "" && (k == access.LANSecret() || k == gateway.WSLKeyMade())
+	return k != "" && (k == access.LANSecret() || k == access.LocalSecret() || k == gateway.WSLKeyMade())
 }
 
 // gatewayTakes says the gateway would authenticate a request carrying k: a

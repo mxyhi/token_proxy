@@ -80,6 +80,9 @@ func TestMigrationRoutingAndAuthentication(t *testing.T) {
 	old := appdir.Name
 	appdir.Name = "data"
 	t.Cleanup(func() { appdir.Name = old })
+	if access.LocalSecret() != "caller-secret" {
+		t.Fatal("local integrations cannot authenticate")
+	}
 	if settings.Load().Port != 9208 {
 		t.Fatal("settings not readable")
 	}

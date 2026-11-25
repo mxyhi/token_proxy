@@ -322,7 +322,7 @@ func (s *bridge) pass(m message, body []byte) {
 	}
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "application/json")
-	r.Header.Set("Authorization", "Bearer "+gateway.Token)
+	r.Header.Set("Authorization", "Bearer "+gateway.ClientToken())
 	if s.session != "" {
 		r.Header.Set(gateway.BrowserSessionHeader, callerSession(body, s.session))
 	}

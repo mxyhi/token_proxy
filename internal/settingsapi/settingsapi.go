@@ -314,6 +314,8 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	in.Wallpaper = cur.Wallpaper // set on its own (appearance/wallpaper)
 	in.LAN, in.LANKey = cur.LAN, cur.LANKey
 	in.LANKeyID = cur.LANKeyID
+	// A generic preferences save must never disable migrated authentication.
+	in.RequireLocalKey, in.LocalKeyID = cur.RequireLocalKey, cur.LocalKeyID
 	// Bark has its own route (bark); the page never sees its key
 	in.BarkServer, in.BarkKey, in.BarkDaily = cur.BarkServer, cur.BarkKey, cur.BarkDaily
 

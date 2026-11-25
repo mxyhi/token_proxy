@@ -105,7 +105,7 @@ func (g *toolGateway) do(method, path string, body []byte) (*http.Response, erro
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("Accept", "application/json, text/event-stream")
 	}
-	r.Header.Set("Authorization", "Bearer "+gateway.Token)
+	r.Header.Set("Authorization", "Bearer "+gateway.ClientToken())
 	r.Header.Set("User-Agent", toolAgent)
 	if body != nil {
 		// the folder it runs in, as `magpie mcp memory` names it: the

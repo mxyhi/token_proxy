@@ -473,6 +473,28 @@ func LANSecret() string {
 	return ""
 }
 
+// LocalSecret is the migrated caller key handed to this computer's agents.
+// Missing or disabled stays empty: never fall back to a token the strict
+// gateway would refuse, nor silently widen a key's scope by picking another.
+func LocalSecret() string {
+	s := settings.Shared()
+	if !s.RequireLocalKey || s.LocalKeyID == "" {
+		return ""
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	keys, err := load()
+	if err != nil {
+		return ""
+	}
+	for _, k := range keys {
+		if k.ID == s.LocalKeyID && !k.Off {
+			return k.Secret
+		}
+	}
+	return ""
+}
+
 // Default says secret is the sharing key magpie itself made (the default
 // key ConfigureLAN keeps), whether sharing is on now or not: magpie's own,
 // never one the user brought, so a write that keeps "a caller key of the

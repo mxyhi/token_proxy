@@ -1703,6 +1703,9 @@ func refreshLive(ctx context.Context) {
 // network by MAGPIE_ADDR (a server, a Docker image), it takes others with
 // an enabled gateway key.
 func keyNote() string {
+	if settings.Shared().RequireLocalKey {
+		return "(an enabled gateway key is required on this machine too)"
+	}
 	if settings.Shared().LAN || gateway.OnNetwork() {
 		if gateway.InContainer() {
 			return "(anything works inside the container; from its host and other machines, an enabled gateway key — magpie gateway-key add <name>)"
@@ -1787,7 +1790,11 @@ func serve() error {
 	fmt.Println(green.Render("●"), "magpie gateway on", bold.Render(gateway.URL()))
 	fmt.Println(muted.Render("  OpenAI  "), public+"/v1/chat/completions", muted.Render("·"), public+"/v1/responses")
 	fmt.Println(muted.Render("  Anthropic"), public+"/v1/messages")
-	fmt.Println(muted.Render("  key     "), gateway.Token, muted.Render(keyNote()))
+	keyHint := gateway.Token
+	if settings.Shared().RequireLocalKey {
+		keyHint = "(use an enabled gateway key)"
+	}
+	fmt.Println(muted.Render("  key     "), keyHint, muted.Render(keyNote()))
 	if l := tlsLine(); l != "" {
 		fmt.Println(l)
 	}

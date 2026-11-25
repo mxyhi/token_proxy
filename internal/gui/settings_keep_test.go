@@ -148,6 +148,8 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		RedactActions:        map[string]string{"API_KEY": "block", "EMAIL": "warn"},
 		RedactAllow:          []string{"team@kelvarn.io"},
 		LAN:                  true,
+		RequireLocalKey:      true,
+		LocalKeyID:           "imported-main",
 		LANKey:               "sk-lan",
 		LANKeyID:             "lan-key-id",
 		Port:                 3591,

@@ -498,7 +498,7 @@ func (s *server) generate(raw json.RawMessage, used *string, c caller) (string, 
 	body, _ := json.Marshal(req)
 	r, _ := http.NewRequest(http.MethodPost, s.gateway+endpoint, bytes.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("Authorization", "Bearer "+gateway.Token)
+	r.Header.Set("Authorization", "Bearer "+gateway.ClientToken())
 	r.Header.Set("User-Agent", c.agent)
 	res, err := s.client.Do(r)
 	if err != nil {
@@ -859,7 +859,7 @@ func (s *server) call(c caller, method, path string, body []byte) ([]byte, int, 
 	if body != nil {
 		r.Header.Set("Content-Type", "application/json")
 	}
-	r.Header.Set("Authorization", "Bearer "+gateway.Token)
+	r.Header.Set("Authorization", "Bearer "+gateway.ClientToken())
 	r.Header.Set("User-Agent", c.agent)
 	res, err := s.client.Do(r)
 	if err != nil {
@@ -1027,7 +1027,7 @@ func (s *server) ask(method string, params any) (json.RawMessage, int, error) {
 	r, _ := http.NewRequestWithContext(ctx, http.MethodPost, s.gateway+gateway.ImageMCPPath, bytes.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("Accept", "application/json, text/event-stream")
-	r.Header.Set("Authorization", "Bearer "+gateway.Token)
+	r.Header.Set("Authorization", "Bearer "+gateway.ClientToken())
 	s.mu.Lock()
 	r.Header.Set("User-Agent", s.agent)
 	s.mu.Unlock()

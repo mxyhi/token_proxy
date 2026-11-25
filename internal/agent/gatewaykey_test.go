@@ -12,6 +12,7 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // An agent in a WSL distro under NAT reaches the gateway at Windows'
@@ -271,4 +272,39 @@ func cherryKey(link string) string {
 func aionuiKey(link string) string {
 	v, _ := url.ParseQuery(strings.TrimPrefix(link, AionUiScheme))
 	return v.Get("api_key")
+}
+
+func TestMigratedAgentUsesEnabledLocalKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	secret, err := access.Update("add-key", access.Change{Name: "Imported"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys, err := access.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := settings.Load()
+	s.RequireLocalKey = true
+	s.LocalKeyID = keys[0].ID
+	if err := settings.Save(s); err != nil {
+		t.Fatal(err)
+	}
+	for _, base := range []string{"http://127.0.0.1:9208", "http://192.168.1.2:9208"} {
+		if keyAt(base) != secret || agentKeyAt("codex", base) != secret {
+			t.Fatal("connected agent received a placeholder key")
+		}
+	}
+	if gateway.ClientToken() != secret || gateway.TokenFor("image") != secret {
+		t.Fatal("local tool received a placeholder key")
+	}
+	if _, err := access.Update("off-key", access.Change{Key: s.LocalKeyID}); err != nil {
+		t.Fatal(err)
+	}
+	if keyAt("http://127.0.0.1:9208") != "" || gateway.ClientToken() != "" {
+		t.Fatal("disabled key was reused or replaced")
+	}
 }

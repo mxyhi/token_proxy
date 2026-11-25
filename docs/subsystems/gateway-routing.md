@@ -3677,3 +3677,7 @@ go test -tags nogui ./internal/provider -run 'TestGroup|TestCodexCreditsSwitch|T
 
 The gateway's `TestMain` gives the package a home of its own, so these tests
 never read real providers or accounts.
+
+## Token Proxy 旧版迁移
+
+发行入口将默认端口设为 9208。迁移开启 `settings.RequireLocalKey`，由 `lanGuard` 和 `identifyCaller` 对本机网关请求也校验密钥，只有 `/` 健康探测豁免。`internal/tpmigrate` 为每个密钥生成按旧优先级排序的路由组，详见 [迁移说明](../token-proxy-migration.md)。

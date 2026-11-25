@@ -652,3 +652,9 @@ real `~/.codex`, `~/.claude`, `~/.config/gcloud` or `~/.config/magpie` files.
 Vertex AI's tests send Vertex AI, Google's token endpoint and IAM Credentials
 to a server of their own (`VertexForTest`). Check a change
 against real accounts in a sandbox HOME, as [Code standards](../code-standards.md#acceptance-criteria) describes.
+
+## Token Proxy 旧版迁移
+
+`internal/tpmigrate` 离线转换 Tauri JSONC，并从 SQLite `provider_accounts` 读取绑定的 Codex OAuth 记录。凭据不刷新，原配置不修改，输出只能写到新目录。限制与未迁移字段见 [迁移说明](../token-proxy-migration.md)。
+
+旧目录的模型名可以含空格（如 Codex Auto Review）；密钥别名按完整字符串匹配，允许内部空格，但仍拒绝控制字符和模式表达式。

@@ -652,7 +652,7 @@ func lanGuard(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if remote || managedKey(r) {
+		if remote || managedKey(r) || localKeyRequired(r) {
 			var ok bool
 			r, ok = identifyCaller(w, r)
 			if !ok {
@@ -794,6 +794,12 @@ func callerGuard(next http.Handler) http.Handler {
 	})
 }
 
+// The gateway has unversioned API aliases too. Only its public health probe
+// is exempt; the desktop management server has its own guards.
+func localKeyRequired(r *http.Request) bool {
+	return settings.Shared().RequireLocalKey && r.URL.Path != "/"
+}
+
 func identifyCaller(w http.ResponseWriter, r *http.Request) (*http.Request, bool) {
 	var who access.Identity
 	ok := false
@@ -817,7 +823,7 @@ func identifyCaller(w http.ResponseWriter, r *http.Request) (*http.Request, bool
 		writeError(w, provider.Chat, http.StatusUnauthorized, refused.Why)
 		return r, false
 	}
-	if !ok && !local(r) {
+	if !ok && (!local(r) || localKeyRequired(r)) {
 		if over, retry := tooManyAuthFails(); over {
 			// A flood of wrong keys: stop answering each one (no 401 oracle,
 			// no unbounded work) until the bucket refills. A valid key never

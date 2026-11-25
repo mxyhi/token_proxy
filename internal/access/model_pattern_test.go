@@ -42,7 +42,7 @@ func TestCleanAliases(t *testing.T) {
 		t.Fatalf("%v %v", got, err)
 	}
 	for _, bad := range []map[string]string{
-		{"a b": "openai/gpt-5"}, {"re:x": "openai/gpt-5"}, {"x*": "openai/gpt-5"},
+		{"a\tb": "openai/gpt-5"}, {"re:x": "openai/gpt-5"}, {"x*": "openai/gpt-5"},
 		{"fast": "gpt-5"}, {"fast": "openai/*"}, {"fast": "re:^gpt"}, {"openai/gpt-5": "openai/GPT-5"},
 		{"fast": ""}, {"": "openai/gpt-5"}, {"Fast": "openai/gpt-5", "fast": "openai/gpt-4"},
 	} {
@@ -95,5 +95,16 @@ func TestPatternCoversAGlobOnlyForAll(t *testing.T) {
 	}
 	if who := foldModels([]string{"*"}, []string{"re:^openai/"}); !may(who, "openai/gpt-4o") || may(who, "anthropic/x") {
 		t.Errorf("folded %q: * with the issuer's pattern is the pattern", who)
+	}
+}
+
+// Tauri catalogs can expose model ids with spaces; aliases are exact strings.
+func TestAliasPreservesSpacedModelName(t *testing.T) {
+	a, err := CleanAliases(map[string]string{"Codex Auto Review": "group/imported-review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := (Identity{Aliases: a}).AliasFor("Codex Auto Review"); !ok || got != "group/imported-review" {
+		t.Fatal("model name was changed")
 	}
 }

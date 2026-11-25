@@ -45,8 +45,8 @@ import (
 	"github.com/yetone/magpie/internal/usage"
 )
 
-// DefaultAddr is where the gateway listens unless Settings' port or
-// MAGPIE_ADDR says otherwise.
+// DefaultAddr is the canonical upstream address used in carried configs.
+// Runtime discovery must use Addr/SavedURL: distributions set their own port.
 const DefaultAddr = "127.0.0.1:3425"
 
 // Token is the bearer token agents are told to use. The gateway only

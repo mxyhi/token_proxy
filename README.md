@@ -108,18 +108,18 @@ Claude Code · Claude Desktop · Claude Science · Codex · Gemini CLI · Antigr
 magpie shows only the agents installed on your machine; setup notes for some of them are in the [reference](docs/reference.md#notes-on-some-agents). Anything else that takes a base URL can use the gateway too:
 
 ```sh
-export OPENAI_BASE_URL=http://127.0.0.1:3425/v1     OPENAI_API_KEY=magpie
-export ANTHROPIC_BASE_URL=http://127.0.0.1:3425     ANTHROPIC_API_KEY=magpie
-export GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:3425 GEMINI_API_KEY=magpie
+export OPENAI_BASE_URL=http://127.0.0.1:9208/v1     OPENAI_API_KEY=magpie
+export ANTHROPIC_BASE_URL=http://127.0.0.1:9208     ANTHROPIC_API_KEY=magpie
+export GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:9208 GEMINI_API_KEY=magpie
 ```
 
 ## How it fits together
 
-The gateway at `127.0.0.1:3425` speaks OpenAI Chat, OpenAI Responses, Anthropic Messages and Gemini, and translates between them, streaming, tool calls and reasoning included.
+The gateway at `127.0.0.1:9208` speaks OpenAI Chat, OpenAI Responses, Anthropic Messages and Gemini, and translates between them, streaming, tool calls and reasoning included.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="site/public/img/architecture-dark.svg">
-  <img src="site/public/img/architecture.svg" alt="How magpie fits together: your agents send requests to the magpie gateway at 127.0.0.1:3425, which routes them through routing groups and plugins to your API keys, subscriptions and local models.">
+  <img src="site/public/img/architecture.svg" alt="How magpie fits together: your agents send requests to the magpie gateway at 127.0.0.1:9208, which routes them through routing groups and plugins to your API keys, subscriptions and local models.">
 </picture>
 
 

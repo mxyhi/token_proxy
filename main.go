@@ -4,10 +4,14 @@ package main
 
 import (
 	_ "embed"
+	"fmt"
+	"os"
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/cli"
 	"github.com/yetone/magpie/internal/notices"
+	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/tpmigrate"
 	"github.com/yetone/magpie/internal/update"
 	// the built-in plugins, registered with the runtime (internal/pluginrt)
 	_ "github.com/yetone/magpie/plugins/all"
@@ -24,10 +28,22 @@ var version = "dev"
 //go:embed THIRD_PARTY_NOTICES
 var thirdParty string
 
-func main() {
+func configureDistribution() {
 	// 新基座与官方 Magpie、旧版 Tauri 的配置及更新通道隔离。
 	appdir.Name = "token-proxy-magpie"
 	update.ManualOnly = true
+	settings.DefaultPort = 9208
+}
+
+func main() {
+	configureDistribution()
+	if len(os.Args) > 1 && os.Args[1] == "migrate-tauri" {
+		if err := tpmigrate.Run(os.Args[2:], os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	notices.Text = thirdParty
 	cli.Main(version)
 }

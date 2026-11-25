@@ -108,18 +108,18 @@ Claude Code · Claude Desktop · Claude Science · Codex · Gemini CLI · Antigr
 magpie 只显示你电脑上装了的 Agent；部分 Agent 的配置说明见[参考文档](docs/reference.md#notes-on-some-agents)（英文）。其他任何能填 base URL 的工具也都能用这个网关：
 
 ```sh
-export OPENAI_BASE_URL=http://127.0.0.1:3425/v1     OPENAI_API_KEY=magpie
-export ANTHROPIC_BASE_URL=http://127.0.0.1:3425     ANTHROPIC_API_KEY=magpie
-export GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:3425 GEMINI_API_KEY=magpie
+export OPENAI_BASE_URL=http://127.0.0.1:9208/v1     OPENAI_API_KEY=magpie
+export ANTHROPIC_BASE_URL=http://127.0.0.1:9208     ANTHROPIC_API_KEY=magpie
+export GOOGLE_GEMINI_BASE_URL=http://127.0.0.1:9208 GEMINI_API_KEY=magpie
 ```
 
 ## 整体结构
 
-`127.0.0.1:3425` 上的网关同时支持 OpenAI Chat、OpenAI Responses、Anthropic Messages 和 Gemini，并在它们之间互相转换，流式输出、工具调用和推理都支持。
+`127.0.0.1:9208` 上的网关同时支持 OpenAI Chat、OpenAI Responses、Anthropic Messages 和 Gemini，并在它们之间互相转换，流式输出、工具调用和推理都支持。
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="site/public/img/architecture-zh-dark.svg">
-  <img src="site/public/img/architecture-zh.svg" alt="magpie 的整体结构：你的 Agent 把请求发到 127.0.0.1:3425 上的 magpie 网关，经路由组和插件，再发往你的 API key、订阅和本地模型。">
+  <img src="site/public/img/architecture-zh.svg" alt="magpie 的整体结构：你的 Agent 把请求发到 127.0.0.1:9208 上的 magpie 网关，经路由组和插件，再发往你的 API key、订阅和本地模型。">
 </picture>
 
 

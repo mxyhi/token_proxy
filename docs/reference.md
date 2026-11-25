@@ -1,3 +1,5 @@
+> Token Proxy 发行版默认网关端口为 **9208**，环境变量和 Settings 中显式端口仍优先。下文上游 Docker、远端 Magpie 示例的 3425 需按目标实例修改；旧版迁移后的请求使用原本地密钥，不能使用示例占位值 `magpie`。
+
 # magpie reference
 
 The full manual: every agent magpie wires, every provider option, the gateway, routing, plugins, the CLI, Docker, sync and the files magpie keeps. For the overview, see the [README](../README.md).
@@ -46,7 +48,7 @@ line; agents connected to magpie lose it when it quits.
 - **One endpoint for every agent.** magpie runs a local gateway that speaks
   OpenAI chat completions, OpenAI Responses and the Anthropic Messages API,
   and forwards to whichever vendor serves the model. Codex, Claude Code,
-  OpenCode and the rest all point at `http://127.0.0.1:3425/v1` and pick
+  OpenCode and the rest all point at `http://127.0.0.1:9208/v1` and pick
   from one catalog; the translation between APIs happens in magpie, streaming
   and tool calls included.
 - **Your subscriptions, shared.** Sign in to Claude Code, Codex (ChatGPT)
@@ -242,7 +244,7 @@ the gateway yourself, in `~/.dsh/profiles/<profile>/cordis.patch.yml`
 ```yaml
 - id: llm-deepseek
   config:
-    baseURL: http://127.0.0.1:3425
+    baseURL: http://127.0.0.1:9208
     apiKeyEnv: MAGPIE_DS_KEY
     models:
       - id: deepseek/deepseek-flash
@@ -257,7 +259,7 @@ the gateway yourself, in `~/.dsh/profiles/<profile>/cordis.patch.yml`
 ```
 
 - `baseURL` is the gateway's root, with no `/anthropic`: llm-deepseek adds
-  `/v1/messages` itself (`http://127.0.0.1:3425/v1` works too).
+  `/v1/messages` itself (`http://127.0.0.1:9208/v1` works too).
 - The model ids are magpie's (`magpie models`); dsh sends them as written and
   magpie asks DeepSeek for its own name (`deepseek-flash`). A `models` list
   replaces llm-deepseek's defaults, which give the in-history updates to its
@@ -972,7 +974,7 @@ key, as from the network. This
 covers every route: the model APIs, quotas, MCP sign-ins. To serve magpie
 through a Cloudflare Tunnel, turn on **Settings → Network and sharing → Share on local network**,
 add a gateway key for each client, point the tunnel's service at
-`http://127.0.0.1:3425`, and give clients the tunnel's address with that key.
+`http://127.0.0.1:9208`, and give clients the tunnel's address with that key.
 A tunnel that forwards bare TCP (frp's `tcp`, `ssh -R`, socat) adds no header
 and can't be told from an agent here: point it at this computer's LAN
 address with sharing on, not at loopback. A proxy here that signs its
@@ -1247,7 +1249,7 @@ no list of models to fetch, so the preset names them: the embedding models
 embeddings have no route here.
 
 ```sh
-curl localhost:3425/v1/rerank -H "Authorization: Bearer $MAGPIE_KEY" \
+curl localhost:9208/v1/rerank -H "Authorization: Bearer $MAGPIE_KEY" \
   -d '{"model":"voyage/rerank-3","query":"what eats seeds","documents":["a magpie","a stone"],"top_k":1}'
 ```
 
@@ -1276,7 +1278,7 @@ other way, `/v1/systemone` with a model only the Decisions API serves
 (`openai/gpt-6-luna`) is asked there and answered as System One answers.
 
 ```sh
-curl localhost:3425/v1/decisions -H "Authorization: Bearer $MAGPIE_KEY" \
+curl localhost:9208/v1/decisions -H "Authorization: Bearer $MAGPIE_KEY" \
   -d '{"model":"gpt-6-luna","input":"The parcel arrived torn open.","questions":[{"type":"predicate","name":"damaged","instructions":"Was the parcel damaged?"}]}'
 ```
 
@@ -2174,7 +2176,7 @@ every try. It takes no patterns, rules, classifier, effort or fast mode.
 
 ```sh
 magpie group add Jevs models=typesafe/jev-latest,bailian-token-plan/decision-model-preview routing=order
-curl -s localhost:3425/v1/systemone -H 'Authorization: Bearer magpie' \
+curl -s localhost:9208/v1/systemone -H 'Authorization: Bearer magpie' \
   -d '{"model":"group/jevs","state":{"message":"fix the login bug"},"questions":{"intent":{"type":"choice","choices":["bug","feature"]}}}'
 ```
 
@@ -2760,7 +2762,7 @@ request to which is translated anyway.
 
 A client that takes a custom endpoint only as an Ollama server (Visual
 Studio's and VS Code's Copilot: Manage Models, then Ollama) is given
-`http://127.0.0.1:3425` as the Ollama URL, no `/v1`. It reads the models
+`http://127.0.0.1:9208` as the Ollama URL, no `/v1`. It reads the models
 from `/api/tags`, each one's tools, vision, thinking and window from
 `/api/show`, and chats on `/v1/chat/completions`. Ollama's own chat
 (`/api/chat`, `/api/generate`, so `ollama run`) isn't served. Copilot sends
@@ -2807,9 +2809,9 @@ Anything with a base-URL setting can use it:
 
 | Tool speaks | Base URL                   | Environment                                   |
 | ----------- | -------------------------- | --------------------------------------------- |
-| OpenAI      | `http://127.0.0.1:3425/v1` | `OPENAI_BASE_URL`, `OPENAI_API_KEY=magpie`      |
-| Anthropic   | `http://127.0.0.1:3425`    | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY=magpie` |
-| Gemini      | `http://127.0.0.1:3425`    | `GOOGLE_GEMINI_BASE_URL`, `GEMINI_API_KEY=magpie` |
+| OpenAI      | `http://127.0.0.1:9208/v1` | `OPENAI_BASE_URL`, `OPENAI_API_KEY=magpie`      |
+| Anthropic   | `http://127.0.0.1:9208`    | `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY=magpie` |
+| Gemini      | `http://127.0.0.1:9208`    | `GOOGLE_GEMINI_BASE_URL`, `GEMINI_API_KEY=magpie` |
 
 An optional `X-Magpie-Account: <account>` header (the account's email
 or login, or its id on the Routing page) pins a request to one account of a
@@ -3188,7 +3190,7 @@ calls so the Usage page counts them: `POST /v1/magpie/usage/requests` with
 to 5000 (32 MiB at most), shaped like a `usage.jsonl` line:
 
 ```sh
-curl -s http://127.0.0.1:3425/v1/magpie/usage/requests \
+curl -s http://127.0.0.1:9208/v1/magpie/usage/requests \
   -H 'Content-Type: application/json' \
   -d '[{"t":"2026-10-13T08:00:00Z","agent":"my-app","provider":"anthropic",
         "model":"claude-sonnet-4-6","in":1200,"out":340,"cache_read":9000,
@@ -3392,7 +3394,7 @@ again. `magpie agy env` prints what `agy run` adds.
 **Dim** alpha (`dima`, npm's `dimcode-alpha`) has a built-in provider
 named Magpie. Picking a catalog model (`magpie dim <model>`) fills it in
 through Dim's daemon, the way Dim's own app does: the gateway's `/v1`
-(`http://127.0.0.1:3425/v1`, or the port magpie is on), magpie's key, the
+(`http://127.0.0.1:9208/v1`, or the port magpie is on), magpie's key, the
 provider turned on, and the model made Dim's pick, with its token limits
 when the gateway doesn't know them. A plain `dima`, or Dim's app, then runs
 on magpie. Dim's other providers are never touched. A key or address you

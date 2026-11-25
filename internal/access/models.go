@@ -218,7 +218,7 @@ const MaxAliases = 200
 
 // CleanAliases is a key's model names as kept: each name a key's client
 // asks by, mapped to the model it is, "<provider>/<model>" or a routing
-// group "group/<name>" (tsingchao on X). A name is one word of at most 120
+// group "group/<name>" (tsingchao on X). A name has at most 120
 // characters that is no pattern.
 func CleanAliases(in map[string]string) (map[string]string, error) {
 	if len(in) > MaxAliases {
@@ -233,8 +233,8 @@ func CleanAliases(in map[string]string) (map[string]string, error) {
 		if name == "" || target == "" {
 			return nil, errors.New("A model name needs both the name and the model it stands for")
 		}
-		if len(name) > 120 || strings.ContainsFunc(name, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) || r == '*' }) || IsPattern(name) {
-			return nil, errors.New("A model name is one word of at most 120 characters, with no * or re: pattern: " + name)
+		if len(name) > 120 || strings.ContainsFunc(name, func(r rune) bool { return unicode.IsControl(r) || r == '*' }) || IsPattern(name) {
+			return nil, errors.New("A model name has at most 120 characters, with no controls, * or re: pattern: " + name)
 		}
 		if !strings.Contains(target, "/") || strings.HasPrefix(target, "/") || strings.HasSuffix(target, "/") || strings.Contains(target, "*") || IsPattern(target) || len(target) > 300 {
 			return nil, errors.New("A model name stands for one model, <provider>/<model> like openai/gpt-5: " + target)

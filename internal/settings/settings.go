@@ -279,8 +279,10 @@ type Settings struct {
 	// default key, which rides the synced gateway-key store, so they follow
 	// the folder: turned on on another computer, sharing there takes up the
 	// same key.
-	LAN    bool   `json:"lan,omitempty"`
-	LANKey string `json:"lanKey,omitempty"`
+	// RequireLocalKey preserves Tauri caller authentication on loopback too.
+	RequireLocalKey bool   `json:"requireLocalKey,omitempty"`
+	LAN             bool   `json:"lan,omitempty"`
+	LANKey          string `json:"lanKey,omitempty"`
 	// CORSOrigins are the web pages (scheme://host[:port]) and browser
 	// extensions (chrome-extension://<id>, moz-extension://<uuid>,
 	// safari-web-extension://<uuid>) whose scripts may call the gateway
@@ -1884,6 +1886,7 @@ func (s *Settings) KeepOwn(cur Settings) {
 	s.QuotaReads = cur.QuotaReads
 	s.NoAccountDiscovery = cur.NoAccountDiscovery
 	s.LAN, s.AllowIPs, s.MTLS, s.HTTPS = cur.LAN, cur.AllowIPs, cur.MTLS, cur.HTTPS
+	s.RequireLocalKey = cur.RequireLocalKey
 	s.DesktopGateway = cur.DesktopGateway // an address of this computer
 	s.RouterNote, s.RouterAllTools, s.RouterNoCode = cur.RouterNote, cur.RouterAllTools, cur.RouterNoCode
 	s.Name = cur.Name // what this magpie is called
@@ -2298,7 +2301,8 @@ func CheckProxy(p string) error {
 
 // DefaultPort is the gateway's port unless Settings or MAGPIE_ADDR say
 // another.
-const DefaultPort = 3425
+// Set once by the distribution entry point before settings are read.
+var DefaultPort = 3425
 
 // CheckPort says what is wrong with a port for the gateway: one from 1024
 // to 65535 (below that a system wants an administrator to listen on it),

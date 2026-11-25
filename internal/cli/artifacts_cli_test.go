@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -46,6 +48,15 @@ func TestArtifactsCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := artifact.PublishPage(artifact.Publish{Page: []byte("<title>Old one</title>"), Agent: "some-agent"})
+	// newest-first 的断言不依赖磁盘写入是否跨过一个毫秒。
+	b.Updated = b.Updated.Add(time.Second)
+	meta, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(artifact.Dir(), b.ID, "meta.json"), meta, 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	out, err := run()
 	if err != nil {

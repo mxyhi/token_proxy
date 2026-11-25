@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func sandbox(t *testing.T) string {
@@ -111,6 +112,15 @@ func TestListAndDelete(t *testing.T) {
 	dir := sandbox(t)
 	a, _ := PublishPage(Publish{Page: []byte("a"), Title: "First"})
 	b, _ := PublishPage(Publish{Page: []byte("b"), Title: "Second"})
+	// 排序用例需要不同的毫秒；快速磁盘可能让三次发布具有相同时间。
+	b.Updated = a.Updated.Add(-time.Second)
+	a.Updated = a.Updated.Add(-2 * time.Second)
+	if err := writeMeta(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeMeta(b); err != nil {
+		t.Fatal(err)
+	}
 	PublishPage(Publish{ID: a.ID, Page: []byte("a2")})
 	// a folder with no meta.json (a publish cut short) isn't listed
 	os.MkdirAll(filepath.Join(dir, strings.Repeat("a", 26)), 0o700)

@@ -99,7 +99,7 @@ func TestWebAppAddsToHomeScreen(t *testing.T) {
 	}
 	var raw map[string]any
 	json.Unmarshal(rec.Body.Bytes(), &raw)
-	if raw["name"] != "magpie" || raw["display"] != "standalone" || m.StartURL == "" {
+	if raw["name"] != "Token Proxy" || raw["short_name"] != "Token Proxy" || raw["display"] != "standalone" || m.StartURL == "" {
 		t.Errorf("manifest: name %v, display %v, start_url %q", raw["name"], raw["display"], m.StartURL)
 	}
 	big := false

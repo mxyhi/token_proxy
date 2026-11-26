@@ -135,6 +135,8 @@ var ownRoute = map[string]struct{ call, field string }{
 	"groupSink":       {`api("groups/defaults"`, "sink"},
 	"groupFirstToken": {`api("groups/defaults"`, "firstToken"},
 	"groupPatience":   {`api("groups/defaults"`, "patience"},
+	"foundRouting":    {`api("groups/defaults"`, "routing"},
+	"foundAffinity":   {`api("groups/defaults"`, "affinity"},
 }
 
 // pagesSource is every page script the window serves, the built-in

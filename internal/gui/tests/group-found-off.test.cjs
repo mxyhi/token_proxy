@@ -96,7 +96,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         return [...s.children].map((c) => c.className).filter((c) => c !== "rt-goff");
       });
       assert.deepEqual(order.slice(0, 4), ["row-head", "list rt-groups", "row-head rt-gset-head", "list rt-gset"]);
-      assert.deepEqual(await page.evaluate(() => [...document.querySelector(".rt-gset").children].map((c) => c.className)), ["rt-gfound hint-row", "rt-gnames hint-row", "rt-gdef rt-gdef-sink hint-row", "rt-gdef rt-gdef-first hint-row", "rt-gdef rt-gdef-patience hint-row"]);
+      assert.deepEqual(await page.evaluate(() => [...document.querySelector(".rt-gset").children].map((c) => c.className)), ["rt-gfound hint-row", "rt-gnames hint-row", "rt-gdef rt-gdef-sink hint-row", "rt-gdef rt-gdef-first hint-row", "rt-gdef rt-gdef-patience hint-row", "rt-gdef rt-gdef-route hint-row", "rt-gdef rt-gdef-stays hint-row"]);
+      // how found groups route and stay is set only while there are any
+      const foundRows = () => page.evaluate(() => [".rt-gdef-route", ".rt-gdef-stays"].map((q) => !document.querySelector(q).hidden));
+      assert.deepEqual(await foundRows(), [true, true]);
       const border = await sw.evaluate((e) => { const c = getComputedStyle(e); return c.borderLeftWidth !== c.borderRightWidth || c.borderLeftColor !== c.borderRightColor; });
       assert.equal(border, false, "no left-border accent");
 
@@ -111,6 +114,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await card("Model M").waitFor({ state: "detached" }); // the found group left the list
       assert.equal(await card("Mine").count(), 1, "the user's group stays");
       assert((await box.textContent()).includes(w.offHint), "it says what is listed now");
+      assert.deepEqual(await foundRows(), [false, false], "off: nothing found to route");
       await page.waitForFunction((m) => document.querySelector("#status").textContent.includes(m), w.moved);
       assert.equal(await at(), before, "the click moved nothing");
 
@@ -118,6 +122,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await card("Model M").waitFor();
       assert.deepEqual(posts, [{ on: false }, { on: true }]);
       assert.equal(await box.locator("button[role=switch]").getAttribute("aria-checked"), "true");
+      assert.deepEqual(await foundRows(), [true, true], "on again: set again");
       await page.waitForFunction((m) => document.querySelector("#status").textContent.includes(m), w.back);
       assert.equal(await at(), before, "nor did the second");
 

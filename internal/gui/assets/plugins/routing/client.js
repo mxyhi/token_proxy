@@ -6372,7 +6372,10 @@ function routingPage(part) {
   // set once rather than in each group); a group's editor sets its own
   // (each a .hint-row: its line that explains it rests out of sight, shown
   // in the hover card, settingshints.js)
-  const gDefs = [el("div", "rt-gdef rt-gdef-sink hint-row"), el("div", "rt-gdef rt-gdef-first hint-row"), el("div", "rt-gdef rt-gdef-patience hint-row")];
+  const gDefs = [el("div", "rt-gdef rt-gdef-sink hint-row"), el("div", "rt-gdef rt-gdef-first hint-row"), el("div", "rt-gdef rt-gdef-patience hint-row"),
+    // how the groups magpie finds route and stay (settings' foundRouting,
+    // foundAffinity): never stored, they have no editor of their own
+    el("div", "rt-gdef rt-gdef-route hint-row"), el("div", "rt-gdef rt-gdef-stays hint-row")];
   // the groups go with the routing groups built-in plugin; the pools stay
   for (const n of [gHead, gFound, gNames, ...gDefs, gList]) n.dataset.feature = "groups";
   // and off (the Essentials preset leaves it off), where they were
@@ -6429,6 +6432,9 @@ function routingPage(part) {
   // user picks on its card (provider.Manual, #317) — a provider's keys can't
   // and by its members' weights, as a provider's keys are (#1910)
   const GROUP_ROUTE_OPTS = [...ROUTE_OPTS, ["cheap", "Cheapest first"], ["expiring", "Free quota by expiry"], ["fit", "Small context first"], ["weight", "By weight"], ["manual", "Manual"]];
+  // what the groups magpie finds may route by (settings.FoundRoutings):
+  // none that needs something set on a group's members
+  const FOUND_ROUTE_OPTS = GROUP_ROUTE_OPTS.filter(([v]) => v !== "weight" && v !== "manual");
   const AFF_OPTS = [["", "Auto"], ["session", "Session"], ["turn", "Within a turn"], ["off", "Off"], ["strict", "Strict"]];
   // what one rate limited with quota left does then (provider.Sink), as in
   // a provider's editor (app.js SINKS)
@@ -6462,7 +6468,9 @@ function routingPage(part) {
   const groupDefaults = () => {
     const d = groups?.defaults || {};
     return { sink: d.sink === true, firstToken: Number.isInteger(d.firstToken) && d.firstToken > 0 ? d.firstToken : 0,
-      patience: Number.isInteger(d.patience) && d.patience >= -1 ? d.patience : 0 };
+      patience: Number.isInteger(d.patience) && d.patience >= -1 ? d.patience : 0,
+      routing: FOUND_ROUTE_OPTS.some(([v]) => v === d.routing) ? d.routing : "",
+      affinity: AFF_OPTS.some(([v]) => v === d.affinity) ? d.affinity : "" };
   };
   const patienceWord = (n) => {
     if (n === 60) n = 0;
@@ -7502,12 +7510,12 @@ function routingPage(part) {
   // groupPatience)
   function drawDefaults() {
     const def = groupDefaults();
-    const row = (box, label, hint, opts, cur, key) => {
+    const row = (box, label, hint, opts, cur, key, make = segs) => {
       const txt = el("div", "txt");
       txt.append(el("b", "", t(label)), el("small", "expl", hint));
       // a value set elsewhere (magpie settings set) that no option names
       if (!opts.some(([v]) => v === cur)) opts = [...opts, [cur, key === "firstToken" ? firstWord(cur) : patienceWord(cur)]];
-      const pick = segs(opts.map(([v, n]) => [v, t(n)]), cur, (v) => setDefaults({ ...def, [key]: v }));
+      const pick = make(opts.map(([v, n]) => [v, t(n)]), cur, (v) => setDefaults({ ...def, [key]: v }));
       pick.setAttribute("aria-label", t(label));
       box.replaceChildren(txt, pick);
     };
@@ -7519,14 +7527,25 @@ function routingPage(part) {
       ? t("When every member has failed, the agent gets the last one's error at once.")
       : t("When every member has failed with an error that may pass — overloaded, unavailable, rate limited for a moment — and nothing of the reply has reached the agent, each is asked again after a pause, longer each time and never shorter than the vendor asks, for up to {n} more. A streaming agent is kept waiting meanwhile.", { n: patienceWord(def.patience) }),
       PATIENCE_OPTS, def.patience === 60 ? 0 : def.patience, "patience");
+    // the found groups' own routing and Stays: with them off, nothing to set
+    const found = groups?.found !== false;
+    gDefs[3].hidden = gDefs[4].hidden = !found;
+    if (!found) return;
+    row(gDefs[3], "Found groups route", t("How every group magpie finds routes. A group you change keeps what it had then.") + " " + t(GROUP_HINT[def.routing] || GROUP_HINT[""]),
+      FOUND_ROUTE_OPTS, def.routing, "routing", routingSegs);
+    row(gDefs[4], "Found groups stay", t(AFF_HINT[def.affinity] || AFF_HINT[""]), AFF_OPTS, def.affinity, "affinity");
   }
   async function setDefaults(d) {
     try {
-      const next = groupsFrom(await api("groups/defaults", { sink: d.sink === true || d.sink === "sink", firstToken: d.firstToken, patience: d.patience }));
-      groups.defaults = next.defaults;
+      const next = groupsFrom(await api("groups/defaults", { sink: d.sink === true || d.sink === "sink", firstToken: d.firstToken, patience: d.patience, routing: d.routing, affinity: d.affinity }));
+      // the found groups' cards say their routing and Stays: drawn again
+      // with the groups as they are now
+      const routed = next.defaults?.routing !== groups.defaults?.routing || next.defaults?.affinity !== groups.defaults?.affinity;
+      if (routed) groups = next;
+      else groups.defaults = next.defaults;
       drawDefaults();
       // an open editor's Default rows say the value they follow
-      if (gEdit) renderGroups();
+      if (gEdit || routed) renderGroups();
     } catch (e) {
       status(e.message, "err");
       drawDefaults();

@@ -688,6 +688,17 @@ type Settings struct {
 	GroupSink       bool `json:"groupSink,omitempty"`
 	GroupFirstToken int  `json:"groupFirstToken,omitempty"`
 	GroupPatience   int  `json:"groupPatience,omitempty"`
+	// FoundRouting and FoundAffinity are how the routing groups magpie
+	// finds (auto/…) route and how long a conversation stays on one of
+	// their accounts: one of FoundRoutings, "" for Smart, and one of
+	// Affinities, "" for Auto. A found group is never stored, so it has no
+	// routing of its own to set without becoming the user's, its members
+	// then kept as they were (token_proxy: 自动组按顺序、关闭会话保持).
+	// A group the user made or changed keeps its own. FoundRoutedAt is when
+	// FoundRouting last changed (Unix ms), each found group's Group.RoutedAt.
+	FoundRouting  string `json:"foundRouting,omitempty"`
+	FoundAffinity string `json:"foundAffinity,omitempty"`
+	FoundRoutedAt int64  `json:"foundRoutedAt,omitempty"`
 	// BusyLoad puts a model whose plugin reports it busier than this
 	// percent behind the others it could go to (plugin.ModelLoad,
 	// axelburks on Discord): from 1 to BusyLoadMost-1, past 100 for a
@@ -2547,19 +2558,42 @@ func EditCheckinOff(edit func([]string) []string) error {
 }
 
 // SetGroupDefaults sets what every routing group follows when it sets no
-// value of its own (GroupSink, GroupFirstToken, GroupPatience), from what
-// the file holds now, so a save elsewhere from an older snapshot isn't
-// undone. A settings file that can't be read is left as it is, with the
-// error.
-func SetGroupDefaults(sink bool, firstToken, patience int) error {
+// value of its own (GroupSink, GroupFirstToken, GroupPatience) and how the
+// groups magpie finds route and stay (FoundRouting, FoundAffinity), from
+// what the file holds now, so a save elsewhere from an older snapshot
+// isn't undone. A settings file that can't be read is left as it is, with
+// the error.
+func SetGroupDefaults(d GroupDefaults) error {
 	defer lockFile()()
 	s, err := loadChecked()
 	if err != nil {
 		return err
 	}
-	s.GroupSink, s.GroupFirstToken, s.GroupPatience = sink, firstToken, patience
+	if s.FoundRouting != d.FoundRouting {
+		s.FoundRoutedAt = time.Now().UnixMilli()
+	}
+	s.GroupSink, s.GroupFirstToken, s.GroupPatience = d.Sink, d.FirstToken, d.Patience
+	s.FoundRouting, s.FoundAffinity = d.FoundRouting, d.FoundAffinity
 	return save(s, false)
 }
+
+// GroupDefaults is what SetGroupDefaults sets: GroupSink, GroupFirstToken,
+// GroupPatience, FoundRouting and FoundAffinity.
+type GroupDefaults struct {
+	Sink                        bool
+	FirstToken, Patience        int
+	FoundRouting, FoundAffinity string
+}
+
+// FoundRoutings are the routings FoundRouting may be, "" for Smart: the
+// built-in ones a routing group takes (provider.GroupRouting, which
+// settings can't import) that need nothing set on a group's members, so
+// not By weight or Manual.
+var FoundRoutings = []string{"", "order", "drain", "rotate", "usage", "pace", "free", "fast", "cheap", "expiring", "fit"}
+
+// Affinities are the Stays FoundAffinity may be, "" for Auto: those
+// provider.Affinities names.
+var Affinities = []string{"", "session", "turn", "off", "strict"}
 
 // EditUsageAliases changes UsageAliases alone, as edit returns them from
 // what the file holds now, so a save elsewhere from an older snapshot isn't
@@ -2776,6 +2810,12 @@ func saveOwn(s Settings, recording, reads bool) error {
 	// can't import
 	if s.GroupPatience < -1 || s.GroupPatience > 240 {
 		return fmt.Errorf("a routing group whose every member is busy waits from 1 to 240 seconds, 0 for 60 or -1 for not at all, not %d", s.GroupPatience)
+	}
+	if !slices.Contains(FoundRoutings, s.FoundRouting) {
+		return fmt.Errorf("the groups magpie finds route by one of %s, or smart (empty), not %q", strings.Join(FoundRoutings[1:], ", "), s.FoundRouting)
+	}
+	if !slices.Contains(Affinities, s.FoundAffinity) {
+		return fmt.Errorf("a conversation on a group magpie finds stays %s, or auto (empty), not %q", strings.Join(Affinities[1:], ", "), s.FoundAffinity)
 	}
 	if s.SearchCount < 0 || s.SearchCount > SearchCountMost {
 		return fmt.Errorf("a search is answered with from 1 to %d results, or 0 for %d, not %d", SearchCountMost, SearchCountDefault, s.SearchCount)

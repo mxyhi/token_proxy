@@ -48,7 +48,7 @@ function serve(lang, posts, st) {
     if (url.pathname.startsWith("/api/groups/")) {
       const body = JSON.parse(r.request().postData() || "{}");
       posts.push({ path: url.pathname, body });
-      if (url.pathname === "/api/groups/defaults") st.defaults = { sink: !!body.sink, firstToken: body.firstToken || 0, patience: body.patience || 0 };
+      if (url.pathname === "/api/groups/defaults") st.defaults = { sink: !!body.sink, firstToken: body.firstToken || 0, patience: body.patience || 0, routing: body.routing || "", affinity: body.affinity || "" };
       if (url.pathname === "/api/groups/save") st.group = { sink: !!body.sink, noSink: !!body.noSink, firstToken: body.firstToken || 0, patience: body.patience || 0 };
       return json(groups());
     }
@@ -74,7 +74,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       });
       page.setDefaultTimeout(5000);
       page.setDefaultNavigationTimeout(60000);
-      const errors = [], posts = [], st = { defaults: { sink: false, firstToken: 0, patience: 0 }, group: {} };
+      const errors = [], posts = [], st = { defaults: { sink: false, firstToken: 0, patience: 0, routing: "", affinity: "" }, group: {} };
       page.on("pageerror", (e) => errors.push(e.message));
       await page.route("**/*", serve(lang, posts, st));
       await page.goto("http://magpie.test/?view=groups");
@@ -119,10 +119,11 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       assert.equal(await on(pat), await tr("1 min"));
       assert.equal(await page.locator("select").count(), 0, "no native select");
 
-      // each pick posts all three, the others as they are
-      assert.deepEqual(await pick(sink, await tr("Goes to the back")), { sink: true, firstToken: 0, patience: 0 });
-      assert.deepEqual(await pick(first, await tr("1 min")), { sink: true, firstToken: 60, patience: 0 });
-      assert.deepEqual(await pick(pat, await tr("Off")), { sink: true, firstToken: 60, patience: -1 });
+      // each pick posts them all, the others as they are
+      const was = { routing: "", affinity: "" };
+      assert.deepEqual(await pick(sink, await tr("Goes to the back")), { sink: true, firstToken: 0, patience: 0, ...was });
+      assert.deepEqual(await pick(first, await tr("1 min")), { sink: true, firstToken: 60, patience: 0, ...was });
+      assert.deepEqual(await pick(pat, await tr("Off")), { sink: true, firstToken: 60, patience: -1, ...was });
       assert((await first.locator("small").textContent()).includes(await tr("{n} s", { n: 60 })), "the hint says what the value does");
       assert((await pat.locator("small").textContent()).includes(await tr("When every member has failed, the agent gets the last one's error at once.")));
       const fits = () => page.evaluate(() => {
@@ -133,6 +134,21 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         }) && document.scrollingElement.scrollWidth <= document.scrollingElement.clientWidth;
       });
       assert.equal(await fits(), true, "the rows fit at " + width);
+
+      // how the groups magpie finds route and stay (token_proxy: 自动组按顺序、
+      // 关闭会话保持): Quota first and Auto until picked, no By weight or
+      // Manual, which need something set on a group's members
+      const route = set.locator(".rt-gdef-route"), stays = set.locator(".rt-gdef-stays");
+      await reach(stays);
+      assert.equal((await route.locator("b").textContent()).trim(), await tr("Found groups route"));
+      assert.equal((await stays.locator("b").textContent()).trim(), await tr("Found groups stay"));
+      assert.equal(await on(route), await tr("Quota first"));
+      assert.equal(await on(stays), await tr("Auto"));
+      assert((await route.locator("small").textContent()).startsWith(await tr("How every group magpie finds routes. A group you change keeps what it had then.")));
+      for (const no of ["By weight", "Manual"]) assert.equal(await route.locator(".opt", { hasText: new RegExp(`^${await tr(no)}$`) }).count(), 0, no + " offered");
+      assert.deepEqual(await pick(route, await tr("In order")), { sink: true, firstToken: 60, patience: -1, routing: "order", affinity: "" });
+      assert.deepEqual(await pick(stays, await tr("Off")), { sink: true, firstToken: 60, patience: -1, routing: "order", affinity: "off" });
+      assert.equal(await fits(), true, "the found groups' rows fit at " + width);
 
       // a group that sets none opens on Default, its hint saying what it follows
       await (await reach(card.locator("button", { hasText: await tr("Edit") }))).click();
@@ -176,6 +192,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       const missing = await page.evaluate(() => [
         "As set for every group under the list: {v}.", "Default", "Rate limited", "Slow to start", "Every member busy",
         "Keeps its place", "Goes to the back", "Wait", "Off", "30 s", "1 min", "2 min", "4 min",
+        "Found groups route", "Found groups stay", "How every group magpie finds routes. A group you change keeps what it had then.",
       ].flatMap((k) => ["zh", "zh-TW", "ja", "de"].filter((l) => !I18N[l][k]).map((l) => l + ": " + k)));
       assert.deepEqual(missing, [], "every string has its zh, zh-TW, ja and de");
       assert.deepEqual(errors, []);

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/gateway"
@@ -48,7 +49,7 @@ var Keys = []string{
 	"replyModel", "noLoopGuard", "claudeLeanPrompt", "claudeNoExtraUsage", "claudeRegionHold", "claudePrintMode", "refusalRetries", "retryAfterCap",
 	"vision", "visionEffort", "imageGen", "videoGen", "imageTimeout", "imageResolution", "classifyTimeout",
 	// what every routing group does that says nothing of its own
-	"groupSink", "groupFirstToken", "groupPatience",
+	"groupSink", "groupFirstToken", "groupPatience", "foundRouting", "foundAffinity",
 	"searcher", "searcherThen", "searcherEffort", "searchFirst",
 	// updates
 	"noUpdatePill", "noAutoUpdate", "updateEvery", "noAutoDownload", "autoRestart", "updateChannel",
@@ -76,6 +77,8 @@ var Choices = map[string][]string{
 	"searchFirst":     {settings.SearchFirstModel, settings.SearchFirstAPI},
 	"replyModel":      settings.ReplyModels,
 	"imageResolution": {"1K", "2K", "4K"},
+	"foundRouting":    settings.FoundRoutings,
+	"foundAffinity":   settings.Affinities,
 }
 
 func ints(v []int) []string {
@@ -237,6 +240,17 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	}
 	if _, sent := fields["groupPatience"]; !sent {
 		in.GroupPatience = cur.GroupPatience
+	}
+	// nor how the groups magpie finds route and stay, set beside them
+	if _, sent := fields["foundRouting"]; !sent {
+		in.FoundRouting = cur.FoundRouting
+	}
+	if _, sent := fields["foundAffinity"]; !sent {
+		in.FoundAffinity = cur.FoundAffinity
+	}
+	// a change of it is each found group's routing changing (Group.RoutedAt)
+	if in.FoundRoutedAt = cur.FoundRoutedAt; in.FoundRouting != cur.FoundRouting {
+		in.FoundRoutedAt = time.Now().UnixMilli()
 	}
 	// nor whether animations are stilled (#3813)
 	if _, sent := fields["reduceMotion"]; !sent {

@@ -66,7 +66,8 @@ type groupsJSON struct {
 	// none
 	GatewayKeys []groupKeyJSON `json:"gatewayKeys"`
 	// Defaults: what every group follows when it sets no value of its own
-	// (settings.GroupSink, GroupFirstToken, GroupPatience)
+	// (settings.GroupSink, GroupFirstToken, GroupPatience), and how the
+	// groups magpie finds route and stay (FoundRouting, FoundAffinity)
 	Defaults groupDefaultsJSON `json:"defaults"`
 }
 
@@ -98,6 +99,10 @@ type groupDefaultsJSON struct {
 	Sink       bool `json:"sink"`
 	FirstToken int  `json:"firstToken"`
 	Patience   int  `json:"patience"`
+	// how the groups magpie finds route and stay (settings.FoundRouting,
+	// FoundAffinity), each found group's own routing and Stays
+	Routing  string `json:"routing"`
+	Affinity string `json:"affinity"`
 }
 
 type skippableJSON struct {
@@ -357,7 +362,7 @@ func groupsState() groupsJSON {
 	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Drawers: []modelRef{}, Found: provider.AutoGroupsOn(), Templates: provider.Templates(),
 		Clock: clockJSON{Zone: provider.LocalZone(), Offset: offset}}
 	def := settings.Load()
-	out.Defaults = groupDefaultsJSON{Sink: def.GroupSink, FirstToken: def.GroupFirstToken, Patience: def.GroupPatience}
+	out.Defaults = groupDefaultsJSON{Sink: def.GroupSink, FirstToken: def.GroupFirstToken, Patience: def.GroupPatience, Routing: def.FoundRouting, Affinity: def.FoundAffinity}
 	for i := range out.Templates {
 		if out.Templates[i].Group.Members == nil {
 			out.Templates[i].Group.Members = []string{} // one that can't be made has none
@@ -649,8 +654,9 @@ func groupRoutes(mux *http.ServeMux) {
 			err = provider.SetGroupOrder(body.Order)
 		case "defaults":
 			// what every group follows when it sets no value of its own
-			// (jiezhengj on Discord: set once, not in each group)
-			err = settings.SetGroupDefaults(in.Sink, in.FirstToken, in.Patience)
+			// (jiezhengj on Discord: set once, not in each group), and how
+			// the groups magpie finds route and stay
+			err = settings.SetGroupDefaults(settings.GroupDefaults{Sink: in.Sink, FirstToken: in.FirstToken, Patience: in.Patience, FoundRouting: in.Routing, FoundAffinity: in.Affinity})
 		case "pick":
 			// a Manual group's member every request goes to, and nothing
 			// else of it (#2489: the tray panel switches it)

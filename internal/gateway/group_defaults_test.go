@@ -13,7 +13,7 @@ import (
 
 func setGroupDefaults(t *testing.T, sink bool, firstToken, patience int) {
 	t.Helper()
-	if err := settings.SetGroupDefaults(sink, firstToken, patience); err != nil {
+	if err := settings.SetGroupDefaults(settings.GroupDefaults{Sink: sink, FirstToken: firstToken, Patience: patience}); err != nil {
 		t.Fatal(err)
 	}
 }

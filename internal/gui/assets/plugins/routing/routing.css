@@ -764,6 +764,8 @@ button.rt-session { cursor: pointer; }
 .rt-skip-pick.open svg { transform: rotate(180deg); }
 .pop.proto-menu.rt-skip-menu { width: 230px; max-width: calc(100vw - 16px); background: var(--card); }
 .rt-gnames .txt, .rt-gdef .txt { flex-basis: 220px; }
+/* the found groups' routing has nine choices: they wrap, as an editor's do */
+.rt-gdef:is(.rt-gdef-route, .rt-gdef-stays) .segs { max-width: 100%; flex-wrap: wrap; }
 .rt-ghidden { display: flex; align-items: center; padding: 4px 12px 4px 8px; }
 .rt-ghidden .rt-gremoved { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--faint); }
 .rt-ghidden .rt-gremoved:hover, .rt-ghidden .rt-gremoved.open { color: var(--fg-2); }

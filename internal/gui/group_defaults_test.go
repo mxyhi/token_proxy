@@ -65,6 +65,26 @@ func TestGroupDefaultsSaved(t *testing.T) {
 	if s := settings.Load(); s.GroupPatience != -1 {
 		t.Fatalf("after a refusal: %d", s.GroupPatience)
 	}
+	// how the groups magpie finds route and stay; a group the user made
+	// keeps its own, and a routing a found group can't follow is refused
+	code, got = post(`{"routing":"order","affinity":"off"}`)
+	if code != 200 || got.Defaults != (groupDefaultsJSON{Routing: "order", Affinity: "off"}) {
+		t.Fatalf("found: %d %+v", code, got.Defaults)
+	}
+	if s := settings.Load(); s.FoundRouting != "order" || s.FoundAffinity != "off" || s.FoundRoutedAt == 0 || s.ClassifyTimeout != 9 {
+		t.Fatalf("found settings: %q %q %d %d", s.FoundRouting, s.FoundAffinity, s.FoundRoutedAt, s.ClassifyTimeout)
+	}
+	if g, _, _ := provider.FindGroup("group/own"); g.Routing != "" || g.Affinity != "" {
+		t.Fatalf("the user's group: %q %q", g.Routing, g.Affinity)
+	}
+	for _, bad := range []string{`{"routing":"weight"}`, `{"routing":"manual"}`, `{"affinity":"nope"}`} {
+		if code, _ := post(bad); code == 200 {
+			t.Fatalf("%s saved", bad)
+		}
+	}
+	if s := settings.Load(); s.FoundRouting != "order" || s.FoundAffinity != "off" {
+		t.Fatalf("after a refusal: %q %q", s.FoundRouting, s.FoundAffinity)
+	}
 	// back to magpie's own
 	if code, got := post(`{}`); code != 200 || got.Defaults != (groupDefaultsJSON{}) {
 		t.Fatalf("cleared: %d %+v", code, got.Defaults)

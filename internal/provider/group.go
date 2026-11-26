@@ -1033,7 +1033,35 @@ func GoneAutoGroup(ref string) bool {
 // stays in the group, a member the gateway skips (membersIn), rather than
 // taking a group of two away with every agent, rule and group set to it.
 func foundGroups(entries []Entry) []Group {
-	return autoGroups(unskipped(foundFrom(entries, heldOffEntries()), heldOf("file", load).AutoGroupSkip), heldSettings().ModelSameAs)
+	st := heldSettings()
+	gs := autoGroups(unskipped(foundFrom(entries, heldOffEntries()), heldOf("file", load).AutoGroupSkip), st.ModelSameAs)
+	var at time.Time
+	if st.FoundRoutedAt > 0 {
+		at = time.UnixMilli(st.FoundRoutedAt)
+	}
+	return foundRouted(gs, st.FoundRouting, st.FoundAffinity, at)
+}
+
+// foundRouted is gs, groups magpie found, routed and staying as settings
+// say every found group does (FoundRouting, FoundAffinity): a found group
+// is never stored, so this is the only routing it has, and it reads as
+// its own everywhere (the gateway, the Routing page, the CLI). Changed by
+// the user, a group is stored with what it showed, and keeps that.
+// routedAt, when FoundRouting last changed, moves a conversation kept on
+// one of its accounts to the new routing at its next turn (RoutedAt). A
+// value Save would refuse (a file edited by hand) is Smart and Auto, as
+// SaveGroup has an unknown one.
+func foundRouted(gs []Group, routing, affinity string, routedAt time.Time) []Group {
+	if routing == Manual || routing == Weighted || !GroupRouting(routing) || PluginRouting(routing) {
+		routing = ""
+	}
+	if !slices.Contains(Affinities, affinity) {
+		affinity = ""
+	}
+	for i := range gs {
+		gs[i].Routing, gs[i].Affinity, gs[i].RoutedAt = routing, affinity, routedAt
+	}
+	return gs
 }
 
 // unskipped is entries without the models of the providers skip names:

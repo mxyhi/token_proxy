@@ -400,3 +400,49 @@ func TestRedactModelDirIsNotASettingsSave(t *testing.T) {
 		t.Errorf("a save changed the models folder: %q", in.RedactModelDir)
 	}
 }
+
+// `magpie settings set foundRouting order` stamps when the found groups'
+// routing changed, so their conversations move at the next turn; a body
+// that leaves foundRouting alone keeps the stamp it had.
+func TestFoundRoutingStampsItsChange(t *testing.T) {
+	home(t)
+	set := func(key, value string) settings.Settings {
+		t.Helper()
+		cur, err := settings.LoadChecked()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := Body(cur, key, json.RawMessage(value))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := Apply(body, false); err != nil {
+			t.Fatalf("%s=%s: %v", key, value, err)
+		}
+		return settings.Load()
+	}
+	got := set("foundRouting", `"order"`)
+	if got.FoundRouting != "order" || got.FoundRoutedAt == 0 {
+		t.Fatalf("set: %q %d", got.FoundRouting, got.FoundRoutedAt)
+	}
+	at := got.FoundRoutedAt
+	if got = set("foundAffinity", `"off"`); got.FoundAffinity != "off" || got.FoundRouting != "order" || got.FoundRoutedAt != at {
+		t.Fatalf("stays set: %q %q %d, want %d", got.FoundAffinity, got.FoundRouting, got.FoundRoutedAt, at)
+	}
+	if got = set("lang", `"ja"`); got.FoundRoutedAt != at {
+		t.Fatalf("another key moved the stamp: %d, want %d", got.FoundRoutedAt, at)
+	}
+	cur, err := settings.LoadChecked()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Body or the save refuses it
+	if body, err := Body(cur, "foundRouting", json.RawMessage(`"weight"`)); err == nil {
+		if _, _, err := Apply(body, false); err == nil {
+			t.Fatal("weight saved for the found groups")
+		}
+	}
+	if s := settings.Load(); s.FoundRouting != "order" {
+		t.Fatalf("after a refusal: %q", s.FoundRouting)
+	}
+}

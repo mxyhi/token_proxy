@@ -20,7 +20,7 @@ func TestGroupDefaultsUnlessItsOwn(t *testing.T) {
 	if none.Waits() != PatienceDefault*time.Second || none.FirstTokenOr() != 0 || none.Sinks() {
 		t.Fatalf("magpie's own: %s %d %v", none.Waits(), none.FirstTokenOr(), none.Sinks())
 	}
-	if err := settings.SetGroupDefaults(true, 45, 200); err != nil {
+	if err := settings.SetGroupDefaults(settings.GroupDefaults{Sink: true, FirstToken: 45, Patience: 200}); err != nil {
 		t.Fatal(err)
 	}
 	if none.Waits() != 200*time.Second || none.FirstTokenOr() != 45 || !none.Sinks() {
@@ -30,7 +30,7 @@ func TestGroupDefaultsUnlessItsOwn(t *testing.T) {
 	if own.Waits() != PatienceDefault*time.Second || own.FirstTokenOr() > 0 || own.Sinks() {
 		t.Fatalf("own: %s %d %v", own.Waits(), own.FirstTokenOr(), own.Sinks())
 	}
-	if err := settings.SetGroupDefaults(false, 0, PatienceOff); err != nil {
+	if err := settings.SetGroupDefaults(settings.GroupDefaults{Patience: PatienceOff}); err != nil {
 		t.Fatal(err)
 	}
 	if none.Waits() != 0 {
@@ -41,7 +41,7 @@ func TestGroupDefaultsUnlessItsOwn(t *testing.T) {
 	}
 	// a value no setting can hold is refused, and the file kept
 	for _, bad := range [][2]int{{-2, 0}, {0, -2}, {0, PatienceLongest + 1}} {
-		if err := settings.SetGroupDefaults(false, bad[0], bad[1]); err == nil {
+		if err := settings.SetGroupDefaults(settings.GroupDefaults{FirstToken: bad[0], Patience: bad[1]}); err == nil {
 			t.Fatalf("%v saved", bad)
 		}
 	}
@@ -66,5 +66,77 @@ func TestGroupDefaultsUnlessItsOwn(t *testing.T) {
 	}
 	if g, _, _ := FindGroup("group/own"); !g.Sink || g.NoSink {
 		t.Fatalf("both: %+v", g)
+	}
+}
+
+// The groups magpie finds route and keep a conversation as settings say
+// (token_proxy: 自动组按顺序、关闭会话保持); a group the user made keeps its
+// own, a routing change stamps when, so conversations move at their next
+// turn, and a routing a found group can't follow is refused.
+func TestFoundGroupsFollowTheirDefaults(t *testing.T) {
+	autoRefHome(t)
+	if err := SaveGroup(Group{Name: "Mine", Members: []string{"a/x", "b/x"}}); err != nil {
+		t.Fatal(err)
+	}
+	found := func() (Group, Group) {
+		t.Helper()
+		var auto, mine Group
+		for _, g := range Groups() {
+			switch g.ID {
+			case "auto-claude-opus-5-5":
+				auto = g
+			case "mine":
+				mine = g
+			}
+		}
+		if auto.ID == "" || mine.ID == "" {
+			t.Fatalf("groups: %q %q", auto.ID, mine.ID)
+		}
+		return auto, mine
+	}
+	if auto, _ := found(); auto.Routing != "" || auto.Affinity != "" || !auto.RoutedAt.IsZero() {
+		t.Fatalf("magpie's own: %q %q %s", auto.Routing, auto.Affinity, auto.RoutedAt)
+	}
+	if err := settings.SetGroupDefaults(settings.GroupDefaults{FoundRouting: Ordered, FoundAffinity: AffinityOff}); err != nil {
+		t.Fatal(err)
+	}
+	at := time.UnixMilli(settings.Load().FoundRoutedAt)
+	if settings.Load().FoundRoutedAt == 0 {
+		t.Fatal("a routing change kept no time")
+	}
+	auto, mine := found()
+	if auto.Routing != Ordered || auto.Affinity != AffinityOff || !auto.RoutedAt.Equal(at) {
+		t.Fatalf("found: %q %q %s, want %s", auto.Routing, auto.Affinity, auto.RoutedAt, at)
+	}
+	if !GroupRoutedAt("auto-claude-opus-5-5").Equal(at) {
+		t.Fatalf("GroupRoutedAt: %s", GroupRoutedAt("auto-claude-opus-5-5"))
+	}
+	if g, _, ok := FindGroup("auto/claude-opus-5.5"); !ok || g.Routing != Ordered || g.Affinity != AffinityOff {
+		t.Fatalf("FindGroup: %v %q %q", ok, g.Routing, g.Affinity)
+	}
+	if mine.Routing != "" || mine.Affinity != "" || !mine.RoutedAt.IsZero() {
+		t.Fatalf("the user's group: %q %q %s", mine.Routing, mine.Affinity, mine.RoutedAt)
+	}
+	// stays alone changed: the routing's time is kept
+	if err := settings.SetGroupDefaults(settings.GroupDefaults{FoundRouting: Ordered, FoundAffinity: AffinityTurn}); err != nil {
+		t.Fatal(err)
+	}
+	if s := settings.Load(); s.FoundRoutedAt != at.UnixMilli() || s.FoundAffinity != AffinityTurn {
+		t.Fatalf("stays changed: %d %q", s.FoundRoutedAt, s.FoundAffinity)
+	}
+	for _, bad := range []settings.GroupDefaults{{FoundRouting: Weighted}, {FoundRouting: Manual}, {FoundRouting: "smart"}, {FoundRouting: "nope"}, {FoundAffinity: "nope"}} {
+		if err := settings.SetGroupDefaults(bad); err == nil {
+			t.Fatalf("%+v saved", bad)
+		}
+	}
+	if auto, _ := found(); auto.Routing != Ordered || auto.Affinity != AffinityTurn {
+		t.Fatalf("after refusals: %q %q", auto.Routing, auto.Affinity)
+	}
+	// back to Smart and Auto
+	if err := settings.SetGroupDefaults(settings.GroupDefaults{}); err != nil {
+		t.Fatal(err)
+	}
+	if auto, _ := found(); auto.Routing != "" || auto.Affinity != "" || auto.RoutedAt.Before(at) {
+		t.Fatalf("cleared: %q %q %s", auto.Routing, auto.Affinity, auto.RoutedAt)
 	}
 }

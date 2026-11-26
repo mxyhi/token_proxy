@@ -32,7 +32,14 @@ static int magpie_spawn_own(const char *path, char *const argv[], char *const en
 	posix_spawn_file_actions_addopen(&fa, 0, "/dev/null", O_RDONLY, 0);
 	posix_spawn_file_actions_adddup2(&fa, out, 1);
 	posix_spawn_file_actions_adddup2(&fa, out, 2);
+	// The macOS 26 SDK deprecates the _np call for
+	// posix_spawn_file_actions_addchdir, which only macOS 26 has. magpie
+	// runs on macOS 12 and later, where the _np call is always there, so it
+	// stays, with the warning off for this line alone.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 	if (dir != NULL) posix_spawn_file_actions_addchdir_np(&fa, dir);
+#pragma clang diagnostic pop
 	err = posix_spawn(pid, path, &fa, &attr, argv, envp);
 	posix_spawn_file_actions_destroy(&fa);
 	posix_spawnattr_destroy(&attr);

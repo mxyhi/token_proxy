@@ -1,8 +1,10 @@
 name: Test
 
+# A push to main runs this through prelease.yml (workflow_call) alone, whose
+# publish waits for it: a push trigger of its own ran every job twice, and
+# the second set of macOS jobs queued behind the first's. prelease.yml
+# cancels its run, these tests with it, when a newer push to main comes.
 on:
-  push:
-    branches: [main]
   pull_request:
   workflow_dispatch:
   workflow_call:

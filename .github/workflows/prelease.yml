@@ -2,11 +2,11 @@ name: Token Proxy prelease
 
 on:
   push:
-    branches: [prelease]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
-  group: token-proxy-prelease-${{ github.ref }}
+  group: token-proxy-main-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -33,7 +33,7 @@ jobs:
     uses: ./.github/workflows/test.yml
 
   build:
-    if: github.ref == 'refs/heads/prelease'
+    if: github.ref == 'refs/heads/main'
     strategy:
       fail-fast: false
       matrix:
@@ -70,7 +70,7 @@ jobs:
   publish:
     # 构建可与测试并行；只有同一提交的全部检查通过才对外发布。
     needs: [test, build, installer]
-    if: github.ref == 'refs/heads/prelease' && github.repository == 'mxyhi/token_proxy'
+    if: github.ref == 'refs/heads/main' && github.repository == 'mxyhi/token_proxy'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -114,7 +114,7 @@ jobs:
                 tag_name: process.env.TAG,
                 target_commitish: context.sha,
                 name: `Token Proxy ${process.env.TAG}`,
-                body: `基于 Magpie 的迁移预发布。提交：${context.sha}\n\nmacOS/Linux 安装 curl、jq 后可运行：\n\n\`\`\`sh\ncurl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh\n\`\`\`\n\n脚本校验 SHA256SUMS，Unix 命令为 token-proxy。Linux 需要 GTK 3 和 WebKitGTK 4.1；Windows 请下载 ZIP。macOS 未做开发者签名/公证。应用不自动更新；可重新运行脚本或手动下载升级。默认网关端口 9208，配置目录为 ~/.config/token-proxy-magpie。旧版 Tauri 可使用 token-proxy migrate-tauri 离线迁移；请先备份、验证，再删除旧版，详见 docs/token-proxy-migration.md。`,
+                body: `基于 Magpie 的迁移预发布。提交：${context.sha}\n\nmacOS/Linux 安装 curl、jq 后可运行：\n\n\`\`\`sh\ncurl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/main/install.sh | sh\n\`\`\`\n\n脚本校验 SHA256SUMS，Unix 命令为 token-proxy。Linux 需要 GTK 3 和 WebKitGTK 4.1；Windows 请下载 ZIP。macOS 未做开发者签名/公证。应用不自动更新；可重新运行脚本或手动下载升级。默认网关端口 9208，配置目录为 ~/.config/token-proxy-magpie。旧版 Tauri 可使用 token-proxy migrate-tauri 离线迁移；请先备份、验证，再删除旧版，详见 docs/token-proxy-migration.md。`,
                 draft: true,
                 prerelease: true,
                 make_latest: "false",

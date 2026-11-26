@@ -1,16 +1,16 @@
 # Token Proxy · Magpie 基座预发布
 
-`prelease` 基于 [yetone/magpie](https://github.com/yetone/magpie)，逐步移植旧版 Token Proxy 的功能。
+`main` 基于 [yetone/magpie](https://github.com/yetone/magpie)，逐步移植旧版 Token Proxy 的功能。
 下载：[Token Proxy 预发布](https://github.com/mxyhi/token_proxy/releases)；源码与反馈：[mxyhi/token_proxy](https://github.com/mxyhi/token_proxy)。
 
-每次推送 `prelease` 自动测试并构建 macOS、Windows、Linux 安装包，全部成功后发布 GitHub 预发布。
+每次推送 `main` 自动测试并构建 macOS、Windows、Linux 安装包，全部成功后发布 GitHub 预发布。
 当前包未做 Apple 开发者签名/公证；可重新运行安装脚本升级，也可手动下载；配置保存在 `~/.config/token-proxy-magpie`，不自动导入旧版 Tauri 数据。
 内部 Go 模块路径、可执行文件名和协议暂时保留；Unix 安装脚本提供 `token-proxy` 命令，Windows 包内仍为 `magpie.exe`，详见 [迁移说明](docs/token-proxy-migration.md)。
 
 以下保留上游功能文档，其中官方安装命令与官网链接属于上游 Magpie。本分支 macOS/Linux 安装 `curl` 和 `jq` 后可运行下面的 Token Proxy 安装命令；Windows 请从上面的 Releases 手动下载。
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/main/install.sh | sh
 ```
 
 ---
@@ -69,7 +69,7 @@ This prerelease ships macOS, Windows and Linux packages. Docker, Nix and Termux 
 **1 · Install.** Download Token Proxy from **[its pre-release](https://github.com/mxyhi/token_proxy/releases)**, or on macOS/Linux install `curl` and `jq`, then run:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/main/install.sh | sh
 ```
 
 <sub>预发布包未做 Apple 开发者签名/公证，不支持自动更新；安装脚本会按 GitHub Release 的 SHA-256 校验文件。macOS 安装到 /Applications（不可写时使用 ~/Applications）；若有同名旧版应用，请设置 TOKEN_PROXY_APP_DIR 指向其他目录。Unix 命令为 ~/.local/bin/token-proxy。Linux 安装桌面程序；Linux 运行需要 GTK 3 和 WebKitGTK 4.1。配置目录为 ~/.config/token-proxy-magpie，不会自动迁移旧版 Tauri 或官方 Magpie 数据。</sub>

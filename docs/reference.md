@@ -3462,7 +3462,7 @@ with a link builder: <https://usemagpie.ai/docs/import>.
 **Token Proxy 预发布：** 安装方式、依赖和升级限制以[迁移说明](token-proxy-migration.md#安装与升级)为准。macOS/Linux 安装 `curl`、`jq` 后运行：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/main/install.sh | sh
 ```
 
 Unix 命令为 `token-proxy`；本参考保留的 `magpie` 命令示例需按此替换。Windows 包内仍为 `magpie.exe`。本发行版不使用上游自动更新源。

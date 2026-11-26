@@ -1,6 +1,6 @@
 # Token Proxy 的 Magpie 基座
 
-- `prelease` 从上游 Magpie 提交 `6f91fd0e74bb238dbe2bec7d565cc35f42a74bdf` 开始；旧 Rust/Tauri 代码保留在 `main` 和 `chore/update-magpie-upstream`，后续按功能移植。
+- `main` 是 Token Proxy 的迁移主线，从上游 Magpie 提交 `6f91fd0e74bb238dbe2bec7d565cc35f42a74bdf` 开始；旧 Rust/Tauri 代码保留在 `chore/update-magpie-upstream`，后续按功能移植。
 - `origin` 为 `https://github.com/mxyhi/token_proxy.git`，`upstream` 为 `https://github.com/yetone/magpie.git`。同步时使用 `git fetch upstream`，在迁移分支审查合并。
 - 主要应用标题、平台应用标识、安装包及项目反馈链接使用 Token Proxy。Go 模块路径、内部 `magpie` 命令、协议、插件接口和上游版权保留，避免本轮同时改动所有集成边界。
 - 启动入口把配置/缓存命名空间设为 `token-proxy-magpie`。默认配置为 `~/.config/token-proxy-magpie`（支持 XDG 及上游便携模式），不读取或自动迁移旧版 Tauri / 官方 Magpie 配置。发行默认网关端口为 9208，用户保存的端口和 MAGPIE_ADDR 仍优先；旧格式通过显式迁移命令转换。
@@ -9,7 +9,7 @@
 
 ## 自动预发布
 
-推送 `prelease` 触发 `.github/workflows/prelease.yml`，并行调用上游测试工作流及五组平台构建；全部通过后发布同一提交的 GitHub 预发布。版本为 `0.2.0-prelease.<run_number>`，标签为 `prelease-0.2.0-<run_number>`，不会触发上游 `v*` 发布，也不会替换稳定版 Latest。
+推送 `main` 触发 `.github/workflows/prelease.yml`，并行调用上游测试工作流及五组平台构建；全部通过后发布同一提交的 GitHub 预发布。版本为 `0.2.0-prelease.<run_number>`，标签为 `prelease-0.2.0-<run_number>`，不会触发上游 `v*` 发布，也不会替换稳定版 Latest。
 
 产物包括 macOS arm64/amd64 的 DMG 和 ZIP、Linux amd64/arm64 的 tar.gz、Windows amd64/arm64 的 ZIP，以及 SHA256SUMS。macOS 仅 ad-hoc 签名，未经 Apple 开发者签名/公证。所有发布仅使用当前仓库的 GITHUB_TOKEN，不需要上游的 RELEASES_REPO_TOKEN。
 
@@ -18,7 +18,7 @@
 macOS/Linux 需要 `curl` 和 `jq`（macOS 可用 `brew install jq`，Debian/Ubuntu 可用 `sudo apt install curl jq`）。运行：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/prelease/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/main/install.sh | sh
 ```
 
 脚本从自有仓库最近 100 条 Release 中选择发布时间最新的 `prelease-*` 非草稿预发布，核对资产存在且上传完成，再下载对应架构的包和 `SHA256SUMS`。下载或校验失败保留现有安装；重新运行即可升级。可通过 `TOKEN_PROXY_TAG=prelease-0.2.0-4` 指定版本（变量放在管道右侧 `sh` 前）。这是手动调用安装器，应用内自动更新仍关闭。

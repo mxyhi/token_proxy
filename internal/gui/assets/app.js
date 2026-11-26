@@ -7986,12 +7986,18 @@ function concurrencyField(p) {
       if (k === "concurrency") document.querySelectorAll(".alane").forEach(laneText);
     };
   }
+  // how long a key or account sits out after a failure that says nothing
+  // of why (provider.RestCap), its row in restcap.js; d is this editor's
+  // draft, which the row sets restCap on once it is changed
+  const rc = new Comment(), d = draft;
+  import("./restcap.js").then(() => restCapRow(rc, p, d), statusErr);
   return [
     ...field(t("Requests at once"), box, (plugin ? t("Over it, requests queue and go out in order; empty takes the plugin's {n}, 0 is no limit", { n: plugin }) : t("Over it, requests queue and go out in order; 0 or empty is no limit"))),
     ...field(t("Accounts at once"), accounts, t("How many of its accounts or keys take requests at once, the first in the list; the next takes over when one runs out or fails. 0 is no limit")),
     ...field(t("Requests per minute"), rpm, t("How many requests each key or account sends in any minute, retries included; one more waits for room, up to 2 minutes. 0 or empty is no limit")),
     ...field(t("Queue size"), queue, t("How many requests may wait for each key or account; one more is turned away at once. 0 or empty is no bound")),
     ...field(t("Queue wait"), wait, t("Seconds a request waits for a free slot before it is turned away. 0 or empty waits as long as it takes")),
+    rc,
   ];
 }
 // priceRateField: a relay's rate on the official price (#819), which
@@ -8172,7 +8178,7 @@ function advancedSet(d, p) {
     [d.concurrency, d.maxAccounts, d.queueLimit, d.queueWait, d.maxRPM, d.priceRate, d.topUpRate ?? p?.topUpRate, d.contexts, d.outputs, d.compacts].some((v) => String(v ?? "").trim()) ||
     !!d.rateWindows?.length ||
     !!(d.searches || d.authHeader || d.passUserAgent === false || d.unredacted || d.countFree || d.billing || d.pinUpstream || d.nativeCompaction || d.balanceToken || d.limitRestOff || d.noBalanceProbe || d.http1 || d.socket || d.imageFilesOff || d.passErrors || d.clientCert || d.serverCA || d.serverPin || d.resolve) ||
-    !!d.fallback?.length || !!(p?.balanceToken?.set || p?.connectAgents || p?.maxImages) ||
+    !!d.fallback?.length || !!(p?.balanceToken?.set || p?.connectAgents || p?.maxImages || p?.restCap) ||
     (p?.accessKey?.vendor === "aws" && !!(p.accessKey.id || p.accessKey.secretSet));
 }
 function priceRateError(ed) {
@@ -8185,9 +8191,10 @@ function concurrencyDraft(p) {
     maxRPM: p?.maxRPM ? String(p.maxRPM) : "", maxAccounts: p?.maxAccounts == null ? "" : String(p.maxAccounts),
     keyPriceRates: { ...p?.keyPriceRates } };
 }
-// queueOfDraft: { queueLimit, queueWait, maxRPM } as saved, 0 for none, or { bad }
+// queueOfDraft: { queueLimit, queueWait, maxRPM } as saved, 0 for none, or { bad };
+// with restCap once the Failure rest row (restcap.js) is changed
 function queueOfDraft() {
-  const out = {};
+  const out = { restCap: draft.restCap };
   for (const [k, max] of [["queueLimit", 10000], ["queueWait", 3600], ["maxRPM", 10000]]) {
     const v = String(draft[k] ?? "").trim();
     if (!v) { out[k] = 0; continue; }

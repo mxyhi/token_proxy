@@ -2457,7 +2457,9 @@ pool whose unknown errors come now and then: a key or account of it that
 fails without saying why (a 5xx, a dropped connection) doesn't rest at all,
 and the next request asks it again. A refused key (401, 403), a model it
 doesn't serve, being out of quota or credit, or a rate limit still rests
-it as above.
+it as above. The provider editor's Advanced has the same setting as
+**Failure rest**: Default, No rest (`off`), or Custom with the minutes of
+the cap. A save that never changed it keeps what the CLI set.
 
 **When the safety filter refuses.** A reply the vendor's safety filter
 refuses before any of it is said rests nobody: it is about what was asked,

@@ -424,12 +424,22 @@ func (p Provider) RestCapOr(def time.Duration) time.Duration {
 	return def
 }
 
+// CheckRestCap says whether minutes is a RestCap SetRestCap and the
+// editor's save take: RestCapOff, 0 for the gateway's own, or up to
+// MaxQuotaRest.
+func CheckRestCap(minutes int) error {
+	if minutes != RestCapOff && (minutes < 0 || minutes > MaxQuotaRest) {
+		return fmt.Errorf("the longest rest is from 0 (magpie's own) to %d minutes (8 days), or off, not %d", MaxQuotaRest, minutes)
+	}
+	return nil
+}
+
 // SetRestCap sets the most, in minutes, the provider's keys and accounts
 // sit out while they keep failing or being rate limited, 0 for the
 // gateway's own, RestCapOff for no rest after an unknown failure.
 func SetRestCap(id string, minutes int) error {
-	if minutes != RestCapOff && (minutes < 0 || minutes > MaxQuotaRest) {
-		return fmt.Errorf("the longest rest is from 0 (magpie's own) to %d minutes (8 days), or off, not %d", MaxQuotaRest, minutes)
+	if err := CheckRestCap(minutes); err != nil {
+		return err
 	}
 	p, err := Find(id)
 	if err != nil {

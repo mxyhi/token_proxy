@@ -19,7 +19,20 @@ case "$target" in
     trap 'rm -rf "$staging"' EXIT
     ditto 'Token Proxy.app' "$staging/Token Proxy.app"
     ln -s /Applications "$staging/Applications"
-    hdiutil create -volname 'Token Proxy' -srcfolder "$staging" -ov -format UDZO "dist/token-proxy-$target.dmg"
+    # hdiutil 按 -srcfolder 自估卷大小，在 macos-26-arm64 runner 上同一提交
+    # 时而不够（No space left on device，写 MacOS/magpie 时），所以显式给
+    # 源大小 1.5 倍加 32MB；UDZO 压缩后 dmg 体积不变。Resource busy 是 runner
+    # 上 DiskArbitration 的瞬时错误：只重试这一步，不重编译，最多三次。
+    dmg_mb=$(du -sm "$staging" | cut -f1)
+    dmg_size=$((dmg_mb + dmg_mb / 2 + 32))m
+    try=1
+    until hdiutil create -volname 'Token Proxy' -srcfolder "$staging" -size "$dmg_size" -ov -format UDZO "dist/token-proxy-$target.dmg"; do
+      echo "hdiutil create failed (try $try/3, size $dmg_size)" >&2
+      df -h . "$staging" >&2 || true
+      [ "$try" -lt 3 ] || exit 1
+      try=$((try + 1))
+      sleep 5
+    done
     ;;
   linux-amd64|linux-arm64)
     make release-linux VERSION="$version"

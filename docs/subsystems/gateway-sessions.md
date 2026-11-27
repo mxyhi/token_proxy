@@ -721,7 +721,59 @@ and otherwise a known gateway session from what its transcript reads
 (`sessions.WriteGatewayMarkdown`, "Recorded by: magpie's gateway", with a note
 when turns or a part's end weren't kept). A magpie that others reach as a
 remote magpie has no file of their agents' sessions, so this is the only way
-it can export them. Verification: `TestGatewaySessionExportsMarkdown`.
+it can export them. Both take `only=said` (the Sessions page's Export
+Markdown menu, "Messages only"; usrname1833 on Discord): `sessions.KeepSaid`
+keeps the user's and the agent's text and images, leaves out thinking, tool
+calls and results and context, says so under the heading, and names the file
+`…-messages.md`. Any other `only` exports the whole conversation.
+Verification: `TestGatewaySessionExportsMarkdown`, `TestSessionExportOnlySaid`,
+`TestMarkdownKeepSaid`, `TestGatewayMarkdownKeepSaid`; browser
+`sessions-export.test.cjs`.
+
+The conversation sheet (`drawTalk` in the sessions plugin's `client.js`)
+draws each turn as the user's words (`sess-ask`), one fold of its steps
+(`details.sess-steps`, "N steps": thinking, tool calls and results, context
+and what the agent said on the way), and its last words (`sess-final`, the
+turn's last assistant text). A turn with no last words shows its fold only.
+In the fold each step is a line (thinking, context) or its first three lines
+(`brief`), and a click or Enter shows it whole. Which folds and steps were
+opened survives a redraw (`stepsOpen`, `stepFull`); a search hit inside a fold
+opens it. A fold's steps are drawn when it is first opened (the summary's
+click, before the fold shows, so it never opens empty), or at once when it is
+open from before or holds the hit. `[data-turn]` is on the user's messages,
+always drawn, so it still counts the turns. With 300 turns of 8 tool calls,
+the sheet has 4,233 nodes instead of 30,933. It opens in 199ms instead of
+245ms in Chromium, and 227ms instead of 361ms in WebKit. Verification: browser
+`sessions-talk-steps.test.cjs`.
+
+A transcript holds the first `transcriptMax` (400,000) characters of its
+parts, thinking and tool output included, and says `cut` when there was
+more. The sheet then ends in "Show the rest": it asks
+`GET /api/sessions/transcript?…&after=<n>` (`TranscriptAfter`,
+`SubagentTranscriptAfter`; n is `from` plus the parts it holds), adds what
+comes back and draws the turns again, until a read is not cut. Before, the
+sheet stopped at the cut with a muted line and no way on, so a long
+session's last turns couldn't be seen (usrname1833 on Discord). A gateway
+session's cut is turns the gateway didn't keep, with nothing after to
+read: it keeps the line and gets no button. `SessionText` (`magpie sessions
+show`, the sessions MCP's `read_session`) reads from `from` the same way;
+it used to read the cut start again, so its "go on from" past the cut never
+reached the end. The Markdown export reads the whole file and was never
+cut. Verification: `TestTranscriptAfterReadsTheRest`,
+`TestSessionTextReadsPastTheCut`; browser `sessions-talk-rest.test.cjs`.
+
+The sheet's "turn i / N" counts the whole session. A first read that is cut,
+or starts past the start (a search's, `from` > 0), carries `turns`, the
+user's text messages in the whole file, and `turnsBefore`, those among the
+`from` parts it skipped (`sessions.Counted`, `SubagentCounted`; a turn is
+the `turn` of `TurnsOf`, the same parts the sheet marks `[data-turn]`).
+They cost a second scan of the file, so a read that holds the whole session
+and a `after=` read (the sheet has N already) aren't counted, and
+`TranscriptOf`'s other callers (memdistill, the CLI) never pay it. Before,
+N was the turns drawn, about 18 of a long real session (usrname1833 on
+Discord). Verification: `TestCountedCountsTheWholeFile`,
+`TestSessionTranscriptCountsEveryTurn`; browser
+`sessions-talk-turns.test.cjs`.
 
 A gateway session without a saved Desktop name is titled by what it was
 first asked (YOU on Discord), not its `ses_…` id: `sessions.GatewayTitle` reads the first 8 complete turns of

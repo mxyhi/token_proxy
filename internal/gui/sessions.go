@@ -318,17 +318,32 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 		// (#2261)
 		// find: the words a search found in it, so that the part they
 		// are in is among those read (a long session's is cut)
-		read := sessions.TranscriptOf
-		if find := sessions.NeedleOf(q.Get("find")); find != "" {
+		// after: the parts after the first n, the rest of one that was
+		// cut, which the sheet reads when asked (usrname1833 on Discord)
+		after, _ := strconv.Atoi(q.Get("after"))
+		read := func(s sessions.Session) (sessions.Transcript, error) { return sessions.TranscriptAfter(s, after) }
+		if find := sessions.NeedleOf(q.Get("find")); find != "" && after <= 0 {
 			read = func(s sessions.Session) (sessions.Transcript, error) { return sessions.TranscriptAt(s, find) }
 		}
 		if sub := q.Get("sub"); sub != "" {
-			read = func(s sessions.Session) (sessions.Transcript, error) { return sessions.SubagentTranscript(s, sub) }
+			read = func(s sessions.Session) (sessions.Transcript, error) {
+				return sessions.SubagentTranscriptAfter(s, sub, after)
+			}
 		}
 		t, err := read(s)
 		if err != nil {
 			fail(rw, err)
 			return
+		}
+		// the first read of a long session counts its turns in the whole
+		// file, for the sheet's "turn i / N" (usrname1833 on Discord); a
+		// count that fails leaves N to what was read
+		if after <= 0 {
+			if sub := q.Get("sub"); sub != "" {
+				t, _ = sessions.SubagentCounted(s, sub, t)
+			} else {
+				t, _ = sessions.Counted(s, t)
+			}
 		}
 		writeJSON(rw, t)
 	})
@@ -336,9 +351,11 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 	// read from the agent's own file as transcript is: to the browser that
 	// asks (magpie web), which saves it itself, and, in the app, to
 	// Downloads.
+	// only=said keeps only what the user and the agent said, no thinking
+	// or tools (usrname1833 on Discord)
 	mux.HandleFunc("GET /api/sessions/markdown", func(rw http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		stem, md, err := sessionMarkdown(q.Get("agent"), q.Get("id"))
+		stem, md, err := sessionMarkdown(q.Get("agent"), q.Get("id"), keptOf(q.Get("only")))
 		if err != nil {
 			fail(rw, err)
 			return
@@ -349,7 +366,7 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 	})
 	mux.HandleFunc("POST /api/sessions/export", func(rw http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
-		stem, md, err := sessionMarkdown(q.Get("agent"), q.Get("id"))
+		stem, md, err := sessionMarkdown(q.Get("agent"), q.Get("id"), keptOf(q.Get("only")))
 		if err != nil {
 			fail(rw, err)
 			return
@@ -526,7 +543,16 @@ func sessionRoutes(mux *http.ServeMux, w Windows) {
 // transcript reads it: the agent of one that reaches this magpie through a
 // remote magpie ran on another machine, so there is no file of it here, and
 // its download was a 400 "no such session" (akic404 on Discord).
-func sessionMarkdown(agentID, id string) (stem string, md []byte, err error) {
+// keptOf is what an export's only= asks it to keep: "said", what the user
+// and the agent said; anything else, the whole conversation.
+func keptOf(only string) sessions.Kept {
+	if only == "said" {
+		return sessions.KeepSaid
+	}
+	return sessions.KeepAll
+}
+
+func sessionMarkdown(agentID, id string, keep sessions.Kept) (stem string, md []byte, err error) {
 	s, ok := sessions.Find(agentID, id)
 	var t sessions.Transcript
 	if !ok {
@@ -547,9 +573,9 @@ func sessionMarkdown(agentID, id string) (stem string, md []byte, err error) {
 	}
 	var b bytes.Buffer
 	if ok {
-		err = sessions.WriteMarkdown(&b, s, wslName(name, s))
+		err = sessions.WriteMarkdownKept(&b, s, wslName(name, s), keep)
 	} else {
-		err = sessions.WriteGatewayMarkdown(&b, s, name, t)
+		err = sessions.WriteGatewayMarkdownKept(&b, s, name, t, keep)
 	}
 	if err != nil {
 		return "", nil, err
@@ -564,7 +590,11 @@ func sessionMarkdown(agentID, id string) (stem string, md []byte, err error) {
 		}
 		return '-'
 	}, s.Agent+"-"+string(short))
-	return "magpie-session-" + safe, b.Bytes(), nil
+	stem = "magpie-session-" + safe
+	if keep == sessions.KeepSaid {
+		stem += "-messages"
+	}
+	return stem, b.Bytes(), nil
 }
 
 // wslName is an agent's name for a session it ran in a WSL distro, as the

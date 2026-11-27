@@ -2,10 +2,10 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
 const { fixture } = require("./fixtures/caller-keys.cjs");
-const { openPart } = require("./reader.cjs");
+const { openPart, watchSettingsReads, settingsDrawn } = require("./reader.cjs");
 
 // Settings › About's Report a problem copies the version, the system and
-// the architecture, says so, then opens the feedback post on X. What it
+// the architecture, says so, then opens the fork's issue form. What it
 // copied is never in the link (River_WLan on X).
 const words = {
   en: ["Report a problem", "Details copied. Paste them in your reply"],
@@ -32,8 +32,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.route("**/*", fixture(lang, "light", events));
         await page.route("**/api/feedback*", (r) => r.fulfill({ json: { text: block, url: post } }));
         await page.route("**/api/open", (r) => { events.push({ action: "open", body: r.request().postDataJSON() }); return r.fulfill({ status: 204 }); });
+        await watchSettingsReads(page);
         await page.goto("http://magpie.test/");
         await page.locator("#prefs").click();
+        await settingsDrawn(page);
         await openPart(page, "about");
         const row = page.locator("#about .row", { has: page.locator(".who", { hasText: words[lang][0] }) });
         await row.waitFor();
@@ -41,7 +43,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         await page.locator("#status", { hasText: words[lang][1] }).waitFor();
         assert.equal(events.find((e) => e.action === "clipboard").body.text, block);
         const opened = events.find((e) => e.action === "open");
-        assert.equal(opened.body.url, post);
+        assert.equal(opened.body.url, "https://github.com/mxyhi/token_proxy/issues/new");
         assert.equal(opened.body.url.includes(encodeURIComponent("magpie 0.1.9")), false);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "About wider than the window");
         assert.deepEqual(errors, []);

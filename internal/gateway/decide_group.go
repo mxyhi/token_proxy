@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/yetone/magpie/internal/access"
@@ -111,6 +112,17 @@ func (s *Server) serveDecisionGroup(w http.ResponseWriter, r *http.Request, body
 		writeError(w, provider.Chat, http.StatusServiceUnavailable, pausedError(asked, paused))
 		return
 	}
+	// a request with audio asks only the members that read it (#7790)
+	if audio, msg := systemOneAudio(body); msg != "" {
+		writeError(w, provider.Chat, http.StatusBadRequest, msg)
+		return
+	} else if audio {
+		ms = slices.DeleteFunc(slices.Clone(ms), func(m provider.Member) bool { return !(systemOneTarget{m.Provider, m.Model}).takesAudio() })
+		if len(ms) == 0 {
+			writeError(w, provider.Chat, http.StatusBadRequest, fmt.Sprintf("no decision model of the group %s can take audio: magpie's System One carries \"audio\" only to Google's gemini-decision-1 (and to another magpie). Add one to the group, or send the request without audio", g.Name))
+			return
+		}
+	}
 	cs, pl, ms := s.decideTries(g, ms)
 	if len(ms) == 0 {
 		writeError(w, provider.Chat, http.StatusNotFound, fmt.Sprintf("no decision model of the group %s can be asked now: their providers are switched off or gone", g.Name))
@@ -156,6 +168,13 @@ func (s *Server) serveDecisionGroup(w http.ResponseWriter, r *http.Request, body
 func (s *Server) decideKeys(p provider.Provider, model string) ([]candidate, planned) {
 	p.Fallback = nil
 	cs, pl := s.plan(p, model, provider.Chat)
+	// an OpenAI key's gpt-6-luna is asked at OpenAI's Decisions API
+	// (askClassifierIn): each of its keys there
+	for i := range cs {
+		if d, ok := cs[i].p.OpenAIDecider(cs[i].model); ok {
+			cs[i].p = d
+		}
+	}
 	// a key on another of its preset's plans is asked at that plan's
 	// endpoints, where there may be no System One (Volcengine's Coding
 	// Plan beside its pay as you go): never there
@@ -368,6 +387,53 @@ func (s *Server) askDecider(wait time.Duration, who access.Identity, p provider.
 	return s.askDecideTries(wait, cs, intents, prev, effort, text)
 }
 
+// decisionsUnserved reports whether OpenAI's Decisions API turned a call
+// to p away as one it doesn't serve the key at all, not for the key's
+// money or load: a request it can't read (400, 422), a key, project or
+// model it doesn't take there (403, 404, 405). The key's gpt-6-luna is
+// then asked through chat as it was before (askClassifierIn), and its
+// answer there lifts the rest the refusal put on the key (zyh6036 on
+// X: every Codex turn went to the group's first member, gpt-6-luna
+// itself, with no record of the classifier's calls).
+func decisionsUnserved(p provider.Provider, status int, body []byte) bool {
+	if p.DecideVia() != provider.ViaOpenAI {
+		return false
+	}
+	switch status {
+	case http.StatusBadRequest, http.StatusUnprocessableEntity, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed:
+		return !quotaWords.Match(wordsOf(body))
+	}
+	return false
+}
+
+// decisionsOff is when each OpenAI key Decisions didn't serve
+// (decisionsUnserved) is asked there again: until then its gpt-6-luna
+// is asked through chat, not first at a route that turns it away.
+var decisionsOff = struct {
+	sync.Mutex
+	until map[string]time.Time
+}{until: map[string]time.Time{}}
+
+// decisionsOffFor is how long a key Decisions didn't serve is asked
+// through chat.
+const decisionsOffFor = time.Hour
+
+func decisionsKey(p provider.Provider) string { return p.ID + "|" + provider.KeyID(p.Key) }
+
+// decisionsRefusedNow reports whether p's key is asked through chat for
+// now (decisionsOff).
+func decisionsRefusedNow(p provider.Provider) bool {
+	decisionsOff.Lock()
+	defer decisionsOff.Unlock()
+	return time.Now().Before(decisionsOff.until[decisionsKey(p)])
+}
+
+func noteDecisionsRefused(p provider.Provider) {
+	decisionsOff.Lock()
+	defer decisionsOff.Unlock()
+	decisionsOff.until[decisionsKey(p)] = time.Now().Add(decisionsOffFor)
+}
+
 // askDecideTries asks each of cs as Jev is (askJev) until one answers, the
 // one that failed resting as it would for a chat; the last one's error
 // when none does. Every try shares the one classifier's wait, as Settings
@@ -383,9 +449,16 @@ func (s *Server) askDecideTries(wait time.Duration, cs []candidate, intents []st
 		if ctx.Err() != nil {
 			break // the wait is spent: the rest are not asked, nor rested
 		}
-		if v, err = s.askJev(ctx, wait, c.p, c.model, intents, prev, effort, text); err == nil {
+		if v, err = s.askJev(context.WithValue(ctx, decideSeat{}, c), wait, c.p, c.model, intents, prev, effort, text); err == nil {
 			servedCandidate(c, 0)
 			return v, nil
+		}
+		if errors.As(err, new(intentFailed)) || errors.As(err, new(effortFailed)) {
+			// it answered, declining one question: the other's answer
+			// holds, and another key of the same model would be asked
+			// the same words
+			servedCandidate(c, 0)
+			return v, err
 		}
 		var refused decideRefused
 		var answer answerError

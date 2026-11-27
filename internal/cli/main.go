@@ -105,7 +105,7 @@ const usage = `Token Proxy — one place to pick every agent's model
                                   or only the models ticked for it, a new one off until it is ticked
   magpie search [add <api> <key>|rm <api>]   Tavily, Brave, Exa, Firecrawl, You.com, DeepSeek, Doubao Search (Volcengine), Yuanbao Search (Tencent Cloud), TinyFish or SearXNG for web search when no provider can search
   magpie groups                   routing groups: several models agents pick as one, group/<id>
-  magpie group add <name> models=<m1>,<m2> [routing=smart|order|rotate|usage|pace|weight|free|fast|cheap|drain|expiring|fit] [stays=auto|session|turn|off]
+  magpie group add <name> models=<m1>,<m2> [routing=smart|order|rotate|usage|pace|weight|free|fast|cheap|drain|pace-drain|expiring|fit] [stays=auto|session|turn|off]
   magpie group <id> | set <id> k=v… | rm <id>   show, change or remove one (magpie group help for more)
   magpie accounts [agent] [--json]  every subscription magpie knows, with each one's allowance used and when it resets
   magpie accounts add <agent>     sign in to one more Claude, ChatGPT or Google (Gemini CLI, Antigravity) subscription
@@ -154,7 +154,7 @@ const usage = `Token Proxy — one place to pick every agent's model
   magpie log [--path] [-n N] [-f]  where magpie's logs are, to send with a report: the app's (app.log), the service's; -n prints the app log's last N lines, -f follows it
   magpie gateway-key list|add <name> [--read-only]|rotate <id> [--key -]|remove <id>   manage the keys clients use to call a shared gateway
   magpie gateway-key limit <id> [list|off|reset [n]|remove <n>|[add] day|week|month|<N>d|<N>h --tokens N --cost USD --cache-reads --model openai/*]   a key's own limits, and what it used; --model counts only those models
-  magpie gateway-key models <id> [all|<provider>/<model>|<provider>/* ...]   the models a key may use, every one unless it names some
+  magpie gateway-key models <id> [all|none|<provider>/<model>|<provider>/* ...]   the models a key may use, every one unless it names some; none: MCP servers only
   magpie gateway-key accounts <id> [all|<provider>/<account>|<provider>/!<account>|@<group>|!@<group> ...]   the accounts a key may use, or keeps out
   magpie gateway-key groups [add <name> <account>...|set <group> <account>...|rename <group> <name>|remove <group>]   named account groups a key's accounts can name
   magpie gateway-key quotas <id> [on|off]   whether a key held to a budget, models or accounts is told the quotas of what it may use
@@ -543,6 +543,9 @@ func run(args []string) error {
 	// a Codex that reaches magpie for account failover alone is handed
 	// only its own models (#1385)
 	gateway.CodexOwnOnly = agent.CodexOwnOnly
+	// a Claude Code or Claude Desktop whose user turned its tool search
+	// off is given the router's tools on demand (#7349)
+	gateway.HubSearchOff = agent.HubSearchOff
 	// what magpie writes into an agent's TOML, YAML or dotenv config says
 	// so in a comment, for whoever reads it once magpie is gone
 	agent.MarkWritten()

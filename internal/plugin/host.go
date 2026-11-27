@@ -184,8 +184,10 @@ var (
 	frameOverhead = 2048
 	rpcReserve    = 64
 	// maxWireLine bounds one line the child writes: a frame's base64 is well
-	// under it, and so is any RPC result, so a child that never ends a line
-	// fails the host rather than making it allocate without bound.
+	// under it, so a child that never ends a line fails the host rather than
+	// making it allocate without bound. The child is told it at init
+	// (lineMax): an answer longer than it fails its own call there instead,
+	// and a gateway begin no hook changed sends no body back (#5699).
 	maxWireLine = 32 << 20
 	// streamWait is how long a fetch waits for a stream's window to come
 	// free when the budget's are all held, while its request lives. Past
@@ -541,6 +543,8 @@ var live = struct {
 	hosts map[*host]bool
 	// ended is set by EndHosts: no host starts after it
 	ended bool
+	// efficient puts running and newly started hosts in Windows' EcoQoS
+	efficient bool
 }{hosts: map[*host]bool{}}
 
 // errHostsEnded is a host asked for once EndHosts has run.
@@ -1166,6 +1170,9 @@ func startOn(ctx context.Context, bun string) (*host, bool, error) {
 		live.Unlock()
 		return nil, false, err
 	}
+	if live.efficient {
+		tree.SetEfficiencyMode(true)
+	}
 	hctx, hcancel := context.WithCancel(context.Background())
 	h := &host{
 		cmd: cmd, in: in,
@@ -1233,6 +1240,7 @@ func startOn(ctx context.Context, bun string) (*host, bool, error) {
 		"plugins":       items,
 		"loadMillis":    pluginLoadWait.Milliseconds(),
 		"listMillis":    pluginListWait.Milliseconds(),
+		"lineMax":       h.lineLimit(),
 		"heavy": map[string]any{
 			"mb":          heavyMB,
 			"afterMillis": heavyAfter.Milliseconds(),

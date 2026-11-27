@@ -89,7 +89,18 @@ func codexStandIn(path string) string {
 	return m
 }
 
-func codex(home string) *Agent { return codexIn(here(home)) }
+// codex is Codex on this machine. Cindy's bundled copy leaves files in
+// ~/.codex (its runs' tmp/arg0, the skills it links), so with only that
+// copy here the folder is Cindy's, no Codex to list (otherCopy, T_t__biu
+// on X); its row in the Library stays, as Cindy's copy reads ~/.codex's
+// AGENTS.md and skills (shared, sharedApp).
+func codex(home string) *Agent {
+	a := codexIn(here(home))
+	a.otherCopy = func() bool { return codexOnlyCindys(a, home) }
+	a.shared = a.Name
+	a.sharedApp = cindyCodexHere
+	return a
+}
 
 // The two notices magpie's multi-agent V1 setting (#141) can carry: Codex's
 // own features.multi_agent_v2 is on in the config magpie routes and takes the
@@ -466,14 +477,24 @@ func codexIn(at place) *Agent {
 		_, err := os.Stat(deskPath)
 		return errors.Is(err, fs.ErrNotExist)
 	}
-	// deskWanted: magpie is connected beside the ChatGPT sign-in (joined,
-	// or on one of magpie's models), not as Codex's provider, on this
-	// machine's Codex, and the Codex app reads this config. The CLI alone
-	// keeps asking the gateway for the list, which follows every change at
-	// once; a Codex here for account failover alone has no models of
-	// magpie's to show.
+	// deskWanted: this machine's Codex reaches magpie by the base URL
+	// beside its ChatGPT sign-in, not with magpie its provider, and the
+	// Codex app reads this config. That is every Codex the gateway hands
+	// magpie's models with its own (codexModels), joined, beside, or with
+	// no mark of either: a base URL the user wrote, or one whose mark the
+	// stash lost (wbssg0401 on X: the CLI and the threads from before had
+	// magpie's models, and the app's new conversation GPT alone, as the
+	// app shows its own presets for the built-in provider with no
+	// model_catalog_json). The CLI alone keeps asking the gateway for the
+	// list, which follows every change at once; a Codex here for account
+	// failover alone is handed its own models only (failingOver,
+	// CodexOwnOnly).
 	deskWanted := func() bool {
-		if at.spell != nil || asProvider() || !viaBase() || !(joined() || beside()) || !chatGPT() {
+		if at.spell != nil || asProvider() || !viaBase() || !chatGPT() {
+			return false
+		}
+		// failingOver's base URL, which failover takes out at the sync
+		if !wired() && stashShared()[at.key("codex.failover")] == "1" {
 			return false
 		}
 		for _, r := range codexReaders(at) {
@@ -1817,6 +1838,24 @@ func codexIn(at place) *Agent {
 		forgetValues(taken)
 		return was, nil
 	}
+	restoreOutOwn := func(own string) error {
+		mark := "codex.joined"
+		if stashShared()[at.key("codex.joined")] != "1" {
+			mark = "codex.beside"
+		}
+		if err := edit.DelTOMLTop(path, "model_provider", "model_catalog_json"); err != nil {
+			return err
+		}
+		if err := edit.SetTOMLTop(path,
+			edit.KV{Path: "openai_base_url", Value: at.codexURL()},
+			edit.KV{Path: "model", Value: own},
+		); err != nil {
+			return err
+		}
+		forget(at.key("codex.out"), at.key("codex.out_own"), at.key("codex.out_stand"))
+		stash(map[string]string{at.key(mark): "1"})
+		return settle()
+	}
 	set := func(v string) error {
 		if v == "" {
 			// a stray table of an older magpie's goes with a Disconnect
@@ -1955,25 +1994,18 @@ func codexIn(at place) *Agent {
 			return settle()
 		}
 		// joined, a model of Codex's own is picked beside magpie's, as in
-		// Codex's /model: it stays connected
-		if joined() && !api() && chatGPT() {
+		// Codex's /model: it stays connected; ending a takeover (Keep on
+		// ChatGPT) puts back the own model whether Codex was joined or beside
+		// its sign-in before the takeover
+		outOwn := asProvider() && stashShared()[at.key("codex.out")] == "1" && !out() && stashShared()[at.key("codex.out_own")] == v
+		if (joined() || outOwn) && !api() && chatGPT() {
 			// magpie made its provider for a used-up account (codex.out)
 			// and that no longer holds (kept on ChatGPT, or room again):
-			// back on the sign-in as Join leaves it. Only the model set
+			// back on the sign-in as it was before. Only the model set
 			// left magpie the provider of one of Codex's own for good
 			// (eddie.zhan on Discord, Always ChatGPT from the takeover)
 			if asProvider() && stashShared()[at.key("codex.out")] == "1" && !out() {
-				forget(at.key("codex.out"), at.key("codex.out_own"), at.key("codex.out_stand"))
-				if err := edit.DelTOMLTop(path, "model_provider", "model_catalog_json"); err != nil {
-					return err
-				}
-				if err := edit.SetTOMLTop(path,
-					edit.KV{Path: "openai_base_url", Value: at.codexURL()},
-					edit.KV{Path: "model", Value: v},
-				); err != nil {
-					return err
-				}
-				return settle()
+				return restoreOutOwn(v)
 			}
 			if err := edit.SetTOMLTop(path, edit.KV{Path: "model", Value: v}); err != nil {
 				return err
@@ -1993,6 +2025,27 @@ func codexIn(at place) *Agent {
 			return err
 		}
 		return settle()
+	}
+	// takeOverOwn moves Codex off its held ChatGPT account onto magpie as its
+	// provider when Codex is on one of its own models beside the sign-in
+	// (joined, or beside after Codex switched back to an own model in
+	// config.toml): onto codex/<m> when magpie serves it while out, else onto
+	// another provider's model so the Codex app still sends.
+	takeOverOwn := func(m string) (bool, error) {
+		if isMagpie(m) || api() || !chatGPT() || !(joined() || beside()) || !outOn(m) {
+			return false, nil
+		}
+		if provider.CodexServesWhileOut(m) {
+			if id := codexOwnViaMagpie(m); id != "" {
+				stash(map[string]string{at.key("codex.out_own"): m})
+				return true, set(id)
+			}
+		}
+		if id := codexOtherModel(); id != "" {
+			stash(map[string]string{at.key("codex.out_own"): m, at.key("codex.out_stand"): id})
+			return true, set(id)
+		}
+		return false, nil
 	}
 
 	a := atomic(&Agent{
@@ -2218,38 +2271,19 @@ func codexIn(at place) *Agent {
 				return set(m)
 			}
 			// the ChatGPT account ran out on one of Codex's own models,
-			// joined beside the sign-in (MasterYi on Discord: the Codex
-			// app greyed Send, a magpie model's turn too), as in #540
-			// below: magpie becomes Codex's provider on that model as
-			// magpie serves it, the one picked kept (codex.out_own) to go
-			// back to once the account has room. One magpie serves on no
-			// account of its own is left as it is, and so is one magpie
-			// could serve on that same account alone, with no fallback
-			// and no other account (provider.CodexServesWhileOut): every
-			// turn would be refused there too, and the takeover only hid
-			// the account and its reset and restarted the app twice
-			// (xiaoq6285 on Discord, one Plus account)
-			if m := get("model"); !isMagpie(m) && !api() && chatGPT() && joined() && out() && provider.CodexServesWhileOut(m) {
-				if id := codexOwnViaMagpie(m); id != "" {
-					stash(map[string]string{at.key("codex.out_own"): m})
-					return set(id)
-				}
-			}
-			// magpie can't serve the model picked on that account, but the
-			// Codex app greys Send for every model while the account is
-			// out (shamen, chenhan, xiaoq6285 on Discord): with a model of
-			// magpie's on no account of the held one, magpie becomes
-			// Codex's provider on that one so the user can send at all.
-			// This reverses f37742e14, which left Codex on its sign-in to
-			// keep the account's menu: a grey Send for every model costs
-			// more. Once per held/unheld transition: on the stand-in the
-			// model is magpie's, so the branch is not met again; the
-			// stand-in is kept (codex.out_stand) for the way back below.
-			if m := get("model"); !isMagpie(m) && !api() && chatGPT() && joined() && out() && !provider.CodexServesWhileOut(m) {
-				if id := codexOtherModel(); id != "" {
-					stash(map[string]string{at.key("codex.out_own"): m, at.key("codex.out_stand"): id})
-					return set(id)
-				}
+			// wired beside the sign-in (joined, or beside after Codex
+			// switched back to its own model; MasterYi on Discord: the Codex
+			// app greyed Send, a magpie model's turn too), as in #540 below:
+			// magpie becomes Codex's provider on that model as magpie serves
+			// it, the one picked kept (codex.out_own) to go back to once the
+			// account has room. When magpie can't serve that model while out
+			// (no fallback and no other account, or the model isn't listed on
+			// Codex in magpie), magpie becomes Codex's provider on another
+			// provider's model (codexOtherModel) so the user can send at all
+			// (shamen, chenhan, xiaoq6285 on Discord); with none in magpie,
+			// Codex stays on its sign-in.
+			if took, err := takeOverOwn(get("model")); took || err != nil {
+				return err
 			}
 			// put back before #540's way back, which would take
 			// codex/<model> for a magpie model picked beside the sign-in
@@ -2268,20 +2302,9 @@ func codexIn(at place) *Agent {
 					// disconnect): that stands
 					forget(at.key("codex.out_own"), at.key("codex.out_stand"))
 				case ending:
-					// back beside the sign-in on the one picked, as Join
-					// leaves it: Codex's own sign-in, magpie's models joined
-					forget(at.key("codex.out_own"), at.key("codex.out"), at.key("codex.out_stand"))
-					if err := edit.DelTOMLTop(path, "model_provider", "model_catalog_json"); err != nil {
-						return err
-					}
-					if err := edit.SetTOMLTop(path,
-						edit.KV{Path: "openai_base_url", Value: at.codexURL()},
-						edit.KV{Path: "model", Value: own},
-					); err != nil {
-						return err
-					}
-					stash(map[string]string{at.key("codex.joined"): "1"})
-					return settle()
+					// back beside the sign-in on the one picked, keeping
+					// joined or beside as it was before the takeover
+					return restoreOutOwn(own)
 				}
 			}
 			// the ChatGPT account ran out (of its allowance and its
@@ -2629,8 +2652,15 @@ func codexIn(at place) *Agent {
 					}
 					stash(map[string]string{at.key("codex.login"): v})
 					m := get("model")
+					own := stashShared()[at.key("codex.out_own")]
 					switch {
-					case v != "api" && codexOwnOf(m) != "":
+					case v != "api" && !out() && asProvider() && stashShared()[at.key("codex.out")] == "1" && own != "" &&
+						(codexOwnOf(m) == own || m == stashShared()[at.key("codex.out_stand")]):
+						// ending a takeover (Keep on ChatGPT): put back the
+						// own model it replaced, whether codex/<model> or a
+						// stand-in model
+						return set(own)
+					case v != "api" && !out() && codexOwnOf(m) != "":
 						// back beside the sign-in, Codex's own model goes to
 						// OpenAI itself again, not by a hop through magpie
 						return set(codexOwnOf(m))
@@ -2640,6 +2670,9 @@ func codexIn(at place) *Agent {
 						// magpie API on one of Codex's own models: wired as
 						// for magpie's, so its models are in Codex's picker
 						return set(m)
+					case v == "":
+						_, err := takeOverOwn(m)
+						return err
 					}
 					return nil
 				},

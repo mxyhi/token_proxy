@@ -132,6 +132,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		ModelCompacts:        map[string]int{"p/*": 500000},
 		CompactAt:            400000,
 		AgentCompacts:        map[string]settings.AgentCompact{"claude": {At: 600000}},
+		AgentCompactPcts:     map[string]int{"claude": 65},
 		AgentContexts:        map[string]map[string]int{"dsh": {"p/m": 400000}},
 		ModelPrices:          map[string]settings.ModelPrice{"p/m": {Input: &one, Output: &two}},
 		ModelWires:           map[string]string{"p/m": "vendor-c/m"},
@@ -157,6 +158,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		AllowIPs:             []string{"203.0.113.7"},
 		FetchPrivate:         []string{"nas.lan"},
 		GitHubToken:          "ghp_kept",
+		HideRequestText:      true,
 		RequestArchive:       true,
 		RequestArchiveMaxMB:  64,
 		RequestArchiveMB:     2048,
@@ -192,6 +194,8 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		CodexAutoReset:       []string{"me@example.com"},
 		CodexAutoResetOnly:   map[string]string{"me@example.com": "expiring"},
 		CodexResetLead:       180,
+		CodexResetDaysLeast:  1,
+		CodexResetDaysMost:   7,
 		CodexNoCredits:       []string{"me@example.com"},
 		CodexCreditsLast:     []string{"two@example.com"},
 		CodexCreditsFirst:    []string{"three@example.com"},
@@ -245,6 +249,9 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.ImageResolution = "4K"                        // Settings > Images' Resolution row, sent by that row alone
 	was.RedactModelDir = "/Volumes/models"            // Privacy's Advanced › models folder, moved by its own route
 	was.Name = "Tokyo box"                            // Network and sharing's Advanced › Name, sent by its own row alone
+	was.TimeZone = "Asia/Tokyo"                       // Settings > Usage's Advanced › Time zone, sent by its own row alone
+	gpuOn := true
+	was.GPURendering = &gpuOn // Settings > General's Advanced › GPU rendering, sent by that row alone
 	// Settings > Usage's Bark row has its own route (settings/bark)
 	was.BarkServer, was.BarkKey, was.BarkDaily = "https://bark.example.com", "kept", "21:30"
 	// the Routing groups page's defaults for every group (groups/defaults)

@@ -1,6 +1,6 @@
 # magpie
 
-> magpie is a free, open-source (MIT) desktop app for macOS, Windows and Linux that lets every AI coding agent use every model. Add a provider once (DeepSeek, Kimi, GLM, Qwen, MiniMax, OpenRouter, Ollama, or the Claude and ChatGPT subscriptions you already pay for), then pick it in Codex, Claude Code, Gemini CLI or any other agent. It runs a local gateway that speaks the OpenAI, Anthropic and Gemini APIs and translates between them, with streaming, tool calls and reasoning intact.
+> magpie is a free, open-source (MIT) desktop app for macOS, Windows and Linux that lets every AI agent use every model. Add a provider once (DeepSeek, Kimi, GLM, Qwen, MiniMax, OpenRouter, Ollama, or the Claude and ChatGPT subscriptions you already pay for), then pick it in Codex, Claude Code, Gemini CLI or any other agent. It runs a local gateway that speaks the OpenAI, Anthropic and Gemini APIs and translates between them, with streaming, tool calls and reasoning intact.
 
 magpie lives in the menu bar (tray on Windows and Linux), with a full window, a TUI and a CLI. The Mac download is about 50 MB, built on the system WebView (no Electron). It is signed and notarised on macOS and updates itself.
 
@@ -124,6 +124,7 @@ A group is several models, from one provider or many, that an agent picks as one
 | Smart `smart` | The default. Over the members’ accounts and keys together (a group in the group as one, see below): of the subscriptions with quota to spare, the one whose allowance renews soonest. The week decides; an account with five hours and no week (Claude Enterprise) goes by its five hours, so ahead of every week renewing later. Credits with no reset (WorkBuddy’s packages, each ending on its own day) count as renewing when the soonest of those left run out, so the WorkBuddy account whose credits end first goes first; accounts renewing together (free ones at the month’s end) go by whose credits left end first after that. One resting after a failure goes last. |
 | In order `order` | The first model until it can’t answer, then the next. |
 | Until used up `drain` | One account or key until it is used up, then the next, which keeps the requests: one before it that renews meanwhile doesn’t take them back. One rate limited or failing is passed over only while it rests. |
+| Before expiry, one by one `pace-drain` | The account with the most of its allowance left per hour until it is lost, as Use before expiry picks it, takes every request until it is used up or fails; then the next is picked the same way. One picked keeps the requests while its pace falls below another’s, and one that renews meanwhile doesn’t take them back. |
 | In turn `rotate` | Each message you send goes to the next member’s account or key; the agent’s tool calls for it stay on the same one. With Stays on Session, a whole conversation stays on one instead. |
 | Least used `usage` | The account or key with the most of its allowance left. |
 | Use before expiry `pace` | The account with the most of its week left per hour until it renews — the one with the most to lose at its reset — so less of each member’s week is lost at its reset; an account with five hours and no week (Claude Enterprise) by what its five hours have left per hour until they renew, so almost always first. Credits in an account that expire before it resets count too: those that expire first, per hour until they do, when that is the more (WorkBuddy’s check-in credits). One at 90% or more waits until the others can’t answer. A key by the tokens sent it lately. |
@@ -264,7 +265,7 @@ Deleted magpie already (the app in the Trash, the folder removed) and an agent s
 
 Installed, magpie keeps its settings, providers, usage and library in `~/.config/magpie` (`C:\Users\<you>\.config\magpie` on Windows). It backs them up by itself once a day, into `auto-backups` in that same folder, so a reinstalled system loses the backups too; Settings → Sync and backup says so under Backup folder. Click Change… there and pick a folder on another disk (`D:\magpie-backups`) or one a cloud drive syncs. After a reinstall, install magpie, pick the same folder there and Restore… the newest version. Backups hold no API keys; Sign-ins in backups adds subscription accounts and plugin sign-ins, sealed with a passphrase. To carry the keys too, sync to a WebDAV folder, an S3 bucket or a GitHub repository, sealed with a passphrase, in the same place.
 
-To keep magpie’s own files on that disk (an external SSD, say), click Move… beside Data folder in the same place and pick a folder there. magpie restarts, moves its files and cache into a folder named `magpie` inside it, and leaves a link where they were, so nothing else changes. Keep the disk connected: without it magpie won’t open until it is back. Move back brings them home. `magpie data move <folder>` does the same from a terminal.
+To keep magpie’s own files on that disk (an external SSD, say), click Move… beside Data folder in the same place and pick a folder there. magpie restarts, moves its files and cache into a folder named `magpie` inside it, and leaves a link where they were, so nothing else changes. Keep the disk connected: without it magpie won’t open until it is back. Move back brings them home. `magpie data move <folder>` does the same from a terminal. On Windows a folder can’t move while something runs from it, such as an MCP server an agent started: magpie names what does, and you quit those agents first.
 
 To keep everything on that disk, run magpie portable: put `magpie.exe` in a folder there with an empty folder named `data` beside it (`D:\magpie\magpie.exe` and `D:\magpie\data`). magpie then keeps everything in `data`, its caches and log too, and writes nothing of its own to your user folder; Settings → About → Config folder says Portable. Open it, and restore a backup into it as above. After a reinstall, open `D:\magpie\magpie.exe` again. The agents’ own configs (`~/.claude`, `~/.codex`…) stay where each agent reads them.
 
@@ -274,7 +275,7 @@ The app (its window, the menu bar or tray icon and the panel, however it was ope
 
 ### What does magpie send about me?
 
-Your prompts, replies, keys and accounts go only to the providers you use; magpie has no server of its own in the path. Once a day a released magpie tells us it is in use, so we know how many people use it and what to look after first: a random id made up on your computer, magpie’s version and your system, and which agents, providers and models it is used with, by magpie’s own ids (`claude`, `deepseek`, `deepseek/deepseek-v4`) with how many of each. A provider you added yourself, and a model on it, is only `custom`. For each partner listed first in the add sheet, how many times a day it was shown, opened and added from goes with them, as counts only. No names, base URLs, accounts, keys, prompts or usage are sent. Settings → Privacy → Share the agents, providers, models and plugins I use leaves out the agents, providers and models, the partner counts and which of Discover’s plugins are installed and which of the Library market’s MCP servers are used (for their counts of who uses and likes each); Count me as a user, `DO_NOT_TRACK=1` or `MAGPIE_NO_STATS=1` turns it all off. Builds from source never send it. A partner's website and key-page links go through `usemagpie.ai/go/…`, which counts the click (the partner, which link, and a country) before sending you on, and usemagpie.ai counts how many times the partner list is fetched. The server sees these whatever the settings say, as any website sees its visits; no id, address or account is kept with them. Icons named by a plugin, an import link or the library are fetched through `usemagpie.ai/api/icon`, so their hosts see Cloudflare's address, not yours; the server only passes the picture on, and counts and keeps nothing. The [Privacy page](https://usemagpie.ai/docs/privacy) lists everything magpie sends by itself, with an example of the daily count, the files it keeps and every switch.
+Your prompts, replies, keys and accounts go only to the providers you use; magpie has no server of its own in the path. Once a day a released magpie tells us it is in use, so we know how many people use it and what to look after first: a random id made up on your computer, magpie’s version and your system, and which agents, providers and models it is used with, by magpie’s own ids (`claude`, `deepseek`, `deepseek/deepseek-v4`) with how many of each. A provider you added yourself, and a model on it, is only `custom`. For each partner listed first in the add sheet, how many times a day it was shown, opened and added from goes with them, as counts only. No names, base URLs, accounts, keys, prompts or usage are sent. Settings → Privacy → Share the agents, providers, models and plugins I use leaves out the agents, providers and models, the partner counts and which of Discover’s plugins are installed and which of the Library market’s MCP servers are used, and which routing groups shared on usemagpie.ai were imported, by their share ids (for their counts of who uses and likes each); Count me as a user, `DO_NOT_TRACK=1` or `MAGPIE_NO_STATS=1` turns it all off. Builds from source never send it. A partner's website and key-page links go through `usemagpie.ai/go/…`, which counts the click (the partner, which link, and a country) before sending you on, and usemagpie.ai counts how many times the partner list is fetched. The server sees these whatever the settings say, as any website sees its visits; no id, address or account is kept with them. Icons named by a plugin, an import link or the library are fetched through `usemagpie.ai/api/icon`, so their hosts see Cloudflare's address, not yours; the server only passes the picture on, and counts and keeps nothing. A routing group you share goes to usemagpie.ai, with each version after, until you stop sharing it; a provider you added yourself is named only `custom` in it, and no key goes. The [Privacy page](https://usemagpie.ai/docs/privacy) lists everything magpie sends by itself, with an example of the daily count, the files it keeps and every switch.
 
 ### The agent gets 502 or can’t connect, and nothing shows in magpie’s Routing tab?
 
@@ -717,7 +718,7 @@ Using Claude Code or Codex too? See [Models in Claude Code](https://usemagpie.ai
 
 Source: https://usemagpie.ai/docs/subscriptions
 
-# Use your Claude Pro/Max, ChatGPT Plus/Pro or GitHub Copilot subscription in any coding agent
+# Use your Claude Pro/Max, ChatGPT Plus/Pro or GitHub Copilot subscription in any agent
 
 Sign in to a subscription once, in magpie. Its models then show in every agent magpie sets up: GPT models from your ChatGPT plan in Claude Code, Claude models from your Claude plan in Codex or OpenCode, Copilot’s models in any of them. No API key.
 
@@ -1177,7 +1178,7 @@ Source: https://usemagpie.ai/docs/alternatives
 
 # magpie, CC Switch and Claude Code Router compared
 
-magpie, [CC Switch](https://github.com/farion1231/cc-switch) and [Claude Code Router](https://github.com/musistudio/claude-code-router) (CCR) all help you run AI coding agents on the providers and models you choose. They overlap, and each is good at something. This page puts them side by side, using each project’s own README for the other two and magpie’s source for magpie.
+magpie, [CC Switch](https://github.com/farion1231/cc-switch) and [Claude Code Router](https://github.com/musistudio/claude-code-router) (CCR) all help you run AI agents on the providers and models you choose. They overlap, and each is good at something. This page puts them side by side, using each project’s own README for the other two and magpie’s source for magpie.
 
 ### CC Switch
 
@@ -3538,10 +3539,10 @@ A real request through a group with two intent rules (“a quick question or exp
 
 ## What the classifier sees
 
-This is the whole request, and nothing else is sent. The system message is fixed. The user message lists your intents in rule order, as they were collected in step 2:
+This is the whole request, and nothing else is sent. The system message is magpie’s, unless the group has its own instructions (below). The user message lists your intents in rule order, as they were collected in step 2:
 
 ```
-You route a user's message to a coding assistant by what it asks for. Given numbered kinds of request and the user's message, answer with the number of the kind the message is, or 0 if it is none of them. Answer with the number only.
+You sort a user's message, sent to an AI assistant, into one of several kinds. Given numbered kinds and the user's message, answer with the number of the kind that fits the message best. The kinds may be topics, or levels such as how hard or how big a request is; when they are levels, every message has one, a greeting or a question about the assistant included. Answer 0 only when the message is plainly none of the kinds. Answer with the number only.
 ```
 
 ```
@@ -3554,7 +3555,7 @@ The user's message:
 Write unit tests for the parseTokens function and fix any that fail.
 </message>
 
-The number of its kind (0 for none):
+The number of the kind that fits it best (0 only if none does):
 ```
 
 - **Only your latest message..** magpie sends the text parts of the last user message and nothing else: no earlier turns, no system prompt, no tool definitions, no files.
@@ -3562,6 +3563,18 @@ The number of its kind (0 for none):
 - **Agent reminders are removed..** `<system-reminder>…</system-reminder>` blocks, which Claude Code adds to your message, are stripped. Other text an agent puts in the same message is kept.
 - **Long messages are shortened..** Over 4,000 characters, magpie keeps the first 3,000 and the last 1,000, joined by `…`. The start and the end usually say what is being asked.
 - **The request settings..** An OpenAI-style chat completion, not streamed, with `temperature 0`, `max_tokens 2048` and User-Agent `magpie-router/1`. When magpie knows the classifier’s reasoning levels, it asks for the least: `none` if the model has it, else its lowest level (for example `low`). When the levels aren’t known, nothing is sent and the vendor’s default applies. magpie translates it for the classifier’s provider, like any other request, so an Anthropic, Gemini or other model works too.
+
+### Your own instructions
+
+When magpie’s system message leads the classifier the wrong way for your intents, give the group its own. In the group’s editor, open Advanced and write them in Classifier prompt (shown once a rule has an intent), or run `magpie group set <group> classify-prompt="…"`. They take the place of magpie’s instructions, and magpie adds only how to answer:
+
+```
+<your instructions>
+
+The user's message comes with numbered kinds. Answer with the number of the kind the message is by the instructions above, or 0 when it is none of them. Answer with the number only.
+```
+
+The intents are still listed by number, and the user message ends with `The number of its kind (0 for none):`. A decision model (Jev) is asked by your instructions too. Up to 4,000 characters; empty brings magpie’s back. A change asks the classifier again rather than reusing an answer given under the old instructions, and the instructions go with the group when you share it.
 
 ## When it can’t say
 
@@ -4668,7 +4681,7 @@ The catalog lists a model at each of its reasoning levels, so the app’s own pi
 
 On a gateway, Antigravity uses no Google sign-in and its backend asks Google for nothing. What Google turns on for your account, its experiments and commands such as `/boost`, `/teamwork`, `/plugin` and `/generative_ui`, is gone while it is on magpie. Taking the row off magpie gives it back.
 
-The models your own sign-in gave the app leave its picker too. To have them back on magpie, sign the same Google account in under magpie’s Antigravity subscription in the Providers tab: its models are then in the app’s list, served on that account’s quota, beside any other Google account you add there.
+The models your own sign-in gave the app leave its picker too. To have them back beside magpie’s, install Antigravity (local agy CLI) from Plugins (`magpie plugin add @magpie-community/opencode-agy-cli-auth`). It runs the agy you installed and signed in to, so your account’s models are in the app’s list next to every other model in magpie, and Google sees agy’s own requests. Signing a Google account in to magpie’s Antigravity subscription is retired: Google bans accounts used that way ([Subscriptions](https://usemagpie.ai/docs/subscriptions)).
 
 ## The agy CLI
 
@@ -5457,7 +5470,7 @@ Platform custom (OpenAI-compatible), at http://127.0.0.1:3425/v1, or the gateway
 
 magpie lists AionUi once it has run on this computer. Open AionUi once, then look again.
 
-More desktop apps on the same models: [Every model in Cherry Studio, through magpie](https://usemagpie.ai/docs/cherry-studio) and [AstrBot on any model](https://usemagpie.ai/docs/astrbot). Using coding agents too? See [Subscriptions in any agent](https://usemagpie.ai/docs/subscriptions). Something fails? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
+More desktop apps on the same models: [Every model in Cherry Studio, through magpie](https://usemagpie.ai/docs/cherry-studio) and [AstrBot on any model](https://usemagpie.ai/docs/astrbot). Using other agents too? See [Subscriptions in any agent](https://usemagpie.ai/docs/subscriptions). Something fails? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
 
 ---
 
@@ -8666,7 +8679,7 @@ Once Cherry Studio has a provider at the gateway’s address, the row shows magp
 
 ## Usage and keys
 
-On a gateway that isn’t shared, the key in the link is Cherry Studio’s own, so its requests are counted as Cherry Studio’s in magpie’s Usage, apart from your coding agents. When the gateway is shared on your network with gateway keys, the link carries a key that works there.
+On a gateway that isn’t shared, the key in the link is Cherry Studio’s own, so its requests are counted as Cherry Studio’s in magpie’s Usage, apart from your other agents. When the gateway is shared on your network with gateway keys, the link carries a key that works there.
 
 ## FAQ
 
@@ -8690,7 +8703,7 @@ Cherry Studio shows models you added to the provider. Fetch the magpie provider�
 
 magpie lists it once Cherry Studio has run on this computer. Open Cherry Studio once, then look again.
 
-Another desktop app on the same models: [AionUi on any model](https://usemagpie.ai/docs/aionui). Using a coding agent too? See [Subscriptions in any agent](https://usemagpie.ai/docs/subscriptions) and [Get started](https://usemagpie.ai/docs/start). Something fails? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
+Another desktop app on the same models: [AionUi on any model](https://usemagpie.ai/docs/aionui). Using other agents too? See [Subscriptions in any agent](https://usemagpie.ai/docs/subscriptions) and [Get started](https://usemagpie.ai/docs/start). Something fails? See [Fixing common errors](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
 
 ---
 
@@ -8714,6 +8727,8 @@ Every request is listed on magpie’s Routing page, with which provider and acco
 | --- | --- | --- |
 | model disabled | You turned the model off in magpie. | Turn it on again on its provider. |
 | model not allowed for the gateway key | The gateway key is held to some models. | `magpie gateway-key models <id>` lists or changes them. |
+| gateway_key_mcp_only | The gateway key is for MCP servers only: it may use no model. | `magpie gateway-key models <id> all`, or pick its models in Gateway › Gateway keys. |
+| gateway_key_no_mcp | The gateway key is for models only: it may use no MCP server. | `magpie gateway-key mcp <id> all`, or pick its MCP servers in the key’s ⋯ menu. |
 | magpie doesn’t answer the web page … | A web page called the gateway from a browser. | List it in Settings › Network and sharing › Web pages, and send a gateway key. |
 
 ## 429 and rest periods
@@ -9056,7 +9071,7 @@ Stays decides whether a conversation stays with the account or key that answered
 
 A routing group puts models from different providers together: Opus from a Claude subscription and from Copilot, say, or several free models. An agent picks `group/<id>` as its model, and magpie sends each request as the group's routing and rules say. Groups are under Routing groups on the Routing page; New group makes one.
 
-1. **magpie finds groups by itself.** A model two or more of your providers serve becomes a group of them (auto-<model>), with nothing to set. Switch off Find groups on their own if you don't want them.
+1. **magpie finds groups by itself.** A model two or more of your providers serve becomes a group of them (auto-<model>), with nothing to set. Switch off Find groups on their own if you don't want them. For a group of a model only one provider serves, so agents keep the name when a second one comes, turn on Groups of one provider under Advanced.
 2. **What goes in.** Any model as provider/model, another group (up to 8 deep), or a pattern: `openrouter/*:free` takes in free models the vendor adds later too. `free:` before a pattern keeps only the models the last catalog marks free, as in `free:workbuddy/*`: the vendor's flag, not a promise of no charge.
 3. **A group's routing.** Besides the ones above, a group can go By weight (each model's weight) or Manual (only the model you pick, with no failover).
 4. **Rules.** Which model a turn goes to first, by its length, an image, the reasoning asked for or the agent.
@@ -9110,7 +9125,7 @@ Yes. Make a routing group with DeepSeek and a fallback in order, routing In orde
 
 Stays is Auto by default: a conversation stays with its account while the cache is worth keeping, and always within a turn, so rotating doesn't lose the cache on every request.
 
-Related: [Use your Claude Pro/Max, ChatGPT Plus/Pro or GitHub Copilot subscription in any coding agent](https://usemagpie.ai/docs/subscriptions). Something fails? See [Fixing common errors: 401, 429, 502, 504 and more](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
+Related: [Use your Claude Pro/Max, ChatGPT Plus/Pro or GitHub Copilot subscription in any agent](https://usemagpie.ai/docs/subscriptions). Something fails? See [Fixing common errors: 401, 429, 502, 504 and more](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
 
 ---
 
@@ -9144,7 +9159,7 @@ curl http://127.0.0.1:3425/v1/magpie/quotas
 curl 'http://127.0.0.1:3425/v1/magpie/quotas/history?days=7&provider=codex'
 ```
 
-magpie's own skill `magpie-quota` lets an agent read `magpie quota --json` and wait with `magpie quota wait`. It is first in the Library's skills market.
+magpie's own skill `magpie-quota` lets an agent read `magpie quota --json` and wait with `magpie quota wait`. It is first in the Library's skills market. Beside it, `magpie-api` teaches an agent this API, and `/v1/models` and `/v1/magpie/route` (the model a routing group picked) too, for an agent that hands work out across models.
 
 ## Alerts
 
@@ -9178,11 +9193,13 @@ A Codex account that holds rate-limit resets says how many.
 ```
 magpie quota reset                 # spends one held reset; asks first
 magpie quota auto-reset on
+magpie quota auto-reset days 0-7
 magpie quota credits off
 ```
 
 - `magpie quota reset` spends one, starting the account's current windows again. It can't be undone, so it asks first; `--yes` doesn't.
 - `magpie quota auto-reset on` lets the account spend one by itself when its weekly window is used up and no other account can take a request, one a week at most (the five hours running out never does), and spend the one about to expire about half an hour before it does, if the account's windows have been used. Off until turned on.
+- `magpie quota auto-reset days 0-7` lets a reset be spent by itself only when it has 0 to 7 days left before it expires, counted from now (`3-` at least 3, `default` any); the soonest to expire in that range goes first, and one that never expires counts only with no most. Spending one by hand isn't held to it. Also in the Codex editor's Advanced, under Resets.
 - `magpie quota credits off` keeps a Codex account from spending its credits once a window is used up: routing holds it as used up and the request goes to the other accounts, groups and fallbacks. On, the default, lets the task go on.
 
 [Token usage and cost per agent](https://usemagpie.ai/docs/usage): what each agent, model, account and session spent, and a relay's real price.
@@ -9205,7 +9222,7 @@ magpie quota alert 80 has the magpie app notify when any window reaches 80% used
 
 Yes. magpie quota --json and GET http://127.0.0.1:3425/v1/magpie/quotas give the same; magpie's skill magpie-quota teaches an agent to read it and wait for allowance.
 
-Related: [Round robin and failover across accounts, keys and providers](https://usemagpie.ai/docs/routing-groups) and [Use your Claude Pro/Max, ChatGPT Plus/Pro or GitHub Copilot subscription in any coding agent](https://usemagpie.ai/docs/subscriptions). Something fails? See [Fixing common errors: 401, 429, 502, 504 and more](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
+Related: [Round robin and failover across accounts, keys and providers](https://usemagpie.ai/docs/routing-groups) and [Use your Claude Pro/Max, ChatGPT Plus/Pro or GitHub Copilot subscription in any agent](https://usemagpie.ai/docs/subscriptions). Something fails? See [Fixing common errors: 401, 429, 502, 504 and more](https://usemagpie.ai/docs/troubleshooting), or ask on [Discord](https://discord.gg/vGSnD3ZKQF).
 
 ---
 
@@ -10224,6 +10241,8 @@ Switching between the three keeps the others' settings and credentials for switc
 
 A change to an agent's model on one computer reaches the others. When sync changes one on a computer and you set it back there, that computer keeps its own: the others' picks no longer change it, and its picks stay there, while everything else keeps syncing. Kept on this computer lists those fields, and Follow the others takes the synced value again.
 
+Each computer can also keep its own provider settings, so only the providers' list and their keys sync: tick Sync only the providers' list and API keys under Advanced in the sync's form (or `magpie s3 set provider-settings-here=yes`). Providers added, removed or renamed, their keys and the URLs the keys go to still sync; each provider's settings, such as the models ticked, routing, limits, headers, the proxy and whether it is on, stay as this computer has them. A provider new here comes with the settings it was made with. Set it on each computer that keeps its own.
+
 ## Pick what syncs, preview, undo
 
 Under What syncs in the sync's form, untick what each computer should keep as its own: providers, settings, agents' models, the library or memory (profiles, usage and sign-ins are under Advanced). A part not ticked is neither sent nor taken: this computer keeps its own, and the server keeps the others'. Ticked again later, it is joined like a first sync, with this computer's copy kept in the sync folder first. Preview a sync lists what would come here and what would go to the server, item by item, before anything changes; Sync now there runs that sync only if nothing changed since. Undo the last sync puts back what the last sync brought in, on this computer only.
@@ -10632,7 +10651,7 @@ The computer you sit at still runs magpie: it wires that computer’s agents, pi
 ## 1. Share the main magpie
 
 1. **Turn on sharing.** On the computer that keeps your providers: Settings → Network and sharing → Share on local network → On. magpie then listens on the local network and makes a gateway key named Magpie. The Address row below the switch shows where other computers reach it, such as `http://192.168.1.20:3425`.
-2. **Make a key for each computer.** Gateway → Gateway keys, or `magpie gateway-key add "Laptop"`, which prints its `sk-magpie-key-…`. Each key can have its own daily, weekly or monthly limit and its own models, and its calls are counted under its name.
+2. **Make a key for each computer.** Gateway → Gateway keys, or `magpie gateway-key add "Laptop"`, which prints its `sk-magpie-key-…`. Each key can have its own daily, weekly or monthly limit and its own models, and its calls are counted under its name. A key for an MCP gateway can be given **No model** (`magpie gateway-key models <id> none`): it reaches the MCP servers and no model.
 
 While sharing is off, a desktop magpie listens on its own computer only, and other computers can’t reach it. A magpie in Docker is reached through its published port instead, and asks every caller outside its container for a gateway key, shared or not; see [Docker](https://usemagpie.ai/docs/docker#share).
 
@@ -11653,7 +11672,7 @@ Your `fetch` gets the same as `x-magpie-caller-agent`, `x-magpie-caller-name` an
 
 ### One account, by its id
 
-To test whether one account or key works, list them all and send a request pinned to one. `GET /v1/magpie/accounts` names every account and API key of every provider, whether or not its vendor tells a quota: its provider, `id` (a key’s is a fingerprint, never the key), `kind` (`account` or `key`), `label`, `on` and `pin`. No key or token is in it. `?provider=<id>` lists one provider’s. Send `pin` as `X-Magpie-Account` and only that account is tried: no routing, no failover, and its failure comes back as the vendor said it.
+To test whether one account or key works, list them all and send a request pinned to one. `GET /v1/magpie/accounts` names every account and API key of every provider, whether or not its vendor tells a quota: its provider, `id` (a key’s is a fingerprint, never the key), `kind` (`account` or `key`), `label`, `on` and `pin`. No key or token is in it. `?provider=<id>` lists one provider’s. Send `pin` as `X-Magpie-Account` and only that account is tried: no routing, no failover, and its failure comes back as the vendor said it. An account or key turned off (`on: false`) can be pinned too, to try it before turning it on: it takes that request alone, routing still leaves it out, and a failure doesn’t rest it. A gateway key held to models, accounts or limits gets 403 for one that is off.
 
 ```
 const base = "http://" + process.env.MAGPIE_ADDR
@@ -11665,6 +11684,15 @@ const res = await fetch(base + "/v1/chat/completions", {
     "x-magpie-account": encodeURIComponent(data[0].pin) },
   body: JSON.stringify({ model: "openai/gpt-5.5", messages: [{ role: "user", content: "ping" }] }),
 })
+```
+
+Add `?models=1` and each one also has `models`: the id of every model it can be asked for, its provider’s whole list. Agents are offered only the first 24 of a provider’s list when no models are picked; this list stops at none of them, and leaves out only what the account can’t be asked for (a model the user kept off that account, or one on none of the provider’s APIs). Ask each as `<provider>/<id>`, offered to agents or not: `openai/o4-mini`.
+
+Add `?models=full` instead and each of `models` is the model as `/v1/models` lists it, field for field: `id` (`<provider>/<id>`), `display_name`, `reasoning`, `reasoning_levels`, `context_window`, `max_output_tokens`, `modalities`, `pricing`, `magpie_label` and the rest, for the models `/v1/models` leaves out too. `?models=1` still gives ids.
+
+```
+const { data } = await (await fetch(base + "/v1/magpie/accounts?models=full")).json()
+// data[0].models: [{ id: "openai/o4-mini", display_name: "o4-mini", reasoning_levels: ["low", "medium", "high"], context_window: 200000, pricing: { prompt: "0.0000011", … }, … }, …]
 ```
 
 ## Sign-in state
@@ -12269,6 +12297,8 @@ With them go `magpie partner` events: for each partner listed first in the add s
 
 With that part on, magpie also tells `usemagpie.ai`, on the same day, which of the plugins Discover lists are installed and on, so Discover can say how many use each one: `POST /api/plugins/report` with the same random id and the plugins’ npm names, or `github:owner/repo` for a repository tagged `magpie-plugin` (at most 50). A plugin from a folder, a private repository or a package Discover doesn’t list is never named. The same report names the MCP servers in your Library that an agent is given and that the Library’s market lists from what ships with magpie, by their market ids only (`context7`, `io.github.owner/name`; at most 50), so the market can put the most used first; a server of your own, or one found only by a search, is never named, nor its address, command or keys. A like on a plugin’s page goes as `POST /api/plugins/like` with the id, the plugin and whether it is on, and only for a plugin installed here; the plugins you liked are kept in `plugin-likes.json`. The site counts the ids that reported a plugin in the last 7 days, drops a report after 30 days, and keeps your address only hashed, for an hour, to limit how often it is asked. Discover reads the counts from `GET /api/plugins/stats`, which carries no id. The code is [internal/stats/plugins.go](https://github.com/yetone/magpie/blob/main/internal/stats/plugins.go) and [site/pluginstats.js](https://github.com/yetone/magpie/blob/main/site/pluginstats.js).
 
+With that part on, and if you imported a routing group someone shared on `usemagpie.ai/groups`, magpie also tells the site, the same day, which of those you still have, so each one can show how many use it: `POST /api/groups/report` with the same random id and the shared groups’ ids (`usemagpie.ai/g/<id>`; at most 50). A group of your own, one imported from text, and the group’s name or members here never go. A computer that never imported one sends nothing. A like on a shared group goes as `POST /api/groups/like` with the id, the group and whether it is on. The site counts the ids that reported a group in the last 7 days and drops a report after 30. The code is [internal/groupshare/groupshare.go](https://github.com/yetone/magpie/blob/main/internal/groupshare/groupshare.go) and [site/groups.js](https://github.com/yetone/magpie/blob/main/site/groups.js).
+
 Every event carries `$process_person_profile: false`, so PostHog keeps no person profile for the id. No names, base URLs, accounts, keys, prompts, replies or usage are sent. A whole batch looks like this:
 
 ```
@@ -12305,7 +12335,7 @@ Each of these switches stops part or all of it:
 
 - Settings → Privacy → Count me as a user off, or `"noStats": true` in `settings.json` stops the whole daily count.
 - `DO_NOT_TRACK=1` or `MAGPIE_NO_STATS=1` in magpie’s environment (any value but empty, `0` or `false`) stops the whole daily count, whatever the settings say.
-- Settings → Privacy → Share the agents, providers, models and plugins I use off, or `"noUsageStats": true` leaves out the `magpie uses` and `magpie partner` events, the counts in `magpie active` and the plugin report; the id, version and system are still sent. Partner counts stop being kept too.
+- Settings → Privacy → Share the agents, providers, models and plugins I use off, or `"noUsageStats": true` leaves out the `magpie uses` and `magpie partner` events, the counts in `magpie active`, the plugin report and the shared groups report; the id, version and system are still sent. Partner counts stop being kept too.
 - Settings → About → Automatic updates off, or `"noAutoUpdate": true` stops magpie asking `usemagpie.ai` for a newer version by itself (it asks every 6 hours otherwise). This is not part of the count.
 
 A change in Settings takes effect at the next hourly look; no restart is needed. `settings.json` sits in magpie’s folder (see below):
@@ -12327,6 +12357,7 @@ A change in Settings takes effect at the next hourly look; no restart is needed.
 | `install-id` | The random id, made the first time the count is sent |
 | `stats-sent` | The last day (UTC) the count went, so a day is sent once |
 | `plugin-likes.json` | The plugins you liked in Discover |
+| `shared-groups.json` | The routing groups you shared (each one’s link, and the token that changes it), the ones you imported from a link and the version imported, and the shared groups you liked |
 | `partner-counts.json` (in the cache folder) | Partner counts not yet sent, at most 14 days |
 
 `install-id` and `stats-sent` are in magpie’s folder: `~/.config/magpie` on macOS and Linux, `%USERPROFILE%\.config\magpie` on Windows, `$XDG_CONFIG_HOME/magpie` when that is set, and the data folder of a portable magpie. `partner-counts.json` is in `~/.cache/magpie` (`$XDG_CACHE_HOME/magpie`, or `cache` in a portable magpie’s data folder). You can delete any of them: a deleted `install-id` is replaced by a new random one at the next send, so you are counted as a new user; with the count off, none of them is written again.
@@ -12345,6 +12376,7 @@ magpie asks its own site for a few things, whatever the privacy settings say, as
 - `/go/<partner>/site` and `/go/<partner>/keys`: a partner’s website and key-page links, opened in your browser, are counted (the partner, which link, a region, where it is listed, a country) as `magpie partner go` before you are sent on.
 - `/api/plugins/stats`: Discover’s counts of how many use and like each plugin, and the Library market’s of how many use each MCP server, at most once an hour. It carries no id; the plugin report and likes do, and go only with sharing what you use on.
 - `/api/shares`: only when you share an artifact (Work → Artifacts → Share…, or `magpie artifacts share`), its page, files, title and description go here, and so does each version an agent publishes to it after, until you stop sharing it or delete it, which takes it down. Anyone with its link, `usemagpie.ai/a/…`, opens it. The site keeps the shared version, a hash of the token that changes it, and, for an hour, a hash of your address, to hold each address to 30 shares and updates an hour. Nothing else magpie keeps is sent.
+- `/api/groups`: only when you share a routing group (Routing → a group’s menu → Share…, or `magpie group share`), the group goes here with the title, description and name you give it: its models by magpie’s ids, a provider you added yourself only as `custom`, its routing and rules, never a key, account, address or folder. Sharing it again puts a new version at the same link; Stop sharing takes it down. Anyone with its link, `usemagpie.ai/g/…`, opens it, and a listed one shows in the gallery. The site keeps the group, a hash of the token that changes it, and, for an hour, a hash of your address, to hold each address to 20 shares and updates an hour. Opening the gallery or a shared group’s preview fetches them from here. While you have a group imported from a link, the Routing page asks `/api/groups?ids=…`, with only the shared groups’ ids, at most once an hour, to say when an author shared a newer version.
 - `/api/icon?url=…`: icons named by a plugin, an import link or the library are fetched through it, so their hosts see Cloudflare’s address, not yours. The worker passes the picture on and counts and keeps nothing.
 
 The site’s own pages (these docs, the home page) carry Cloudflare Web Analytics and PostHog Web Analytics (`us.i.posthog.com`), without cookies. PostHog keeps a random visitor id in your browser’s local storage for this site, so a return visit counts as the same visitor. It gets each page’s address, the page that sent you, what you click on the page (not what you type), how fast the page and its requests loaded, errors the page hit, your browser, system and screen size, the country and city your address is in, and a recording of the visit (what the page showed, mouse moves, clicks and scrolls, its console messages) with every input box masked; nothing at all when your browser sends Do Not Track or Global Privacy Control. PostHog’s requests go through this site, under `usemagpie.ai/r/`, which passes them and your address on to PostHog and keeps the site’s cookies. Following a `/download` link, or fetching `install.sh`, sends PostHog a count of its own: which file, your country, and whether a browser or a command asked; no id and no address. The app doesn’t load either. The code is [site/worker.js](https://github.com/yetone/magpie/blob/main/site/worker.js).

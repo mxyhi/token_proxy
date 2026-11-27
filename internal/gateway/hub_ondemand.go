@@ -23,7 +23,8 @@ import (
 // them as xd:// devices named in a catalog, and Antigravity and agy, which
 // list an MCP tool by name only and read its schema file when it is called
 // for. Any other agent sends every
-// tool it is given, with its whole inputSchema, on every request, so past
+// tool it is given, with its whole inputSchema, on every request, and so
+// does one of those whose search the user turned off (HubSearchOff), so past
 // hubOnDemandOver tools it is given two in their place: find_tools, which
 // gives the tools that match what the model looks for with their
 // parameters, and call_tool, which runs one by name. find_tools' own
@@ -44,7 +45,9 @@ const (
 const hubOnDemandOver = 10
 
 // hubSearchesItself are the agents that load MCP tools only when searched
-// for, by their id without a WSL distro (claude@wsl:Ubuntu is claude).
+// for, by their id without a WSL distro or a profile (hubKindOf:
+// claude@wsl:Ubuntu, a Claude Code config folder's claude#work and omp's
+// profile omp#work are claude, claude and omp).
 // Droid (0.231) defers every MCP tool but GitHub's and agent-browser's to
 // its ToolSearch, which matches the names and descriptions it is given, and
 // omp (18.9) mounts every MCP tool as an xd:// device, its schema read only
@@ -59,6 +62,17 @@ const hubOnDemandOver = 10
 // their place it searched twice (izhidigua on X, 11-19).
 // The Library's Tools on demand row names them from HubFindsItself, so its
 // words can't leave one out again (they named four of the six, 11-18).
+// Cindy isn't one (T_t__biu on X, #7873, Cindy 0.1.146): the only runtime
+// of its own that reaches /mcp/magpie/hub/cindy is its Codex (codex-home's
+// config.toml; its Pi gets MCP servers only from Cindy's own database,
+// which magpie never writes, and its Claude Code reads ~/.claude.json,
+// hub/claude). That Codex defers MCP tools only for a model
+// whose catalog entry has supports_search_tool, and Cindy's catalog
+// (catalogWithModels in maker-host) copies the flag only for a GPT slug
+// that matches its own bundled catalog: a model of magpie's under any other
+// name gets the fallback entry, with no supports_search_tool, so Cindy's
+// Codex sends every tool whole on every request. find_tools and call_tool
+// are what keep those requests small.
 var hubSearchers = []string{"claude", "claude-desktop", "codex", "pi", "droid", "omp", "agy", "antigravity"}
 
 var hubSearchesItself = func() map[string]bool {
@@ -71,8 +85,11 @@ var hubSearchesItself = func() map[string]bool {
 
 // HubFindsItself is the agents given every tool whole because they search
 // their MCP tools themselves (hubSearchesItself), by id, in the order the
-// Library names them.
-func HubFindsItself() []string { return slices.Clone(hubSearchers) }
+// Library names them: one whose search the user turned off
+// (HubSearchOff) is given its tools on demand and isn't named.
+func HubFindsItself() []string {
+	return slices.DeleteFunc(slices.Clone(hubSearchers), hubSearchOff)
+}
 
 // HubOnDemandOver is hubOnDemandOver, for the Library to say.
 const HubOnDemandOver = hubOnDemandOver
@@ -112,11 +129,35 @@ func hubOnDemand(agent string, n int, asked bool) bool {
 	if (agent == "" && !asked) || n <= hubOnDemandOver {
 		return false
 	}
-	id, _, _ := strings.Cut(HubAgentOf(agent), "@")
-	if hubSearchesItself[id] {
+	if hubSearchesItself[hubKindOf(agent)] && !hubSearchOff(HubAgentOf(agent)) {
 		return false
 	}
 	return !settings.Shared().RouterAllTools
+}
+
+// HubSearchOff says whether an agent that searches its MCP tools itself
+// (hubSearchesItself), by its id, has that search turned off by the
+// user's own settings: a Claude Code with ENABLE_TOOL_SEARCH=false sends
+// every tool it is given whole on every request, as any other agent does,
+// so it is given them on demand (jjaychen1e on X, #7349: 89 tools, ~38K
+// tokens, on each request, and a Claude Code past 50 deferred tools on a
+// route that doesn't take them, whose loads change the tools mid-session,
+// is one the user can turn search off for). agent.HubSearchOff, set by
+// the cli; nil, every such agent searches.
+var HubSearchOff func(agent string) bool
+
+func hubSearchOff(agent string) bool { return HubSearchOff != nil && HubSearchOff(agent) }
+
+// hubKindOf is the agent a hub address's agent is one of: its id without
+// a project's key, a WSL distro or a profile. A profile is the same
+// program in a folder of its own (claude#work is Claude Code with
+// CLAUDE_CONFIG_DIR=~/.claude-work, omp#work omp's profiles/work), so it
+// searches its tools as the program does: read as an agent of its own,
+// each was given find_tools in place of the tools it searches itself.
+func hubKindOf(agent string) string {
+	id, _, _ := strings.Cut(HubAgentOf(agent), "@")
+	id, _, _ = strings.Cut(id, "#")
+	return id
 }
 
 // hubToolCount is how many tools ss have, as the instructions know them.

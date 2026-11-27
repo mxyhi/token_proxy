@@ -53,6 +53,12 @@ type Route struct {
 	// key (acezan on Discord). None for a request without one.
 	CallerKey     string `json:"callerKey,omitempty"`
 	CallerKeyName string `json:"callerKeyName,omitempty"`
+	// Client: the other computer the request came from (clientOf), by its
+	// address and its name when known; none for one made on this
+	// computer. The Routing page draws each computer's agent apart. The
+	// trace is told to this computer alone (gatewayTrace).
+	Client        string `json:"client,omitempty"`
+	ClientName    string `json:"clientName,omitempty"`
 	imageTurn     string
 	imageCaller   string
 	imageProvider string
@@ -411,6 +417,9 @@ type Weighed struct {
 	// share, CapBack when the last window at or past it renews
 	Capped  int        `json:"capped,omitempty"`
 	CapBack *time.Time `json:"capBack,omitempty"`
+	// CapTurn: held short of Capped, as its next turn is taken to spend
+	// this many points (nearCapHeld)
+	CapTurn float64 `json:"capTurn,omitempty"`
 	// CapAmount: held (Capped) at a window's fixed amount of its own unit
 	// rather than a share: CapCount of it used, in CapUnit
 	CapAmount float64 `json:"capAmount,omitempty"`
@@ -787,6 +796,7 @@ func (t *trace) changed() {
 // told it: one begun without (begin alone) is told to no held key.
 func (t *trace) beginFor(req *http.Request, r Route) *Route {
 	r.CallerKey, r.CallerKeyName = callerKeyOf(req.Context())
+	r.Client, r.ClientName = clientOf(req)
 	rt := t.begin(r)
 	noteRoute(req.Context(), rt)
 	return rt

@@ -72,10 +72,17 @@ type HubTool struct {
 // a server that keeps something per caller: Magpie Browser's tab, which
 // two agents behind one router would otherwise share, the router running
 // one `magpie mcp browser` for all of them.
+//
+// Base is the address a caller on another computer reaches the gateway
+// at (imageMCPBase: MAGPIE_PUBLIC_URL, else the Host it called), "" for
+// one on this computer: Magpie Artifacts' links are made at it, as a
+// link to 127.0.0.1 opens nowhere but here (#7890). It names an address
+// in an answer and decides nothing.
 type HubCaller struct {
 	Roots   []string
 	Client  string
 	Session string
+	Base    string
 }
 
 // The _meta keys a call of magpie's image server carries its caller in:
@@ -90,6 +97,9 @@ const (
 	// in (HubCaller.Session), to Magpie Browser and to another magpie's
 	// router, which passes it on as its own caller's
 	HubSessionMeta = "magpie/session"
+	// HubBaseMeta is the _meta key a call of Magpie Artifacts carries
+	// HubCaller.Base in, for a caller on another computer
+	HubBaseMeta = "magpie/base"
 )
 
 type hubCallerKey struct{}
@@ -126,6 +136,16 @@ type Hub interface {
 	// gives: the switch turned off, the server removed or edited, here or
 	// by another magpie (the window, the CLI)
 	Prune()
+	// Met is told of an agent that connected to its own address from
+	// another computer (hubMeet): one magpie knows that isn't on this
+	// computer is recorded, and given the servers on the first time
+	// (library/remote_agents.go)
+	Met(agent string)
+	// Version changes whenever a list the hub gives may have: a server
+	// added, edited, removed or ticked, the switch, a server's tools
+	// listed other than before. The hub's event stream (hubEvents) tells
+	// its clients their tools changed when it does.
+	Version() string
 }
 
 // HubServer is a server behind the hub as an agent is told of it: About
@@ -159,7 +179,8 @@ type HubServer struct {
 	// Program: the server is a program run on this computer, with the
 	// user's rights (a command, or a tools plugin), not an HTTP server
 	// elsewhere. A gateway key held to some models, accounts or a spend
-	// limit isn't given it from another computer.
+	// limit isn't given it from another computer; a key for MCP servers
+	// only, held to no model, is (hubVisitor).
 	Program bool
 	// Keyed: the server is Magpie Browser, whose browsers are each this
 	// computer's or a gateway key's (browser.go): given to this computer
@@ -219,7 +240,14 @@ func HubVisitorOf(ctx context.Context) HubVisitor {
 // hubVisitor is who r is from (HubVisitor).
 func hubVisitor(r *http.Request) HubVisitor {
 	away := !local(r) || hubFromPage(r)
-	v := HubVisitor{Away: away, Held: away && nativeHeld(access.Caller(r.Context()))}
+	held := access.Caller(r.Context())
+	if held.ModelsOff() {
+		// a key for MCP servers only (ifitscolorful on X) is held to no
+		// model, not to some: no limit of its models is there for a
+		// program to slip past, and its MCP list holds it to servers
+		held.Models = nil
+	}
+	v := HubVisitor{Away: away, Held: away && nativeHeld(held)}
 	if !local(r) && !hubFromPage(r) {
 		v.Key = access.Caller(r.Context()).KeyID
 		v.Memory = access.Caller(r.Context()).Memory
@@ -455,6 +483,12 @@ const errHubOff = "magpie's MCP hub is off, so it runs no server's tools: turn i
 
 func (s *Server) hubMCP(w http.ResponseWriter, r *http.Request) {
 	agent := r.PathValue("agent")
+	if r.Method == http.MethodGet && strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		if mcpServes(w, r, "magpie's MCP hub", hubServerName) {
+			s.hubEvents(w, r)
+		}
+		return
+	}
 	if r.Header.Get(RouterHeader) != "" {
 		r = r.WithContext(WithRouter(r.Context()))
 	}
@@ -765,7 +799,24 @@ func hubServersFor(ctx context.Context, agent string) []HubServer {
 	return hubServersOf(ctx, agent)
 }
 
+// hubMeet tells the Library of an agent on another computer that
+// connected to its own address (Hub.Met): a magpie in Docker has none of
+// the agents that use its router (bitxeno303 on X: DeepSeek Harness on
+// their own computer had no tools at /mcp/magpie/hub/dsh), and nothing
+// could be ticked for one. A request from this computer, a web page's, or
+// another magpie's router is no agent of another computer's.
+func hubMeet(r *http.Request, agent string) {
+	if agent == "" || MCPHub == nil || local(r) || hubFromPage(r) || FromRouter(r.Context()) {
+		return
+	}
+	MCPHub.Met(HubAgentOf(agent))
+}
+
 func (s *Server) hubMCPCall(r *http.Request, agent string, m mcpMessage) (any, map[string]any) {
+	switch m.Method {
+	case "initialize", "tools/list":
+		hubMeet(r, agent)
+	}
 	switch m.Method {
 	case "initialize":
 		say := "The tools of the MCP servers in magpie's Library that are switched on for this agent, each named <server>__<tool>. Add servers, or switch them on for an agent, in magpie's Library → MCP."
@@ -798,12 +849,16 @@ func (s *Server) hubMCPCall(r *http.Request, agent string, m mcpMessage) (any, m
 		}
 		return map[string]any{
 			"protocolVersion": mcpVersion(m),
-			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "magpie", "title": title, "version": Version},
-			"instructions":    say,
+			// logging: the servers' log lines are relayed during a call
+			// (hub_notes.go), at the level the client sets
+			"capabilities": map[string]any{"tools": map[string]any{"listChanged": true}, "logging": map[string]any{}},
+			"serverInfo":   map[string]any{"name": "magpie", "title": title, "version": Version},
+			"instructions": say,
 		}, nil
 	case "ping":
 		return map[string]any{}, nil
+	case "logging/setLevel":
+		return hubSetLevel(r, agent, m.Params)
 	case "tools/list":
 		ts := hubTools(r.Context(), agent)
 		where := hubWhere(r)
@@ -848,12 +903,22 @@ func (s *Server) hubMCPCall(r *http.Request, agent string, m mcpMessage) (any, m
 		switch p.Name {
 		case hubFindTool:
 			return hubFind(ts, p.Arguments, hubWhere(r)), nil
-		case hubCallTool:
-			return s.hubCallByName(r, agent, ts, p.Arguments, p.Meta), nil
 		case hubCodeTool:
 			if hubCodeOn(len(ts)) {
+				// its tools' log lines, not their progress: one token's
+				// progress only grows, and a script runs several tools
+				r, end := withHubRelay(r, agent, p.Meta.ProgressToken, false)
+				defer end()
 				return s.hubCodeRun(r, agent, ts, p.Arguments, p.Meta), nil
 			}
+		}
+		// the server's progress and log lines on this call's stream, for
+		// an agent that asked for them (hub_notes.go); ended before the
+		// result is written
+		r, end := withHubRelay(r, agent, p.Meta.ProgressToken, true)
+		defer end()
+		if p.Name == hubCallTool {
+			return s.hubCallByName(r, agent, ts, p.Arguments, p.Meta), nil
 		}
 		if t, ok := hubToolNamed(r.Context(), ts, agent, p.Name); ok {
 			return s.hubCall(r, agent, t, p.Arguments, p.Meta), nil
@@ -918,6 +983,9 @@ func (s *Server) hubCall(r *http.Request, agent string, t hubTool, args json.Raw
 	if t.Roots {
 		c.Roots, c.Client = hubRoots(r, meta), hubClient(r)
 	}
+	if !local(r) {
+		c.Base = imageMCPBase(r)
+	}
 	r = r.WithContext(WithHubCaller(r.Context(), c))
 	return s.hubMCPRun(r, agent, t, args)
 }
@@ -973,6 +1041,9 @@ func (s *Server) hubMCPRun(r *http.Request, agent string, t hubTool, args json.R
 // (the git repositories it works in, keyed by their folder).
 type hubCallMeta struct {
 	ThreadID string `json:"threadId"`
+	// ProgressToken is the agent's, for the server's progress on this
+	// call (hubRelay)
+	ProgressToken json.RawMessage `json:"progressToken"`
 	// Session is the caller's session as another magpie's router passed
 	// it on (HubSessionMeta)
 	Session string `json:"magpie/session"`

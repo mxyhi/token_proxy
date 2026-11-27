@@ -244,6 +244,17 @@ func closeDB(id string) {
 	}
 }
 
+// CloseDBs lets go of every open data.db. Windows can't remove a folder
+// while a file in it is open, so a test's folder needs this first.
+func CloseDBs() {
+	handlesMu.Lock()
+	defer handlesMu.Unlock()
+	for id, h := range handles {
+		h.Close()
+		delete(handles, id)
+	}
+}
+
 func unavailable(err error) error {
 	return &DBError{Code: "unavailable", Message: err.Error()}
 }
@@ -559,6 +570,8 @@ type Change struct {
 	Paths    []string
 	// Version, when set, is a new version published: no data changed
 	Version int
+	// Comments: the artifact's comments changed, and no data did
+	Comments bool
 }
 
 var (
@@ -892,26 +905,30 @@ const secretName = ".secret"
 var (
 	secretMu sync.Mutex
 	secret   []byte
+	// secretAt is the file secret was read from: the key is kept for the
+	// folder it belongs to, not for whatever Dir names next
+	secretAt string
 )
 
 // pageSecret is that key.
 func pageSecret() ([]byte, error) {
 	secretMu.Lock()
 	defer secretMu.Unlock()
-	if secret != nil {
+	p := filepath.Join(Dir(), secretName)
+	if secret != nil && secretAt == p {
 		return secret, nil
 	}
-	p := filepath.Join(Dir(), secretName)
+	secret = nil
 	if b, err := os.ReadFile(p); err == nil {
 		if k, err := hex.DecodeString(strings.TrimSpace(string(b))); err == nil && len(k) == 32 {
-			secret = k
+			secret, secretAt = k, p
 			return k, nil
 		}
 	}
 	defer lock()()
 	if b, err := os.ReadFile(p); err == nil {
 		if k, err := hex.DecodeString(strings.TrimSpace(string(b))); err == nil && len(k) == 32 {
-			secret = k
+			secret, secretAt = k, p
 			return k, nil
 		}
 	}
@@ -931,7 +948,7 @@ func pageSecret() ([]byte, error) {
 	if err := f.Close(); err != nil {
 		return nil, err
 	}
-	secret = k
+	secret, secretAt = k, p
 	return k, nil
 }
 

@@ -21,7 +21,7 @@ func artifacts(t *testing.T) http.Handler {
 	dir := t.TempDir()
 	was := artifact.Dir
 	artifact.Dir = func() string { return dir }
-	t.Cleanup(func() { artifact.Dir = was })
+	t.Cleanup(func() { artifact.CloseDBs(); artifact.Dir = was })
 	return lanGuard(New().Handler())
 }
 
@@ -166,7 +166,7 @@ func TestArtifactsPublishSaysWhy(t *testing.T) {
 func TestArtifactsMCPOnlyForAgentsHere(t *testing.T) {
 	h := artifacts(t)
 	list := `{"jsonrpc":"2.0","id":1,"method":"tools/list"}`
-	if m := readMCP(t, mcpPostTo(h, ArtifactsMCPPath, "127.0.0.1:50000", list)); len(m.Result.Tools) != 6 {
+	if m := readMCP(t, mcpPostTo(h, ArtifactsMCPPath, "127.0.0.1:50000", list)); len(m.Result.Tools) != 7 {
 		t.Fatalf("tools: %+v", m.Result.Tools)
 	}
 	for _, c := range []struct {
@@ -180,6 +180,34 @@ func TestArtifactsMCPOnlyForAgentsHere(t *testing.T) {
 	} {
 		if w := mcpPostTo(h, ArtifactsMCPPath, c.addr, list, c.hdr...); w.Code == 200 {
 			t.Errorf("%s was answered: %s", c.name, w.Body)
+		}
+	}
+}
+
+// An agent that defers MCP tools behind a search shows the server as the
+// start of its instructions only (Codex 0.172 cuts it near 250
+// characters), so what makes an agent publish a page it writes, and the
+// tool it searches for, are in that start.
+func TestArtifactsInstructionsLeadWithTheTrigger(t *testing.T) {
+	h := artifacts(t)
+	var m struct {
+		Result struct {
+			Instructions string `json:"instructions"`
+		} `json:"result"`
+	}
+	w := mcpPostTo(h, ArtifactsMCPPath, "127.0.0.1:50000", `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"codex-mcp-client","version":"0.172.0"}}}`)
+	if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+		t.Fatalf("%v: %s", err, w.Body)
+	}
+	head := m.Result.Instructions[:min(200, len(m.Result.Instructions))]
+	for _, want := range []string{artifactPublishTool, "HTML", "tool", "game", "app", "HTML file"} {
+		if !strings.Contains(head, want) {
+			t.Errorf("the first 200 characters don't say %q: %q", want, head)
+		}
+	}
+	for _, not := range []string{"magpie", "Magpie", "Codex", "Claude Code"} {
+		if strings.Contains(m.Result.Instructions, not) {
+			t.Errorf("the instructions name %q", not)
 		}
 	}
 }
@@ -268,7 +296,7 @@ func shareSite(t *testing.T) (puts func() int, up func() bool) {
 		defer mu.Unlock()
 		const id = "abcdefghijklmnop"
 		if r.Method != http.MethodPost && (!live || r.Header.Get("Authorization") != "Bearer tok") {
-			http.Error(w, `{"error":"no such share"}`, http.StatusNotFound)
+			http.Error(w, `{"error":"no such shared page: it was taken down"}`, http.StatusNotFound)
 			return
 		}
 		switch r.Method {
@@ -276,6 +304,9 @@ func shareSite(t *testing.T) (puts func() int, up func() bool) {
 			live = true
 			w.WriteHeader(http.StatusCreated)
 			w.Write([]byte(`{"id":"` + id + `","url":"https://usemagpie.ai/a/` + id + `","token":"tok","version":1}`))
+		case http.MethodGet:
+			// its assets (none)
+			w.Write([]byte(`{"blobs":[]}`))
 		case http.MethodPut:
 			n++
 			w.Write([]byte(`{"id":"` + id + `","url":"https://usemagpie.ai/a/` + id + `","version":2}`))
@@ -323,5 +354,39 @@ func TestArtifactsSharedFollowsPublish(t *testing.T) {
 		if b, _ := json.Marshal(tool.(map[string]any)["inputSchema"]); strings.Contains(string(b), "share") {
 			t.Fatalf("an agent can share: %s", b)
 		}
+	}
+}
+
+// The guide is a tool of its own, loaded with the server, read-only: it
+// gives the capabilities a list or a declaration names, and publish's
+// capabilities point an agent to it.
+func TestArtifactsGuideTool(t *testing.T) {
+	h := artifacts(t)
+	var guide, publish map[string]any
+	for _, x := range artifactsMCPTools() {
+		switch m := x.(map[string]any); m["name"] {
+		case artifactGuideTool:
+			guide = m
+		case artifactPublishTool:
+			publish = m
+		}
+	}
+	if guide == nil || guide["annotations"].(map[string]any)["readOnlyHint"] != true || guide["_meta"].(map[string]any)["anthropic/alwaysLoad"] != true {
+		t.Fatalf("the guide tool: %v", guide)
+	}
+	if b, _ := json.Marshal(publish["inputSchema"]); !strings.Contains(string(b), artifactGuideTool) || !strings.Contains(string(b), "view, interact, admin, owner, self") {
+		t.Fatalf("publish's capabilities don't name the guide or the levels: %s", b)
+	}
+	for _, args := range []map[string]any{{"capabilities": []string{"db"}}, {"capabilities": map[string]any{"db": map[string]any{}}}} {
+		said, isErr := artifactsCall(t, h, artifactGuideTool, args)
+		if isErr || !strings.Contains(said, "db.collection(") || strings.Contains(said, "\nsample: ") {
+			t.Fatalf("guide %v: %s", args, said)
+		}
+	}
+	if said, isErr := artifactsCall(t, h, artifactGuideTool, map[string]any{}); isErr || !strings.Contains(said, "\nsample: ") || !strings.Contains(said, "\nassets: ") {
+		t.Fatalf("the whole guide: %s", said)
+	}
+	if said, isErr := artifactsCall(t, h, artifactGuideTool, map[string]any{"capabilities": []string{"speech"}}); !isErr || !strings.Contains(said, "speech") {
+		t.Fatalf("speech: %v %s", isErr, said)
 	}
 }

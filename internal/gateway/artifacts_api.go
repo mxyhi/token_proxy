@@ -34,7 +34,7 @@ const (
 )
 
 // artifactAPICalls are the page runtime's POSTs, under <page>/_api/.
-var artifactAPICalls = []string{"db", "publish", "meta", "upload", "assets"}
+var artifactAPICalls = []string{"db", "publish", "meta", "upload", "assets", "sample", "comments"}
 
 // artifactAPICall: r is a page's call into its runtime's API, which
 // corsGuard lets through from Origin: null, as artifactPageRead lets its
@@ -171,7 +171,9 @@ func (s *Server) artifactDB(w http.ResponseWriter, r *http.Request) {
 		err = db.Delete(c.Path)
 	case "acquire":
 		var l *artifact.Lease
-		if l, err = db.Acquire(c.Path, c.Holder, time.Duration(c.TTLMs)*time.Millisecond, c.Data); err == nil {
+		// in milliseconds, held under an hour first so a huge one can't
+		// wrap round to a short or negative lease
+		if l, err = db.Acquire(c.Path, c.Holder, time.Duration(min(c.TTLMs, int64(time.Hour/time.Millisecond)))*time.Millisecond, c.Data); err == nil {
 			out = map[string]any{"lease": l}
 		}
 	default:
@@ -254,6 +256,9 @@ func (s *Server) artifactEvents(w http.ResponseWriter, r *http.Request) {
 				}
 				newest = c.Version
 				line = fmt.Sprintf("data: {\"version\":%d}\n\n", c.Version)
+			case c.Comments:
+				// the shell's (artifactShellEvents), not the page's
+				continue
 			case c.Paths == nil:
 				// one that fell behind: every path, and the newest version
 				line = "data: {}\n\n"

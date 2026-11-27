@@ -367,8 +367,10 @@ var (
 	// plannedWords: a 429 that says the plan's own allowance is used, rate
 	// words or not — a day's free requests, say, or a sub2api key's own
 	// 5-hour, day or 7-day limit ("api key 7天限额已用完", sent as
-	// rate_limit_exceeded).
-	plannedWords = lazyre.New(`(?i)quota|usage.?limit|(?:hit|reached) your .*limit|limit.{0,24}resets|per.?(day|week|month)|daily|weekly|monthly|额度|用量|套餐|限额已用完`)
+	// rate_limit_exceeded). 使用上限 is "usage limit" in Chinese: Zhipu's
+	// 1308 and 1310 say "已达到 5 小时的使用上限", "已达到每周/每月使用上限"
+	// under rate_limit_error (#3013).
+	plannedWords = lazyre.New(`(?i)quota|usage.?limit|(?:hit|reached) your .*limit|limit.{0,24}resets|per.?(day|week|month)|daily|weekly|monthly|额度|用量|使用上限|套餐|限额已用完`)
 	// minuteWords: a 429 that names a window of a minute or less, or the
 	// rate itself — tokens or requests per minute, TPM, RPM — which some
 	// vendors call a quota all the same: Gemini's "You exceeded your
@@ -493,8 +495,9 @@ const (
 	failEffort = "effort"
 	// failProxy: the proxy magpie sends through (its own setting, the
 	// *_PROXY variables, the system's) didn't take the connection (#381),
-	// or the network closed each new connection before the request went
-	// out (errClosedUnsent) —
+	// the network closed each new connection before the request went
+	// out (errClosedUnsent), or a box between mangled the TLS stream
+	// under it (recordWords) —
 	// nothing reached the vendor, so the next one is asked, and nobody rests
 	failProxy = "proxy"
 	// failOffline: this computer had no network (offline.go) — nothing
@@ -540,6 +543,13 @@ const reloopedError = "the model's reasoning was stuck in a loop before it said 
 // over HTTP (proxyconnect) or SOCKS (socks connect).
 var proxyDown = lazyre.New(`proxyconnect |socks connect `)
 
+// recordWords are Go's TLS words for a stream a box between mangled: a
+// record that fails its MAC, or a header that is no record's. The connection
+// is dead, and the vendor never read a request it could answer. netproxy's
+// recordError reads the same words from an error to speak HTTP/1.1 to the
+// host after one.
+var recordWords = lazyre.New(`bad record MAC|received record with version|oversized record received`)
+
 // wordsOf is catalog.Words: an error body as its words are matched, with
 // the strings of a JSON body that escapes what isn't ASCII decoded (#1669).
 func wordsOf(body []byte) []byte { return catalog.Words(body) }
@@ -572,14 +582,15 @@ func carriedStatus(status int, body []byte) int {
 // failure says why a reply failed.
 func failure(status int, body []byte) string {
 	status = carriedStatus(status, body)
-	if status == http.StatusBadGateway && (proxyDown.Match(body) || bodyHas(body, closedUnsentWords) || bodyHas(body, stalledWords) || bodyHas(body, egress.HeldWords)) {
-		// the proxy didn't take the connection, or the network closed
-		// each new one before the request was sent (errClosedUnsent):
-		// nothing reached the vendor, and the account is as good as it
-		// was. Read as the account's failure, it rested ChatGPT accounts
-		// whose window was full till the window renewed, days off,
-		// shown as "502 · 失败" (dealyang_ on X). A Claude request magpie
-		// held for its way out's region (egress.Hold) never left either
+	if status == http.StatusBadGateway && (proxyDown.Match(body) || recordWords.Match(body) || bodyHas(body, closedUnsentWords) || bodyHas(body, stalledWords) || bodyHas(body, egress.HeldWords)) {
+		// the proxy didn't take the connection, the network closed each new
+		// one before the request was sent (errClosedUnsent), or a box
+		// between mangled the TLS stream under it (recordWords): nothing
+		// the vendor could read reached it, and the account is as good as
+		// it was. Read as the account's failure, it rested ChatGPT accounts
+		// whose window was full till the window renewed, days off, shown as
+		// "502 · 失败" (dealyang_ on X). A Claude request magpie held for
+		// its way out's region (egress.Hold) never left either
 		return failProxy
 	}
 	if _, ok := provider.Verification(body); ok && (status == 401 || status == 403) {
@@ -611,11 +622,16 @@ func failure(status int, body []byte) string {
 	case status == 402, creditWords.Match(body) && (status != 429 || brokeWords.Match(body)),
 		bodyHas(body, "insufficient_quota") && !minuteRate(body):
 		return failCredit
-	case status == 429 && resetsWhen.Match(body):
+	case status == 429 && (resetsWhen.Match(body) || zhipuResets.Match(body)):
 		// out until the time it names, in whichever language it said so:
 		// WorkBuddy's Chinese refusal read as out of quota (用量), its
 		// English one as a rate limit, and each rested its own fallback
-		// (#1669)
+		// (#1669). Zhipu's 1308 and 1310 name theirs without a zone
+		// (zhipuResets): through its Anthropic endpoint, typed
+		// rate_limit_error, "[1308][已达到 5 小时的使用上限。您的限额将在 …
+		// 重置。]" read as a rate limit, so no reading of the key's windows
+		// lifted it, and a window reset on Zhipu's side was refused here
+		// till the old time (#3013, ColinWOoOOooo on X)
 		return failQuota
 	case status == 429 && minuteRate(body):
 		// a limit per minute, whatever it calls itself: back in a
@@ -742,10 +758,11 @@ func restrictedSaid(status int, body []byte) bool {
 // built-in's or the plugin's. Another vendor's code 11140 is its own, and
 // isn't read so.
 func restrictedRefused(p provider.Provider, status int, body []byte) bool {
-	if restrictedSaid(status, body) {
+	w := wordsOf(body)
+	if restrictedSaid(status, w) {
 		return true
 	}
-	return isWorkBuddy(p) && provider.WBRestricted(status, wordsOf(body)) || googleSuspended(p, status, body) || claudeAccountOff(p, status, body)
+	return isWorkBuddy(p) && provider.WBRestricted(status, w) || googleSuspended(p, status, body) || claudeAccountOff(p, status, body)
 }
 
 // claudeOffWords are Anthropic's, and Claude Code's, words for an account
@@ -1238,21 +1255,33 @@ func restrictedHeld(c candidate) (int, string, bool) {
 
 // resetsIn is how long until a used-up ChatGPT account is back, as its
 // refusal says: {"error":{"type":"usage_limit_reached","resets_at":<unix>,
-// "resets_in_seconds":<n>}}. Zero when it doesn't say.
+// "resets_in_seconds":<n>}}. A stream's error frame is kept as its error
+// object alone (holdWriter.errBody), so the same members on the body
+// itself count too: doubao-work ends a stream begun with reasoning with
+// {"error":{"status":429,"resets_at":<the 1st of next month>}}, and read
+// only under "error" that rest was the 15 minutes guessed for no word of
+// a reset (aaron0x10 on X). Zero when it doesn't say.
 func resetsIn(body []byte, now time.Time) time.Duration {
+	type said struct {
+		At int64 `json:"resets_at"`
+		In int64 `json:"resets_in_seconds"`
+	}
 	var e struct {
-		Error struct {
-			At int64 `json:"resets_at"`
-			In int64 `json:"resets_in_seconds"`
-		} `json:"error"`
+		Error said `json:"error"`
+		said
 	}
 	if json.Unmarshal(body, &e) != nil {
 		return 0
 	}
-	if t := time.Unix(e.Error.At, 0); e.Error.At > 0 && t.After(now) {
-		return t.Sub(now)
+	for _, s := range []said{e.Error, e.said} {
+		if t := time.Unix(s.At, 0); s.At > 0 && t.After(now) {
+			return t.Sub(now)
+		}
+		if s.In > 0 {
+			return time.Duration(s.In) * time.Second
+		}
 	}
-	return time.Duration(max(e.Error.In, 0)) * time.Second
+	return 0
 }
 
 // resetsAt is how long until a used-up subscription is back, as its
@@ -1564,6 +1593,11 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// request is asked again, and no rest and no failure counted (#2873)
 		return Rest{Why: why, Status: status, By: "off", Until: now}
 	}
+	if c.off {
+		// an account or key turned off, pinned (pinOff): routing leaves it
+		// out as it is, and a rest would stand over it once it is on
+		return Rest{Why: why, Status: status, By: "off", Until: now}
+	}
 	if c.p.PassesErrors() {
 		// the user leaves its errors to the client (errors=pass): none of
 		// its keys is set aside for one, and the next request is asked
@@ -1576,7 +1610,7 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// as soon as the switch is off
 		return Rest{Why: why, Status: status, By: "off", Until: now}
 	}
-	if offlineFailure(c, status, body) {
+	if s.offlineFailure(c, status, body) {
 		// this computer had no network: the provider is as good as it
 		// was, and is asked again once the network is back (offline.go)
 		return Rest{Why: failOffline, Status: status, By: "off", Until: now}
@@ -1596,6 +1630,13 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 		// and the failure counts nowhere; the next try goes out on a new
 		// connection (regionFresh)
 		return Rest{Why: why, Status: status, By: "off", Until: now}
+	}
+	if legalRefused(status, body) {
+		// a 451: the vendor won't serve this request's content, which the
+		// same account serves the moment a word of it changes (Winnie7572
+		// on X). Not the account's doing: none is set aside, wherever the
+		// 451 is read (a System One group, a stream's late error frame)
+		return Rest{Why: failRefused, Status: status, By: "off", Until: now}
 	}
 	if status == http.StatusForbidden && provider.HarnessOnly(wordsOf(body)) {
 		// OpenRouter serving a free model only to the agent apps it lists
@@ -1729,7 +1770,7 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 			// under below; another computer's magpie rests its model
 			// for it, as before
 			id := c.restKey()
-			if c.p.PaidBesideFree(c.model) || modelLimited(c, why, body) {
+			if c.p.PaidBesideFree(c.model) || c.p.FreeBesidePaid(c.model) || modelLimited(c, why, body) {
 				id = c.restID()
 			}
 			d, r.By, r.Failures, guessed = creditBackoff(id, header, body, now)
@@ -1795,7 +1836,7 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 			// key's own limit apart): the sink keeps the same scope, or
 			// one model's 429 would send the remote's other models, never
 			// limited, behind the others too
-			if remoteModelRest(c, failRate, header) || modelLimitedBy(c, failRate, header, body) {
+			if remoteModelRest(c, failRate, header) || modelLimitedBy(c, failRate, header, body) || freeRateAlone(c, failRate) {
 				sink(c.restID(), now)
 			} else {
 				sink(c.restKey(), now)
@@ -1963,9 +2004,15 @@ func (s *Server) restAfterMarked(c candidate, status int, header http.Header, bo
 	// the subscription serves other models free is that model's: the free
 	// ones draw on no credits, and the account still serves them (Creat.wu
 	// on Discord: WorkBuddy AI's 14018 "Credits exhausted" on glm-5.3-flash
-	// rested the account, and its free models went nowhere). A free model
-	// the vendor refuses all the same rests on its own refusal.
-	if (why == failCredit || why == failQuota) && c.p.PaidBesideFree(c.model) {
+	// rested the account, and its free models went nowhere; Winnie7572 on
+	// X and tkhs101's #7496: OpenCode Go's weekly limit on a paid model
+	// rested the key, and its free models, which Go still served, were
+	// answered the kept 429 in a millisecond). A free model the vendor
+	// refuses all the same rests on its own refusal, which says nothing
+	// of the paid ones (ggbdpq). Its rate limit is its own too (xzhih on
+	// X): a 429 on hy4-flash-free held glm-5.3, which the key's windows
+	// still had room for, for the rate limit's time
+	if (why == failCredit || why == failQuota) && (c.p.PaidBesideFree(c.model) || c.p.FreeBesidePaid(c.model)) || freeRateAlone(c, why) {
 		id = c.restID()
 	}
 	if remoteModelRest(c, why, header) {
@@ -2250,7 +2297,7 @@ func remoteModelRest(c candidate, why string, header http.Header) bool {
 // rest after a failure that says nothing of why (RestCapOff) isn't
 // rested, nor its slow starts counted.
 func restSlow(c candidate, now time.Time) (Rest, bool) {
-	if c.p.NoFailRest() {
+	if c.p.NoFailRest() || c.off {
 		return Rest{}, false
 	}
 	id := c.restID()
@@ -2304,6 +2351,14 @@ func backingOff(key string, now time.Time) bool {
 	return ok && now.Before(until) && restingUntil.note[key].Why == failOther
 }
 
+// freeRateAlone says whether a rate limit is the model's alone because
+// it is a free model beside paid ones (OpenCode Go's hy4-flash-free beside
+// glm-5.3, xzhih on X): its rest, its backoff count and its sink are kept
+// to the model, so the paid models the key still has room for go on.
+func freeRateAlone(c candidate, why string) bool {
+	return why == failRate && c.p.FreeBesidePaid(c.model)
+}
+
 // vendorSaidWhen says whether a 429's headers or body name a time it is
 // limited till, as rateRest reads them.
 func vendorSaidWhen(header http.Header, body []byte) bool {
@@ -2322,7 +2377,7 @@ func vendorSaidWhen(header http.Header, body []byte) bool {
 // count where it is, so one request's own retries don't stretch it.
 func (s *Server) rateRest(c candidate, header http.Header, body []byte, sharedPool bool, now time.Time) (time.Duration, string, int) {
 	id := c.restKey()
-	if c.isOpenRouterFree() && sharedPool || remoteModelRest(c, failRate, header) || modelLimitedBy(c, failRate, header, body) {
+	if c.isOpenRouterFree() && sharedPool || remoteModelRest(c, failRate, header) || modelLimitedBy(c, failRate, header, body) || freeRateAlone(c, failRate) {
 		id = c.restID()
 	}
 	n := 1
@@ -2803,11 +2858,12 @@ func routingOf(routing string) string {
 }
 
 // keepsWeek: routed so, a pool keeps an account running low on its week
-// alone with those that have room (routes.Seat.WeekLow): Smart and Use
-// before expiry, which spend what a reset would lose.
+// alone with those that have room (routes.Seat.WeekLow): Smart, Use
+// before expiry and Before expiry, one by one (which picks as Use before
+// expiry does), which spend what a reset would lose.
 func keepsWeek(routing string) bool {
 	r := routingOf(routing)
-	return r == "" || r == provider.Pace
+	return r == "" || r == provider.Pace || r == provider.PaceDrain
 }
 
 // goesRound: routed so, a pool goes round by itself (in turn, by weight),

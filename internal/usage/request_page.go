@@ -80,6 +80,9 @@ type RequestPage struct {
 	// Big is the request that wrote the most to the cache, of the rows the
 	// filter keeps
 	Big BigWrite
+	// Tools are the MCP tool calls the filter keeps, by tool, when it
+	// keeps those alone (mcpTools)
+	Tools []ToolCalls
 }
 
 type packedRow struct {
@@ -761,6 +764,10 @@ type pageKey struct {
 	// state's key turns with this computer's day, and a reader in another
 	// zone has a today of their own
 	Date string
+	// Zone is the zone the page is cut in, Filter.Zone or, for none,
+	// Zone(""), which Settings' time zone and day start move: a page
+	// asked for with no zone before a change is not served after it
+	Zone *time.Location
 }
 type requestIndex struct {
 	sync.Mutex
@@ -940,7 +947,9 @@ func readRequestState(now time.Time) requestState {
 	meta += "|" + provider.UsageNamesKey()
 	h.Reset()
 	snapshot := readLogSnapshot()
-	fmt.Fprint(h, meta, snapshot.version, now.In(time.Local).Format("2006-01-02 MST"))
+	// a page asked for with no zone is in Zone(""), which Settings' time
+	// zone and day start move: kept apart by it, not served from before
+	fmt.Fprint(h, meta, snapshot.version, now.In(time.Local).Format("2006-01-02 MST"), "|", Zone("").String())
 	hashCodexIdentities(h, codexIdentities)
 	for _, s := range sources {
 		fmt.Fprintf(h, "%s:%d:%d;", s.Path, s.Size, s.Modified.UnixNano())
@@ -1022,7 +1031,7 @@ func queryPageOf(p Period, f Filter, offset, limit int, readSource func(sessions
 	idx.Lock()
 	idx.keepWhileAsked()
 	idx.adopt(st)
-	q := pageKey{p, f, offset, limit, now.Format(time.DateOnly)}
+	q := pageKey{p, f, offset, limit, now.Format(time.DateOnly), now.Location()}
 	if page, ok := idx.pages[q]; ok {
 		idx.Unlock()
 		return page
@@ -1937,6 +1946,26 @@ func matchTokens(t [6]int32) [3]int64 {
 	return [3]int64{int64(t[0]) + int64(t[3]), int64(t[1]), int64(t[2])}
 }
 
+// localMatchTokens is what a session file's call may match a gateway
+// record by, n of them: matchTokens, and, when it read from the cache, the
+// same with that read taken out of its input. An agent that
+// speaks OpenAI's protocol to the gateway and writes its file in
+// Anthropic's shape keeps prompt_tokens, which holds the cache read, as
+// input_tokens, while the gateway records the uncached part (Qoder and
+// Qoder CN, #7107: 29,351 = 1,703 + 27,648). Read by matchTokens alone,
+// such a call never paired with the record of it, and every call it made
+// through magpie was listed again as not through magpie (Toby5080 on X).
+// The rest of the key, the session, the output, the cache read and an end
+// within 2s, is the same, and the match must still be the only one both
+// ways, so a call that pairs either way is one call.
+func localMatchTokens(t [6]int32) (ways [2][3]int64, n int) {
+	k := matchTokens(t)
+	if t[2] <= 0 || t[0] < t[2] {
+		return [2][3]int64{k}, 1
+	}
+	return [2][3]int64{k, {k[0] - int64(t[2]), k[1], k[2]}}, 2
+}
+
 type matchEnd struct {
 	at    time.Time
 	index rowRef
@@ -2358,34 +2387,38 @@ func matchedBlocks(gateways []*rowChunk, chunks []*rowChunk, skip refSet, respon
 			if p.Tokens[0]+p.Tokens[1]+p.Tokens[2]+p.Tokens[3] == 0 && !failed {
 				continue
 			}
-			key := matchKey{session: c.Strings[c.text(p, 13)], tokens: matchTokens(p.Tokens), failed: failed}
+			key := matchKey{session: c.Strings[c.text(p, 13)], failed: failed}
 			from, to := p.Time().Add(-2*time.Second), p.Time().Add(2*time.Second)
 			if agyLocal(c.Strings[c.text(p, 0)]) {
 				key.session, to = agyMatchSession, p.Time().Add(agyStepLongest)
 			}
 			count, at := 0, int32(0)
-			// Without a local ID either gateway partition can match. With an ID,
-			// only an unnamed gateway call can match (different IDs stay distinct).
-			for _, hasID := range []bool{false, true} {
-				if hasID && c.text(p, 11) != 0 {
-					continue
-				}
-				key.hasID = hasID
-				k, ok := groupOf[key.sum()]
-				if !ok {
-					continue
-				}
-				g := groups[k]
-				in := ends[g.off : g.off+g.n]
-				lo := sort.Search(len(in), func(i int) bool { return !in[i].at.Before(from) })
-				hi := sort.Search(len(in), func(i int) bool { return in[i].at.After(to) })
-				if hi > lo {
-					count += hi - lo
-					at = g.off + int32(lo)
-					// Range counts preserve ambiguity even for thousands of identical
-					// retries, without enumerating their Cartesian product.
-					counts[g.off+k+int32(lo)]++
-					counts[g.off+k+int32(hi)]--
+			ways, n := localMatchTokens(p.Tokens)
+			for _, tokens := range ways[:n] {
+				key.tokens = tokens
+				// Without a local ID either gateway partition can match. With an ID,
+				// only an unnamed gateway call can match (different IDs stay distinct).
+				for _, hasID := range []bool{false, true} {
+					if hasID && c.text(p, 11) != 0 {
+						continue
+					}
+					key.hasID = hasID
+					k, ok := groupOf[key.sum()]
+					if !ok {
+						continue
+					}
+					g := groups[k]
+					in := ends[g.off : g.off+g.n]
+					lo := sort.Search(len(in), func(i int) bool { return !in[i].at.Before(from) })
+					hi := sort.Search(len(in), func(i int) bool { return in[i].at.After(to) })
+					if hi > lo {
+						count += hi - lo
+						at = g.off + int32(lo)
+						// Range counts preserve ambiguity even for thousands of identical
+						// retries, without enumerating their Cartesian product.
+						counts[g.off+k+int32(lo)]++
+						counts[g.off+k+int32(hi)]--
+					}
 				}
 			}
 			if count == 1 {
@@ -2797,6 +2830,7 @@ func buildRequestBlocksIn(p Period, f Filter, offset, limit int, now time.Time, 
 		}
 	}
 	out.Computers, out.Names = computerShares(computers, names)
+	out.Tools = mcpTools(f, since, p.Until(now), now, gateways)
 	var base []Point
 	var chartSince time.Time
 	chartSince, out.Bucket, base = timeline(p, now, first)
@@ -2904,11 +2938,18 @@ func pageFromLedgerAt(p Period, f Filter, offset, limit int, all Ledgered, now t
 	offset = min(offset, len(l.Rows))
 	out.Rows = l.Rows[offset:min(len(l.Rows), offset+limit)]
 	speeds := speedRank{}
+	tools := mcpTally{}
 	for _, r := range l.Rows {
 		if !r.IsRejected() && !r.IsProbe() {
 			speeds.add(&r)
 			out.Big.add(&r)
 		}
+		if f.picksMCP() && r.Kind == KindMCP {
+			tools.add(&r)
+		}
+	}
+	if f.picksMCP() {
+		out.Tools = tools.list(toolsEnd(p.Until(now), now), f.Day != "")
 	}
 	out.Speeds, out.ProviderSpeeds = speeds.result(), speeds.providers()
 	chartRows := l.Rows

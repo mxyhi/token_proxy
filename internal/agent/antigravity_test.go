@@ -105,21 +105,10 @@ func TestAntigravityGateway(t *testing.T) {
 	if a.Notice() == "" {
 		t.Error("no notice to restart the app")
 	}
-	// the models the app's own sign-in gave it leave its picker: with no
-	// account under magpie's Antigravity subscription the notice says how
-	// to have them back (T_t__biu on X); with one, they are in the list
+	// the models the app's own sign-in gave it leave its picker: the
+	// notice says how to have them back (antigravityOwnModelsNotice)
 	if !strings.Contains(a.Notice(), noticeAntigravityOwn.String()) {
-		t.Errorf("no word of the app's own models with no Antigravity account: %q", a.Notice())
-	}
-	b, _ := json.Marshal([]map[string]any{{"agent": "antigravity", "user": "me@example.com", "on": true,
-		"auth": map[string]any{"access_token": "a", "refresh_token": "r"}}})
-	os.MkdirAll(filepath.Dir(provider.Path()), 0o755)
-	os.WriteFile(filepath.Join(filepath.Dir(provider.Path()), "logins.json"), b, 0o600)
-	if n := len(provider.Logins("antigravity")); n != 1 {
-		t.Fatalf("the Antigravity account isn't read: %d", n)
-	}
-	if got := a.Notice(); got != noticeAntigravity.String() {
-		t.Errorf("notice with an Antigravity account in magpie: %q", got)
+		t.Errorf("no word of the app's own models with no agy-cli account: %q", a.Notice())
 	}
 	opts := f.Options(map[string]string{"model": f.Get()})
 	if !slices.ContainsFunc(opts, func(o Option) bool { return o.Value == "magpie/anth/claude-sonnet-5" }) {
@@ -559,5 +548,44 @@ func TestAntigravitySyncWiresConfigJSON(t *testing.T) {
 	}
 	if !sameJSON(readFile(legacy), map[string]any{"caCertPath": "/etc/ssl/certs/x.pem"}) {
 		t.Errorf("settings.json:\n%s", readFile(legacy))
+	}
+}
+
+// The app's catalog puts the model it starts on first in the 32 entries it
+// takes (leslie_luo on Discord: Gemini 4 Neon late in a long list had Low
+// and Medium only), so the gateway is told that model, read from the
+// wired file, and the app starts on a level of it, not on its bare id.
+func TestAntigravityStartModelToldToTheGateway(t *testing.T) {
+	home := antigravityHome(t)
+	var ids []string
+	var models []catalog.Model
+	for i := range 40 {
+		id, efforts := "m"+strings.Repeat("x", i), []string{"low", "medium", "high"}
+		if i == 36 {
+			id, efforts = "gemini-4-neon", []string{"low", "medium", "high", "xhigh"}
+		}
+		ids = append(ids, id)
+		models = append(models, catalog.Model{ID: id, Efforts: efforts})
+	}
+	if err := provider.Save(provider.Provider{ID: "cpa", Name: "cpa", Chat: "http://127.0.0.1:8317/v1", Key: "key", Models: ids}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SaveLive("cpa", "http://127.0.0.1:8317/v1", models); err != nil {
+		t.Fatal(err)
+	}
+	if got := gateway.AntigravityStart(); got != "" {
+		t.Fatalf("start %q before the app is wired", got)
+	}
+	a := antigravity(home)
+	if err := a.Field("model").Set("magpie/cpa/gemini-4-neon"); err != nil {
+		t.Fatal(err)
+	}
+	if got := gateway.AntigravityStart(); got != "cpa/gemini-4-neon" {
+		t.Errorf("start %q, want cpa/gemini-4-neon", got)
+	}
+	var m map[string]any
+	json.Unmarshal(antigravityFile(t, filepath.Join(home, ".antigravity", "settings.json"))["models"], &m)
+	if got, _ := m["defaultModelId"].(string); got != "cpa/gemini-4-neon:medium" {
+		t.Errorf("defaultModelId %q, want cpa/gemini-4-neon:medium", got)
 	}
 }

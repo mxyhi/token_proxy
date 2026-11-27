@@ -74,6 +74,13 @@ type before struct {
 	// still asked in time. Not part of the question: an answer is the
 	// same wherever in the list it was asked.
 	Then int
+	// Prompt: the asking group's own instructions for a classifier asked
+	// in words (provider.Group.ClassifyPrompt), in place of magpie's
+	// (classifySystem); "" for magpie's. Part of the question, so of
+	// classify's key: the same message under other instructions is
+	// asked again. A decision model (Jev) is asked its intent and level
+	// questions by them too (intentAsk, levelAsk).
+	Prompt string
 }
 
 // verdict is what a classifier said.
@@ -158,6 +165,18 @@ type effortFailed struct{ error }
 
 func (e effortFailed) Unwrap() error { return e.error }
 
+// intentFailed is a decision model that rated how hard the turn is but
+// declined, or didn't answer, which kind the message is (OpenAI's
+// Decisions API answering the question {"type":"refusal"}): the effort
+// holds, and the turn's route says why no intent came of it, as for a
+// classifier that couldn't say. It answered, so it isn't left to rest,
+// nor its answer kept for the next turn with the same words.
+// (zyh6036 on X: such turns went to the group's first member, the route
+// saying the classifier said none.)
+type intentFailed struct{ error }
+
+func (e intentFailed) Unwrap() error { return e.error }
+
 // cutShort is the waitSpent of a classifier given wait, what was left of
 // the request's classifier wait full, that didn't answer in it.
 func cutShort(model string, wait, full time.Duration) error {
@@ -181,7 +200,7 @@ func classify(ask classifier, held access.Identity, model string, intents []stri
 		rest += "\x00" + strings.Join(held.Accounts, "\x00")
 	}
 	h := sha256.New()
-	h.Write([]byte(model + "\x00" + strings.ToLower(strings.Join(intents, "\x00")) + "\x00" + prev.Intent + "\x00" + prev.Effort + "\x00" + prev.User + "\x00" + prev.Reply + "\x00" + strconv.FormatBool(effort) + "\x00" + text))
+	h.Write([]byte(model + "\x00" + strings.ToLower(strings.Join(intents, "\x00")) + "\x00" + prev.Intent + "\x00" + prev.Effort + "\x00" + prev.User + "\x00" + prev.Reply + "\x00" + prev.Prompt + "\x00" + strconv.FormatBool(effort) + "\x00" + text))
 	key := hex.EncodeToString(h.Sum(nil))
 	now := time.Now()
 	classified.Lock()
@@ -216,6 +235,16 @@ func classify(ask classifier, held access.Identity, model string, intents []stri
 		// the intent alone, said this time and not kept: the effort is
 		// asked again with the next turn
 		c.v, c.err = v, nil
+		if was, ok := classified.last[model]; !ok || was.err != err.Error() {
+			log.Printf("routing: the classifier %s couldn't say: %s", model, err)
+		}
+		classified.last[model] = classifyFailure{err: err.Error(), at: time.Now()}
+		delete(classified.failed, rest)
+		return v, false, err
+	}
+	if errors.As(err, new(intentFailed)) {
+		// the effort alone, said this time and not kept, nor rested for
+		c.v = v
 		if was, ok := classified.last[model]; !ok || was.err != err.Error() {
 			log.Printf("routing: the classifier %s couldn't say: %s", model, err)
 		}
@@ -398,11 +427,32 @@ func assistantSaid(m Message) string {
 	return strings.Join(said, "\n")
 }
 
-const classifyPrompt = "You route a user's message to a coding assistant. " +
+// classifyPrompt is magpie's own instructions to a classifier asked in
+// words. It names no kind of assistant: magpie serves any agent, and a
+// "coding assistant" framing led a classifier to judge a chat, a story or
+// a translation by what a coder would ask (sloceanxc on X).
+const classifyPrompt = "You sort a user's message, sent to an AI assistant, into one of several kinds. " +
 	"Given numbered kinds and the user's message, answer with the number of the kind that fits the message best. " +
 	"The kinds may be topics, or levels such as how hard or how big a request is; " +
 	"when they are levels, every message has one, a greeting or a question about the assistant included. " +
 	"Answer 0 only when the message is plainly none of the kinds. Answer with the number only."
+
+// classifyAnswer is what follows a group's own instructions (before.Prompt):
+// the answer readIntent reads, a number, and nothing of magpie's way of
+// judging, which the user's words replace.
+const classifyAnswer = "The user's message comes with numbered kinds. " +
+	"Answer with the number of the kind the message is by the instructions above, or 0 when it is none of them. " +
+	"Answer with the number only."
+
+// classifySystem is the system prompt a classifier asked in words is sent:
+// the group's own instructions, when it has any, then how to answer;
+// magpie's own otherwise.
+func classifySystem(prompt string) string {
+	if prompt = strings.TrimSpace(prompt); prompt == "" {
+		return classifyPrompt
+	}
+	return prompt + "\n\n" + classifyAnswer
+}
 
 // classifyBody is the Chat request asking model which of intents text is,
 // at effort when it isn't "". A model that reasons does so before it
@@ -425,11 +475,16 @@ func classifyBody(model, effort string, intents []string, prev before, text stri
 	}
 	b.WriteString("\nThe user's message:\n<message>\n")
 	b.WriteString(text)
-	b.WriteString("\n</message>\n\nThe number of the kind that fits it best (0 only if none does):")
+	b.WriteString("\n</message>\n\n")
+	if strings.TrimSpace(prev.Prompt) == "" {
+		b.WriteString("The number of the kind that fits it best (0 only if none does):")
+	} else {
+		b.WriteString("The number of its kind (0 for none):")
+	}
 	req := map[string]any{
 		"model": model,
 		"messages": []map[string]string{
-			{"role": "system", "content": classifyPrompt},
+			{"role": "system", "content": classifySystem(prev.Prompt)},
 			{"role": "user", "content": b.String()},
 		},
 		"stream":      false,
@@ -562,8 +617,14 @@ func (s *Server) askWaited(ctx context.Context) classifier {
 	// the caller's accounts (a gateway key's, the group the request names)
 	// hold its classifier's calls too, as they hold magpie's other calls
 	// for it (accountHolds): only the accounts, not the key's models, as
-	// the classifier is the group's pick, not the caller's
+	// the classifier is the group's pick, not the caller's. They are
+	// magpie's own requests: with those set to some accounts (OwnAgent),
+	// those hold them in place of the agent's
 	caller := access.Caller(ctx)
+	own := provider.AgentAccounts(OwnAgent)
+	if len(own) > 0 {
+		caller = beforeAgent(ctx)
+	}
 	return func(held access.Identity, model string, intents []string, prev before, effort bool, text string) (verdict, error) {
 		mu.Lock()
 		now := time.Now()
@@ -576,7 +637,11 @@ func (s *Server) askWaited(ctx context.Context) classifier {
 			return verdict{}, waitSpent{fmt.Errorf("%s not asked: the request's classifier wait of %s was spent by the routing group above or a classifier before it", model, classifyTimeout())}
 		}
 		defer noteWait(ctx, "decision model")()
-		who := access.Identity{Accounts: caller.Accounts, Group: caller.Group}.HeldToGroup(held.Group, held.Accounts)
+		who := access.Identity{Accounts: caller.Accounts, Group: caller.Group}
+		if len(own) > 0 {
+			who = who.HeldToAgent(OwnAgent, own)
+		}
+		who = who.HeldToGroup(held.Group, held.Accounts)
 		if prev.Then <= 0 {
 			return s.askClassifierIn(left, who, model, intents, prev, effort, text)
 		}
@@ -607,6 +672,28 @@ func (s *Server) askClassifier(model string, intents []string, prev before, effo
 func (s *Server) askClassifierIn(wait time.Duration, who access.Identity, model string, intents []string, prev before, effort bool, text string) (verdict, error) {
 	if p, m, ok := provider.Resolve(model); ok && p.DecidesModel(m) {
 		return s.askDecider(wait, who, p, m, intents, prev, effort, text)
+	}
+	// an OpenAI key's gpt-6-luna: asked at OpenAI's Decisions API, as Jev
+	// is at System One (zyh6036 on X), not through chat
+	if p, m, ok := provider.Resolve(model); ok {
+		if d, ok := p.OpenAIDecider(m); ok && !decisionsRefusedNow(d) {
+			t0 := time.Now()
+			v, err := s.askDecider(wait, who, p, m, intents, prev, effort, text)
+			var refused decideRefused
+			if !errors.As(err, &refused) || !decisionsUnserved(d, refused.status, refused.body) {
+				return v, err
+			}
+			// Decisions doesn't serve the key (a project without it, a
+			// request it reads otherwise): gpt-6-luna is asked through
+			// chat, as before, in what is left of the wait, and for an
+			// hour (zyh6036 on X: no turn was told, each went to the
+			// group's first member)
+			noteDecisionsRefused(d)
+			log.Printf("routing: OpenAI's Decisions API didn't serve %s (%v): asked through chat for %s", model, err, decisionsOffFor)
+			if wait -= time.Since(t0); wait <= 0 {
+				return verdict{}, err
+			}
+		}
 	}
 	// a group of decision models: each in turn (decide_group.go)
 	if v, ok, err := s.askDecisionGroup(wait, who, model, intents, prev, effort, text); ok {
@@ -649,7 +736,7 @@ func (s *Server) askClassifierIn(wait time.Duration, who access.Identity, model 
 	return v, nil
 }
 
-const effortPrompt = "You judge how much reasoning a coding assistant needs to handle a user's message well. " +
+const effortPrompt = "You judge how much reasoning an AI assistant needs to handle a user's message well. " +
 	"Given numbered levels and the user's message, answer with the number of the level it needs. Answer with the number only."
 
 // effortBody is the Chat request asking model how hard text is to think

@@ -61,6 +61,10 @@
 //                          shared artifacts: a page a magpie user shared,
 //                          and sharing, updating and taking one down
 //                          (shares.js); a.usemagpie.ai serves their files
+//   /g/<id>, /groups, /api/groups, /api/groups/<id>, /api/groups/report,
+//   /api/groups/like       shared routing groups: a group's page and the
+//                          gallery, and sharing, listing, counting and
+//                          liking them (groups.js)
 //
 // Everything else is the static site in public/.
 
@@ -70,6 +74,11 @@ import { SPONSORS } from "./sponsors.js";
 import { serve as serveFile, held, onR2, mirror, githubFile } from "./files.js";
 import { handle as pluginStats, prune as prunePlugins } from "./pluginstats.js";
 import { api as shareAPI, page as sharePage, content as shareContent, prune as pruneShares, CONTENT as SHARE_HOST } from "./shares.js";
+import { api as groupAPI, page as groupPage, prune as pruneGroups } from "./groups.js";
+import { api as liveAPI, ShareLive } from "./live.js";
+
+// each shared page's data and room (live.js)
+export { ShareLive };
 
 const REPO = "yetone/magpie-releases";
 const SITE = "https://usemagpie.ai";
@@ -104,9 +113,21 @@ export default {
       url.hostname = url.hostname.slice(4);
       return Response.redirect(url.toString(), 301);
     }
-    if (url.pathname === "/api/shares" || url.pathname.startsWith("/api/shares/")) return shareAPI(req, env, ctx);
+    if (url.pathname.startsWith("/api/visitors") || url.pathname.startsWith("/api/shares/")) {
+      const got = await liveAPI(req, env, ctx);
+      if (got) return got;
+    }
+    // a path neither knows (a malformed id, an unknown call) is a 404,
+    // not a Worker exception
+    if (url.pathname === "/api/shares" || url.pathname.startsWith("/api/shares/"))
+      return (await shareAPI(req, env, ctx)) || Response.json({ error: "no such call" }, { status: 404 });
     if (url.pathname.startsWith("/a/")) {
       const got = await sharePage(req, env);
+      if (got) return got;
+    }
+    if (url.pathname === "/api/groups" || url.pathname.startsWith("/api/groups/")) return groupAPI(req, env, ctx);
+    if (url.pathname.startsWith("/g/") || url.pathname === "/groups" || url.pathname === "/groups/") {
+      const got = await groupPage(req, env);
       if (got) return got;
     }
     if (url.pathname === "/api/plugins/tagged") return taggedPlugins(ctx);
@@ -230,14 +251,15 @@ export default {
   },
   // the crons (wrangler.jsonc's triggers): every quarter hour the ledger
   // the Stable channel is chosen from, then the day's Daily pick, and
-  // Discover's old counts pruned; every five minutes the newest, the
-  // Stable and the Daily release's files into R2
+  // Discover's and shared groups' old counts pruned; every five minutes
+  // the newest, the Stable and the Daily release's files into R2
   async scheduled(event, env, ctx) {
     if (event.cron === MIRROR_CRON) ctx.waitUntil(keepFiles(ctx, env));
     else {
       ctx.waitUntil(keepLedger(env, Date.now()).catch((e) => console.log("ledger", String(e))).then(() => keepDaily(env, Date.now())));
       ctx.waitUntil(prunePlugins(env));
       ctx.waitUntil(pruneShares(env).catch((e) => console.log("shares", String(e))));
+      ctx.waitUntil(pruneGroups(env).catch((e) => console.log("groups", String(e))));
     }
   },
 };

@@ -61,7 +61,7 @@ function serve(lang, posts, use = usage, alone = false, opts = {}) {
   if (alone) ps.codex.account.logins[1].on = false;
   if (opts.fallback) ps.codex.fallback = opts.fallback;
   const providers = { providers: [ps.codex], presets: [], excluded: [], gateway: { running: true, window: true } };
-  const state = { agents: opts.agents || [], profiles: [], settings: { lang, theme: "light" } };
+  const state = { agents: (opts.agents || []).map((a) => ({ fields: [], ...a })), profiles: [], settings: { lang, theme: "light" } };
   return async (route) => {
     const url = new URL(route.request().url());
     const json = (data) => route.fulfill({ json: data });

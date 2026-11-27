@@ -1,6 +1,6 @@
 // Run with Node's test runner and Playwright on the module path; see README.md.
 // A browser tab's title names the magpie it shows (starballl on X: several
-// deployed, every tab titled "magpie"): "<name> · magpie" from the first
+// deployed, every tab titled "magpie"): "<name> · Token Proxy" from the first
 // paint (boot.js), MAGPIE_NAME's while Settings has none, and the name set
 // in Settings › Network and sharing › Advanced › Name once saved. The
 // field sits under Advanced, closed until a name is set, the variable's
@@ -23,7 +23,7 @@ function server(lang, web, saved, posts) {
     const url = new URL(req.url());
     const json = (data, status = 200) => route.fulfill({ status, json: data });
     // as api.go's boot.js: a browser tab is titled before app.js runs
-    if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = ${JSON.stringify({ lang, theme: "light", web, name: saved.name || "nas", nameEnv: "nas", sideGateway: { url: "http://127.0.0.1:3425", running: true, boot: true } })};\n` + (web ? `document.title = ${JSON.stringify((saved.name || "nas") + " · magpie")};\n` : "") });
+    if (url.pathname === "/boot.js") return route.fulfill({ contentType: "text/javascript", body: `window.bootPrefs = ${JSON.stringify({ lang, theme: "light", web, name: saved.name || "nas", nameEnv: "nas", sideGateway: { url: "http://127.0.0.1:3425", running: true, boot: true } })};\n` + (web ? `document.title = ${JSON.stringify((saved.name || "nas") + " · Token Proxy")};\n` : "") });
     if (url.pathname === "/wails/runtime.js") return route.fulfill({ contentType: "text/javascript", body: "export const Window = {};" });
     if (url.pathname === "/api/state") return json({ agents: [], profiles: [], settings: { lang, theme: "light", nameEnv: "nas", ...(saved.name ? { name: saved.name } : {}) }, web });
     if (url.pathname === "/api/settings") {
@@ -74,7 +74,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
     for (const lang of ["en", "zh", "zh-TW", "ja", "de"]) {
       await t.test(lang, async () => {
         const { page, errors, posts, tr } = await open(lang, true);
-        assert.equal(await page.title(), "nas · magpie", "MAGPIE_NAME's name from the first paint");
+        assert.equal(await page.title(), "nas · Token Proxy", "MAGPIE_NAME's name from the first paint");
         const more = page.locator("#netMore");
         const field = page.locator("#netMoreList input.instance-name");
         await field.waitFor({ state: "attached" });
@@ -89,13 +89,13 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         if (lang !== "en") assert.notEqual(await tr("Shown in the browser tab’s title"), "Shown in the browser tab’s title", "translated");
         await field.fill("  Tokyo   box ");
         await field.press("Enter");
-        await page.waitForFunction(() => document.title === "Tokyo box · magpie");
+        await page.waitForFunction(() => document.title === "Tokyo box · Token Proxy");
         assert.equal(posts.at(-1).name, "Tokyo box");
         assert.equal(await page.locator("#netMoreList input.instance-name").inputValue(), "Tokyo box");
         // cleared: the variable's name again
         await page.locator("#netMoreList input.instance-name").fill("");
         await page.locator("#netMoreList input.instance-name").press("Enter");
-        await page.waitForFunction(() => document.title === "nas · magpie");
+        await page.waitForFunction(() => document.title === "nas · Token Proxy");
         assert.equal(posts.at(-1).name, "");
         assert.deepEqual(errors, []);
       });
@@ -112,7 +112,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
       await settingsDrawn(page);
       await page.locator("#netMoreList input.instance-name").waitFor();
       assert.equal(await page.locator("#netMore").evaluate((d) => d.open), true);
-      assert.equal(await page.title(), "A rather long name for a server in a closet · magpie");
+      assert.equal(await page.title(), "A rather long name for a server in a closet · Token Proxy");
       const over = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert(over <= 0, `wider than the window by ${over}px`);
       const box = await page.locator("#netMoreList .instance-name-row").boundingBox();
@@ -122,7 +122,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
 
     await t.test("the app's window keeps its title", async () => {
       const { page, errors } = await open("en", false);
-      assert.equal(await page.title(), "magpie");
+      assert.equal(await page.title(), "Token Proxy");
       assert.deepEqual(errors, []);
     });
   });

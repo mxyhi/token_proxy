@@ -15,6 +15,7 @@ package provider
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,12 @@ func readsKeyWindows(p Provider) bool {
 		return true
 	}
 	if _, ok := planQuotaSourceOf(p); ok {
+		return true
+	}
+	// a Cline API key's ClinePass limits, which its card has read since
+	// #79 while routing knew nothing of them: the Routing page showed a
+	// ClinePass seat with no bar and no reset (xzhih on X)
+	if clineKeyCard(p) {
 		return true
 	}
 	return accountPlanOf(p) != ""
@@ -217,8 +224,11 @@ func readKeyAllowance(p Provider, id string, gen int) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	r, err := keyWindows(ctx, p)
-	ws := r.ws
 	now := time.Now()
+	var a Allowance
+	if err == nil {
+		a = keyAllowanceOf(p, r.ws, now) // before the lock: it reads p's list
+	}
 	c.Lock()
 	e := c.m[id]
 	if e == nil || c.gen != gen {
@@ -228,7 +238,7 @@ func readKeyAllowance(p Provider, id string, gen int) {
 	e.loading, e.at = false, now
 	var renewed, started bool
 	if err == nil {
-		renewed, started = e.keep(allowanceOf(ws, now), SpentShareOf(p.Routing), now)
+		renewed, started = e.keep(a, SpentShareOf(p.Routing), now)
 	}
 	if err == nil {
 		r.at, r.seq = now, seq
@@ -285,6 +295,15 @@ func keyWindows(ctx context.Context, p Provider) (keyReading, error) {
 		r.plan, r.ws, _, err = planKeyWindows(q.Via(ctx), q, src, q.Key)
 		return r, err
 	}
+	if clineKeyCard(q) {
+		// as its card reads them (KeyBalances): the limits failing
+		// beside a balance read is a failed read, never "no windows"
+		r.ws, r.balance, err = clineKeyUsage(ctx, q)
+		if err != nil {
+			return keyReading{}, err
+		}
+		return r, nil
+	}
 	var parts []BalancePart
 	r.balance, parts, r.split, r.ws, _, _, err = balanceRead(ctx, q)
 	r.parts = cardParts(parts)
@@ -321,18 +340,83 @@ func keyCardTag(p Provider) string {
 	return keyTag("balance", p.Key)
 }
 
+// keyAllowanceOf is the allowance routing goes by from ws, p's key's
+// windows read at now: each counts the models that draw on it (paidOnly).
+func keyAllowanceOf(p Provider, ws []QuotaWindow, now time.Time) Allowance {
+	return allowanceOf(p.paidOnly(ws), now)
+}
+
+// paidOnly is ws, p's key's plan windows, each made to count only the
+// models that draw on it where the vendor serves models free of them:
+// OpenCode Go's 5 hours, week and month count none of its free models
+// (its list's "monthly_usage": null; beam-free, hy4-flash-free), which it
+// serves with every window used up ("If you reach the usage limit, you
+// can continue using the free models"). Read as the whole key's, a full
+// window held them too: ordered last, held at the key's cap, shown used
+// up on the Routing page (Winnie7572 on X, #7496). The free models are
+// p's list's as it is now (costsNothing); ws as it is at any other
+// vendor, or with none free. A window still counts model "", the key.
+func (p Provider) paidOnly(ws []QuotaWindow) []QuotaWindow {
+	if len(ws) > 0 && clineKeyCard(p) {
+		return clinePassOnly(ws)
+	}
+	if len(ws) == 0 || !p.atOpenCodeGo() {
+		return ws
+	}
+	free := map[string]bool{}
+	for _, m := range p.Available() {
+		if p.costsNothing(m) {
+			free[strings.ToLower(m.ID)] = true
+		}
+	}
+	if len(free) == 0 {
+		return ws
+	}
+	paid := func(model string) bool { return !free[model] }
+	out := slices.Clone(ws)
+	for i, w := range out {
+		if w.Model == "" && w.Family == "" && w.matches == nil {
+			out[i].matches = paid
+		}
+	}
+	return out
+}
+
+// clinePassOnly is ws, a Cline key's ClinePass limits, each made to count
+// only the plan's models (cline-pass/…): Cline serves its free models
+// apart from the plan's quota ("separate from ClinePass quota", its
+// recommended-models feed) and its other models from the account's
+// credits, so a week used up holds neither. A window still counts model
+// "", the key.
+func clinePassOnly(ws []QuotaWindow) []QuotaWindow {
+	out := slices.Clone(ws)
+	for i, w := range out {
+		if w.Model == "" && w.Family == "" && w.matches == nil {
+			out[i].matches = clinePassModel
+		}
+	}
+	return out
+}
+
+// clinePassModel says model, as routing asks for it, draws on ClinePass's
+// limits: one of the plan's, or "" for the key itself.
+func clinePassModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	return m == "" || strings.HasPrefix(m, clinePassPrefix) || strings.Contains(m, "/"+clinePassPrefix)
+}
+
 // lastKeyAllowance is p's key's windows as its card last read them, kept
 // on disk (keepLast), each started again whose reset has passed.
 func lastKeyAllowance(p Provider) Allowance {
 	c := &lastQuotas
 	c.Lock()
-	defer c.Unlock()
 	c.load()
 	q, ok := c.reading(p.ID + "/" + strings.ToLower(keyCardTag(p)))
+	c.Unlock()
 	if !ok || len(q.Windows) == 0 {
 		return nil
 	}
-	return allowanceOf(q.Windows, time.Now())
+	return keyAllowanceOf(p, q.Windows, time.Now())
 }
 
 // noteKeyAllowance keeps the windows the key's card just read, for
@@ -341,6 +425,7 @@ func noteKeyAllowance(p Provider, ws []QuotaWindow, now time.Time) {
 	if !readsKeyWindows(p) {
 		return
 	}
+	a := keyAllowanceOf(p, ws, now)
 	c := &keyAllowances
 	c.Lock()
 	if c.m == nil {
@@ -352,7 +437,7 @@ func noteKeyAllowance(p Provider, ws []QuotaWindow, now time.Time) {
 		e = &keyAllowance{}
 		c.m[id] = e
 	}
-	renewed, started := e.keep(allowanceOf(ws, now), SpentShareOf(p.Routing), now)
+	renewed, started := e.keep(a, SpentShareOf(p.Routing), now)
 	e.at = now
 	c.Unlock()
 	if renewed {

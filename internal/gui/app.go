@@ -151,7 +151,11 @@ func (h *host) MainShown() bool { return application.InvokeSyncWithResult(h.main
 
 // Import opens the window on an import link, for the user to confirm.
 func (h *host) Import(link string) {
-	if view, ok := pluginView(link, time.Now()); ok {
+	view, ok := groupView(link, time.Now())
+	if !ok {
+		view, ok = pluginView(link, time.Now())
+	}
+	if ok {
 		if view != "" {
 			h.whenReady(func() { h.ShowMain(view) })
 		}
@@ -452,6 +456,7 @@ func Run(version string, showMain bool, link string) error {
 		// so do the threads.
 		OnShutdown: func() {
 			unhookNoActivate()
+			stopEfficiencyMode()
 			stopServing()
 			proc.EndProbes()
 			if handedOver.Load() {
@@ -740,6 +745,7 @@ func Run(version string, showMain bool, link string) error {
 	if runtime.GOOS == "windows" {
 		h.main.OnWindowEvent(events.Windows.WebViewNavigationCompleted, func(*application.WindowEvent) { markReady() })
 		h.mendOnWake()
+		h.startEfficiencyMode()
 	} else {
 		h.app.Event.OnApplicationEvent(events.Common.ApplicationStarted, func(*application.ApplicationEvent) {
 			if runtime.GOOS != "darwin" {
@@ -809,6 +815,7 @@ func Run(version string, showMain bool, link string) error {
 		startAppPage(h, gw)
 	}
 	defer unhookNoActivate()
+	defer stopEfficiencyMode()
 	return h.app.Run()
 }
 

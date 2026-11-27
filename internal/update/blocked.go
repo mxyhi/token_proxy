@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -94,8 +95,7 @@ var launch = func(exe string, args, env []string) (<-chan struct{}, func(), erro
 // it is ended and old — this running version, moved aside for it — goes
 // back in its place.
 func startChecked(exe, old string, args, env []string) error {
-	marker := filepath.Join(os.TempDir(), "magpie-started-"+strconv.Itoa(os.Getpid()))
-	os.Remove(marker)
+	marker := markerPath("magpie-started-"+strconv.Itoa(os.Getpid()), exe)
 	defer os.Remove(marker)
 	exited, kill, err := launch(exe, args, append(env, startedEnv+"="+marker))
 	if err == nil {
@@ -111,6 +111,40 @@ func startChecked(exe, old string, args, env []string) error {
 	return blocked
 }
 
+// markerPath is a new, empty file, named name and a random suffix, that a
+// magpie started from exe writes and this one reads: in the temp folder,
+// else beside exe, a folder this update has just written into. A TEMP
+// naming a folder that isn't there (a RAM disk not mounted, a drive taken
+// out) leaves no temp folder, and a started version that couldn't write
+// its word there was ended at startWait and the update called refused,
+// every time (reproduced with TEMP=R:\Temp on the Windows box; one way to
+// 柒拾's "didn't start within 20s" on Discord). The file is made here,
+// in the folder that took it, and left for the started magpie to write
+// over: awaitStarted waits for it to hold something.
+//
+// The temp folder can be shared (/tmp on Linux), so the file is never at
+// a name someone else can guess and make first: os.CreateTemp makes it
+// new (O_EXCL, never through a link) and the user's own (0600). A fixed
+// "magpie-started-<pid>" there could be another user's link, and writing
+// it emptied and then wrote over whatever file of this user's the link
+// named; or their file, already holding a word, said a new version that
+// never ran was up.
+func markerPath(name, exe string) string {
+	dirs := []string{os.TempDir(), filepath.Dir(exe)}
+	for i, dir := range dirs {
+		f, err := os.CreateTemp(dir, name+"-*")
+		if err != nil {
+			if i == 0 {
+				log.Printf("update: the temp folder %s can't be written (%v); the new version says it is up beside %s", dir, err, filepath.Base(exe))
+			}
+			continue
+		}
+		f.Close()
+		return f.Name()
+	}
+	return filepath.Join(dirs[0], name)
+}
+
 // awaitStarted waits for marker to be written, the started program's
 // exit (exited closing) or startWait, whichever comes first.
 func awaitStarted(marker string, exited <-chan struct{}, kill func()) error {
@@ -118,12 +152,12 @@ func awaitStarted(marker string, exited <-chan struct{}, kill func()) error {
 	defer tick.Stop()
 	deadline := time.After(startWait)
 	for {
-		if _, err := os.Stat(marker); err == nil {
+		if said(marker) {
 			return nil
 		}
 		select {
 		case <-exited:
-			if _, err := os.Stat(marker); err == nil {
+			if said(marker) {
 				return nil // it said so and then went on as another
 			}
 			return errors.New("it quit as soon as it started")
@@ -138,6 +172,12 @@ func awaitStarted(marker string, exited <-chan struct{}, kill func()) error {
 		case <-tick.C:
 		}
 	}
+}
+
+// said is whether the started magpie wrote its word (its pid) in marker.
+func said(marker string) bool {
+	fi, err := os.Stat(marker)
+	return err == nil && fi.Size() > 0
 }
 
 // putBack puts old in exe's place, the new version that was there out of
@@ -170,7 +210,9 @@ func reportStarted() {
 		return
 	}
 	os.Unsetenv(startedEnv)
-	os.WriteFile(p, []byte(strconv.Itoa(os.Getpid())), 0o644)
+	if err := os.WriteFile(p, []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		log.Printf("update: couldn't tell the magpie that started this one it is up: %v", err)
+	}
 }
 
 // Blocked is a version this computer refused to start, and why.

@@ -76,7 +76,7 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
         await page.route("**/*", serve(lang, textSize, posts));
         await page.goto("http://magpie.test/?view=agents");
-        assert.equal(await page.title(), "magpie");
+        assert.equal(await page.title(), "Token Proxy");
         assert.equal(new URL(page.url()).searchParams.get("view"), "agents");
         for (const id of ["omp", "codex"]) {
           await page.locator(`.row.agent[data-id="${id}"] .ag-conn`).click();

@@ -43,6 +43,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -120,7 +121,7 @@ func SeekMoved(ctx context.Context, p Provider, err error) (Provider, bool) {
 	if q == nil || strings.TrimSpace(q.Chat) == strings.TrimSpace(p.Chat) {
 		return p, false
 	}
-	p.Chat, p.Responses, p.Anthropic, p.Decide = q.Chat, q.Responses, q.Anthropic, q.Decide
+	p.Chat, p.Responses, p.Anthropic, p.Decide, p.Addresses = q.Chat, q.Responses, q.Anthropic, q.Decide, q.Addresses
 	return p, true
 }
 
@@ -129,16 +130,17 @@ func SeekMoved(ctx context.Context, p Provider, err error) (Provider, bool) {
 // (seekMoved) found it there, while a request held p as it read it (le13ure
 // on X: a request asked the old address again and again, through its
 // retries and its patience, after the new one was saved). Only the
-// addresses are taken; a key's view of p stays as it was.
+// addresses, its other ones too (Addresses), are taken; a key's view of p
+// stays as it was.
 func Readdressed(p Provider) (Provider, bool) {
 	if !p.IsRemoteMagpie() {
 		return p, false
 	}
 	q := lookIn(sharedAll(), p.ID)
-	if q == nil || q.ID != p.ID || !q.IsRemoteMagpie() || q.Chat == "" || q.Chat == p.Chat {
+	if q == nil || q.ID != p.ID || !q.IsRemoteMagpie() || q.Chat == "" || q.Chat == p.Chat && slices.Equal(q.Addresses, p.Addresses) {
 		return p, false
 	}
-	p.Chat, p.Responses, p.Anthropic, p.Decide = q.Chat, q.Responses, q.Anthropic, q.Decide
+	p.Chat, p.Responses, p.Anthropic, p.Decide, p.Addresses = q.Chat, q.Responses, q.Anthropic, q.Decide, q.Addresses
 	return p, true
 }
 
@@ -253,7 +255,9 @@ func isRemote(ctx context.Context, p Provider, scheme, at string) bool {
 	if !proves(ctx, scheme, at, p.Key) {
 		return false
 	}
-	p.Chat, p.Responses, p.Anthropic, p.Decide = scheme+"://"+at, "", "", ""
+	// at this address alone: another of p's (Addresses) answering would
+	// prove nothing of this one
+	p.Chat, p.Responses, p.Anthropic, p.Decide, p.Addresses = scheme+"://"+at, "", "", "", nil
 	p.remoteMagpieEndpoints()
 	b, err := remoteBody(ctx, p, "GET", "/v1/models", seekAnswer)
 	if err != nil {
@@ -327,6 +331,12 @@ var proveClient = func() *http.Client {
 // the proof only key's holder, reached at at, can make. Neither key nor
 // any header of the provider's own goes with the ask.
 func proves(ctx context.Context, scheme, at, key string) bool {
+	return provesVia(ctx, scheme, at, "", key, proveClient.Do)
+}
+
+// provesVia is proves with the ask made through do, at the magpie's root
+// path under at (a Remote magpie's address may have one).
+func provesVia(ctx context.Context, scheme, at, path, key string, do func(*http.Request) (*http.Response, error)) bool {
 	if key == "" {
 		return false
 	}
@@ -338,13 +348,13 @@ func proves(ctx context.Context, scheme, at, key string) bool {
 	body, _ := json.Marshal(map[string]string{"nonce": nonce, "key_id": RemoteKeyID(key)})
 	ctx, cancel := context.WithTimeout(ctx, seekAnswer)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, scheme+"://"+at+RemoteProvePath, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, scheme+"://"+at+path+RemoteProvePath, bytes.NewReader(body))
 	if err != nil {
 		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	res, err := proveClient.Do(req)
+	res, err := do(req)
 	if err != nil {
 		return false
 	}

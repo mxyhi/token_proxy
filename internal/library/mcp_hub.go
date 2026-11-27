@@ -92,7 +92,7 @@ func inHub(s *Server, id string) bool {
 // entry (direct); the agents are written again at once, so the entry it
 // had the other way goes.
 func ServerHub(name string, direct bool) (*Result, error) {
-	return change(func(l *Library) error {
+	return changeMCP(func(l *Library) error {
 		s := l.server(name)
 		if s == nil {
 			return fmt.Errorf("no server called %s", name)
@@ -124,7 +124,9 @@ func (l *Library) hubServerFor(t *Target) *Server {
 		s.about = gateway.HubLine(hubAbouts(ss))
 		for _, a := range ss {
 			if serverKey(a) == artifactsKey {
-				s.direct = append(s.direct, gateway.HubToolName(a.Name, artifactPublish))
+				for _, n := range artifactsDirect {
+					s.direct = append(s.direct, gateway.HubToolName(a.Name, n))
+				}
 			}
 		}
 	}
@@ -231,6 +233,14 @@ func hubServers(agentID string) []*Server {
 // is the agent in that project: the global set with the project's own
 // servers added and those it turns off left out.
 func (l *Library) hubServers(agentID string) []*Server {
+	out, _ := l.givenTo(agentID)
+	return out
+}
+
+// givenTo are the servers agentID is given from l: through the hub
+// (hubServers), and each one's own entry while the hub is on (direct,
+// none for the hub's own address, which no agent is).
+func (l *Library) givenTo(agentID string) (hub, direct []*Server) {
 	id, key, scoped := strings.Cut(agentID, gateway.HubProjectSep)
 	var p *Project
 	var given map[string][]string // the project's servers, its plugins' too
@@ -241,7 +251,6 @@ func (l *Library) hubServers(agentID string) []*Server {
 		_, given, _ = l.withPlugins(p)
 	}
 	natives := l.claudeHubNatives(id, p)
-	var out []*Server
 	for _, s := range l.MCP {
 		on := id == "" && !s.Hidden || slices.Contains(s.Agents, id)
 		if p != nil {
@@ -255,14 +264,41 @@ func (l *Library) hubServers(agentID string) []*Server {
 			on = false // Claude Code runs the plugin's own
 		}
 		if on && inHub(s, id) {
-			out = append(out, s)
+			hub = append(hub, s)
+		} else if on && id != "" && !s.Hidden {
+			direct = append(direct, s)
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
+	sort.SliceStable(hub, func(i, j int) bool { return hub[i].Name < hub[j].Name })
+	return hub, direct
 }
 
-func (theHub) Servers(agentID string) []gateway.HubServer { return hubAbouts(hubServers(agentID)) }
+// hubGiven are the servers the hub gives agentID (hubServers) and those
+// the agent is given directly beside it (givenTo).
+func hubGiven(agentID string) (hub, direct []*Server) {
+	mu.Lock()
+	l, err := load()
+	mu.Unlock()
+	if err != nil || !l.MCPHub {
+		return nil, nil
+	}
+	return l.givenTo(agentID)
+}
+
+func (theHub) Servers(agentID string) []gateway.HubServer {
+	ss, direct := hubGiven(agentID)
+	out := hubAbouts(ss)
+	// a Remote magpie's router is told of without the tools the agent has
+	// from this Library's own servers (twinTools): its instructions name
+	// only what it adds
+	own := ownPrefixes(ss, nil, direct)
+	for i := range out {
+		if out[i].Bridge && len(own) > 0 {
+			out[i].Tools = slices.DeleteFunc(out[i].Tools, func(t gateway.HubToolNote) bool { return twinTool(t.Name, own) })
+		}
+	}
+	return out
+}
 
 // hubAbouts are ss as an agent is told of them.
 func hubAbouts(ss []*Server) []gateway.HubServer {
@@ -304,12 +340,14 @@ func visitorServers(ctx context.Context, ss []*Server) []*Server {
 }
 
 func (theHub) Tools(ctx context.Context, agentID string) []gateway.HubTool {
-	ss := visitorServers(ctx, hubServers(agentID))
+	ss, direct := hubGiven(agentID)
+	ss = visitorServers(ctx, ss)
 	if gateway.FromRouter(ctx) {
 		// another magpie's router: not given a Remote magpie's back
 		ss = slices.DeleteFunc(ss, func(s *Server) bool { return s.Bridge != "" })
 	}
 	lists := make([][]gateway.HubTool, len(ss))
+	listed := make([]bool, len(ss))
 	var wg sync.WaitGroup
 	for i, s := range ss {
 		wg.Add(1)
@@ -328,6 +366,7 @@ func (theHub) Tools(ctx context.Context, agentID string) []gateway.HubTool {
 			if err != nil {
 				return
 			}
+			listed[i] = true
 			noteCard(s, says, ts)
 			for _, t := range ts {
 				var name string
@@ -339,8 +378,12 @@ func (theHub) Tools(ctx context.Context, agentID string) []gateway.HubTool {
 		}()
 	}
 	wg.Wait()
+	own := ownPrefixes(ss, listed, direct)
 	var out []gateway.HubTool
-	for _, l := range lists {
+	for i, l := range lists {
+		if ss[i].Bridge != "" && len(own) > 0 {
+			l = slices.DeleteFunc(l, func(t gateway.HubTool) bool { return twinTool(t.Tool, own) })
+		}
 		out = append(out, l...)
 	}
 	return out
@@ -368,6 +411,14 @@ func (theHub) Call(ctx context.Context, agentID, server, tool string, args json.
 	var meta map[string]any
 	if wantsCaller(s) {
 		meta = imageMeta(gateway.HubCallerOf(ctx))
+	}
+	if c := gateway.HubCallerOf(ctx); c.Base != "" && serverKey(s) == artifactsKey {
+		// an agent on another computer is given links at the address it
+		// reaches magpie at, not this computer's 127.0.0.1 (#7890)
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		meta[gateway.HubBaseMeta] = c.Base
 	}
 	if c := gateway.HubCallerOf(ctx); c.Session != "" && keepsSession(s) {
 		if meta == nil {
@@ -479,7 +530,7 @@ func backendOf(s *Server) *backend {
 	}
 	if b == nil {
 		c := *s
-		b = &backend{s: &c, key: key}
+		b = &backend{s: &c, key: key, router: isRouter(&c)}
 		hubPool.m[s.Name] = b
 	}
 	return b
@@ -520,10 +571,14 @@ type backend struct {
 	err     error         // why the last connection failed
 	list    []map[string]json.RawMessage
 	listed  bool
+	at      time.Time  // when list was listed
 	says    serverSays // what the server said of itself when it was connected to
 	busy    int
 	idle    *time.Timer
 	stopped bool
+	// router: the server is another magpie's router, whose event stream
+	// says when its tools change (watch); watching, it is open now
+	router, watching bool
 }
 
 var errHubStopped = errors.New("magpie stopped it")
@@ -575,7 +630,7 @@ func (b *backend) start(ready chan struct{}) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), each)
 	defer cancel()
-	c, err := dialHub(ctx, b.s, b.relist)
+	c, err := dialHub(ctx, b.s, b.changed)
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.stopped && c != nil {
@@ -585,6 +640,9 @@ func (b *backend) start(ready chan struct{}) {
 	b.conn, b.err, b.ready = c, err, nil
 	if c != nil {
 		b.says = c.said()
+	}
+	if h, ok := c.(*httpConn); ok && b.router {
+		go b.watch(h)
 	}
 	close(ready)
 }
@@ -624,6 +682,11 @@ func (b *backend) done() {
 		return
 	}
 	d := b.s.idleFor(hubIdle)
+	if b.watching && b.s.IdleTimeout == 0 {
+		// another magpie's router, held to hear of its tools changing
+		// (watch): a session and a quiet stream are no load to keep
+		d = 0
+	}
 	if d <= 0 {
 		return
 	}
@@ -664,12 +727,35 @@ func (b *backend) tools(ctx context.Context) ([]map[string]json.RawMessage, erro
 	b.use()
 	defer b.done()
 	b.mu.Lock()
-	if b.listed {
+	if b.listed && !b.unwatched() {
 		ts := b.list
 		b.mu.Unlock()
 		return ts, nil
 	}
 	b.mu.Unlock()
+	all, err := b.listAll(ctx)
+	if err != nil {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.router && b.list != nil {
+			// another magpie's router not answering now: its tools as
+			// last listed, for this list, and asked again next time
+			return b.list, nil
+		}
+		return nil, err
+	}
+	b.mu.Lock()
+	was, had := b.list, b.at
+	b.list, b.listed, b.at = all, true, time.Now()
+	b.mu.Unlock()
+	if had.IsZero() || !sameTools(was, all) {
+		hubListsChanged()
+	}
+	return all, nil
+}
+
+// listAll asks the server for its tools, every page of them.
+func (b *backend) listAll(ctx context.Context) ([]map[string]json.RawMessage, error) {
 	c, err := b.connect(ctx)
 	if err != nil {
 		return nil, err
@@ -704,9 +790,6 @@ func (b *backend) tools(ctx context.Context) ([]map[string]json.RawMessage, erro
 		}
 		cursor = r.NextCursor
 	}
-	b.mu.Lock()
-	b.list, b.listed = all, true
-	b.mu.Unlock()
 	return all, nil
 }
 
@@ -718,6 +801,18 @@ func (b *backend) call(ctx context.Context, tool string, args json.RawMessage, m
 	c, err := b.connect(ctx)
 	if err != nil {
 		return nil, err
+	}
+	if note, progress := gateway.HubNoteOf(ctx); note != nil {
+		// the agent is told what the server says of this call
+		// (mcp_hub_notes.go): asked for progress, under a token of its own
+		n := newCallNotes(note)
+		if progress {
+			if meta == nil {
+				meta = map[string]any{}
+			}
+			meta["progressToken"] = n.token
+		}
+		ctx = withNotes(ctx, n)
 	}
 	params := map[string]any{"name": tool, "arguments": args}
 	if meta != nil {
@@ -812,10 +907,13 @@ type waiters struct {
 	mu   sync.Mutex
 	next int
 	wait map[string]chan *rpcMsg
-	gone error
+	// notes are the waiting calls' that are told the server's
+	// notifications about them (mcp_hub_notes.go)
+	notes map[string]*callNotes
+	gone  error
 }
 
-func (w *waiters) open() (int, chan *rpcMsg, error) {
+func (w *waiters) open(n *callNotes) (int, chan *rpcMsg, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.gone != nil {
@@ -827,13 +925,47 @@ func (w *waiters) open() (int, chan *rpcMsg, error) {
 		w.wait = map[string]chan *rpcMsg{}
 	}
 	w.wait[fmt.Sprint(w.next)] = ch
+	if n != nil {
+		if w.notes == nil {
+			w.notes = map[string]*callNotes{}
+		}
+		w.notes[fmt.Sprint(w.next)] = n
+	}
 	return w.next, ch, nil
 }
 
 func (w *waiters) drop(id int) {
 	w.mu.Lock()
 	delete(w.wait, fmt.Sprint(id))
+	delete(w.notes, fmt.Sprint(id))
 	w.mu.Unlock()
+}
+
+// progressOf is the waiting call the server was given tok for.
+func (w *waiters) progressOf(tok string) *callNotes {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for _, n := range w.notes {
+		if n.token == tok {
+			return n
+		}
+	}
+	return nil
+}
+
+// lone is the notes of the one request waiting, when only one is: a log
+// line on a stream that every reply shares is that request's, and whose
+// it is isn't known while two are waiting.
+func (w *waiters) lone() *callNotes {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if len(w.wait) != 1 {
+		return nil
+	}
+	for id := range w.wait {
+		return w.notes[id]
+	}
+	return nil
 }
 
 func (w *waiters) deliver(m *rpcMsg) {
@@ -841,6 +973,7 @@ func (w *waiters) deliver(m *rpcMsg) {
 	w.mu.Lock()
 	ch := w.wait[id]
 	delete(w.wait, id)
+	delete(w.notes, id)
 	w.mu.Unlock()
 	if ch != nil {
 		ch <- m
@@ -859,6 +992,7 @@ func (w *waiters) end(err error) {
 		close(ch)
 		delete(w.wait, id)
 	}
+	w.notes = nil
 }
 
 func (w *waiters) err() error {
@@ -879,7 +1013,8 @@ type streamConn struct {
 
 // read takes one message off the stream: a reply is its request's, a
 // request of the server's own is answered (ping; nothing else is offered),
-// a note that its tools changed has them listed again.
+// a note that its tools changed has them listed again, and a call's
+// progress or log line goes to the call it is about (mcp_hub_notes.go).
 func (c *streamConn) read(b []byte, changed func()) {
 	var m rpcMsg
 	if json.Unmarshal(b, &m) != nil {
@@ -904,13 +1039,17 @@ func (c *streamConn) read(b []byte, changed func()) {
 		}()
 	case m.Method == "notifications/tools/list_changed":
 		changed()
+	case m.Method == "notifications/progress":
+		c.w.progressOf(progressTokenOf(&m)).take(&m)
+	case m.Method == "notifications/message":
+		c.w.lone().take(&m)
 	case m.Method == "":
 		c.w.deliver(&m)
 	}
 }
 
 func (c *streamConn) ask(ctx context.Context, method string, params any) (*rpcMsg, error) {
-	id, ch, err := c.w.open()
+	id, ch, err := c.w.open(notesOf(ctx))
 	if err != nil {
 		return nil, err
 	}
@@ -1094,6 +1233,9 @@ type httpConn struct {
 	ids atomic.Int64
 	// reopen is held while a session the server forgot is opened again
 	reopen sync.Mutex
+	// ended ends with the connection: its event stream with it (watch)
+	ended context.Context
+	end   context.CancelFunc
 }
 
 func dialHTTP(ctx context.Context, s *Server) (*httpConn, error) {
@@ -1105,6 +1247,7 @@ func dialHTTP(ctx context.Context, s *Server) (*httpConn, error) {
 		return nil, healthErr(*h)
 	}
 	hc := &httpConn{c: c}
+	hc.ended, hc.end = context.WithCancel(context.Background())
 	hc.ids.Store(1)
 	return hc, nil
 }
@@ -1156,7 +1299,7 @@ func (h *httpConn) ask(ctx context.Context, method string, params any) (*rpcMsg,
 
 func (h *httpConn) alive() bool { return true }
 
-func (h *httpConn) close() { h.c.end() }
+func (h *httpConn) close() { h.end(); h.c.end() }
 
 var (
 	_ hubConn = (*streamConn)(nil)
@@ -1166,18 +1309,25 @@ var (
 // hubFindsItself is the names of the agents the router gives every tool
 // whole, as they search their MCP tools themselves (gateway.HubFindsItself),
 // for the Tools on demand row to say: its words named four of the six
-// (11-18). An agent's name doesn't change while magpie runs, so they are
-// looked up once; one not found is said by its id.
-var hubFindsItself = sync.OnceValue(func() []string {
+// (11-18). Which they are is asked each time, as the user can turn an
+// agent's search off (#7349); an agent's name doesn't change while magpie
+// runs, so the names are looked up once, and one not found is said by its
+// id.
+func hubFindsItself() []string {
+	names := hubAgentNames()
+	var out []string
+	for _, id := range gateway.HubFindsItself() {
+		out = append(out, cmp.Or(names[id], id))
+	}
+	return out
+}
+
+var hubAgentNames = sync.OnceValue(func() map[string]string {
 	names := map[string]string{}
 	for _, a := range append(apps(), agent.All()...) {
 		if _, ok := names[a.ID]; !ok && a.WSL == "" {
 			names[a.ID] = a.Name
 		}
 	}
-	var out []string
-	for _, id := range gateway.HubFindsItself() {
-		out = append(out, cmp.Or(names[id], id))
-	}
-	return out
+	return names
 })

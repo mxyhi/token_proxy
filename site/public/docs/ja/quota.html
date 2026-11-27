@@ -192,7 +192,7 @@ magpie quota history --days 7 --json</pre></div>
     <p>ゲートウェイはローカル API でも同じ内容を返します（ポートは設定のゲートウェイアドレス）。別のマシンからは、magpie をローカルネットワークで共有している間だけ、そのキーを API キー（Authorization: Bearer または x-api-key）として届きます。</p>
     <div class="code"><span class="lang">ターミナル</span><button class="copy" data-copy="q-api">コピー</button><pre id="q-api">curl http://127.0.0.1:3425/v1/magpie/quotas
 curl 'http://127.0.0.1:3425/v1/magpie/quotas/history?days=7&provider=codex'</pre></div>
-    <p>magpie 公式のスキル <code>magpie-quota</code> は、エージェントに <code>magpie quota --json</code> を読ませ、<code>magpie quota wait</code> で待たせます。ライブラリ のスキルマーケットの先頭にあります。</p>
+    <p>magpie 公式のスキル <code>magpie-quota</code> は、エージェントに <code>magpie quota --json</code> を読ませ、<code>magpie quota wait</code> で待たせます。ライブラリ のスキルマーケットの先頭にあります。隣の <code>magpie-api</code> スキルは、この API と <code>/v1/models</code>、<code>/v1/magpie/route</code>（ルーティンググループが選んだモデル）の読み方をエージェントに教えます。複数のモデルに作業を振り分けるエージェント向けです。</p>
     <h2 id="alert"><a class="anchor" href="#alert">通知</a></h2>
     <p>サブスクリプションやプランのどれかの枠が指定の割合まで使われたとき（枠ごとに一回）、または残高が指定額以下になったとき（その通貨かクレジットで、それを超えてチャージされるまで一回）、magpie アプリが通知します。どちらも既定はオフで、<code>off</code> で止めます。</p>
     <div class="code"><span class="lang">ターミナル</span><button class="copy" data-copy="q-alert">コピー</button><pre id="q-alert">magpie quota alert 80              # notify at 80% used, once per window
@@ -209,8 +209,9 @@ until codex exec …; do magpie quota wait codex || break; done</pre></div>
     <p>レート制限のリセットを持つ Codex アカウントは、その回数を表示します。</p>
     <div class="code"><span class="lang">ターミナル</span><button class="copy" data-copy="q-reset">コピー</button><pre id="q-reset">magpie quota reset                 # spends one held reset; asks first
 magpie quota auto-reset on
+magpie quota auto-reset days 0-7
 magpie quota credits off</pre></div>
-    <ul><li><code>magpie quota reset</code> は一回使って、アカウントの現在の枠を再開させます。取り消せないので先に確認します。<code>--yes</code> なら確認しません。</li><li><code>magpie quota auto-reset on</code> は、週の枠を使い切りほかのアカウントも受けられないときに自分で一回使います（週に一回まで、5 時間枠の使い切りでは使いません）。期限切れ間近のものは、枠を使っていれば期限の約 30 分前に使います。既定はオフです。</li><li><code>magpie quota credits off</code> は、枠を使い切った Codex アカウントにクレジットを使わせません。ルーティングは使い切りとして扱い、リクエストはほかのアカウント、グループ、フォールバックへ回ります。既定のオンなら作業が続きます。</li></ul>
+    <ul><li><code>magpie quota reset</code> は一回使って、アカウントの現在の枠を再開させます。取り消せないので先に確認します。<code>--yes</code> なら確認しません。</li><li><code>magpie quota auto-reset on</code> は、週の枠を使い切りほかのアカウントも受けられないときに自分で一回使います（週に一回まで、5 時間枠の使い切りでは使いません）。期限切れ間近のものは、枠を使っていれば期限の約 30 分前に使います。既定はオフです。</li><li><code>magpie quota auto-reset days 0-7</code> は、期限まで残り 0〜7 日（今から数えて）のものだけを自動で使います（<code>3-</code> は 3 日以上、<code>default</code> は制限なし）。範囲内で期限の早いものから使い、期限のないものは上限がないときだけ対象です。手動で使うときは制限されません。Codex エディタの詳細設定 › リセットでも設定できます。</li><li><code>magpie quota credits off</code> は、枠を使い切った Codex アカウントにクレジットを使わせません。ルーティングは使い切りとして扱い、リクエストはほかのアカウント、グループ、フォールバックへ回ります。既定のオンなら作業が続きます。</li></ul>
 
     <p><a href="/docs/ja/usage">エージェントごとのトークン使用量とコスト</a>：エージェント・モデル・アカウント・セッションごとの費用と、中継サービスの実際の価格。</p>
 
@@ -224,7 +225,7 @@ magpie quota credits off</pre></div>
     <h3>エージェントが自分で枠を読めますか？</h3>
     <p>読めます。magpie quota --json と GET http://127.0.0.1:3425/v1/magpie/quotas は同じ内容を返し、公式スキル magpie-quota がエージェントに読み方と待ち方を教えます。</p>
 
-    <p style="margin-top:48px">関連ページ：<a href="/docs/ja/routing-groups">アカウント・キー・プロバイダーのローテーションとフェイルオーバー</a>、<a href="/docs/ja/subscriptions">Claude Pro/Max・ChatGPT Plus/Pro・GitHub Copilot のサブスクを任意のコーディングエージェントで使う</a>。エラーが出るときは <a href="/docs/ja/troubleshooting">よくあるエラーの直し方：401・429・502・504 など</a>、または <a href="https://discord.gg/vGSnD3ZKQF">Discord</a> で質問してください。</p>
+    <p style="margin-top:48px">関連ページ：<a href="/docs/ja/routing-groups">アカウント・キー・プロバイダーのローテーションとフェイルオーバー</a>、<a href="/docs/ja/subscriptions">Claude Pro/Max・ChatGPT Plus/Pro・GitHub Copilot のサブスクを任意のエージェントで使う</a>。エラーが出るときは <a href="/docs/ja/troubleshooting">よくあるエラーの直し方：401・429・502・504 など</a>、または <a href="https://discord.gg/vGSnD3ZKQF">Discord</a> で質問してください。</p>
   </article>
 </main>
 

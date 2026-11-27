@@ -38,6 +38,8 @@ function fixture() {
     if (url.pathname === "/api/providers") return json(providers);
     if (url.pathname === "/api/groups") return json({ groups: [] });
     if (url.pathname === "/api/login/usage") return json(Object.fromEntries(logins.map((l, i) => [l.user, { windows: Array.from({ length: i % 3 + 1 }, () => ({ label: "Weekly", used: 10, limit: 100 })) }])));
+    // Window lifecycle notifications are not account edits.
+    if (["/api/update/using", "/api/page-away"].includes(url.pathname)) return json({});
     if (request.method() === "POST" && url.pathname.startsWith("/api/")) {
       const body = request.postDataJSON();
       f.posted.push({ action: url.pathname, body });

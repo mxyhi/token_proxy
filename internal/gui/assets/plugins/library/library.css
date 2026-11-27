@@ -282,6 +282,9 @@ button.row.lib-hubfolded:hover { background: var(--pill); }
 .lib-signin-err { margin-top: 6px; font-size: 12px; color: var(--red); line-height: 1.45; overflow-wrap: anywhere; }
 .lib-signin-link { display: flex; align-items: center; gap: 4px; margin-top: 5px; min-width: 0; }
 .lib-signin-link code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: var(--code-style, normal) var(--code-weight, 400) 11px/1.3 var(--code-font, var(--code)); font-stretch: var(--code-stretch, 100%); color: var(--fg-2); padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--card); user-select: all; -webkit-user-select: all; cursor: text; }
+.lib-signin > .note { margin-top: 6px; font-size: 12px; color: var(--fg-2); line-height: 1.45; }
+.lib-signin-callback { display: flex; align-items: center; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.lib-signin-callback input { flex: 1 1 14em; min-width: 0; font-family: var(--code-font, var(--code)); font-size: 12px; }
 
 /* the switch */
 .lib-switch { flex: none; position: relative; width: 32px; height: 19px; border-radius: 10px; background: var(--line); transition: background .2s var(--ease); }
@@ -328,6 +331,7 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-problems-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
 .lib-problems-head b { flex: 1 1 10em; font-weight: 600; min-width: 0; overflow-wrap: break-word; }
 .lib-problems-head .action { flex: none; margin-left: auto; }
+.lib-problems-head .lib-problems-all { margin-left: auto; height: 24px; }
 .lib-problems-head .lib-x { margin: -4px -6px -4px -2px; color: var(--muted); }
 .lib-problems-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
 .lib-problems ul { list-style: none; margin: 6px 0 0; padding: 0 0 0 15px; display: grid; gap: 4px; }
@@ -477,6 +481,9 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 .lib-pick { display: flex; align-items: flex-start; gap: 10px; padding: 7px 6px; border-radius: 8px; cursor: default; }
 .lib-pick:hover:not(.dim) { background: var(--pill); }
 .lib-pick.dim { opacity: .55; }
+/* a row is a label, and an editor sets its labels (a form's names) right:
+   in a sheet the row still reads from its tick (AXmake110 on X) */
+.editor label.lib-pick { text-align: start; }
 .lib-pick input { margin: 2px 0 0; accent-color: var(--fg); flex: none; }
 .lib-pick .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .lib-pick .name { font-size: 13px; font-weight: 500; }
@@ -774,6 +781,24 @@ input.lib-setname:focus { border-color: var(--accent); box-shadow: 0 0 0 3px col
 #view-library .row-head.lib-skillshead .lib-skillq { flex: 1 1 90px; max-width: 190px; }
 #view-library .row-head .lib-skillq { width: 190px; height: 24px; margin: 0; flex: 0 1 auto; min-width: 90px; }
 .lib-skillq::-webkit-search-cancel-button { -webkit-appearance: none; }
+/* one agent's skills: as tall as the filter beside it, but for a
+   phone's taller picker (body.web .sess-pick), which wins */
+.row-head .lib-skillagent { height: 24px; flex: 0 1 auto; min-width: 0; max-width: 180px; gap: 6px; }
+.lib-skillagent .ic { width: 13px; height: 13px; }
+/* on In your agents' heading (no skill in the library): whole, and the
+   heading takes a second line before the pick is cut to "All…" */
+#view-library .row-head.lib-foundhead:has(> .lib-skillagent:not([hidden])) { flex-wrap: wrap; row-gap: 6px; padding-block: 1px; }
+#view-library .row-head.lib-foundhead > .lib-skillagent, #view-library .row-head.lib-foundhead:has(> .lib-skillagent:not([hidden])) > .label { flex: none; }
+/* the note takes what room is left, and never pushes the buttons down */
+#view-library .row-head.lib-foundhead:has(> .lib-skillagent:not([hidden])) > .note { flex: 1 1 0; text-align: right; }
+/* in a narrow window it would show a letter or two: none */
+@media (max-width: 640px) { #view-library .row-head.lib-foundhead:has(> .lib-skillagent:not([hidden])) > .note { display: none; } }
+/* its menu: each agent's icon, its count at the end (as Sessions' agent menu) */
+.pop.proto-menu.lib-agentmenu { width: min(260px, calc(100vw - 16px)); max-height: min(360px, 70vh); overflow-y: auto; }
+.lib-agentmenu .pm-item { align-items: center; }
+.lib-agentmenu .pm-words { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex: 1; min-width: 0; }
+.lib-agentmenu .pm-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-agentmenu .pm-note { flex: none; font-variant-numeric: tabular-nums; }
 /* a project's skills out of view are neither laid out nor painted until they near it */
 .lib-projskill { content-visibility: auto; contain-intrinsic-size: auto 76px; }
 .lib-grouphead .lib-rowacts { min-width: 26px; }
@@ -929,6 +954,8 @@ body.window .lib-list .lib-row { --lib-indent: 38px; }
 .lib-serverhead .note + .lib-viewpick { margin-left: 0; }
 /* a row's note, the user's own words, over the muted line it stands for */
 .lib-row .sub.lib-subnote { color: var(--fg-2); }
+.lib-row .sub.lib-twins { white-space: normal; overflow-wrap: anywhere; color: var(--muted); }
+.lib-row .sub.lib-twins[hidden] { display: none; }
 /* a skill's note, over its SKILL.md */
 .lib-skillnote { display: flex; flex-direction: column; gap: 4px; }
 .lib-reader .lib-skillnote label { text-align: left; padding-top: 0; }
@@ -950,6 +977,74 @@ body.window .lib-list .lib-row { --lib-indent: 38px; }
 .lib-pi-head > .lib-path { flex: 0 1 auto; min-width: 0; }
 .lib-pi-row > .lib-pi-copy { flex: none; }
 .lib-pi + .lib-pi-head { margin-top: 18px; }
+
+/* Memory's numbers (memstats.js): four tiles, each a value and its days
+   as small columns, and the picked one's chart under them. Ink is the
+   app's greys; the one accent is the data. Nothing moves but hover */
+.lib-memstats-hold { height: 160px; margin-bottom: 12px; }
+.lib-memstats { margin-bottom: 12px; }
+.lib-memstats.wait .ms-tiles { opacity: .55; }
+.lib-memstats .ms-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px 2px 16px; }
+.lib-memstats .ms-title { min-width: 0; font-size: 12px; font-weight: 500; color: var(--fg-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lib-memstats .ms-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; padding: 4px 6px 6px; transition: opacity .15s ease; }
+.lib-memstats .ms-tile { display: flex; flex-direction: column; align-items: stretch; min-width: 0; padding: 8px 10px 10px; border: 0; border-radius: 9px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background-color .15s ease, transform .12s cubic-bezier(.23, 1, .32, 1); }
+@media (hover: hover) and (pointer: fine) { .lib-memstats .ms-tile:hover { background: var(--pill); } }
+.lib-memstats .ms-tile:active { transform: scale(.97); }
+.lib-memstats .ms-tile.on { background: var(--accent-soft); }
+.lib-memstats .ms-tile:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.lib-memstats .ms-name { font-size: 11.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lib-memstats .ms-value { display: flex; align-items: baseline; gap: 3px; margin-top: 3px; color: var(--fg); white-space: nowrap; }
+.lib-memstats .ms-value span { font-size: 22px; font-weight: 600; letter-spacing: -.01em; line-height: 1.15; }
+.lib-memstats .ms-value small { font-size: 12px; color: var(--muted); font-weight: 500; }
+.lib-memstats .ms-sub { margin-top: 1px; font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lib-memstats .ms-spark { display: flex; align-items: flex-end; gap: 2px; height: 22px; margin-top: 9px; box-shadow: inset 0 -1px 0 var(--line-2); }
+.lib-memstats .ms-spark span { flex: 1 1 0; min-width: 1px; height: 100%; display: flex; align-items: flex-end; }
+.lib-memstats .ms-spark i { display: block; width: 100%; max-width: 10px; margin: 0 auto; border-radius: 1.5px 1.5px 0 0; background: var(--faint); opacity: .55; }
+.lib-memstats .ms-spark span.now i { background: var(--accent); opacity: 1; }
+.lib-memstats .ms-chart { margin: 0 12px; padding: 12px 0 12px; border-top: 1px solid var(--line-2); }
+.lib-memstats .ms-plot { position: relative; height: 148px; margin: 20px 0 0; outline: none; }
+.lib-memstats .ms-plot:focus-visible { box-shadow: 0 0 0 2px var(--accent); border-radius: 4px; }
+.lib-memstats .ms-grid { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid var(--line-2); pointer-events: none; }
+.lib-memstats .ms-grid span { position: absolute; right: 0; bottom: 3px; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lib-memstats .ms-cols { position: absolute; inset: 0; display: flex; align-items: stretch; border-bottom: 1px solid var(--line); }
+.lib-memstats .ms-col { flex: 1 1 0; min-width: 0; display: flex; align-items: flex-end; justify-content: center; padding: 0 2px; border-radius: 6px 6px 0 0; transition: background-color .12s ease; }
+.lib-memstats .ms-col.hot { background: var(--pill); }
+.lib-memstats .ms-col i { display: block; width: 100%; max-width: 24px; border-radius: 4px 4px 0 0; background: var(--accent); }
+.lib-memstats .ms-cols.dense .ms-col { padding: 0 1px; }
+.lib-memstats .ms-cols.dense .ms-col i { border-radius: 2px 2px 0 0; }
+.lib-memstats .ms-side { display: flex; align-items: center; gap: 6px; flex: none; }
+.lib-memstats .ms-style .opt { display: inline-flex; align-items: center; padding: 0 6px; }
+.lib-memstats .ms-style svg { display: block; }
+/* the line: the columns stay as the pointer's targets, drawn bare; the
+   day under the pointer is a hairline and a dot on the line */
+.lib-memstats .ms-plot.line .ms-col { position: relative; background: none; }
+.lib-memstats .ms-plot.line .ms-col.hot::after { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; background: var(--line); }
+.lib-memstats .ms-marks { position: absolute; inset: 0 0 1px; pointer-events: none; }
+.lib-memstats .ms-marks svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.lib-memstats .ms-marks .ms-stroke { fill: none; stroke: var(--accent); stroke-width: 2px; stroke-linejoin: round; stroke-linecap: round; vector-effect: non-scaling-stroke; }
+.lib-memstats .ms-marks .ms-area { fill: var(--accent); opacity: .1; }
+:root[data-theme="dark"] .lib-memstats .ms-marks .ms-area { opacity: .06; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .lib-memstats .ms-marks .ms-area { opacity: .06; } }
+.lib-memstats .ms-pt, .lib-memstats .ms-dot { position: absolute; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--card); }
+.lib-memstats .ms-axis { display: flex; margin-top: 6px; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.lib-memstats .ms-axis span { flex: 1 1 0; min-width: 0; text-align: center; white-space: nowrap; overflow: visible; }
+.lib-memstats .ms-axis.dense span:first-child { text-align: left; }
+.lib-memstats .ms-axis.dense span:last-child { text-align: right; }
+.lib-memstats .ms-axis span:empty { flex-basis: 0; }
+.lib-memstats .ms-note { margin-top: 10px; font-size: 11px; color: var(--muted); }
+.lib-memstats .ms-none { display: flex; align-items: center; justify-content: center; height: 96px; font-size: 12px; color: var(--muted); text-align: center; }
+.lib-memstats .ms-read { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 12px; row-gap: 2px; min-height: 34px; margin-top: 2px; font-size: 11.5px; line-height: 16px; color: var(--fg-2); }
+.lib-memstats .ms-read .ms-about { color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.lib-memstats .ms-read b { font-weight: 500; color: var(--muted); }
+.lib-memstats .ms-read strong { font-size: 13px; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+.lib-memstats .ms-read em { font-style: normal; color: var(--fg); font-variant-numeric: tabular-nums; }
+.lib-memstats .ms-read .ms-muted { color: var(--muted); }
+/* narrow: two tiles a row */
+@media (max-width: 560px) {
+  .lib-memstats .ms-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .lib-memstats-hold { height: 278px; }
+}
+@media (prefers-reduced-motion: reduce) { .lib-memstats .ms-tile:active { transform: none; } }
 
 /* Memory: the digest switch, a search with its filters, and the memories */
 .lib-memcard { margin-bottom: 12px; }

@@ -234,7 +234,7 @@ var presets = []PresetDef{
 		Website: "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models",
 		NoList:  true,
 		Models: []string{"gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite",
-			"gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
+			"gemini-4-neon", "gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-argon", "gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools", "gemini-3.1-flash-lite", "gemini-3-flash-preview",
 			"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite",
 			"deepseek-ai/deepseek-v4.1-flash-maas", "zai-org/glm-5.2-maas", "openai/gpt-oss-120b-maas",
 			"claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-2", "claude-fable-5-1"},
@@ -625,6 +625,10 @@ var presets = []PresetDef{
 		Website: "https://www.gmicloud.ai", KeysURL: "https://console.gmicloud.ai"},
 	{ID: "opencode-go", Name: "OpenCode Go", Icon: "opencode", Kind: KindRelay, Catalog: "opencode-go",
 		Chat: OpenCodeGoChat, Responses: OpenCodeGoChat, Anthropic: OpenCodeGoAnthropic,
+		// Go's decision models (Jev 1.14, Gemini Decision 1 and GPT-6 Luna
+		// Decision) are served on System One under the same key, while its
+		// model list marks them "type": "decision"
+		Decide:  "https://opencode.ai/inference/go/systemone/v1",
 		Note:    "open coding models, $10/month",
 		Website: "https://opencode.ai/docs/go", KeysURL: "https://opencode.ai/auth"},
 	// Cline's plan for open models, at the Cline API with a Cline key: the

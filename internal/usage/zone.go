@@ -13,7 +13,15 @@ import (
 // in UTC+8 under 1:00 (Outvi V on Discord). The page names its browser's
 // zone, and Zone is that zone here.
 
-var zones sync.Map // name → *time.Location, one for each name
+var zones sync.Map // name → zoneEntry, one for each name
+
+// zoneEntry is a name's zone, judged against the time.Local it was read
+// under: a test that holds time.Local in another zone (testenv.Zone) and
+// reads a name then left that name's zone apart from time.Local for every
+// later reader, though both kept one clock (#7847).
+type zoneEntry struct {
+	local, loc *time.Location
+}
 
 // Zone is the time zone a browser names (an IANA name such as
 // "Asia/Shanghai"), the same *time.Location for every ask of one name, so
@@ -25,26 +33,45 @@ var zones sync.Map // name → *time.Location, one for each name
 // With a day that starts after midnight (Settings' dayStart, ssharpcc on
 // X), the zone is that zone moved so its midnight is that hour (dayzone):
 // every day and hour the page cuts by it starts there.
+//
+// A magpie with a time zone of its own (Settings' timeZone, JackyFill on
+// X) is in that zone for every reader, whatever zone the browser names:
+// the days are the data's, so that a magpie on a server and one on the
+// desk set to one zone count the same days, and every page of one magpie
+// (its window, a browser, another magpie's window onto it) the same.
 func Zone(name string) *time.Location {
-	return dayzone.Shift(zoneNamed(name), settings.Shared().DayStart)
+	s := settings.Shared()
+	if s.TimeZone != "" && settings.ValidTimeZone(s.TimeZone) {
+		name = s.TimeZone
+	}
+	return dayzone.Shift(zoneNamed(name), s.DayStart)
 }
 
 func zoneNamed(name string) *time.Location {
 	if name == "" || name == "Local" {
 		return time.Local
 	}
-	if l, ok := zones.Load(name); ok {
-		return l.(*time.Location)
+	local := time.Local
+	if e, ok := zones.Load(name); ok && e.(zoneEntry).local == local {
+		return e.(zoneEntry).loc
 	}
 	loc, err := time.LoadLocation(name)
 	if err != nil {
 		return time.Local // not kept: any text can be asked for
 	}
-	if sameClock(loc, time.Local) {
-		loc = time.Local
+	if sameClock(loc, local) {
+		loc = local
 	}
-	l, _ := zones.LoadOrStore(name, loc)
-	return l.(*time.Location)
+	// the first read under this time.Local is the one every reader gets
+	for {
+		e, loaded := zones.LoadOrStore(name, zoneEntry{local, loc})
+		if !loaded || e.(zoneEntry).local == local {
+			return e.(zoneEntry).loc
+		}
+		if zones.CompareAndSwap(name, e, zoneEntry{local, loc}) {
+			return loc
+		}
+	}
 }
 
 // sameClock is whether a and b tell the same offset every twelve hours

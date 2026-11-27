@@ -4,6 +4,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -115,6 +117,50 @@ func TestRelaunchReportedStays(t *testing.T) {
 	}
 }
 
+// 柒拾 on Discord: with TEMP naming a folder that isn't there, the new
+// version couldn't write its word in the temp folder, was ended after
+// startWait and the update noted as refused, on every try. Its word goes
+// beside the exe then, where the update has just written. The stand-in
+// writes it as reportStarted does.
+func TestRelaunchWithoutATempFolder(t *testing.T) {
+	gone := filepath.Join(t.TempDir(), "unmounted", "Temp")
+	for _, k := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(k, gone)
+	}
+	was := startWait
+	startWait = 2 * time.Second
+	t.Cleanup(func() { startWait = was })
+	for _, forward := range []bool{false, true} {
+		exe, old := relaunchFiles(t)
+		var at string
+		stubLaunch(t, func(_ string, _, env []string) (<-chan struct{}, func(), error) {
+			for _, kv := range env {
+				if p, ok := strings.CutPrefix(kv, startedEnv+"="); ok {
+					at = p
+					t.Setenv(startedEnv, p)
+					reportStarted()
+				}
+			}
+			return make(chan struct{}), func() { t.Error("killed") }, nil
+		})
+		var err error
+		if forward {
+			err = Forward(old, exe)
+		} else {
+			err = RelaunchBinary(exe, old, false, "")
+		}
+		if err != nil {
+			t.Fatalf("forward=%v: %v", forward, err)
+		}
+		if filepath.Dir(at) != filepath.Dir(exe) {
+			t.Errorf("forward=%v: word written at %s, want beside %s", forward, at, exe)
+		}
+		if _, err := os.Stat(at); !os.IsNotExist(err) {
+			t.Errorf("forward=%v: the word was left behind: %v", forward, err)
+		}
+	}
+}
+
 // What the started magpie writes is what the one starting it waits for.
 func TestReportStarted(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "started")
@@ -146,4 +192,87 @@ func TestBlockedNote(t *testing.T) {
 	if policyRefused(syscall.Errno(2)) || !policyRefused(&os.PathError{Err: syscall.Errno(1260)}) {
 		t.Error("policyRefused")
 	}
+}
+
+// The started magpie's word goes in a file no one else could have made
+// first: the temp folder can be shared (/tmp on Linux), and a link left at
+// the old fixed name "magpie-started-<pid>" was followed, emptying and
+// writing over the file of the user's it named. A file someone else left
+// there already holding a word doesn't say a new version is up that never
+// ran either.
+func TestRelaunchMarkerNotAGuessableName(t *testing.T) {
+	tmp := t.TempDir()
+	for _, k := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(k, tmp)
+	}
+	was := startWait
+	startWait = time.Second
+	t.Cleanup(func() { startWait = was })
+	victim := filepath.Join(t.TempDir(), "victim")
+	os.WriteFile(victim, []byte("the user's own"), 0o600)
+	for _, forward := range []bool{false, true} {
+		name := "magpie-started-" + strconv.Itoa(os.Getpid())
+		if forward {
+			name = "magpie-installed-" + strconv.Itoa(os.Getpid())
+		}
+		planted := filepath.Join(tmp, name)
+		os.Remove(planted)
+		if err := os.Symlink(victim, planted); err != nil {
+			t.Skipf("no symlinks here: %v", err)
+		}
+		exe, old := relaunchFiles(t)
+		var at string
+		stubLaunch(t, func(_ string, _, env []string) (<-chan struct{}, func(), error) {
+			for _, kv := range env {
+				if p, ok := strings.CutPrefix(kv, startedEnv+"="); ok {
+					at = p
+					if runtime.GOOS != "windows" {
+						if fi, err := os.Lstat(p); err != nil {
+							t.Errorf("forward=%v: the word's file %s: %v", forward, p, err)
+						} else if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+							t.Errorf("forward=%v: the word's file %s is %v, want a regular 0600 file", forward, p, fi.Mode())
+						}
+					}
+					t.Setenv(startedEnv, p)
+					reportStarted()
+				}
+			}
+			return make(chan struct{}), func() { t.Error("killed") }, nil
+		})
+		var err error
+		if forward {
+			err = Forward(old, exe)
+		} else {
+			err = RelaunchBinary(exe, old, false, "")
+		}
+		if err != nil {
+			t.Fatalf("forward=%v: %v", forward, err)
+		}
+		if at == planted {
+			t.Errorf("forward=%v: the word went to the guessable %s", forward, at)
+		}
+		if b, _ := os.ReadFile(victim); string(b) != "the user's own" {
+			t.Fatalf("forward=%v: the linked file was written over: %q", forward, b)
+		}
+		os.Remove(planted)
+	}
+
+	// a file at the old name already holding a pid is not the started
+	// magpie's word: one that never writes is still ended and refused
+	planted := filepath.Join(tmp, "magpie-started-"+strconv.Itoa(os.Getpid()))
+	os.WriteFile(planted, []byte("1"), 0o644)
+	exe, old := relaunchFiles(t)
+	killed := make(chan struct{})
+	stubLaunch(t, func(string, []string, []string) (<-chan struct{}, func(), error) {
+		return killed, func() { close(killed) }, nil
+	})
+	if err := RelaunchBinary(exe, old, false, ""); err == nil {
+		t.Fatal("a version that never said it was up was taken as started")
+	}
+	select {
+	case <-killed:
+	default:
+		t.Error("the silent version wasn't ended")
+	}
+	wantPutBack(t, exe, old)
 }

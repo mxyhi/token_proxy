@@ -122,7 +122,7 @@ type Session struct {
 	// Gateway: seen only through magpie's gateway, with no file of the
 	// agent's on this computer (external.go)
 	Gateway       bool          `json:"gateway,omitempty"`
-	Agent         string        `json:"agent"` // magpie agent id: claude, codex, opencode, pi, omp, zcode, dsh, cline, qoder, qoder-cn, grok, workbuddy, workbuddy-ai, codebuddy, droid, cursor, hermes, alma, openmausbot, liveagent, kimi, agy
+	Agent         string        `json:"agent"` // magpie agent id: claude, codex, opencode, pi, omp, zcode, dsh, cline, qoder, qoder-cn, grok, workbuddy, workbuddy-ai, codebuddy, droid, cursor, hermes, alma, openmausbot, catpaw, liveagent, kimi, agy
 	ID            string        `json:"id"`
 	Cwd           string        `json:"cwd"`
 	Title         string        `json:"title"` // the name it was given, else the agent's own title, else the first prompt
@@ -429,12 +429,41 @@ func routedSkill(path string) string {
 // idleGap is the longest pause between two lines still counted as work.
 const idleGap = 5 * time.Minute
 
-// dateOf is the local date of a time, "" for none.
+// dateOf is the local date of a time (in Local), "" for none.
 func dateOf(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.In(time.Local).Format(time.DateOnly)
+	return t.In(Local()).Format(time.DateOnly)
+}
+
+// local is Settings' time zone as zone last read it: own is nil when none
+// is set, and the days are then the system's, time.Local as it is when
+// asked (a test moves it); local is nil before the first read.
+var local atomic.Pointer[struct{ own *time.Location }]
+
+// Local is the zone this magpie's days are dates in: Settings' timeZone
+// (JackyFill on X), else the system's. The setting is read again at each
+// load of the cache (zone), not on each line a parse dates.
+func Local() *time.Location {
+	z := local.Load()
+	if z == nil {
+		return zoneNow()
+	}
+	if z.own != nil {
+		return z.own
+	}
+	return time.Local
+}
+
+// zoneNow reads Settings' zone again, kept for Local, and is Local.
+func zoneNow() *time.Location {
+	own := settings.OwnZone()
+	local.Store(&struct{ own *time.Location }{own})
+	if own != nil {
+		return own
+	}
+	return time.Local
 }
 
 func (s *state) day(date string) *day {
@@ -479,7 +508,7 @@ func (s *state) saw(t time.Time, main bool) {
 		if gap := t.Sub(s.Last); main && !s.Last.IsZero() && gap < idleGap {
 			d := s.day(dateOf(t))
 			d.Active += gap.Milliseconds()
-			d.Hours.add(t.In(time.Local).Hour(), gap.Milliseconds())
+			d.Hours.add(t.In(Local()).Hour(), gap.Milliseconds())
 		}
 		s.Last = t
 	}
@@ -588,7 +617,9 @@ type fileMore struct {
 	alma *almaStore
 	// OpenMausBot: its database, bots and usage rows
 	omb *ombStore
-	rev string
+	// CatPaw: its database, and the conversation's title and folder
+	catpaw *catpawConv
+	rev    string
 	// agy: what conversation_summaries.db says of the conversation
 	agy    *agySummary
 	editor *cursorEditorMeta
@@ -1012,7 +1043,7 @@ func allFilesWith(kept *filesKept, zcode func() []file) []file {
 	lists := callFileLists(codexFiles())
 	lists = append(lists, openCodeFiles(), piFiles(), raftFiles(), cindyFiles(), wslFiles("pi", "raft", "omp", "kimi", "antigravity", "agy"), zcode())
 	lists = append(lists, dshFiles(), clineFiles(), ccFiles("qoder", QoderDir("qoder")), ccFiles("qoder-cn", QoderDir("qoder-cn")),
-		grokFiles(), workbuddyFiles(), workbuddyAIFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), openmausbotFiles(), liveagentFiles(), kimiFiles(), agyFiles(),
+		grokFiles(), workbuddyFiles(), workbuddyAIFiles(), codebuddyFiles(), droidFiles(), ompFiles(), cursorFiles(), hermesFiles(), almaFiles(), openmausbotFiles(), catpawFiles(), liveagentFiles(), kimiFiles(), agyFiles(),
 		antigravityFiles()) // #2190
 	// each lister asked Reads already; a file listed under another
 	// agent's name is held to that agent too
@@ -1127,6 +1158,7 @@ func Dirs() []string {
 		{filepath.Dir(cursorEditorDB()), cursorEditorDB()},
 		{AlmaDir(), almaDB()},
 		{OpenMausBotDir(), ombDB()},
+		{CatPawDir(), catpawDB()},
 		{LiveAgentDir(), liveagentSessions()},
 		{MiniMaxDir(), minimaxSessions()},
 		{KimiCodeDir(), kimiSessions()},
@@ -1508,11 +1540,13 @@ type cacheFile struct {
 }
 
 // zone tells time zones apart well enough for the days kept by date: their
-// offsets in winter and in summer. Moved to another, the files are read again.
+// offsets in winter and in summer. Moved to another, the files are read
+// again. The zone is Local, read again here.
 func zone() string {
+	loc := zoneNow()
 	y := time.Now().Year()
-	_, w := time.Date(y, 1, 1, 0, 0, 0, 0, time.Local).Zone()
-	_, s := time.Date(y, 7, 1, 0, 0, 0, 0, time.Local).Zone()
+	_, w := time.Date(y, 1, 1, 0, 0, 0, 0, loc).Zone()
+	_, s := time.Date(y, 7, 1, 0, 0, 0, 0, loc).Zone()
 	return strconv.Itoa(w) + "/" + strconv.Itoa(s)
 }
 
@@ -1722,7 +1756,7 @@ func refresh(want, all []file) {
 		if f.cold {
 			continue // in a stopped WSL distro: what was read of it stands
 		}
-		if s := parsed(f.path); s == nil || s.Size != f.size || s.Mod != f.mod.UnixNano() || ccStale(f, s) || (f.agent == "hermes" && (f.m().hermes == nil || f.m().rev == "" || s.more().DBRevision != f.m().rev)) || ((f.agent == "alma" || f.agent == "openmausbot" || f.agent == "cursor" || f.agent == "agy" || f.agent == "antigravity") && s.more().DBRevision != f.m().rev) {
+		if s := parsed(f.path); s == nil || s.Size != f.size || s.Mod != f.mod.UnixNano() || ccStale(f, s) || (f.agent == "hermes" && (f.m().hermes == nil || f.m().rev == "" || s.more().DBRevision != f.m().rev)) || ((f.agent == "alma" || f.agent == "openmausbot" || f.agent == "catpaw" || f.agent == "cursor" || f.agent == "agy" || f.agent == "antigravity") && s.more().DBRevision != f.m().rev) {
 			if parsing[f.path] != nil {
 				// a refresh is reading it, another or this one (a path
 				// listed twice): its last parse stands until that one is
@@ -2331,6 +2365,8 @@ func parserFor(agent string) sessionParser {
 		return sessionParser{whole: parseAlma}
 	case "openmausbot":
 		return sessionParser{whole: parseOpenMausBot}
+	case "catpaw":
+		return sessionParser{whole: parseCatPaw}
 	case "liveagent":
 		return sessionParser{whole: parseLiveAgent}
 	case "opencode", "zcode":

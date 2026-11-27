@@ -576,7 +576,7 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     <p><code>fetch</code> は同じ内容を <code>init.headers</code> の <code>x-magpie-caller-agent</code>、<code>x-magpie-caller-name</code>、<code>x-magpie-caller-via</code>（カンマ区切り）で受け取ります。どの値もパーセントエンコードされています（<code>decodeURIComponent</code> で戻せます）。magpie はプラグインが送るリクエストからこれらのヘッダーを外すので、ベンダーには届かず、誰がリクエストしてもベンダーが受け取るリクエストは同じです。</p>
 
     <h3 id="pin"><a class="anchor" href="#pin">id で一つのアカウントを指定する</a></h3>
-    <p>アカウントや API キーが使えるか試すには、まず一覧を取り、そのうち一つに固定したリクエストを送ります。<code>GET /v1/magpie/accounts</code> は、ベンダーが枠を返すかどうかに関係なく、すべてのプロバイダのすべてのアカウントと API キーを返します。プロバイダ、<code>id</code>（キーの id はフィンガープリントで、キーそのものではありません）、<code>kind</code>（<code>account</code> または <code>key</code>）、<code>label</code>、<code>on</code>、<code>pin</code> です。キーやトークンは含まれません。<code>?provider=&lt;id&gt;</code> で一つのプロバイダに絞れます。<code>pin</code> を <code>X-Magpie-Account</code> に入れて送ると、そのアカウントだけが試されます。ルーティングもフェイルオーバーもせず、失敗はベンダーの返したとおりに返ります。</p>
+    <p>アカウントや API キーが使えるか試すには、まず一覧を取り、そのうち一つに固定したリクエストを送ります。<code>GET /v1/magpie/accounts</code> は、ベンダーが枠を返すかどうかに関係なく、すべてのプロバイダのすべてのアカウントと API キーを返します。プロバイダ、<code>id</code>（キーの id はフィンガープリントで、キーそのものではありません）、<code>kind</code>（<code>account</code> または <code>key</code>）、<code>label</code>、<code>on</code>、<code>pin</code> です。キーやトークンは含まれません。<code>?provider=&lt;id&gt;</code> で一つのプロバイダに絞れます。<code>pin</code> を <code>X-Magpie-Account</code> に入れて送ると、そのアカウントだけが試されます。ルーティングもフェイルオーバーもせず、失敗はベンダーの返したとおりに返ります。オフにしたアカウントやキー（<code>on: false</code>）も指定でき、オンにする前に試せます。送られるのはそのリクエストだけで、ルーティングは引き続き使わず、失敗しても休ませません。モデル、アカウント、上限が決められたゲートウェイキーでオフのものを指定すると 403 になります。</p>
     <div class="code">
       <span class="lang">JavaScript</span>
       <pre><span class="k">const</span> base = <span class="s">"http://"</span> + process.env.MAGPIE_ADDR
@@ -588,6 +588,13 @@ magpie quota                             <span class="c"># acme · Pro · 5h 37%
     <span class="s">"x-magpie-account"</span>: encodeURIComponent(data[0].pin) },
   body: JSON.stringify({ model: <span class="s">"openai/gpt-5.5"</span>, messages: [{ role: <span class="s">"user"</span>, content: <span class="s">"ping"</span> }] }),
 })</pre>
+    </div>
+    <p><code>?models=1</code> を付けると、それぞれに <code>models</code> も付きます。そのアカウントで呼べるすべてのモデルの id、つまりプロバイダの完全な一覧です。モデルを選んでいないとき、エージェントに出す一覧はプロバイダの一覧の先頭 24 個だけですが、こちらにはその上限がありません。外れるのはそのアカウントで呼べないもの（ユーザーがそのアカウントに使わせないモデルや、プロバイダのどの API にもないモデル）だけです。エージェントに出しているかどうかに関係なく、<code>&lt;provider&gt;/&lt;id&gt;</code> の形で呼べます（例：<code>openai/o4-mini</code>）。</p>
+    <p>代わりに <code>?models=full</code> を付けると、<code>models</code> の各項目は <code>/v1/models</code> が返すそのモデルと同じ形になり、フィールドも同じです：<code>id</code>（<code>&lt;provider&gt;/&lt;id&gt;</code>）、<code>display_name</code>、<code>reasoning</code>、<code>reasoning_levels</code>、<code>context_window</code>、<code>max_output_tokens</code>、<code>modalities</code>、<code>pricing</code>、<code>magpie_label</code> など。<code>/v1/models</code> に出ていないモデルも同じです。<code>?models=1</code> はこれまでどおり id だけを返します。</p>
+    <div class="code">
+      <span class="lang">JavaScript</span>
+      <pre><span class="k">const</span> { data } = <span class="k">await</span> (<span class="k">await</span> fetch(base + <span class="s">"/v1/magpie/accounts?models=full"</span>)).json()
+<span class="c">// data[0].models: [{ id: "openai/o4-mini", display_name: "o4-mini", reasoning_levels: ["low", "medium", "high"], context_window: 200000, pricing: { prompt: "0.0000011", … }, … }, …]</span></pre>
     </div>
 
     <h2 id="signin-state"><a class="anchor" href="#signin-state">サインイン状態</a></h2>

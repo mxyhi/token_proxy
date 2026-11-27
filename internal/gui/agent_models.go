@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/agent"
+	"github.com/yetone/magpie/internal/gateway"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -29,6 +30,33 @@ type modelCountJSON struct {
 	// Names are the first few models shown by name, for a row that says
 	// which it lists rather than how many (Claude Desktop's)
 	Names []string `json:"names,omitempty"`
+	// Menu is how many of them the agent's app's model menu takes at most,
+	// when it takes fewer than magpie may list (agentMenus): the row says
+	// when the rest are left out
+	Menu int `json:"menu,omitempty"`
+}
+
+// agentMenus is how many models an agent's app's menu takes. The Codex
+// app asks Codex's app-server for model/list with limit 100 and never for
+// the next page (ChatGPT.app 26.930), so a model past them can't be picked
+// there; the Codex CLI's /model asks for every one (#1262). Antigravity's
+// backend keeps the first 32 of a gateway's catalog entries
+// (gateway.AntigravityMenuMax), so the rest were missing from its menu
+// while the row counted them (0xBCD18E on X); the levels of the model it
+// starts on take some of them (gateway.AntigravityMenuModels). By the
+// agent's own id: a WSL twin has no app.
+var agentMenus = map[string]func() int{
+	"codex":       func() int { return 100 },
+	"antigravity": gateway.AntigravityMenuModels,
+}
+
+// agentMenu is how many models agent id's app's menu takes, 0 for every
+// one (agentMenus).
+func agentMenu(id string) int {
+	if f := agentMenus[id]; f != nil {
+		return f()
+	}
+	return 0
 }
 
 // countNames is how many models' names modelCount gives.
@@ -153,12 +181,15 @@ func unservedIn(opts []agent.Option, first bool, unserved func() []provider.Unse
 func agentModelCount(a *agent.Agent, fields []fieldJSON) *modelCountJSON {
 	id := a.ListsFor()
 	if takesCatalog(fields) || a.ListsModels {
-		return modelCount(id)
+		c := modelCount(id)
+		c.Menu = agentMenu(a.ID)
+		return c
 	}
 	if _, only := provider.PickedModels(id); !only && len(provider.HiddenModels(id)) == 0 {
 		return nil
 	}
 	if c := modelCount(id); c.Shown < c.Listed {
+		c.Menu = agentMenu(a.ID)
 		return c
 	}
 	return nil

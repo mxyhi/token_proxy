@@ -192,7 +192,7 @@ magpie quota history --days 7 --json</pre></div>
     <p>网关在本地接口上返回同样的内容（端口以 设置 里的网关地址为准）。只有在 magpie 开着局域网共享时，其他电脑才能访问，并以网关密钥作为 API Key（Authorization: Bearer 或 x-api-key）。</p>
     <div class="code"><span class="lang">终端</span><button class="copy" data-copy="q-api">复制</button><pre id="q-api">curl http://127.0.0.1:3425/v1/magpie/quotas
 curl 'http://127.0.0.1:3425/v1/magpie/quotas/history?days=7&provider=codex'</pre></div>
-    <p>magpie 的官方技能 <code>magpie-quota</code> 让 Agent 读 <code>magpie quota --json</code>，并用 <code>magpie quota wait</code> 等待额度恢复。它在 资源库 的技能市场里排在最前面。</p>
+    <p>magpie 的官方技能 <code>magpie-quota</code> 让 Agent 读 <code>magpie quota --json</code>，并用 <code>magpie quota wait</code> 等待额度恢复。它在 资源库 的技能市场里排在最前面。旁边的 <code>magpie-api</code> 技能教 Agent 直接读这个 API，以及 <code>/v1/models</code> 和 <code>/v1/magpie/route</code>（路由组选了哪个模型），适合在多个模型间分派任务的 Agent。</p>
     <h2 id="alert"><a class="anchor" href="#alert">用量提醒</a></h2>
     <p>让 magpie 应用在任意订阅或计划的某个窗口用到指定比例时发通知，每个窗口每次只提醒一次；或者在余额降到某个数以下时提醒，以它自己的货币或 credits 计，充值超过之前只提醒一次。两项默认都关闭，<code>off</code> 关掉。</p>
     <div class="code"><span class="lang">终端</span><button class="copy" data-copy="q-alert">复制</button><pre id="q-alert">magpie quota alert 80              # notify at 80% used, once per window
@@ -209,8 +209,9 @@ until codex exec …; do magpie quota wait codex || break; done</pre></div>
     <p>持有限额重置次数的 Codex 账号会显示有几次。</p>
     <div class="code"><span class="lang">终端</span><button class="copy" data-copy="q-reset">复制</button><pre id="q-reset">magpie quota reset                 # spends one held reset; asks first
 magpie quota auto-reset on
+magpie quota auto-reset days 0-7
 magpie quota credits off</pre></div>
-    <ul><li><code>magpie quota reset</code> 用掉一次，让账号当前的窗口重新开始。不能撤销，所以会先问；<code>--yes</code> 不问。</li><li><code>magpie quota auto-reset on</code>：每周窗口用完、又没有别的账号能接请求时，让账号自己用掉一次，每周最多一次（5 小时窗口用完从不会触发）；快过期的那次会在过期前约半小时用掉（如果账号的窗口用过）。默认关闭。</li><li><code>magpie quota credits off</code>：窗口用完后不让 Codex 账号花 credits，路由把它当作用完，请求交给其他账号、组和备用。默认 on，任务能继续。</li></ul>
+    <ul><li><code>magpie quota reset</code> 用掉一次，让账号当前的窗口重新开始。不能撤销，所以会先问；<code>--yes</code> 不问。</li><li><code>magpie quota auto-reset on</code>：每周窗口用完、又没有别的账号能接请求时，让账号自己用掉一次，每周最多一次（5 小时窗口用完从不会触发）；快过期的那次会在过期前约半小时用掉（如果账号的窗口用过）。默认关闭。</li><li><code>magpie quota auto-reset days 0-7</code>：只自动使用离过期还剩 0 到 7 天的重置（从现在算起；<code>3-</code> 为至少 3 天，<code>default</code> 为不限），范围内最早过期的先用；永不过期的只在没设上限时算在内。手动使用不受限。Codex 编辑器的「高级」› 重置里也能设。</li><li><code>magpie quota credits off</code>：窗口用完后不让 Codex 账号花 credits，路由把它当作用完，请求交给其他账号、组和备用。默认 on，任务能继续。</li></ul>
 
     <p><a href="/docs/zh/usage">查看 Agent 的 Token 用量和费用</a>：每个 Agent、模型、账号和会话花了多少，以及给中转站设置真实价格。</p>
 

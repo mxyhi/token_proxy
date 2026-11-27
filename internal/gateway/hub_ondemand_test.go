@@ -3,6 +3,7 @@ package gateway
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -272,6 +273,103 @@ func TestHubFindsItselfIsWhoGetsEveryTool(t *testing.T) {
 		if !hubOnDemand(id, n, false) {
 			t.Fatalf("%s is given every tool but not named", id)
 		}
+	}
+}
+
+// jjaychen1e on X (#7349): a Claude Code whose user set
+// ENABLE_TOOL_SEARCH=false doesn't search its MCP tools, and was given
+// every one whole (89 tools, ~38K tokens, on each request). With its
+// search off (HubSearchOff, agent.HubSearchOff) it is given find_tools and
+// call_tool past hubOnDemandOver, through the hub's own route, a project's
+// address too, and isn't named as finding its tools itself; the others
+// still are, and a few tools still go whole.
+func TestHubSearchOffGivesToolsOnDemand(t *testing.T) {
+	fresh(t)
+	n := hubOnDemandOver + 5
+	off := map[string]bool{"claude": true}
+	var asked []string
+	old := HubSearchOff
+	HubSearchOff = func(agent string) bool { asked = append(asked, agent); return off[agent] }
+	t.Cleanup(func() { HubSearchOff = old })
+	withHub(t, &fakeHub{on: true, tools: map[string][]HubTool{
+		"claude": manyHubTools(n), "claude~1a2b3c4d5e6f": manyHubTools(n), "codex": manyHubTools(n),
+	}})
+	h := lanGuard(New().Handler())
+	for _, id := range []string{"claude", "claude~1a2b3c4d5e6f"} {
+		got := listedNames(t, readMCP(t, hubPost(h, id, here, toolsList)))
+		if !slices.Contains(got, hubFindTool) || !slices.Contains(got, hubCallTool) || slices.Contains(got, "github__create_issue") {
+			t.Fatalf("hub/%s with tool search off listed %v", id, got)
+		}
+	}
+	if slices.Contains(asked, "claude~1a2b3c4d5e6f") {
+		t.Fatalf("asked by the project's address: %q", asked)
+	}
+	if got := listedNames(t, readMCP(t, hubPost(h, "codex", here, toolsList))); slices.Contains(got, hubFindTool) {
+		t.Fatalf("codex, searching, listed %v", got)
+	}
+	if hubOnDemand("claude", hubOnDemandOver, false) {
+		t.Fatal("a few tools given on demand")
+	}
+	if names := HubFindsItself(); slices.Contains(names, "claude") || !slices.Contains(names, "codex") || !slices.Contains(names, "claude-desktop") {
+		t.Fatalf("named as finding their tools themselves: %q", names)
+	}
+	// turned on again, every tool whole
+	off["claude"] = false
+	if got := listedNames(t, readMCP(t, hubPost(h, "claude", here, toolsList))); slices.Contains(got, hubFindTool) {
+		t.Fatalf("searching again, listed %v", got)
+	}
+	if !slices.Contains(HubFindsItself(), "claude") {
+		t.Fatal("claude, searching again, not named")
+	}
+}
+
+// A profile of an agent that searches its MCP tools itself searches them
+// as that agent does: a Claude Code config folder (claude#work, its
+// address hub/claude%23work), omp's profile (omp#work) and one in a WSL
+// distro are given every tool whole, as claude and omp are, through the
+// hub's own route. Read by the whole id, each was given find_tools in
+// place of the tools it searches itself.
+func TestHubProfileSearchesAsItsAgent(t *testing.T) {
+	fresh(t)
+	n := hubOnDemandOver + 2
+	ids := []string{"claude#work", "omp#work", "claude#work@wsl:Ubuntu", "claude#work~1a2b3c4d5e6f"}
+	tools := map[string][]HubTool{}
+	for _, id := range ids {
+		tools[id] = manyHubTools(n)
+	}
+	withHub(t, &fakeHub{on: true, tools: tools})
+	h := lanGuard(New().Handler())
+	for _, id := range ids {
+		if hubOnDemand(id, n, false) {
+			t.Errorf("%s given its %d tools on demand", id, n)
+		}
+		got := listedNames(t, readMCP(t, hubPost(h, url.PathEscape(id), here, toolsList)))
+		if slices.Contains(got, hubFindTool) || !slices.Contains(got, "github__create_issue") {
+			t.Errorf("hub/%s listed %v", id, got)
+		}
+	}
+	// a profile of an agent that sends every tool keeps them on demand
+	if !hubOnDemand("hermes#work", n, false) {
+		t.Error("hermes#work given every tool whole")
+	}
+}
+
+// T_t__biu on X (#7873) asked for Cindy among the agents given every tool
+// whole. Its Codex, the one runtime of Cindy's that reaches hub/cindy,
+// defers MCP tools only for a model its catalog marks supports_search_tool,
+// which a model of magpie's isn't unless its slug is one of Cindy's bundled
+// GPT ones: given every tool whole, it would send them all on every
+// request. So Cindy keeps find_tools and call_tool past hubOnDemandOver.
+func TestCindyGetsToolsOnDemand(t *testing.T) {
+	fresh(t)
+	if slices.Contains(HubFindsItself(), "cindy") {
+		t.Fatal("cindy is named as searching its MCP tools itself")
+	}
+	if hubOnDemand("cindy", hubOnDemandOver, false) {
+		t.Errorf("cindy given %d tools on demand", hubOnDemandOver)
+	}
+	if !hubOnDemand("cindy", hubOnDemandOver+1, false) {
+		t.Errorf("cindy given %d tools whole", hubOnDemandOver+1)
 	}
 }
 

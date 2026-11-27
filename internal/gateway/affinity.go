@@ -673,6 +673,20 @@ func strictOnly(cs []candidate, pl planned, at int) ([]candidate, planned) {
 	return out, pl
 }
 
+// notAmong is what of cs isn't in kept, in cs's order: the candidates
+// strictOnly left out.
+func notAmong(cs, kept []candidate) []candidate {
+	var out []candidate
+	for _, c := range cs {
+		if !slices.ContainsFunc(kept, func(k candidate) bool {
+			return k.who() == c.who() && k.model == c.model && k.effort == c.effort
+		}) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // stickKey is the conversation a stick is kept for: scope's, by the
 // conversation's id, and a Claude Code subagent's apart from its lead's.
 // Claude Code sends its session's id with every request of the session,
@@ -1059,10 +1073,25 @@ func leastHeld(scope, key string, cs []candidate, pl planned, ready bool) ([]can
 // nor a fallback while the provider's own model leads, nor used past
 // lowShare unless it spends its credits first (Weighed.CreditsFirst) or
 // is that low on its week alone, which Smart and Use before expiry keep
-// with those that have room (Weighed.WeekLow).
+// with those that have room (Weighed.WeekLow), nor a key nothing is read
+// of while one whose allowance is known leads (unreadBehind).
 func readyForNew(order []Weighed, i int) bool {
 	w := order[i]
-	return w.Rest == nil && !w.Aside && !standsIn(order, i) && !(w.Known && w.Used >= lowShare && !w.CreditsFirst && !(w.WeekLow && w.Used < usedShare)) && !lastBehind(order, i) && !busyBehind(order, i)
+	return w.Rest == nil && !w.Aside && !standsIn(order, i) && !(w.Known && w.Used >= lowShare && !w.CreditsFirst && !(w.WeekLow && w.Used < usedShare)) && !lastBehind(order, i) && !busyBehind(order, i) && !unreadBehind(order, i)
+}
+
+// unreadBehind says whether order[i] is a key (a relay, an API key: no
+// account) that tells nothing of what it has left, while order[0] is one
+// whose allowance is known: routing put it behind (Smart and Use before
+// expiry keep one not known after those known, Least used first one with
+// no share after those with room), as what a subscription has left is
+// lost at its reset and a pay-as-you-go key's balance keeps. Spreading
+// sessions (leastHeld) took it as one more seat, the one nobody was on, so
+// under Stays: Session every other new conversation went to a relay while
+// a Codex account had its week to spend (wangtufly on X). Keys alike, none
+// read, still spread among themselves, as connor_yang's did.
+func unreadBehind(order []Weighed, i int) bool {
+	return i > 0 && i < len(order) && order[i].Kind != "account" && !order[i].Known && order[0].Known
 }
 
 // standsIn says whether order[i] is a provider's fallback while one of the
@@ -1363,8 +1392,9 @@ type sealsRefused struct {
 
 // sealedItem is what's read of an input item to tell what it has sealed.
 type sealedItem struct {
-	Type string `json:"type"`
-	Enc  string `json:"encrypted_content"`
+	Type    string          `json:"type"`
+	Enc     string          `json:"encrypted_content"`
+	Content json.RawMessage `json:"content"`
 }
 
 // sealedKinds are the input items a vendor seals for itself: its
@@ -1377,7 +1407,7 @@ var sealedKinds = map[string]bool{"reasoning": true, "compaction": true, "compac
 var compactionKinds = []string{"compaction", "compaction_summary"}
 
 // seals are what is sealed (encrypted_content) in a Responses request's
-// input, item by item.
+// input, item by item (including sealed parts inside agent_message items).
 func seals(body []byte) [][sha256.Size]byte {
 	var q struct {
 		Input []sealedItem `json:"input"`
@@ -1389,6 +1419,17 @@ func seals(body []byte) [][sha256.Size]byte {
 	for _, it := range q.Input {
 		if it.Enc != "" {
 			out = append(out, sha256.Sum256([]byte(it.Enc)))
+		}
+		if it.Type == "agent_message" {
+			for _, content := range elementsOf(trimJSON(it.Content)) {
+				var part struct {
+					Type             string `json:"type"`
+					EncryptedContent string `json:"encrypted_content"`
+				}
+				if decodeJSON(content, &part) == nil && part.Type == "encrypted_content" && part.EncryptedContent != "" {
+					out = append(out, sha256.Sum256([]byte(part.EncryptedContent)))
+				}
+			}
 		}
 	}
 	return out
@@ -1459,13 +1500,22 @@ func withoutRefused(key, who string, body []byte) ([]byte, bool) {
 	kept, changed := items[:0:0], false
 	for _, it := range items {
 		var t sealedItem
-		if decodeJSONView(it, &t) == nil && t.Enc != "" && r.seals[sha256.Sum256([]byte(t.Enc))] {
-			if sealedKinds[t.Type] {
-				changed = true
-				continue
+		if decodeJSONView(it, &t) == nil {
+			if t.Enc != "" && r.seals[sha256.Sum256([]byte(t.Enc))] {
+				if sealedKinds[t.Type] {
+					changed = true
+					continue
+				}
+				if b, ok := withoutItemSeal(it); ok {
+					it, changed = b, true
+				}
 			}
-			if b, ok := withoutItemSeal(it); ok {
-				it, changed = b, true
+			if t.Type == "agent_message" {
+				if b, ok := withoutSealedAgentMessage(it, func(c string) bool {
+					return r.seals[sha256.Sum256([]byte(c))]
+				}); ok {
+					it, changed = b, true
+				}
 			}
 		}
 		kept = append(kept, it)
@@ -1480,10 +1530,11 @@ func withoutRefused(key, who string, body []byte) ([]byte, bool) {
 
 // withoutSeals takes out of a Responses request's input what is sealed,
 // but a compaction, for one that can't read what another account sealed:
-// the sealed reasoning, the model's private notes to itself, and the
-// sealed copy output token replay keeps of each item answered, a message,
-// a call or a web search (#3887, hheei: the reasoning alone went, and the
-// web search another ChatGPT account ran was refused again). What was
+// the sealed reasoning, the model's private notes to itself, the sealed
+// copy output token replay keeps of each item answered, a message, a call
+// or a web search (#3887, hheei: the reasoning alone went, and the web
+// search another ChatGPT account ran was refused again), and sealed
+// agent_message MESSAGE items (#7830, leaving NEW_TASK intact). What was
 // said and done stays.
 func withoutSeals(body []byte) ([]byte, bool) {
 	var q map[string]json.RawMessage
@@ -1505,6 +1556,11 @@ func withoutSeals(body []byte) ([]byte, bool) {
 		}
 		if b, ok := withoutItemSeal(it); ok {
 			it, changed = b, true
+		}
+		if t.Type == "agent_message" {
+			if b, ok := withoutSealedAgentMessage(it, nil); ok {
+				it, changed = b, true
+			}
 		}
 		kept = append(kept, it)
 	}

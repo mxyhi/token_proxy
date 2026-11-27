@@ -244,3 +244,84 @@ func TestGoogleKeyDecides(t *testing.T) {
 		t.Fatalf("vertex: %q", d)
 	}
 }
+
+// bunnybit0121 on X (#7788): a key's own list of models is picked from
+// the provider's chat models, which never name the vendor's own decision
+// model beside them (Google's, Bailian's), so a list barred it on every
+// key. Such a model is served whatever a key's list says; every other
+// model, a decision model the list can hold (OpenRouter's Jev) among
+// them, stays as the list says.
+func TestGoogleDecisionKeyLists(t *testing.T) {
+	arkHome(t)
+	g, err := FromPreset("google")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.Key, g.Keys, g.Decide = "AIza-a", []KeyAccount{{Key: "AIza-b"}}, AIStudioGemini
+	g.AccountModels = map[string][]string{keyID("AIza-a"): {"gemini-3-flash"}, keyID("AIza-b"): {"gemini-3-pro"}}
+	bl := Provider{ID: "bl", Chat: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+		Decide: "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", Key: "sk-sp-1",
+		AccountModels: map[string][]string{keyID("sk-sp-1"): {"qwen3-max"}}}
+	or := Provider{ID: "openrouter", Chat: "https://openrouter.ai/api/v1", Decide: "https://openrouter.ai/api/v1", Key: "sk-or",
+		AccountModels: map[string][]string{keyID("sk-or"): {"openai/gpt-5"}}}
+	for _, c := range []struct {
+		p     Provider
+		ref   string
+		model string
+		want  bool
+	}{
+		{g, keyID("AIza-a"), GoogleDecision, true},
+		{g, keyID("AIza-b"), GoogleDecision, true},
+		{g, keyID("AIza-a"), "gemini-3-flash", true},
+		{g, keyID("AIza-a"), "gemini-3-pro", false},
+		{bl, keyID("sk-sp-1"), BailianDecision, true},
+		{bl, keyID("sk-sp-1"), "qwen3-coder-plus", false},
+		{or, keyID("sk-or"), OpenRouterJev, false},
+	} {
+		if got := c.p.AccountServes(c.ref, c.model); got != c.want {
+			t.Errorf("%s key %s serves %s: %v, want %v", c.p.ID, c.ref, c.model, got, c.want)
+		}
+	}
+	// and the gateway's key routing asks both of Google's keys for it
+	out, _, barred, _ := g.KeysFor(GoogleDecision, nil)
+	if len(out) != 2 || len(barred) != 0 {
+		t.Fatalf("keys for %s: %d asked, %d barred", GoogleDecision, len(out), len(barred))
+	}
+}
+
+// bunnybit0121 on X (#7789): Google's Decisions API names a noul's two
+// criteria true_description and false_description (NoulCriteria in
+// google-genai), and refused System One's true and false with 400
+// "Unknown parameter 'false' at 'questions.b.criteria'". They go as
+// Google names them; criteria given in Google's names, or a noul with
+// none, go as they are, and Google's names win over System One's.
+func TestGoogleNoulCriteria(t *testing.T) {
+	for _, c := range []struct{ in, want string }{
+		{`{"true":"billing","false":"other"}`, `{"true_description":"billing","false_description":"other"}`},
+		{`{"true":"billing"}`, `{"true_description":"billing"}`},
+		{`{"true_description":"billing","false_description":"other"}`, `{"true_description":"billing","false_description":"other"}`},
+		{`{"true":"mine","true_description":"google's"}`, `{"true_description":"google's"}`},
+	} {
+		ask := `{"model":"gemini-decision-1","state":"The export crashes the app.","questions":{"b":{"type":"noul","instructions":"Is it about billing?","criteria":` + c.in + `}}}`
+		sameJSON(t, c.in, DecideAsk(ViaGoogle, GoogleDecision, []byte(ask)),
+			`{"model":"gemini-decision-1","input":"The export crashes the app.","questions":{"b":{"type":"noul","instructions":"Is it about billing?","criteria":`+c.want+`}}}`)
+	}
+	none := `{"model":"gemini-decision-1","state":"x","questions":{"b":{"type":"noul","instructions":"?"}}}`
+	sameJSON(t, "no criteria", DecideAsk(ViaGoogle, GoogleDecision, []byte(none)), strings.Replace(none, `"state"`, `"input"`, 1))
+	// a choice whose options are named true and false keeps them
+	choice := `{"model":"gemini-decision-1","state":"x","questions":{"b":{"type":"choice","instructions":"?","criteria":{"true":"yes","false":"no"}}}}`
+	sameJSON(t, "choice", DecideAsk(ViaGoogle, GoogleDecision, []byte(choice)), strings.Replace(choice, `"state"`, `"input"`, 1))
+}
+
+// #7790: a System One request's audio goes to Google as audio blocks of
+// its input (AudioContent in google-genai: type audio, data or uri,
+// mime_type): a data: URL's bytes with its type, another URL at its uri
+// with the type its extension names, when it is one Google lists.
+func TestGoogleAudioBlocks(t *testing.T) {
+	ask := `{"model":"gemini-decision-1","state":"listen","questions":{"q":{"type":"noul","instructions":"?"}},"audio":["data:audio/ogg;base64,T2dnUw==","https://example.com/a/CALL.FLAC#t=1","https://generativelanguage.googleapis.com/v1beta/files/abc","",7]}`
+	sameJSON(t, "audio", DecideAsk(ViaGoogle, GoogleDecision, []byte(ask)),
+		`{"model":"gemini-decision-1","input":[{"type":"text","text":"listen"},{"type":"audio","data":"T2dnUw==","mime_type":"audio/ogg"},{"type":"audio","uri":"https://example.com/a/CALL.FLAC#t=1","mime_type":"audio/flac"},{"type":"audio","uri":"https://generativelanguage.googleapis.com/v1beta/files/abc"}],"questions":{"q":{"type":"noul","instructions":"?"}}}`)
+	// an empty list is no audio: the input stays text
+	empty := `{"model":"gemini-decision-1","state":"listen","questions":{},"audio":[]}`
+	sameJSON(t, "empty", DecideAsk(ViaGoogle, GoogleDecision, []byte(empty)), `{"model":"gemini-decision-1","input":"listen","questions":{}}`)
+}

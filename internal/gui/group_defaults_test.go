@@ -85,6 +85,11 @@ func TestGroupDefaultsSaved(t *testing.T) {
 	if s := settings.Load(); s.FoundRouting != "order" || s.FoundAffinity != "off" {
 		t.Fatalf("after a refusal: %q %q", s.FoundRouting, s.FoundAffinity)
 	}
+	// The new built-in strategy offered by the picker saves as a default too.
+	code, got = post(`{"routing":"pace-drain","affinity":"off"}`)
+	if code != 200 || got.Defaults != (groupDefaultsJSON{Routing: "pace-drain", Affinity: "off"}) {
+		t.Fatalf("pace-drain: %d %+v", code, got.Defaults)
+	}
 	// back to magpie's own
 	if code, got := post(`{}`); code != 200 || got.Defaults != (groupDefaultsJSON{}) {
 		t.Fatalf("cleared: %d %+v", code, got.Defaults)

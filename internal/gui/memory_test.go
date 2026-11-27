@@ -74,3 +74,100 @@ func TestMemoryStatusRouteActsOnSome(t *testing.T) {
 		t.Fatalf("after removing two: %v", s)
 	}
 }
+
+// The Memory tab's numbers come from /api/memory/stats: the last 7 or 30
+// days, today last, with what was saved counted today. Any other range
+// is refused.
+func TestMemoryStatsRoute(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	mux := http.NewServeMux()
+	memoryRoutes(mux)
+	text := "Prefers pnpm."
+	if _, _, err := memory.Save(memory.Input{Text: &text}, memory.FromUser, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []int{7, 30} {
+		rec := httptest.NewRecorder()
+		path := "/api/memory/stats"
+		if n == 30 {
+			path += "?days=30"
+		}
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
+		var r memory.Report
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &r) != nil {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+		if len(r.Days) != n || r.Active != 1 || r.Since == "" {
+			t.Fatalf("%s: %d days, %d active, since %q", path, len(r.Days), r.Active, r.Since)
+		}
+		if last := r.Days[n-1]; !last.Recorded || last.Created[memory.FromUser] != 1 {
+			t.Fatalf("%s: today %+v", path, last)
+		}
+	}
+	for _, bad := range []string{"9", "0", "x", "400"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/memory/stats?days="+bad, nil))
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("days=%s: %d", bad, rec.Code)
+		}
+	}
+}
+
+// #7780: POST /api/memory/digest accepts {"omitWhy": true/false}, keeps
+// stored rationale in GET /api/memory, and updates published digests.
+func TestMemoryDigestOmitWhyRoute(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	mux := http.NewServeMux()
+	memoryRoutes(mux)
+
+	text, kind, scope, why := "Prefer pnpm.", memory.Preference, memory.Global, "faster installs"
+	if _, _, err := memory.Save(memory.Input{Text: &text, Kind: &kind, Scope: &scope, Why: &why}, memory.FromUser, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.Publish(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := func(method, path, body string) (int, memoryView) {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(method, path, strings.NewReader(body)))
+		var v memoryView
+		if rec.Code == 200 {
+			if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+				t.Fatalf("%s %s: %s", method, path, rec.Body)
+			}
+		}
+		return rec.Code, v
+	}
+
+	code, v := req("GET", "/api/memory", "")
+	if code != 200 || v.DigestOmitWhy {
+		t.Fatalf("initial GET /api/memory: code=%d omitWhy=%v", code, v.DigestOmitWhy)
+	}
+
+	code, v = req("POST", "/api/memory/digest", `{"omitWhy":true}`)
+	if code != 200 || !v.DigestOmitWhy || !v.Digest {
+		t.Fatalf("omitWhy=true: code=%d digest=%v omitWhy=%v", code, v.Digest, v.DigestOmitWhy)
+	}
+	if len(v.Memories) != 1 || v.Memories[0].Why != why {
+		t.Fatalf("stored Why not preserved in Memory tab view: %+v", v.Memories)
+	}
+	if d, err := memory.Digest("claude"); err != nil || strings.Contains(d, "(why:") || !strings.Contains(d, "Prefer pnpm.") {
+		t.Fatalf("digest after omitWhy=true: %q (%v)", d, err)
+	}
+
+	code, v = req("POST", "/api/memory/digest", `{"omitWhy":false}`)
+	if code != 200 || v.DigestOmitWhy {
+		t.Fatalf("omitWhy=false: code=%d omitWhy=%v", code, v.DigestOmitWhy)
+	}
+	if d, err := memory.Digest("claude"); err != nil || !strings.Contains(d, "(why: faster installs)") {
+		t.Fatalf("digest after omitWhy=false: %q (%v)", d, err)
+	}
+
+	if code, _ := req("POST", "/api/memory/digest", `{}`); code != http.StatusBadRequest {
+		t.Fatalf("empty body: code=%d, want 400", code)
+	}
+}

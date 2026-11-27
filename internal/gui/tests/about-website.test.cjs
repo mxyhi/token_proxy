@@ -2,11 +2,10 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
 const { fixture } = require("./fixtures/caller-keys.cjs");
-const { openPart } = require("./reader.cjs");
+const { openPart, watchSettingsReads, settingsDrawn } = require("./reader.cjs");
 
-// Settings › About had Discord and GitHub but no link to usemagpie.ai (the
-// owner). Its Website row names the site and opens it, in every language and
-// at the tray panel's width.
+// The fork's Website row opens Token Proxy releases, in every language
+// and at the tray panel's width.
 const words = {
   en: "Website", zh: "官网", "zh-TW": "官網", ja: "公式サイト", de: "Website",
 };
@@ -23,15 +22,17 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         const errors = [];
         page.on("pageerror", (e) => errors.push(e.message));
         await page.route("**/*", fixture(lang, "light", []));
+        await watchSettingsReads(page);
         await page.goto("http://magpie.test/");
         await page.locator("#prefs").click();
+        await settingsDrawn(page);
         await openPart(page, "about");
         const row = page.locator("#about .row", { has: page.locator(".who", { hasText: words[lang] }) });
         await row.waitFor();
-        assert.equal(await row.locator("code").textContent(), "usemagpie.ai");
+        assert.equal(await row.locator("code").textContent(), "mxyhi/token_proxy");
         const opened = page.waitForRequest((r) => r.url().includes("/api/open"));
         await row.locator("button.text").click();
-        assert.equal(JSON.parse((await opened).postData()).url, "https://usemagpie.ai");
+        assert.equal(JSON.parse((await opened).postData()).url, "https://github.com/mxyhi/token_proxy/releases");
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "About wider than the window");
         assert.deepEqual(errors, []);
       });

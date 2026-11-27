@@ -21,11 +21,11 @@ curl -fsSL https://raw.githubusercontent.com/mxyhi/token_proxy/main/install.sh |
 
 # magpie
 
-### Every agent's model. One place.
+### All your plans, one pool. Any agent.
 
-**Claude Code on Kimi. Codex on DeepSeek. Gemini CLI on GLM. OpenCode on your ChatGPT plan.**<br>
-Switch any of them from the menu bar. One local gateway serves them all,<br>
-and when a quota runs out, it quietly moves on to your next account.
+**Claude Code on your ChatGPT Pro. Codex on your Claude Max. Claude Desktop on your GLM Coding Plan.**<br>
+Add every plan you pay for once, and every agent can use all of them.<br>
+No plan stays locked to the agent you bought it for, and when one runs out, the next takes over.
 
 [![Token Proxy pre-release](https://img.shields.io/badge/Token_Proxy-pre--release-111111)](https://github.com/mxyhi/token_proxy/releases) [![Stars](https://img.shields.io/github/stars/yetone/magpie?style=flat&color=111111)](https://github.com/yetone/magpie/stargazers) [![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/vGSnD3ZKQF) [![License](https://img.shields.io/badge/license-MIT-111111)](LICENSE)<br>
 ![macOS](https://img.shields.io/badge/macOS-000000?logo=apple&logoColor=white) ![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white) ![Linux](https://img.shields.io/badge/Linux-FCC624?logo=linux&logoColor=black)
@@ -55,8 +55,8 @@ Thanks to [Kimi](https://usemagpie.ai/go/kimi/readme) for supporting magpie and 
 
 Each agent keeps its model in its own file, in its own format, with its own keys and base URLs. A subscription you pay for works in one agent and nowhere else. magpie puts all of that behind one app and one local gateway:
 
+- **Pool every plan you pay for**: the Claude, ChatGPT, Copilot, Gemini or Grok plan you're signed in to, a coding plan sold as a key (GLM, Kimi Code, Volcengine, Bailian, StepFun), pay-as-you-go keys and local models. Every agent can use every one of them.
 - **Pick any model for any agent** from one list. magpie edits the one key that matters in the agent's own config.
-- **Use one provider everywhere**: an API key, a local model, or the Claude, ChatGPT, Copilot, Gemini or Grok plan you're signed in to.
 - **Keep going when a quota runs out**: a provider's next account takes over, and a routing group moves on to another model or provider, so the agent never sees the error. With one account and no group there is nothing to move to, and the error reaches the agent.
 - **Keep your secrets off the vendor's servers**: once you turn masking on in **Settings → Privacy** (it's off by default), keys, passwords and emails in a prompt are masked on your computer before the request leaves it, and put back in the reply.
 
@@ -313,7 +313,7 @@ Find them under Plugins › Discover › Gateway middleware. See [Gateway middle
 
 ## Privacy
 
-Your prompts, replies, keys and accounts go only to the providers you use, and with [privacy masking](#privacy-masking) on, the secrets in them don't go even there. Once a day a released magpie tells us it is in use: a random id, its version and system, and which agents, providers and models it is used with, by magpie's own ids (a provider you added yourself is only `custom`), which of the plugins Discover lists are installed and which of the Library market’s MCP servers you use, by their market ids, so they can show how many use each one, and for each partner listed first in the add sheet or the Plugins page, how many times a day it was shown, opened and added, and how many times the Plugins page was opened (counts only). No names, URLs, accounts, keys, prompts or usage. Turn part or all of it off in **Settings → Privacy**, or with `DO_NOT_TRACK=1`. A partner's website and key links go through `usemagpie.ai/go/…`, which counts the click, and usemagpie.ai counts fetches of the partner list; the server sees these whatever the settings, and keeps no id or address. Icons named by a plugin, an import link or the library are fetched through `usemagpie.ai/api/icon`, so their hosts see Cloudflare's address, not yours; the server only passes the picture on, and counts and keeps nothing. An artifact you share goes to usemagpie.ai, with each version after, until you stop sharing it. The [Privacy page](https://usemagpie.ai/docs/privacy) lists everything magpie sends by itself, with an example and every switch; the [reference](docs/reference.md#counting-users) has the rules.
+Your prompts, replies, keys and accounts go only to the providers you use, and with [privacy masking](#privacy-masking) on, the secrets in them don't go even there. Once a day a released magpie tells us it is in use: a random id, its version and system, and which agents, providers and models it is used with, by magpie's own ids (a provider you added yourself is only `custom`), which of the plugins Discover lists are installed and which of the Library market’s MCP servers you use, by their market ids, and which routing groups shared on usemagpie.ai you imported, by their share ids, so they can show how many use each one, and for each partner listed first in the add sheet or the Plugins page, how many times a day it was shown, opened and added, and how many times the Plugins page was opened (counts only). No names, URLs, accounts, keys, prompts or usage. Turn part or all of it off in **Settings → Privacy**, or with `DO_NOT_TRACK=1`. A partner's website and key links go through `usemagpie.ai/go/…`, which counts the click, and usemagpie.ai counts fetches of the partner list; the server sees these whatever the settings, and keeps no id or address. Icons named by a plugin, an import link or the library are fetched through `usemagpie.ai/api/icon`, so their hosts see Cloudflare's address, not yours; the server only passes the picture on, and counts and keeps nothing. An artifact or routing group you share goes to usemagpie.ai, with each version after, until you stop sharing it; a shared group names a provider you added yourself only `custom`, and carries no key. The [Privacy page](https://usemagpie.ai/docs/privacy) lists everything magpie sends by itself, with an example and every switch; the [reference](docs/reference.md#counting-users) has the rules.
 
 ## Community
 

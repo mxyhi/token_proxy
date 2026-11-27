@@ -307,6 +307,25 @@ the gateway's rows). It reads the configuration as it is now, as
 `workbuddyGateway` does. Verification: `TestZCodeHandAddedGatewayProvider`,
 `TestGatewayBase`.
 
+The tokens a session file's call pairs by are its input with its cache
+write, its output and its cache read, and also, when it read from the
+cache, that input less the cache read (`localMatchTokens` in
+[`request_page.go`](../../internal/usage/request_page.go)): an agent that
+speaks OpenAI's protocol to the gateway and writes its file in Anthropic's
+shape keeps `prompt_tokens`, cache read included, as `input_tokens`, while
+the gateway records the uncached part. Qoder and Qoder CN do (#7107:
+29,351 = 1,703 + 27,648), so every call they made through magpie was
+listed again under Not through magpie, at a ~50% cache hit (Toby5080 on
+X). The match must still be the only one both ways, and every agent's
+calls are paired so. A call whose model, or the model it asked for, is a
+routing group's id (`group/<id>`, also after `magpie/`) is the gateway's
+however it pairs, as a call under one of magpie's alias ids is
+(`viaGateway`, `magpieOnly` in
+[`gateway_alias.go`](../../internal/usage/gateway_alias.go)): only magpie
+serves one. A found group's `auto/<model>` is not taken, since a relay
+may name a model so. Verification: `TestQoderCallsThroughMagpieCountOnce`,
+`TestMagpieOnlyModels`.
+
 The Claude subscription bridge's own Claude Code runs save their sessions
 in a Claude folder the readers list (the user's own, or a saved account's
 under `claude-accounts`), often in the caller's project. They aren't the
@@ -580,6 +599,43 @@ they are the parent's `sub_usage`. There is no Calls reader, as the
 gateway's own record of LiveAgent's calls carries no session, and no
 resume command or delete. Tests: `TestLiveAgentSessions` (the issue's
 literal `session_meta`), `TestLiveAgentTranscript`, `TestLiveAgentRoot`.
+
+CatPaw's sessions (KenyonCode on X,
+[`catpaw.go`](../../internal/sessions/catpaw.go)) are the conversations
+Meituan's CatPaw IDE keeps in `~/.sankuai/CatPawAI/sqliteDB/globalCache.sqlite`
+(SQLite in WAL mode, `%USERPROFILE%` on Windows): `t_conversations` (id,
+`parent_conversation_id`, title, `workspace_id`) and `t_ui_messages`, each
+message's `content` the agent's message object as JSON. A conversation is
+listed once it has a `user_prompt`; a subagent's (one with a parent) is
+filed under its parent, with its tools and tokens but not its prompt. A
+response's thinking, text and tools each carry its `tokenUsage`, so it
+counts once by `responseId`, at the largest usage seen; a cache read
+named on its own (`cache_read_tokens`) is apart from `prompt_tokens`, one
+from `prompt_tokens_details` inside it. The title is CatPaw's unless it is
+a placeholder of its own (`新对话`, `对话 <date>`, its 50-character cut),
+and the folder is `workspace_id`'s (a `.code-workspace` file's folder,
+none for `defaultWorkspace`). Read only, no resume or delete. Tests:
+`TestCatPawSessions`, `TestCatPawTranscript` (rows made by CatPaw's own
+CREATE statements and message shapes; no signed-in conversation was had).
+
+Hermes Agent keeps its sessions as rows in each profile's `state.db`
+(SQLite in WAL mode): the home (`HERMES_HOME`, else `~/.hermes`, else
+`%LOCALAPPDATA%\hermes` on Windows) and each `profiles/<name>`
+(`HermesDirs`). A session's path is the database and `#` its id. What
+was said is read from the same rows its counts are (`hermesTranscript`,
+through `eachMessageOf`): a rewind's dropped rows and model-only
+scaffolding are left out, a compaction's archived turns are kept once,
+and a row Hermes never shows (`display_kind` `hidden`) is skipped. A
+row's content is Hermes's `_encode_content` (the text, or `\x00json:`
+and its parts); an assistant's `reasoning` (or `reasoning_content`) is
+its thinking, its OpenAI `tool_calls` its tool uses, and a `tool` row's
+answer is named by its `tool_name`. A compaction's handoff summary is
+context and the turn after its end marker is said (`hermesDisplayText`).
+Before, Hermes had no transcript, so Show conversation, search and
+memory learning passed every Hermes session over (CFK on Discord).
+Read only, no resume or delete. Tests: `TestHermesTranscript` (Hermes's
+own CREATE statements, schema 31, and row encodings; no real Hermes
+conversation was read), `TestHermesSessionsRead` in memdistill.
 
 ## Local Gateway Conversation Recording
 
@@ -1052,7 +1108,9 @@ no tokens and no conversation to open (`readable`). Resume is `agy --conversatio
 picks it up from any folder; when agy is set to use magpie it is the
 agent's launch command (the gateway's variables and `--model`) with
 `--conversation` after it (`sessions.AgyStart`, set by package agent).
-Subagents (`parent_conversation_id`) and agy in WSL are not read.
+Subagents (`parent_conversation_id`) are not read. On Windows, agy's
+conversations in a WSL distro's `~/.gemini/antigravity-cli` are read with
+the distro's other sessions (`wslScan`, `TestWSLAntigravityApp`).
 agy's calls are also read from the profile T3 Code gives each of its
 Antigravity instances (`t3AgyDirs`): T3 Code runs `agy acp --gemini-dir
 <profile> --app-data-dir antigravity-acp` on the instance's own Google
@@ -1061,7 +1119,11 @@ sign-in, the profile under `<T3 Code's folder>/userdata/providers/antigravity/`
 `appdir.T3Code`), and those requests go to Google, not through the gateway
 (zzzkl on X; `TestAgyCallsInT3Code`, on what agy 1.5.10 wrote run that way).
 `Found` lists agy for those folders too. The Sessions page doesn't list
-them: `agy --conversation` would look in agy's own folder.
+them: `agy --conversation` would look in agy's own folder. T3 Code run in
+a WSL distro keeps its profiles under the distro's `~/.t3`, read with the
+distro's listing as call sources alone (`wslT3Agy`, entries marked
+`callsOnly`; tovelo on Discord, `TestWSLAgyCallsInT3Code`); a
+`$T3CODE_HOME` set in the distro can't be read from Windows.
 Verification: `TestAgySessions`, `TestAgyTitleLater`, `TestAgyGrows`,
 `TestAgyTranscript`, `TestAgyFolder`, `TestAgyRowOnly`, on conversations agy 1.3.5 and 1.4.7
 wrote in a sandbox.
@@ -1240,17 +1302,34 @@ arguments are never kept, not even masked.
   server, the Requested cell the tool, and the status Succeeded or
   Failed. The Purpose filter names `kind:mcp` "MCP tool"
   (`purposeKinds`, `purposes.js`).
+- **Counted by tool:** while the Purpose filter is `kind:mcp`
+  (`Filter.picksMCP`), a requests page also holds `Tools` (`tools` in
+  `/api/usage/requests`, `mcp_tools.go`; tomtanir and lyl50478600 on X):
+  each server and tool's calls among the rows the filter keeps, how many
+  failed, the last, and `per_day`, the calls over the days from the tool's
+  first call in the period to its end (now for one not ended), one at
+  least, or over the one day of a day's page. It is read from the probe
+  chunk only (`mcpTools`; the ledger path tallies its own rows), and for
+  no other purpose, so the cells, their cache and `settledCountVersion`
+  don't change. The page shows it as the Tool calls card under the chart
+  (`drawLedTools`, `#ledTools`), the most called first.
+  `TestMCPToolCallsCounted` and `usage-mcp-tools.test.cjs` cover it.
 
 ### Claude Code's helper requests and the largest cache write
 
 Claude Code's AgentSummary ("Describe your most recent action in 3-5
 words.") and its auto mode classifier name themselves nowhere in the
 request, so `inferredKind` (observe.go) tells them by their content, for
-a `claude-cli/` request on the Messages API only, and the ledger row's
+a Claude Code request on the Messages API only, and the ledger row's
 Kind is `agent_summary_inferred` or `auto_mode_check_inferred`
 (`usage.InferredSuffix`). The name says "(inferred)"; both spellings share
 the plain kind's purpose, which a client marker would use. Anything else
-stays unmarked.
+stays unmarked. Claude Code's request is told by its `claude-cli/`
+User-Agent, or, from another magpie, by the agent's User-Agent that magpie
+names (`ClientUAHeader`, `claudeCodeAsks`); until 11-26 a Remote magpie
+recorded the relayed helpers unmarked (recih, #7852). The header counts
+only on a magpie's request, so a direct one that sets it is not taken for
+Claude Code's.
 
 A requests page also holds `BigWrite` (big_write.go): the gateway-served
 row that wrote the most to the cache, kept per chunk (`chunkPart.big`) and

@@ -35,6 +35,13 @@ password, escaped and non-UTF-8 credentials, a login saved in the address
 before loading into the fields, masked addresses/status, clearing
 authentication, Tab and Escape, mode switches, and narrow windows in all
 five languages on Chromium and WebKit.
+
+`agy-usage-reason.test.cjs` checks that agy-cli's own reasons for no quota
+reading this time (sign-in due to be renewed, still reading, too slow, no
+agy, too old) are said in the user's words on the account's row, the Usage
+card and the tray card, and beside a kept reading's "As of" line, in all five
+languages on Chromium and WebKit. The API is faked.
+
 ## Installed desktop fonts
 
 `fonts.test.cjs` exercises the interface/code font controls with installed
@@ -1552,6 +1559,15 @@ found skill with a byte copy in another agent shows both agents' icons and
 no "differs in"; one that really differs still says so. Chromium and
 WebKit, in English and Chinese, with `/api/plugins` faked.
 
+`own-skill-all.test.cjs` lists four agents' own skills by the library's
+names (zysicyj on X: ten agents, a click each): the warning's heading has
+one "All agents" menu, whose "Use the library's" and "Keep each agent's
+own" post `skills/use-library-all` and `skills/keep-own-all` with every
+agent's names; Claude Desktop's still stand after "use", with no menu.
+One agent's own Keep says what it did, not the other agents' own skills
+still listed. One agent alone, or a write that failed beside them, gets
+no menu. All five languages, Chromium and WebKit, at 980px and 360px; the API is faked.
+
 `library-sections.test.cjs` hides the Library's tabs from Plugins ›
 Built-in (lantian_x on X): the Library row's Sections link opens a menu of
 the tabs, each ticked; unticking Hooks and Environment variables posts the
@@ -2246,6 +2262,12 @@ line, the 2 days / Cycle control turning every card without moving the page,
 no curve without readings, the theme's chart colours in light and dark, and
 the tray card's thin current-cycle line, in Chinese and English.
 
+`quota-window-segments.test.cjs` checks that a quota window's figure keeps
+every " · " piece (#7396): a plugin's display with four, a text row, a
+metered window whose display has one of its own, one and two pieces as
+before, no readings, and a narrow window wrapping at a · rather than cut
+short. English and Chinese, Chromium and WebKit, the API faked.
+
 `balance-curve.test.cjs` checks a key's balance over time on the Usage page:
 its readings as a line, the least-squares line since the last top-up dashed
 on to zero, "Runs out in 3d at this pace" and the spend a day, a click (or
@@ -2892,3 +2914,21 @@ is the vendor's in beside the cache columns and with them left out
 (`.led.tight`), and the header says so; with it off, the whole prompt as
 `ledger-in-whole` has it. Every language, 1100 and 390 wide, Chromium and
 WebKit; the API is faked.
+
+## A page whose frames are slow still scrolls
+
+`view-slow-frames.test.cjs` makes every frame take 400ms, the one right
+after a wheel or a lift too, as WebKitGTK drawing the Library's long MCP
+list on a slow Linux machine did (aublurer on X, Omarchy). The wheel still
+moves the Library's MCP list and the Agents page as far as it asks, the
+scrollbar's drag follows the pointer (lifted at once, as WebKit sends its
+scrolls only after the lift), the wheel goes back up once frames are
+fast again, a scroll by code at rest is still put back, and Page Down whose
+own frame takes 600ms (past the 400ms a key's window lasts) still scrolls
+the page, all of WebKit's animated scroll. Every language,
+Chromium and WebKit; the API is faked. `MAGPIE_SLOW_ASSETS` points it at an
+older assets folder, where the wheel leaves the page at 0.
+
+```sh
+node --test internal/gui/tests/view-slow-frames.test.cjs
+```

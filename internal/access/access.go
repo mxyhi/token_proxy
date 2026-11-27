@@ -144,6 +144,7 @@ type Key struct {
 	// Models are the models the key may use (#882): "<provider>/<model>",
 	// "<provider>/*" or a group's "group/<name>"; none for every model,
 	// unless it lists accounts: then its accounts' providers' (HeldModels).
+	// NoModels alone is no model: a key for MCP servers only.
 	Models []string `json:"models,omitempty"`
 	// Aliases are the names the key gives models (tsingchao on X): a name
 	// its client asks by, the model "<provider>/<model>" it stands for.
@@ -232,7 +233,7 @@ type Key struct {
 const RoutingSmart = "smart"
 
 // keyRoutings are the built-in routings a key can set, besides Smart.
-var keyRoutings = []string{provider.Ordered, provider.Drain, provider.Rotate, provider.LeastUsed, provider.Pace, provider.Weighted, provider.FreeFirst, provider.Fastest, provider.Cheapest, provider.FreeExpiring, provider.SmallFirst}
+var keyRoutings = []string{provider.Ordered, provider.Drain, provider.PaceDrain, provider.Rotate, provider.LeastUsed, provider.Pace, provider.Weighted, provider.FreeFirst, provider.Fastest, provider.Cheapest, provider.FreeExpiring, provider.SmallFirst}
 
 // CleanRouting is a key's group routing as it is kept: "" to follow the
 // group, RoutingSmart, a built-in routing or a plugin's.
@@ -355,6 +356,15 @@ type Identity struct {
 	// Group is the routing group, by name, whose own accounts hold the
 	// request as well (HeldToGroup); "" when none does.
 	Group string
+	// Agent is the agent whose own account or key of some providers
+	// (provider.Provider.AgentAccounts, nb5p on Discord) holds the request
+	// as well (HeldToAgent); "" when none does.
+	Agent string
+	// agentOnly is set when every account the request is held to is the
+	// agent's (HeldToAgent on an identity held to none): it holds which
+	// account serves, never what a key held to some is kept from
+	// (KeyHeld).
+	agentOnly bool
 	// Spent are the key's limits of some models (Limit.Models) with
 	// nothing left, as the gateway found them for this request: their
 	// models are left out of its candidates, a routing group's members
@@ -554,7 +564,8 @@ type Change struct {
 	// resets every one. For "move-key" it is the place in the list the key
 	// goes to, counted from 0.
 	Index *int `json:"index,omitempty"`
-	// Models is what "models-key" sets; none lets the key use every model.
+	// Models is what "models-key" sets; none lets the key use every model,
+	// NoModels alone none.
 	Models []string `json:"models,omitempty"`
 	// Aliases is what "aliases-key" sets; none takes the names away.
 	Aliases map[string]string `json:"aliases,omitempty"`

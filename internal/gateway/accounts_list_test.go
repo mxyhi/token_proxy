@@ -2,24 +2,31 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/yetone/magpie/internal/access"
+	"github.com/yetone/magpie/internal/catalog"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/settings"
 )
 
 // keyVendor answers a chat request by its key: 401 with the vendor's own
 // words for a key in bad, else a reply naming the key. It notes each key
 // asked.
 type keyVendor struct {
-	mu    sync.Mutex
-	bad   map[string]bool
-	asked []string
+	mu  sync.Mutex
+	bad map[string]bool
+	// limited answers 429 with a Retry-After, which rests a key on
+	limited map[string]bool
+	asked   []string
 }
 
 func (v *keyVendor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -29,6 +36,12 @@ func (v *keyVendor) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	v.asked = append(v.asked, key)
 	v.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
+	if v.limited[key] {
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+		io.WriteString(w, `{"error":{"message":"Rate limit reached for requests","type":"requests","code":"rate_limit_exceeded"}}`)
+		return
+	}
 	if v.bad[key] {
 		w.WriteHeader(http.StatusUnauthorized)
 		io.WriteString(w, `{"error":{"message":"Incorrect API key provided: `+provider.Mask(key)+`","type":"invalid_request_error","code":"invalid_api_key"}}`)
@@ -177,10 +190,16 @@ func TestAccountPinnedByListedID(t *testing.T) {
 	if code, body := keyedPost(t, s, "keyed/m", "keyed/"+provider.KeyID(firstKey)); code != 200 || !strings.Contains(body, "from "+firstKey) {
 		t.Fatalf("the only key on, pinned: %d %s", code, body)
 	}
-	if code, body := keyedPost(t, s, "keyed/m", "keyed/"+provider.KeyID(secondKey)); code != http.StatusNotFound {
+	if got := v.seen(); !slices.Equal(got, []string{firstKey}) {
+		t.Fatalf("keys asked %v", got)
+	}
+	// the one off, pinned, is asked alone (TestAccountPinnedOffKey): its
+	// 401 is the answer
+	v.asked = nil
+	if code, body := keyedPost(t, s, "keyed/m", "keyed/"+provider.KeyID(secondKey)); code != http.StatusUnauthorized {
 		t.Fatalf("the key off, pinned: %d %s", code, body)
 	}
-	if got := v.seen(); !slices.Equal(got, []string{firstKey}) {
+	if got := v.seen(); !slices.Equal(got, []string{secondKey}) {
 		t.Fatalf("keys asked %v", got)
 	}
 }
@@ -196,5 +215,236 @@ func TestAccountPinnedByLoginID(t *testing.T) {
 	}
 	if len(*heads) != 1 || (*heads)[0].Get("chatgpt-account-id") != "acct-2" {
 		t.Fatalf("upstream %v", *heads)
+	}
+}
+
+// @tmr11235 on X again: agents are offered the first 24 of a provider's
+// list when the user picked none (manyModels), and a plugin testing each
+// model wants them all. ?models=1 gives each account and key every model
+// it can be asked for, less what the user's list for it leaves out, and a
+// model past the 24 is asked as "<provider>/<model>", pinned or not.
+func TestAccountsListTellsEveryModel(t *testing.T) {
+	fresh(t)
+	v := &keyVendor{}
+	up := httptest.NewServer(v)
+	t.Cleanup(up.Close)
+	p := provider.Provider{ID: "wide", Name: "Wide", Chat: up.URL + "/v1", Key: firstKey,
+		Keys:          []provider.KeyAccount{{Key: secondKey, Name: "small"}},
+		AccountModels: map[string][]string{provider.KeyID(secondKey): {"m3", "m29"}}}
+	if err := provider.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	var ms []catalog.Model
+	var all []string
+	for i := range 30 {
+		ms = append(ms, catalog.Model{ID: fmt.Sprintf("m%d", i)})
+		all = append(all, fmt.Sprintf("m%d", i))
+	}
+	if err := catalog.SaveLive("wide", p.Chat, ms); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := provider.Find("wide"); err != nil || len(got.Exposed()) != 24 {
+		t.Fatalf("the list agents are offered is not the first 24: %v", err)
+	}
+	s := New()
+	get := func(path string) (int, string) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		req.RemoteAddr = "127.0.0.1:5000"
+		s.Handler().ServeHTTP(rec, req)
+		return rec.Code, rec.Body.String()
+	}
+	// not asked for, none: the list stays as it was
+	if code, body := get(AccountsPath + "?provider=wide"); code != 200 || strings.Contains(body, `"models"`) {
+		t.Fatalf("without ?models: %d %s", code, body)
+	}
+	code, body := get(AccountsPath + "?provider=wide&models=1")
+	if code != 200 {
+		t.Fatalf("%d %s", code, body)
+	}
+	var out struct {
+		Data []idsListed `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(body), &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Data) != 2 {
+		t.Fatalf("listed %s", body)
+	}
+	for _, a := range out.Data {
+		want := all
+		if a.ID == provider.KeyID(secondKey) {
+			want = []string{"m3", "m29"}
+		}
+		if !slices.Equal(a.Models, want) {
+			t.Errorf("%s's models %v, want %v", a.Label, a.Models, want)
+		}
+	}
+	// a model past the 24 is served, unpinned and pinned
+	if code, body := keyedPost(t, s, "wide/m29", ""); code != 200 {
+		t.Fatalf("wide/m29: %d %s", code, body)
+	}
+	if code, body := keyedPost(t, s, "wide/m28", out.Data[0].Pin); code != 200 || !strings.Contains(body, "from "+firstKey) {
+		t.Fatalf("wide/m28 pinned to %s: %d %s", out.Data[0].Pin, code, body)
+	}
+}
+
+// A held key is told a provider only when it may use every model agents
+// are offered of it (quotaScope), and then only the models it may use:
+// past the 24, those its list names.
+func TestAccountsListModelsOfAHeldKey(t *testing.T) {
+	fresh(t)
+	t.Setenv("MAGPIE_ADDR", "")
+	p := provider.Provider{ID: "wide", Name: "Wide", Chat: "https://wide.example.invalid/v1", Key: firstKey}
+	if err := provider.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	var ms []catalog.Model
+	for i := range 30 {
+		ms = append(ms, catalog.Model{ID: fmt.Sprintf("m%d", i)})
+	}
+	if err := catalog.SaveLive("wide", p.Chat, ms); err != nil {
+		t.Fatal(err)
+	}
+	var may, want []string
+	for i := range 24 {
+		may, want = append(may, fmt.Sprintf("wide/m%d", i)), append(want, fmt.Sprintf("m%d", i))
+	}
+	may, want = append(may, "wide/m28"), append(want, "m28")
+	keys, secrets := newCaller(t, "Owner", "Held")
+	for action, c := range map[string]access.Change{
+		"models-key": {Key: keys[1].ID, Models: may},
+		"quotas-key": {Key: keys[1].ID, Quotas: true},
+	} {
+		if _, err := access.Update(action, c); err != nil {
+			t.Fatal(action, err)
+		}
+	}
+	r := httptest.NewRequest("GET", AccountsPath+"?provider=wide&models=1", nil)
+	r.RemoteAddr = "192.168.1.9:5000"
+	r.Header.Set("Authorization", "Bearer "+secrets[1])
+	w := httptest.NewRecorder()
+	lanGuard(New().Handler()).ServeHTTP(w, r)
+	var out struct {
+		Data []idsListed `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil || w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if len(out.Data) != 1 || !slices.Equal(out.Data[0].Models, want) {
+		t.Fatalf("the held key is told %s", w.Body.String())
+	}
+}
+
+// idsListed is a listed account as ?models=1 tells it, its models by id.
+type idsListed struct {
+	listedAccount
+	Models []string `json:"models"`
+}
+
+// @tmr11235 on X, a third time: ?models=1's ids gave a plugin none of what
+// /v1/models tells of a model, its name, levels, window or price, and a
+// model past the 24 is in no other list. ?models=full gives each account
+// its models as /v1/models' rows, built by the same code: a model both
+// list is told the same in both, one past the 24 is told as fully, and
+// ?models=1 still gives ids.
+func TestAccountsListTellsEveryModelInFull(t *testing.T) {
+	fresh(t)
+	p := provider.Provider{ID: "wide", Name: "Wide", Chat: "https://wide.example.invalid/v1", Key: firstKey,
+		Keys:          []provider.KeyAccount{{Key: secondKey, Name: "small"}},
+		AccountModels: map[string][]string{provider.KeyID(secondKey): {"m3", "m29"}}}
+	if err := provider.Save(p); err != nil {
+		t.Fatal(err)
+	}
+	var ms []catalog.Model
+	for i := range 30 {
+		ms = append(ms, catalog.Model{ID: fmt.Sprintf("m%d", i), Name: fmt.Sprintf("Model %d", i),
+			Efforts: []string{"low", "high"}, Context: 200000 + i, Output: 32000})
+	}
+	if err := catalog.SaveLive("wide", p.Chat, ms); err != nil {
+		t.Fatal(err)
+	}
+	f := func(v float64) *float64 { return &v }
+	if err := settings.Save(settings.Settings{
+		ModelPrices: map[string]settings.ModelPrice{"wide/*": {Input: f(1), Output: f(4), CacheRead: f(0.1), CacheWrite: f(0)}},
+		ModelNames:  map[string]string{"wide/m29": "Far Model"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s := New()
+	get := func(path string) string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest("GET", path, nil)
+		req.RemoteAddr = "127.0.0.1:5000"
+		s.Handler().ServeHTTP(rec, req)
+		if rec.Code != 200 {
+			t.Fatalf("%s: %d %s", path, rec.Code, rec.Body.String())
+		}
+		if strings.Contains(rec.Body.String(), firstKey) || strings.Contains(rec.Body.String(), secondKey) {
+			t.Fatalf("%s tells a key: %s", path, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+	var listed struct {
+		Data []map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(get("/v1/models")), &listed); err != nil {
+		t.Fatal(err)
+	}
+	row := map[string]map[string]any{}
+	for _, m := range listed.Data {
+		row[m["id"].(string)] = m
+	}
+	if row["wide/m0"] == nil || row["wide/m29"] != nil {
+		t.Fatalf("/v1/models lists the first 24 alone: %v", listed.Data)
+	}
+	var full struct {
+		Data []struct {
+			ID     string           `json:"id"`
+			Models []map[string]any `json:"models"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(get(AccountsPath+"?provider=wide&models=full")), &full); err != nil {
+		t.Fatal(err)
+	}
+	if len(full.Data) != 2 {
+		t.Fatalf("listed %v", full.Data)
+	}
+	for _, a := range full.Data {
+		want := 30
+		if a.ID == provider.KeyID(secondKey) {
+			want = 2
+		}
+		if len(a.Models) != want {
+			t.Fatalf("%s is told %d models, want %d", a.ID, len(a.Models), want)
+		}
+		for _, m := range a.Models {
+			id, _ := m["id"].(string)
+			if !strings.HasPrefix(id, "wide/m") {
+				t.Fatalf("a model not asked as <provider>/<id>: %v", m)
+			}
+			// a model /v1/models lists is told the same, field for field
+			if want, ok := row[id]; ok && !reflect.DeepEqual(m, want) {
+				t.Errorf("%s: accounts tell %v, /v1/models %v", id, m, want)
+			}
+		}
+	}
+	// one past the 24 is told as fully as one in the list
+	far := full.Data[1].Models[1]
+	if far["id"] != "wide/m29" || far["display_name"] != "Far Model" || far["context_window"] != float64(200029) ||
+		fmt.Sprint(far["reasoning_levels"]) != "[low high]" || far["max_output_tokens"] != float64(32000) ||
+		far["pricing"] == nil || far["magpie_label"] != "Far Model · Wide" || far["owned_by"] != "wide" {
+		t.Fatalf("wide/m29 is told %v", far)
+	}
+	// ?models=1 is as it shipped: ids
+	var ids struct {
+		Data []idsListed `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(get(AccountsPath+"?provider=wide&models=1")), &ids); err != nil {
+		t.Fatal(err)
+	}
+	if len(ids.Data) != 2 || len(ids.Data[0].Models) != 30 || !slices.Equal(ids.Data[1].Models, []string{"m3", "m29"}) {
+		t.Fatalf("?models=1 gives %v", ids.Data)
 	}
 }

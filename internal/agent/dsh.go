@@ -106,6 +106,10 @@ func dshAt(at place) *Agent {
 	if dir == "" {
 		dir = at.join(".dsh")
 	}
+	if at.spell != nil {
+		// read by the distro's dsh, whose version its probe found
+		dshDistros.Store(filepath.Clean(dir), at.version)
+	}
 	// DeepSeek Harness Desktop, on this machine (a distro has none)
 	desktop := func() bool { return at.spell == nil && (&Agent{ID: "dsh"}).HasApp() }
 	// the patch list magpie makes for a dsh with no profile yet: the desktop
@@ -148,8 +152,9 @@ func dshAt(at place) *Agent {
 			// running or not: agent-default-model is read for new
 			// ones only (#2359)
 			notes = append(notes, noticeDsh1.String())
-		} else if Running(`DeepSeek Harness\.app/`, `(^|/)dsh( |$)`, `(^|/)deepseek-harness( |$)`) {
-			// deepseek-harness is the desktop app's executable on Linux
+		} else if Running(`DeepSeek Harness\.app/`, `DSH (NEXT|Desktop)\.app/`, `(^|/)dsh( |$)`, `(^|/)deepseek-harness( |$)`, `(^|/)dsh-desktop(-next)?( |$)`) {
+			// deepseek-harness is the desktop app's executable on Linux,
+			// dsh-desktop-next and dsh-desktop the community shells'
 			notes = append(notes, noticeDsh2.String())
 		}
 		if dshSearchesHere(dir) && !gateway.CanSearch() {
@@ -287,7 +292,7 @@ func dshOn(at place, dir, list string, fresh, lead func() string) *Agent {
 				// dsh (its route gives it no reasoningEfforts), so none is
 				// offered: dsh's own four were, and each was turned away
 				if ref, ok := strings.CutPrefix(cur["model"], magpieID+"/"); ok && modern() {
-					return static(dshLevels(list, ref)...)
+					return static(dshLevelsAt(dir, ref)...)
 				}
 				return static(dshEfforts...)
 			},
@@ -1166,8 +1171,14 @@ func dshReach(dir, gw string) string {
 				continue
 			}
 			base := strings.TrimSuffix(strings.TrimSpace(v.Value), "/")
-			base = strings.TrimSuffix(base, "/v1")
+			// the Gemini route's is at /v1beta (dshBaseURL)
+			base = strings.TrimSuffix(strings.TrimSuffix(base, "/v1beta"), "/v1")
 			if p, ok := strings.CutSuffix(base, gw); ok && p != "" && loopbackWithPath(strings.TrimSuffix(p, "/")) {
+				return p + gw
+			}
+			// billion-context's prefix to the gateway where it was before
+			// its port moved: kept in front of where it is now (#7846)
+			if p := biliToMagpie(base); p != "" {
 				return p + gw
 			}
 		}
@@ -1393,7 +1404,7 @@ func dshSetLocked(at place, dir, v, gw string) error {
 		return fmt.Errorf("unknown model %q", v)
 	}
 	legacy := filepath.Join(dir, "config.yaml")
-	models := magpieModels(dshListFor(dir))
+	models := dshModelsAt(dir)
 	files := dshProfiles(dir)
 	if len(files) == 0 {
 		return dshSetFile(legacy, v, false, models, gw)
@@ -1834,7 +1845,7 @@ func dshSetFile(path, v string, modern bool, models []catalog.Model, gw string) 
 		route := dshRouteFor(ref, models)
 		// a route with a level of the user's own starts on it, not on
 		// magpie's effort carried over (dshRouteLevel)
-		if !contains(dshLevels(dshListFor(path), ref), effort) || dshLevelFor(path, items, route) != "" {
+		if !contains(dshLevelsAt(path, ref), effort) || dshLevelFor(path, items, route) != "" {
 			effort = ""
 		}
 		put("agent-default-model", dshDefaultLines(route, ref, effort))
@@ -2108,6 +2119,20 @@ type dshPiCompat struct {
 // takes every model on each.
 var dshAPIs = []string{"openai-completions", "openai-responses", "anthropic-messages"}
 
+// dshGeminiAPI is llm-pi-ai's name for Google's Generative Language API
+// (generateContent), which the gateway serves at /v1beta. Only a dsh from
+// dshGeminiSince on knows it, and it is dsh's alone: Pi's and omp's
+// protocol pickers (piProtocols) stay on dshAPIs.
+const dshGeminiAPI = "google-generative-ai"
+
+// dshGeminiSince is the first dsh whose llm-pi-ai serves dshGeminiAPI
+// (PROTOCOLS in @deepseek-ai/dsh-llm-pi-ai 0.2.2-rc.2; 0.2.1-rc.2,
+// 0.2.1-rc.5 and 0.2.2-rc.1 lack it). An older one refuses a route naming
+// it while its config is read (llm-pi-ai's schema takes an api of its own
+// list alone), so a home only such a dsh reads keeps its Gemini models
+// on the Chat route.
+const dshGeminiSince = "0.2.2-rc.2"
+
 // dshKind is one of magpie's routes in llm-pi-ai: its key among the
 // providers (what agent-default-model and a session name it by), the wire
 // protocol it is written with, and the name dsh's model list groups it
@@ -2131,6 +2156,10 @@ var dshKinds = []dshKind{
 	{dshRoute, "openai-completions", "Magpie"},
 	{dshRoute + "-responses", "openai-responses", "Magpie · Responses"},
 	{dshRoute + "-anthropic", "anthropic-messages", "Magpie · Anthropic"},
+	// Discord (01huadalang): dsh 支持 gemini 协议了 — a Gemini served on
+	// Google's API, asked on it with its thought signatures kept, for a
+	// dsh that knows it (dshAsked)
+	{dshRoute + "-gemini", dshGeminiAPI, "Magpie · Gemini"},
 }
 
 // isDshRoute reports whether a provider route dsh names is one of magpie's.
@@ -2152,6 +2181,8 @@ func dshKindOf(key string) *dshKind {
 // its provider serves it on natively, the first otherwise.
 func dshRouteOf(m catalog.Model) string {
 	switch {
+	case slices.Contains(m.APIs, string(provider.Gemini)):
+		return dshKinds[3].key
 	case slices.Contains(m.APIs, string(provider.Responses)):
 		return dshKinds[1].key
 	case slices.Contains(m.APIs, string(provider.Anthropic)):
@@ -2170,15 +2201,54 @@ func dshRouteFor(id string, models []catalog.Model) string {
 	return dshRoute
 }
 
+// dshGroupAPIs are the APIs a routing group not on Responses
+// (provider.GroupAPI) goes on in dsh, and whether it is asked adaptively
+// on Messages: the APIs every member's own list has (modelAPIs), so a
+// group of members each best on Messages, or on Gemini's, goes on that
+// route as each would alone, every member relaying it as it is (01huadalang
+// on Discord: a group of Gemini CLI models went on Chat). A member every
+// request to is translated anyway has no say. Messages is left out when
+// the members don't all ask adaptively, or all not (gateway.AsksAdaptively,
+// which the group's id doesn't answer): pi-ai asks the group one way for
+// every member. A group whose members share neither has none and stays on
+// Chat. Gemini's is the first where dsh speaks it, and the one after, if
+// any, where it doesn't (dshAskedOne), as for a lone Gemini model.
+func dshGroupAPIs(ms []provider.Member) (apis []string, adaptive bool) {
+	found, split := false, false
+	for _, m := range ms {
+		own := modelAPIs(&m.Provider, m.Model)
+		if len(own) == 0 {
+			continue
+		}
+		asks := gateway.AsksAdaptively(m.Model)
+		if !found {
+			apis, adaptive, found = own, asks, true
+			continue
+		}
+		apis = slices.DeleteFunc(apis, func(a string) bool { return !slices.Contains(own, a) })
+		split = split || asks != adaptive
+	}
+	if split {
+		apis = slices.DeleteFunc(apis, func(a string) bool { return a == string(provider.Anthropic) })
+	}
+	apis = slices.DeleteFunc(apis, func(a string) bool { return a != string(provider.Anthropic) && a != string(provider.Gemini) })
+	if len(apis) == 0 {
+		return nil, false
+	}
+	return apis, adaptive && slices.Contains(apis, string(provider.Anthropic))
+}
+
 // dshAPI is the wire protocol a route of magpie's speaks, given the one it
 // has now and the one it is written with: the one it has when the gateway
 // speaks it — a user who switched a route to OpenAI Responses in dsh's
 // Models page keeps it, where each round put Chat Completions back
 // (Discord, 01huadalang: 这些协议怎么改 responses，在 dsh 改了一会就会被 magpie
 // 接管) — and the route's own otherwise, none or one the gateway has no
-// endpoint for.
+// endpoint for. Google's is kept only on the Gemini route, which is
+// written only for a dsh that takes it (dshSpeaksGemini): picked for
+// another route, an older dsh would refuse the whole config.
 func dshAPI(cur, own string) string {
-	if contains(dshAPIs, cur) {
+	if contains(dshAPIs, cur) || cur == own {
 		return cur
 	}
 	return own
@@ -2188,9 +2258,15 @@ func dshAPI(cur, own string) string {
 // base to the vendor's SDK as it is, and Anthropic's adds /v1/messages
 // itself, so Anthropic's Messages API is at the gateway's root; OpenAI's
 // SDK adds only /chat/completions or /responses, so those are at its /v1.
+// Google's SDK is given the base with no version of its own (pi-ai sets
+// apiVersion ""), and adds /models/<id>:streamGenerateContent, so Gemini's
+// API is at the gateway's /v1beta, where Google's own is.
 func dshBaseURL(api, gw string) string {
-	if api == "anthropic-messages" {
+	switch api {
+	case "anthropic-messages":
 		return gw
+	case dshGeminiAPI:
+		return gw + "/v1beta"
 	}
 	return gw + "/v1"
 }
@@ -2251,15 +2327,197 @@ func dshModelLevels(efforts []string) ([]string, *dshPiLevels) {
 	return levels, &out
 }
 
-// dshLevels are the thinking levels dsh offers for a catalog model.
+// dshGeminiLevels are dshModelLevels for a model on Gemini's API: the
+// levels whose effort Google takes as a thinking level (minimal, low,
+// medium or high), and off. pi-ai's Google adapter refuses any other
+// before it sends ("Unsupported Google thinking level mapping",
+// resolveGoogleThinkingLevel), so a Gemini's xhigh or max failed the turn
+// there, where the gateway fitted it to the model on Chat; a level left out
+// is not offered (pi-ai clamps a start's level to one that is). Pi's
+// models.json leaves the same ones out (#3282).
+func dshGeminiLevels(levels []string, l *dshPiLevels) ([]string, *dshPiLevels) {
+	if l == nil {
+		return nil, nil
+	}
+	google := func(e string) string {
+		switch strings.ToLower(e) {
+		case "minimal", "low", "medium", "high":
+			return e
+		}
+		return ""
+	}
+	out := dshPiLevels{Off: l.Off, Minimal: google(l.Minimal), Low: google(l.Low), Medium: google(l.Medium), High: google(l.High), XHigh: google(l.XHigh), Max: google(l.Max)}
+	var kept []string
+	for _, lv := range levels {
+		e := map[string]string{"off": out.Off, "minimal": out.Minimal, "low": out.Low, "medium": out.Medium, "high": out.High, "xhigh": out.XHigh, "max": out.Max}[lv]
+		if e != "" {
+			kept = append(kept, lv)
+		}
+	}
+	// dsh turns away a model offering no level but off
+	if len(kept) == 0 || len(kept) == 1 && kept[0] == "off" {
+		return nil, nil
+	}
+	return kept, &out
+}
+
+// dshLevelsOn are dshModelLevels for a model on a route speaking api.
+func dshLevelsOn(efforts []string, api string) ([]string, *dshPiLevels) {
+	levels, l := dshModelLevels(efforts)
+	if api == dshGeminiAPI {
+		return dshGeminiLevels(levels, l)
+	}
+	return levels, l
+}
+
+// dshLevels are the thinking levels dsh offers for a catalog model of list
+// on the route it goes on where Gemini's API is not spoken (dshAsked).
 func dshLevels(list, ref string) []string {
+	return dshLevelsWith(list, ref, false)
+}
+
+// dshLevelsAt are the thinking levels dsh offers for a catalog model in
+// the dsh home holding path, on the route it goes on there.
+func dshLevelsAt(path, ref string) []string {
+	return dshLevelsWith(dshListFor(path), ref, dshSpeaksGemini(path))
+}
+
+func dshLevelsWith(list, ref string, gemini bool) []string {
 	for _, m := range sharedModels(list) {
 		if m.ID == ref {
-			levels, _ := dshModelLevels(m.Efforts)
+			api := dshKindOf(dshRouteOf(dshAskedOne(m, gemini))).api
+			levels, _ := dshLevelsOn(m.Efforts, api)
 			return levels
 		}
 	}
 	return nil
+}
+
+// dshDistros are the dsh homes in WSL distros magpie has wired, by folder,
+// each with the version the distro's dsh said at its probe ("" when it
+// didn't): a home there is read by that dsh, not by this machine's.
+var dshDistros sync.Map
+
+// dshAppVersion is the version of dsh the desktop apps installed here run,
+// the oldest when there are several: DeepSeek Harness Desktop's own, a
+// community shell's the dsh it bundles (dshBundledVersion), not the shell's
+// (DSH NEXT 2.0.24-next runs dsh 0.2.2-rc.5); "" when there is none,
+// "unknown" when one doesn't say. A var for tests (dshAppsVersion).
+var dshAppVersion = dshAppsVersion
+
+// dshAppsVersion is dshAppVersion as it reads this machine.
+func dshAppsVersion() string {
+	oldest := ""
+	for i, b := range desktopApps["dsh"].builds() {
+		if !b.installed() {
+			continue
+		}
+		v := b.version()
+		if i > 0 {
+			v = dshBundledVersion(b)
+		}
+		if v == "" {
+			return "unknown"
+		}
+		if oldest == "" || Newer(oldest, v) {
+			oldest = v
+		}
+	}
+	return oldest
+}
+
+// dshBundledVersion is the dsh a community shell's Mac bundle runs: the
+// @deepseek-ai/dsh its Contents/Resources/app/package.json pins (DSH
+// NEXT's mac extraResources); "" when no bundle of it says, or names a
+// range. Elsewhere that manifest is inside app.asar, so it is "".
+func dshBundledVersion(app desktopApp) string {
+	for _, bundle := range macBundles(app) {
+		if info, ok := bundleInfo(bundle); !ok || info.id != app.id {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(bundle, "Contents", "Resources", "app", "package.json"))
+		if err != nil {
+			continue
+		}
+		var m struct {
+			Dependencies map[string]string `json:"dependencies"`
+		}
+		if json.Unmarshal(b, &m) != nil {
+			continue
+		}
+		if v := strings.TrimSpace(m.Dependencies["@deepseek-ai/dsh"]); v != "" && v[0] >= '0' && v[0] <= '9' {
+			return v
+		}
+	}
+	return ""
+}
+
+// dshSpeaksGemini says every dsh that reads the dsh home holding path
+// takes a route on Gemini's API (dshGeminiSince): the distro's dsh for a
+// home in WSL; this machine's CLI and desktop app, each where installed,
+// for ~/.dsh. A version not known is taken as too old, and so is DS Bot's
+// own dsh, whose version magpie doesn't read: a route an old dsh can't
+// read fails its whole config, where a Gemini on the Chat route is only
+// translated.
+func dshSpeaksGemini(path string) bool {
+	if path == "" || dshListFor(path) != "dsh" {
+		return false
+	}
+	p := filepath.Clean(path)
+	var vs []string
+	distro := false
+	dshDistros.Range(func(k, v any) bool {
+		if rel, err := filepath.Rel(k.(string), p); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			vs, distro = []string{v.(string)}, true
+			return false
+		}
+		return true
+	})
+	if !distro {
+		vs = provider.Held("dsh versions", func() []string {
+			var out []string
+			for _, v := range []string{dshVersion(), dshAppVersion()} {
+				if v != "" {
+					out = append(out, v)
+				}
+			}
+			return out
+		})
+	}
+	if len(vs) == 0 {
+		return false
+	}
+	for _, v := range vs {
+		if v == "" || v == "unknown" || Newer(dshGeminiSince, v) {
+			return false
+		}
+	}
+	return true
+}
+
+// dshAskedOne is m as a dsh is given it: without Gemini's API where that
+// dsh can't speak it (gemini false), so it goes on the route of the API
+// the gateway translates it from, as before dsh had Gemini's.
+func dshAskedOne(m catalog.Model, gemini bool) catalog.Model {
+	if !gemini && slices.Contains(m.APIs, string(provider.Gemini)) {
+		m.APIs = slices.DeleteFunc(slices.Clone(m.APIs), func(a string) bool { return a == string(provider.Gemini) })
+	}
+	return m
+}
+
+// dshAsked is models (a copy of magpie's list, written in place) as the
+// dsh home holding path is given them (dshAskedOne).
+func dshAsked(path string, models []catalog.Model) []catalog.Model {
+	gemini := dshSpeaksGemini(path)
+	for i := range models {
+		models[i] = dshAskedOne(models[i], gemini)
+	}
+	return models
+}
+
+// dshModelsAt is the catalog magpie writes into the dsh home holding path.
+func dshModelsAt(path string) []catalog.Model {
+	return dshAsked(path, magpieModels(dshListFor(path)))
 }
 
 // dshMaxTokens is the maxTokens magpie lists m with. dsh takes a listed
@@ -2315,7 +2573,7 @@ func dshKindConfig(k dshKind, models []catalog.Model, api, gw string) dshPiRoute
 		case m.ImageInput != nil:
 			e.Input = []string{"text"}
 		}
-		_, e.ReasoningEfforts = dshModelLevels(m.Efforts)
+		_, e.ReasoningEfforts = dshLevelsOn(m.Efforts, api)
 		// each switch is magpie's own, put as magpie has it now: a user's
 		// hand-set one of the same name says what magpie writes again says
 		switch {
@@ -2324,7 +2582,8 @@ func dshKindConfig(k dshKind, models []catalog.Model, api, gw string) dshPiRoute
 		// a Gemini 3 or later: #6778) is asked adaptively too: pi-ai then
 		// sends the level itself, max as max (gateway.AsksAdaptively, the
 		// rule Pi's models.json is written by too)
-		case api == "anthropic-messages" && gateway.AsksAdaptively(m.ID):
+		// (a routing group by its members, catalog.Model.AsksAdaptively)
+		case api == "anthropic-messages" && (gateway.AsksAdaptively(m.ID) || m.AsksAdaptively):
 			e.Compat = &dshPiCompat{ForceAdaptiveThinking: true}
 		case api == "openai-responses":
 			// by the api the route stands on (the one the user picked in
@@ -2492,7 +2751,7 @@ func dshSync(dir, gw string) error {
 func dshSyncFresh(at place, dir, gw string, fresh func() string) error {
 	dshWrites.Lock()
 	defer dshWrites.Unlock()
-	models := magpieModels(dshListFor(dir))
+	models := dshModelsAt(dir)
 	files := dshProfiles(dir)
 	made := ""
 	if len(files) == 0 {
@@ -2913,7 +3172,7 @@ func (r *dshRounds) once() string {
 	// are moves it past the one kept, and the next round builds them again
 	var models []catalog.Model
 	if stamp := provider.StampNow(); !r.built || stamp != r.stamp || dshModelsStale(r.at, time.Now()) {
-		models = magpieModels(list)
+		models = dshAsked(dir, magpieModels(list))
 		r.stamp, r.at, r.built = stamp, time.Now(), true
 		key.models = dshModelsSum(models)
 	}
@@ -2927,7 +3186,7 @@ func (r *dshRounds) once() string {
 		return ""
 	}
 	if models == nil {
-		models = magpieModels(list)
+		models = dshAsked(dir, magpieModels(list))
 	}
 	dshRoundsWorked.Add(1)
 	trouble := dshWiredWith(dir, files, models)
@@ -3348,11 +3607,11 @@ func dshSetEffort(dir, v, gw, lead string) error {
 		ref, viaGateway := strings.CutPrefix(model, magpieID+"/")
 		levels := dshEfforts
 		if viaGateway {
-			levels = dshLevels(dshListFor(dir), ref)
+			levels = dshLevelsAt(dir, ref)
 		}
 		route := dshRoute
 		if viaGateway {
-			route = dshRouteFor(ref, magpieModels(dshListFor(dir)))
+			route = dshRouteFor(ref, dshModelsAt(dir))
 		}
 		if v != "" && len(levels) == 0 {
 			return fmt.Errorf("DeepSeek Harness has no thinking levels for %s: magpie knows of none the model takes", ref)

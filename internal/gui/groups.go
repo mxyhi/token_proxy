@@ -13,6 +13,8 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/agent"
 	"github.com/yetone/magpie/internal/gateway"
+	"github.com/yetone/magpie/internal/groupshare"
+	"github.com/yetone/magpie/internal/middleware"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -33,6 +35,9 @@ type groupsJSON struct {
 	Drawers []modelRef `json:"drawers"`
 	// Found: magpie finds groups on its own (provider.AutoGroupsOn)
 	Found bool `json:"found"`
+	// OfOne: a model one provider alone serves is a found group too
+	// (provider.AutoGroupsOfOneOn), set under the page's Advanced
+	OfOne bool `json:"ofOne"`
 	// Skip: the providers kept out of found groups, by id
 	// (provider.AutoGroupSkip); Skippable: those that can be, each a
 	// provider ready to serve, switched off or not, and one in Skip that
@@ -56,6 +61,13 @@ type groupsJSON struct {
 	// Imported: import's answer, the group added and what of the text
 	// this magpie has none of (provider.ImportGroup)
 	Imported *provider.Imported `json:"imported,omitempty"`
+	// Published: publish's answer, the group's link on usemagpie.ai
+	// (groupshare.Publish)
+	Published *groupshare.Mine `json:"published,omitempty"`
+	// Links: the groups the user shared on usemagpie.ai, by id here; From:
+	// those imported from one there, the shared group's id and version
+	Links map[string]groupshare.Mine `json:"links"`
+	From  map[string]groupshare.From `json:"from"`
 	// Accounts: by provider id, the accounts and keys a group may be held
 	// to (Group.Accounts), as a gateway key's list has them (#905): each
 	// provider with more than one, or one a group names already
@@ -69,6 +81,10 @@ type groupsJSON struct {
 	// (settings.GroupSink, GroupFirstToken, GroupPatience), and how the
 	// groups magpie finds route and stay (FoundRouting, FoundAffinity)
 	Defaults groupDefaultsJSON `json:"defaults"`
+	// JSRoutings: the routings JS gateway plugins serve now, as in the
+	// state, read again each time the page is shown: one installed since
+	// the state was read is offered at once (guhailin3 on X)
+	JSRoutings []middleware.Routing `json:"jsRoutings"`
 }
 
 type groupKeyJSON struct {
@@ -359,8 +375,10 @@ func groupAccounts(gs []provider.Group) map[string][]keyModelJSON {
 
 func groupsState() groupsJSON {
 	_, offset := time.Now().Zone()
-	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Drawers: []modelRef{}, Found: provider.AutoGroupsOn(), Templates: provider.Templates(),
+	out := groupsJSON{Groups: []groupJSON{}, Models: []modelRef{}, Pools: []poolJSON{}, Deciders: []modelRef{}, Drawers: []modelRef{}, Found: provider.AutoGroupsOn(), OfOne: provider.AutoGroupsOfOneOn(), Templates: provider.Templates(),
 		Clock: clockJSON{Zone: provider.LocalZone(), Offset: offset}}
+	out.JSRoutings = middleware.Routings()
+	out.Links, out.From = groupshare.Shared(), groupshare.Sources()
 	def := settings.Load()
 	out.Defaults = groupDefaultsJSON{Sink: def.GroupSink, FirstToken: def.GroupFirstToken, Patience: def.GroupPatience, Routing: def.FoundRouting, Affinity: def.FoundAffinity}
 	for i := range out.Templates {
@@ -568,7 +586,7 @@ func groupRoutes(mux *http.ServeMux) {
 		var body struct {
 			provider.Group
 			From string `json:"from"` // the id the group had: another is a rename
-			On   bool   `json:"on"`   // found: magpie finds groups on its own
+			On   bool   `json:"on"`   // found: magpie finds groups on its own; ofone: of one provider too
 			// skip: the providers kept out of found groups
 			// (provider.SetAutoGroupSkip)
 			Skip []string `json:"skip"`
@@ -585,22 +603,30 @@ func groupRoutes(mux *http.ServeMux) {
 			// Replace: the text's id, when it is a group of the user's,
 			// replaces that group (provider.ImportGroupOver)
 			Replace bool `json:"replace"`
+			// sharing on usemagpie.ai (groups_share.go)
+			groupShareBody
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			fail(rw, err)
 			return
 		}
 		in := body.Group
+		if groupShareAction(rw, r, r.PathValue("action"), in.ID, body.Text, body.Replace, body.On, body.groupShareBody) {
+			return
+		}
 		var err error
 		var moved []agent.Move
 		var shared string
-		var imported *provider.Imported
 		switch r.PathValue("action") {
 		case "found":
 			// off, an agent set to a found group is moved to its model
 			// from one provider; a request still naming one goes there too
 			// (provider.AutoStandIn)
 			moved, err = agent.Reseat(func() error { return provider.SetAutoGroups(body.On) })
+		case "ofone":
+			// off, an agent set to a group of one is moved to its model,
+			// as turning found groups off does
+			moved, err = agent.Reseat(func() error { return provider.SetAutoGroupsOfOne(body.On) })
 		case "skip":
 			// an agent set to a found group skipping took away is moved to
 			// its model from one provider, as turning found groups off does
@@ -636,15 +662,6 @@ func groupRoutes(mux *http.ServeMux) {
 		case "share":
 			// the group as text for another magpie: no key goes with it
 			shared, err = provider.ShareGroup(in.ID)
-		case "import":
-			var res provider.Imported
-			imp := provider.ImportGroup
-			if body.Replace {
-				imp = provider.ImportGroupOver
-			}
-			if res, err = imp(body.Text); err == nil {
-				imported = &res
-			}
 		case "template":
 			_, err = provider.AddTemplate(body.Kind, in.Name)
 		case "switch":
@@ -670,7 +687,7 @@ func groupRoutes(mux *http.ServeMux) {
 			return
 		}
 		st := groupsState()
-		st.Moved, st.Shared, st.Imported = moved, shared, imported
+		st.Moved, st.Shared = moved, shared
 		writeJSON(rw, st)
 	})
 }

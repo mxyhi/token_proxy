@@ -137,18 +137,25 @@ one Settings lists, are turned away (`TestMemoryMCPGuarded`).
 
 ### Other memory services
 
-EverMe and Nowledge Mem are not built in: both publish an MCP server, so the
-Library's market offers them as servers (`evermeServer`, `nowledgeServer` in
+EverMe, Nowledge Mem and Hindsight are not built in: each publishes an MCP
+server, so the Library's market offers them as servers (`evermeServer`,
+`nowledgeServer`, `hindsightServer` in
 [market.go](../../internal/library/market.go)), added in one step beside
 Magpie Memory and given to the agents like any server
-(`TestThirdPartyMemoryServers`). Their memories live in their own service;
+(`TestThirdPartyMemoryServers`, `TestHindsightServer`). Their memories live in their own service;
 magpie's digest, Memory tab, distillation and search don't read or write them.
 EverMe runs `npx -y @everme/memory-mcp` with the agent id and `evt_` token
 its console or `evercli auth login` gives (`EVERME_API_BASE` defaults to the
 managed backend, editable for a self-hosted one). Nowledge Mem is its
 Streamable HTTP endpoint on `127.0.0.1:14242/mcp`; a Mem reached through
 Access Anywhere takes its address and an `Authorization: Bearer` key, edited
-after adding.
+after adding. Hindsight (vectorize-io/hindsight) is its API's Streamable
+HTTP endpoint on `localhost:8888/mcp`, where the bank comes from the
+`X-Bank-Id` header (Hindsight's default bank without one) and a key, needed
+only when Hindsight's tenant extension asks for one, goes as
+`Authorization: Bearer`; both are asked for when it is added. Hindsight runs
+an LLM of its own, any OpenAI-compatible endpoint
+(`HINDSIGHT_API_LLM_BASE_URL`), which can be magpie's gateway.
 
 ### Digest in the instructions
 
@@ -183,6 +190,14 @@ project's under the folders it was seen in) to the instructions of the
 agents ticked under Instructions, unless `Instructions.NoMemory`
 (`TestMemoryDigestInInstructions`). The Memory tab's switch sets it.
 
+A memory's why goes into its item as `(why: …)`, and counts against the
+budget, unless the user turns "Include reasons in summary" off under the
+Memory tab's Advanced (#7780). `digestNoWhy` in meta.json keeps that, this
+computer's own like the digest itself, and `SetDigestOmitWhy` publishes
+again at once, so the room it frees takes more memories. The why stays in
+the memory, its file and the tab (`TestDigestOmitWhy`,
+`TestMemoryDigestOmitWhyInInstructions`, `TestMemoryDigestOmitWhyRoute`).
+
 ### GUI
 
 [internal/gui/memory.go](../../internal/gui/memory.go):
@@ -194,6 +209,7 @@ agents ticked under Instructions, unless `Instructions.NoMemory`
 | `POST /api/memory/remove` | `{ids}` |
 | `POST /api/memory/status` | `{ids, status}`: `SetStatus`, in one write, as `Edit` by the user per memory (`TestSetStatusOfSome`, `TestMemoryStatusRouteActsOnSome`) |
 | `POST /api/memory/digest` | `{on}` |
+| `GET /api/memory/stats?days=7\|30` | `memory.Stats`: the day-by-day counts below (`TestMemoryStatsRoute`) |
 
 A reply after a change carries `problem` when publishing the digest
 failed. The tab is in [plugins/library/client.js](../../internal/gui/assets/plugins/library/client.js)
@@ -256,6 +272,11 @@ further (`State.Since`), unless a range is picked.
   the gateway was never learnt from (bxgz233 on X: 1000+ WorkBuddy
   sessions; `TestGatewayOnlySessionsRead`, `TestReadOnlySessionsRead`). A
   gateway session with nothing recorded has no turns and is passed over.
+  A session counts only when its agent has a transcript reader
+  (`sessions.HasTranscript`); `noTranscriptYet` in sessions' tests names
+  the agents listed without one. Hermes Agent was one until its rows were
+  read (`hermesTranscript`, every profile's `state.db`; CFK on Discord,
+  `TestHermesSessionsRead`).
 - A turn counts by what the user said, a user `text` part. WorkBuddy
   (and WorkBuddy AI, CodeBuddy Code) writes each turn as one block, its
   `<system-reminder>` context and then the words in `<user_query>`, in
@@ -397,6 +418,63 @@ meaning, since it downloads a model (~135 MB).
   `{on}` give the row its state: the download's progress, the memories
   read, and why either failed.
 
+### Activity counts
+
+The Memory tab shows how memory is made, recalled, updated and cleaned
+(the owner, 11-25), from counts kept in
+[stats.go](../../internal/memory/stats.go): `memory-stats.json` beside the
+memory folder, this computer's own (never in a backup or sync), counts
+only and never a memory's text (`TestStatsBackfillAndNoText`), a day a
+key for 400 days (`keepDays`). `change` counts what a write did once it is
+written (`count(f.counts)`); a count that can't be written is let go, and
+a file that can't be read is never written over
+(`TestStatsUnreadableIsLeftAlone`).
+
+- Created, by origin: a memory added. The same text saved again is an
+  update, and a tidy merge's memory is the merge, not a new one.
+- Updated: text, kind, scope, why, tags or pin changed; the same text
+  saved again; a tidy merge or a promotion, once each. A status change
+  alone isn't one.
+- Cleaned, by who (`you`, `agent`, `tidy`, `expiry`): a memory in use or
+  to review becoming archived, superseded or deleted. Deleting one already
+  set aside isn't counted again (`TestStatsCountEachChange`,
+  `TestStatsCountTidyAndExpiry`).
+- Searches, Found, Recalled: an agent's `Search` with words, the ones that
+  returned something, and the memories returned. The tab's own search
+  (`Rank`) and a listing aren't counted.
+
+`Stats(n)` gives the last n local days, today last, with `since` (the
+first day counted) and the memories in use and to review now. A day before
+`since` has no counts; its Created is taken from the memory files' own
+dates (`backfilled`).
+
+The tab's four tiles ([memstats.js](../../internal/gui/assets/plugins/library/memstats.js),
+imported when the Memory tab first draws) over 7 or 30 days:
+
+| Tile | Value |
+| --- | --- |
+| Creation rate | memories made ÷ days, each day's own made |
+| Recall rate | agent searches that found something ÷ agent searches |
+| Update rate | updates ÷ memories in use now |
+| Cleanup rate | memories cleaned ÷ memories in use now |
+
+A tile picked opens its daily chart, the day's numbers on hover or the
+arrow keys. A count's 0 is a value: what was made counts every day (a day
+before `since` that no file names made 0), and updates and cleanups every
+day from `since` on. Only a day with nothing to count has no value: an
+update or cleanup before `since`, or a recall day with no search ("No
+searches", never 0%). With a chart open, two icons beside the period draw
+it as columns or as a line (the owner, 11-25), kept in `localStorage`
+`magpie.memStatsChart` like Usage's `magpie.ledChart`. The line is
+straight from day to day, so it never passes a day's value, with a 0 on
+the baseline; it breaks only where a day has no value, as the columns
+draw nothing there, and a day alone between two breaks is a dot, with no
+connector or wash across a break. Today counts as it stands, so a count's
+line ends on today's value, 0 included. The sparklines stay columns
+either way: most of their days are 0 or empty, which a line of 7 points
+draws as noise, and columns keep today's accent apart. Tested by
+`library-memory-stats.test.cjs`.
+
 ### Backups and sync
 
 Memory goes to another computer in a backup file (the scheduled backups
@@ -470,8 +548,8 @@ over the In use list, unsearched and not narrowed to a scope
 ```sh
 mote-run go test ./internal/memory ./internal/backup ./internal/davsync ./internal/memdistill ./internal/memembed ./internal/library
 mote-run sh -c 'MAGPIE_EMBED_DIR=$HOME/models/pml go test -run Embedder ./internal/pii/guard'
-mote-run go test -run 'Distill|Dream' ./internal/gui
+mote-run go test -run 'Distill|Dream|MemoryStats' ./internal/gui
 mote-run go test -tags nogui -run 'MemoryMCP|OwnMCP' ./internal/gateway
 mote-run go test ./internal/browsermcp ./internal/cli
-mote-run node --test internal/gui/tests/library-memory.test.cjs internal/gui/tests/library-memory-select.test.cjs internal/gui/tests/library-memory-suggest.test.cjs
+mote-run node --test internal/gui/tests/library-memory.test.cjs internal/gui/tests/library-memory-select.test.cjs internal/gui/tests/library-memory-suggest.test.cjs internal/gui/tests/library-memory-stats.test.cjs
 ```

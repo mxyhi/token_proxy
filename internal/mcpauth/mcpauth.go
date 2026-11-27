@@ -64,6 +64,44 @@ var Changed func(name string)
 // renewLead is how long before it runs out a token is renewed.
 var renewLead = 2 * time.Minute
 
+// A token endpoint that answers a renewal 429 is not asked again until
+// the wait it gave in Retry-After is over (at most maxRetryAfter), or,
+// with none given, a wait that doubles from rateLimitBase with each 429
+// in a row up to rateLimitMax (#7451, Asher-S-Wu: every request through
+// the router asked Canva again, a call to another server's tool too).
+const (
+	rateLimitBase = 30 * time.Second
+	rateLimitMax  = 15 * time.Minute
+	maxRetryAfter = 24 * time.Hour
+)
+
+// clockFn is what the package reads the time from; a test moves it past
+// a wait (SetClockForTest).
+var (
+	clockMu sync.RWMutex
+	clockFn = time.Now
+)
+
+func clock() time.Time {
+	clockMu.RLock()
+	defer clockMu.RUnlock()
+	return clockFn()
+}
+
+// SetClockForTest has mcpauth read the time from fn until the returned
+// function puts the clock back.
+func SetClockForTest(fn func() time.Time) (restore func()) {
+	clockMu.Lock()
+	was := clockFn
+	clockFn = fn
+	clockMu.Unlock()
+	return func() {
+		clockMu.Lock()
+		clockFn = was
+		clockMu.Unlock()
+	}
+}
+
 // signInTimeout is how long a sign-in waits for the browser.
 var signInTimeout = 10 * time.Minute
 
@@ -72,6 +110,34 @@ var ErrNotSignedIn = errors.New("magpie isn't signed in to this server")
 
 // ErrExpired is a sign-in the server no longer takes: it has to be done again.
 var ErrExpired = errors.New("magpie's sign-in to this server has run out: sign in again in the Library")
+
+// ErrRateLimited is a sign-in whose token endpoint turned its renewal away
+// with 429: it isn't asked again until the wait is over. A RateLimitError
+// says when.
+var ErrRateLimited = errors.New("the server is limiting how often magpie renews its sign-in")
+
+// RateLimitError is a renewal magpie won't ask for before At: the token
+// endpoint answered 429 (Cause, when this request was the one turned away).
+type RateLimitError struct {
+	At    time.Time
+	Cause error
+}
+
+// Wait is how long is left of the wait, a second at least.
+func (e *RateLimitError) Wait() time.Duration {
+	return max(e.At.Sub(clock()).Round(time.Second), time.Second)
+}
+
+func (e *RateLimitError) Error() string {
+	s := ErrRateLimited.Error() + ": magpie renews it in " + e.Wait().String() + ", and until then can't use it"
+	if e.Cause != nil {
+		s += " (" + e.Cause.Error() + ")"
+	}
+	return s
+}
+
+func (e *RateLimitError) Is(target error) bool { return target == ErrRateLimited }
+func (e *RateLimitError) Unwrap() error        { return e.Cause }
 
 // ErrNoSignIn is a server that answered an agent's first request without
 // asking for a sign-in: it works as it is. One that takes a key as a header
@@ -82,10 +148,11 @@ var ErrNoSignIn = errors.New("this server already works without signing in, so t
 // ErrClientRefused is a server whose authorization server turned magpie's
 // registration away with 401 or 403: it admits only the clients it lists,
 // as Figma's (mcp.figma.com, a 403 "Forbidden" to any client_name it doesn't
-// list, #1619). magpie doesn't pass itself off as a listed client; a server
-// magpie isn't signed in to is given to the agents at its own address, so
-// each agent signs in there itself. The GUI has it in every language.
-var ErrClientRefused = errors.New("this server's sign-in admits only the apps it lists and turned magpie away, so magpie can't sign in for the agents. The agents given it still have the server's own address: sign in from each agent itself (in Claude Code, run /mcp and pick the server)")
+// list, #1619). magpie doesn't pass itself off as a listed client; the
+// library gives such a server to each agent at its own address, past the
+// MCP router, so each agent signs in there itself. The GUI has it in every
+// language.
+var ErrClientRefused = errors.New("this server's sign-in admits only the apps it lists and turned magpie away, so neither magpie nor its MCP router can sign in to it. magpie gives it to each agent at its own address, past the router: sign in from each agent itself (in Claude Code, run /mcp and pick the server)")
 
 // ErrTurnedAway is a server whose address answered 403 with a web page
 // rather than the server's own reply: a firewall in front of it (Cloudflare's,
@@ -143,6 +210,12 @@ type Record struct {
 	// Dead is a sign-in the server refused to renew: the page asks for it
 	// again
 	Dead bool `json:"dead,omitempty"`
+	// RetryAt is when a renewal the token endpoint turned away with 429
+	// may be asked for again, unix ms; RateLimits counts the 429s in a
+	// row, for the wait when the server named none. A renewal, or signing
+	// in again, ends both; each account has its own.
+	RetryAt    int64 `json:"retryAt,omitempty"`
+	RateLimits int   `json:"rateLimits,omitempty"`
 
 	// More than one sign-in to a server (Elorynth on X: several accounts,
 	// one in use). This record is always the one in use, so every reader of
@@ -242,6 +315,28 @@ func Get(name string) (Record, bool) {
 	return c, true
 }
 
+// Server is a server magpie is signed in to, as its sign-in names it:
+// never a token or a client's secret.
+type Server struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// Servers are the servers magpie is signed in to, by name.
+func Servers() []Server {
+	fileMu.Lock()
+	m := load()
+	fileMu.Unlock()
+	out := make([]Server, 0, len(m))
+	for name, r := range m {
+		if r != nil {
+			out = append(out, Server{Name: name, URL: r.URL})
+		}
+	}
+	slices.SortFunc(out, func(a, b Server) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
 // SignedIn says whether magpie holds a sign-in to the server by that name
 // at that URL: one to give the agents magpie's address for. One the server
 // refused to renew still is, so the agents get magpie's word to sign in
@@ -256,6 +351,9 @@ type Status struct {
 	SignedIn bool  `json:"signedIn"`
 	Dead     bool  `json:"dead,omitempty"`
 	At       int64 `json:"at,omitempty"`
+	// RetryAt is when a rate-limited renewal is asked for again, unix ms,
+	// while that is still to come
+	RetryAt int64 `json:"retryAt,omitempty"`
 	// Accounts are the sign-ins, when there is more than one
 	Accounts []Account `json:"accounts,omitempty"`
 }
@@ -267,6 +365,9 @@ func StatusOf(name, serverURL string) Status {
 		return Status{}
 	}
 	st := Status{SignedIn: true, Dead: r.Dead, At: r.At}
+	if !r.Dead && cooling(r) {
+		st.RetryAt = r.RetryAt
+	}
 	if l := Accounts(name); len(l) > 1 {
 		st.Accounts = l
 	}
@@ -485,20 +586,43 @@ func Token(ctx context.Context, name string) (string, error) {
 	if !due(r) {
 		return r.Access, nil
 	}
-	return renew(ctx, name, func(cur Record) bool { return due(cur) })
+	// a renewal turned away with 429 isn't asked for again before its
+	// time, by this request or any other: a token still good meanwhile
+	// is used
+	if cooling(r) {
+		return waiting(r, true)
+	}
+	return renew(ctx, name, func(cur Record) bool { return due(cur) }, true)
 }
 
 // Renew renews the sign-in the server just refused stale, unless another
 // request renewed it meanwhile: then the new token is returned.
 func Renew(ctx context.Context, name, stale string) (string, error) {
-	return renew(ctx, name, func(cur Record) bool { return cur.Access == stale })
+	return renew(ctx, name, func(cur Record) bool { return cur.Access == stale }, false)
 }
 
 func due(r Record) bool {
-	return r.Expires != 0 && time.Now().Add(renewLead).UnixMilli() >= r.Expires
+	return r.Expires != 0 && clock().Add(renewLead).UnixMilli() >= r.Expires
 }
 
-func renew(ctx context.Context, name string, still func(Record) bool) (string, error) {
+// cooling says a renewal of r was turned away with 429 and its wait isn't
+// over.
+func cooling(r Record) bool { return r.RetryAt > clock().UnixMilli() }
+
+// waiting is what a request gets while r's renewal waits: its token while
+// it hasn't run out, when the server hasn't refused it (good), else
+// the wait.
+func waiting(r Record, good bool) (string, error) {
+	if good && r.Expires > clock().UnixMilli() {
+		return r.Access, nil
+	}
+	return "", &RateLimitError{At: time.UnixMilli(r.RetryAt)}
+}
+
+// renew renews the sign-in while still holds for it; good says its token
+// hasn't been refused, so it is used, while it lasts, when the renewal
+// has to wait.
+func renew(ctx context.Context, name string, still func(Record) bool, good bool) (string, error) {
 	mu := lockOf(name)
 	mu.Lock()
 	defer mu.Unlock()
@@ -516,6 +640,9 @@ func renew(ctx context.Context, name string, still func(Record) bool) (string, e
 	if !still(r) {
 		return r.Access, nil
 	}
+	if cooling(r) {
+		return waiting(r, good)
+	}
 	if r.Refresh == "" {
 		markDead(name, r.Access)
 		return "", ErrExpired
@@ -527,6 +654,16 @@ func renew(ctx context.Context, name string, still func(Record) bool) (string, e
 	t, err := tokenRequest(ctx, r, form)
 	if err != nil {
 		var te *tokenError
+		// a 429 is the server asking for a wait, not refusing the
+		// sign-in: it stays, and nothing asks again before the wait is
+		// over
+		if errors.As(err, &te) && te.Status == http.StatusTooManyRequests {
+			r.RetryAt = markRateLimited(name, r.Access, te.RetryAfter).UnixMilli()
+			if tok, werr := waiting(r, good); werr == nil {
+				return tok, nil
+			}
+			return "", &RateLimitError{At: time.UnixMilli(r.RetryAt), Cause: err}
+		}
 		if errors.As(err, &te) && (dead(te.Code) || te.Status == http.StatusUnauthorized) {
 			markDead(name, r.Access)
 			return "", ErrExpired
@@ -543,6 +680,7 @@ func renew(ctx context.Context, name string, still func(Record) bool) (string, e
 			cur.Refresh = t.Refresh
 		}
 		cur.Expires = t.expires()
+		cur.RetryAt, cur.RateLimits = 0, 0
 		return true
 	})
 	return t.Access, err
@@ -576,6 +714,53 @@ func markDead(name, access string) {
 	})
 }
 
+// markRateLimited records the 429 a renewal of the sign-in holding access
+// got, and is when it may be asked for again: after retryAfter, the wait
+// the server gave, or the next step of the backoff when it gave none. A
+// sign-in redone meanwhile is left as it is.
+func markRateLimited(name, access string, retryAfter time.Duration) time.Time {
+	now := clock()
+	at := now.Add(max(retryAfter, rateLimitBase/30)) // never asked again at once
+	_ = update(func(m map[string]*Record) bool {
+		cur := m[name]
+		if cur == nil || cur.Access != access {
+			return false
+		}
+		if retryAfter <= 0 {
+			at = now.Add(backoff(cur.RateLimits))
+		}
+		cur.RateLimits++
+		cur.RetryAt = at.UnixMilli()
+		return true
+	})
+	return at
+}
+
+// backoff is the wait after n 429s in a row that named none.
+func backoff(n int) time.Duration {
+	d := rateLimitBase
+	for ; n > 0 && d < rateLimitMax; n-- {
+		d *= 2
+	}
+	return min(d, rateLimitMax)
+}
+
+// retryAfter reads a Retry-After header, seconds or an HTTP date, as the
+// wait from now, at most maxRetryAfter; 0 when it names none.
+func retryAfter(v string, now time.Time) time.Duration {
+	v = strings.TrimSpace(v)
+	var d time.Duration
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+		if n > int64(maxRetryAfter/time.Second) {
+			return maxRetryAfter
+		}
+		d = time.Duration(n) * time.Second
+	} else if at, err := http.ParseTime(v); err == nil {
+		d = at.Sub(now)
+	}
+	return min(max(d, 0), maxRetryAfter)
+}
+
 type tokens struct {
 	Access    string `json:"access_token"`
 	Refresh   string `json:"refresh_token"`
@@ -587,13 +772,15 @@ func (t tokens) expires() int64 {
 	if t.ExpiresIn <= 0 {
 		return 0
 	}
-	return time.Now().Add(time.Duration(t.ExpiresIn) * time.Second).UnixMilli()
+	return clock().Add(time.Duration(t.ExpiresIn) * time.Second).UnixMilli()
 }
 
 type tokenError struct {
-	Status      int
-	Code        string `json:"error"`
-	Description string `json:"error_description"`
+	Status int
+	// RetryAfter is a 429's Retry-After, when it named a wait
+	RetryAfter  time.Duration `json:"-"`
+	Code        string        `json:"error"`
+	Description string        `json:"error_description"`
 }
 
 func (e *tokenError) Error() string {
@@ -632,6 +819,9 @@ func tokenRequest(ctx context.Context, r Record, form url.Values) (tokens, error
 	b, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode/100 != 2 {
 		te := &tokenError{Status: resp.StatusCode}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			te.RetryAfter = retryAfter(resp.Header.Get("Retry-After"), clock())
+		}
 		_ = json.Unmarshal(b, te)
 		return tokens{}, te
 	}
@@ -1014,12 +1204,18 @@ type State struct {
 	URL    string `json:"url,omitempty"` // the sign-in page, to open
 	State  string `json:"state"`         // waiting, done, failed or canceled
 	Error  string `json:"error,omitempty"`
+	// PasteCallback says a browser that can't reach this magpie (magpie on
+	// a server or in Docker, the page open on another machine) can finish
+	// the sign-in by pasting the address it ended on (@OoopsHh on X).
+	PasteCallback bool `json:"pasteCallback,omitempty"`
 }
 
 type flow struct {
 	mu       sync.Mutex
 	st       State
 	srv      *http.Server
+	redirect string // where the sign-in sends the browser back, for a pasted address to match
+	oauth    string // the OAuth state parameter, checked against a pasted address
 	done     chan struct{}
 	claimed  bool
 	finished bool
@@ -1148,7 +1344,7 @@ func start(ctx context.Context, name, serverURL string, app *App, add *string) (
 	}
 	au.RawQuery = aq.Encode()
 
-	f := &flow{done: make(chan struct{}), st: State{ID: randomToken(9), Server: name, URL: au.String(), State: "waiting"}}
+	f := &flow{done: make(chan struct{}), redirect: redirect, oauth: state, st: State{ID: randomToken(9), Server: name, URL: au.String(), State: "waiting", PasteCallback: true}}
 	rec := Record{URL: serverURL, Resource: m.Resource, Issuer: m.Issuer, TokenURL: m.TokenURL, ClientID: id, Secret: secret, AuthMethod: method, Scope: m.Scope}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
@@ -1187,7 +1383,7 @@ func start(ctx context.Context, name, serverURL string, app *App, add *string) (
 			return
 		}
 		r2 := rec
-		r2.Access, r2.Refresh, r2.Expires, r2.At = t.Access, t.Refresh, t.expires(), time.Now().UnixMilli()
+		r2.Access, r2.Refresh, r2.Expires, r2.At = t.Access, t.Refresh, t.expires(), clock().UnixMilli()
 		if t.Scope != "" {
 			r2.Scope = t.Scope
 		}
@@ -1318,6 +1514,100 @@ func Cancel(id string) {
 		f.finish(State{State: "canceled"})
 	}
 }
+
+// Submit finishes a sign-in whose browser couldn't reach this magpie — the
+// whole address the browser was sent back to, pasted (@OoopsHh on X). The sign-in's
+// callback listens on loopback, so a browser on another machine (magpie on
+// a server or in Docker) ends on a page that won't load; its address
+// carries the code magpie needs.
+func Submit(id, raw string) error {
+	flows.Lock()
+	f := flows.m[id]
+	flows.Unlock()
+	if f == nil {
+		return errors.New("no such sign-in")
+	}
+	return f.pastedCallback(raw)
+}
+
+// pastedCallback takes the address the sign-in's browser was sent back to.
+// Only this sign-in's own address is taken: its port, path and state. It
+// goes through the same handler the callback port serves, so the code is
+// checked and traded just as the browser's own would be, and only once —
+// whichever of the two comes first finishes the sign-in.
+func (f *flow) pastedCallback(raw string) error {
+	f.mu.Lock()
+	st, srv, redirect, oauth := f.st, f.srv, f.redirect, f.oauth
+	f.mu.Unlock()
+	if !st.PasteCallback || srv == nil {
+		return errors.New("this sign-in can't be finished from a pasted address")
+	}
+	if st.State != "waiting" {
+		return errors.New("this sign-in is over; start it again")
+	}
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "http" || u.RawQuery == "" {
+		return errors.New("paste the whole address the browser ended on, starting with http://")
+	}
+	if !ownCallback(u, redirect, oauth) {
+		return errors.New("that address isn't from this sign-in: paste the one its browser tab ended on")
+	}
+	req, err := http.NewRequest(http.MethodGet, "http://"+u.Host+u.RequestURI(), nil)
+	if err != nil {
+		return err
+	}
+	// the handler trades the code and finishes the flow before it returns
+	srv.Handler.ServeHTTP(&pastedReply{}, req)
+	f.mu.Lock()
+	claimed := f.claimed
+	f.mu.Unlock()
+	if !claimed {
+		if cur := f.status(); cur.State == "failed" {
+			return errors.New(cur.Error)
+		}
+		return errors.New("that address didn't finish the sign-in; start it again")
+	}
+	select {
+	case <-f.done:
+	case <-time.After(45 * time.Second):
+		return errors.New("the sign-in is still finishing; magpie shows it when it's done")
+	}
+	switch cur := f.status(); cur.State {
+	case "done":
+		return nil
+	case "failed":
+		return errors.New(cur.Error)
+	}
+	return errors.New("the sign-in was canceled")
+}
+
+// ownCallback says whether a pasted address is where this sign-in's page
+// sends the browser back to: its port and path, on loopback, with its state.
+func ownCallback(u *url.URL, redirect, oauth string) bool {
+	want, err := url.Parse(redirect)
+	if err != nil || u.Port() != want.Port() {
+		return false
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "localhost", "127.0.0.1", "::1":
+	default:
+		return false
+	}
+	return u.Path == want.Path && u.Query().Get("state") == oauth
+}
+
+// pastedReply drops the handler's HTML: a pasted address finishes the flow
+// through its side effect, not its body.
+type pastedReply struct{ h http.Header }
+
+func (p *pastedReply) Header() http.Header {
+	if p.h == nil {
+		p.h = http.Header{}
+	}
+	return p.h
+}
+func (p *pastedReply) Write(b []byte) (int, error) { return len(b), nil }
+func (p *pastedReply) WriteHeader(int)             {}
 
 func page(w http.ResponseWriter, status int, msg string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -213,6 +213,10 @@ func (l *Limit) Valid() (*Limit, error) {
 		return nil, err
 	}
 	for _, m := range ms {
+		if m == NoModels {
+			// a key's "no model" counts nothing: a limit names what it counts
+			return nil, errors.New("A limit counts models or providers, like openai/* or openai/gpt-5: " + m)
+		}
 		if strings.HasPrefix(strings.ToLower(m), "group/") || strings.HasPrefix(strings.ToLower(m), "auto/") {
 			return nil, errors.New("A limit counts models or providers, like openai/* or openai/gpt-5, not a routing group: " + m)
 		}
@@ -308,9 +312,16 @@ func (l *Limit) Window(now time.Time) (start, reset time.Time) {
 // location: its start and when the next begins.
 func Window(period string, now time.Time) (start, reset time.Time) {
 	// a day that starts after midnight (settings.DayStart) moves the
-	// calendar: the week and the month begin at that hour too
+	// calendar: the week and the month begin at that hour too. Asked in
+	// this computer's zone, the days are Settings' time zone's (JackyFill
+	// on X): the Usage page's.
 	home := now.Location()
-	loc := dayzone.Shift(home, settings.Shared().DayStart)
+	s := settings.Shared()
+	base := home
+	if home == time.Local {
+		base = s.Location()
+	}
+	loc := dayzone.Shift(base, s.DayStart)
 	now = now.In(loc)
 	y, m, d := now.Date()
 	defer func() { start, reset = start.In(home), reset.In(home) }()

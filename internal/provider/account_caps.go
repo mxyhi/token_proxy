@@ -107,6 +107,31 @@ func (p Provider) KeyCapHeld(k KeyAccount, model string, now time.Time, read fun
 	return al.CapHeld(model, caps, now)
 }
 
+// KeyCapLeaves are the models on p's list that the usage cap holding
+// the key k as a whole (KeyCapHeld for model "") holds none of, by the
+// windows read gives: a window that counts only some models (paidOnly:
+// OpenCode Go's count none of its free ones) leaves the others to the
+// key, as the gateway asks KeyCapHeld per model. The Providers page said
+// the key was passed over while its free models were served (xzhih on
+// X, #7773). Nil when it isn't held, or holds every model.
+func (p Provider) KeyCapLeaves(k KeyAccount, now time.Time, read func(Provider) (Allowance, bool)) []string {
+	caps := p.CapsOf(keyID(k.Key))
+	if !caps.Holds() {
+		return nil
+	}
+	al, ok := read(p.WithKey(k))
+	if !ok || al.CapHeld("", caps, now) == nil {
+		return nil
+	}
+	var out []string
+	for _, m := range p.Available() {
+		if al.CapHeld(m.ID, caps, now) == nil {
+			out = append(out, m.ID)
+		}
+	}
+	return out
+}
+
 // KeyAccountOf is the key of p with the id ref (KeyInfo.ID), and whether
 // p has it.
 func (p Provider) KeyAccountOf(ref string) (KeyAccount, bool) {
@@ -517,6 +542,14 @@ type CapHold struct {
 // caps (WindowCaps.Of), not renewed since; nil when none is. A window
 // whose reset has passed is empty again; no caps hold nothing.
 func (a Allowance) CapHeld(model string, caps WindowCaps, now time.Time) *CapHold {
+	return a.CapHeldWithin(model, caps, 0, now)
+}
+
+// CapHeldWithin is CapHeld for a window less than points under its share
+// too: a turn that spends that many would take it past. A cap at a fixed amount
+// holds at the amount still, and the credits a Codex account is set not
+// to spend at 100%.
+func (a Allowance) CapHeldWithin(model string, caps WindowCaps, points float64, now time.Time) *CapHold {
 	if !caps.Holds() {
 		return nil
 	}
@@ -529,7 +562,7 @@ func (a Allowance) CapHeld(model string, caps WindowCaps, now time.Time) *CapHol
 			continue // held by extraCapped's 100%, not by itself
 		}
 		share, credits, amount := caps.limitShare(l.Name, l.Of, l.aside)
-		if !past(share, amount, l.Used, l.Amount) {
+		if !past(share, amount, l.Used, l.Amount) && (credits || share <= 0 || amount > 0 || l.Used <= share-points) {
 			continue
 		}
 		if !l.Resets.IsZero() && !l.Resets.After(now) {

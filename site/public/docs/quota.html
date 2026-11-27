@@ -192,7 +192,7 @@ magpie quota history --days 7 --json</pre></div>
     <p>The gateway answers the same on a local API, on the port in Settings' Gateway address. Another machine reaches it only while magpie is shared on the local network, with its key as the API key (Authorization: Bearer or x-api-key).</p>
     <div class="code"><span class="lang">Terminal</span><button class="copy" data-copy="q-api">Copy</button><pre id="q-api">curl http://127.0.0.1:3425/v1/magpie/quotas
 curl 'http://127.0.0.1:3425/v1/magpie/quotas/history?days=7&provider=codex'</pre></div>
-    <p>magpie's own skill <code>magpie-quota</code> lets an agent read <code>magpie quota --json</code> and wait with <code>magpie quota wait</code>. It is first in the Library's skills market.</p>
+    <p>magpie's own skill <code>magpie-quota</code> lets an agent read <code>magpie quota --json</code> and wait with <code>magpie quota wait</code>. It is first in the Library's skills market. Beside it, <code>magpie-api</code> teaches an agent this API, and <code>/v1/models</code> and <code>/v1/magpie/route</code> (the model a routing group picked) too, for an agent that hands work out across models.</p>
     <h2 id="alert"><a class="anchor" href="#alert">Alerts</a></h2>
     <p>Have the magpie app notify you when any window of a subscription or plan reaches a share used, once each time the window runs, or when a balance falls to an amount or under, in its own currency or credits, once until topped up past it. Both are off until set; <code>off</code> turns either off.</p>
     <div class="code"><span class="lang">Terminal</span><button class="copy" data-copy="q-alert">Copy</button><pre id="q-alert">magpie quota alert 80              # notify at 80% used, once per window
@@ -209,8 +209,9 @@ until codex exec …; do magpie quota wait codex || break; done</pre></div>
     <p>A Codex account that holds rate-limit resets says how many.</p>
     <div class="code"><span class="lang">Terminal</span><button class="copy" data-copy="q-reset">Copy</button><pre id="q-reset">magpie quota reset                 # spends one held reset; asks first
 magpie quota auto-reset on
+magpie quota auto-reset days 0-7
 magpie quota credits off</pre></div>
-    <ul><li><code>magpie quota reset</code> spends one, starting the account's current windows again. It can't be undone, so it asks first; <code>--yes</code> doesn't.</li><li><code>magpie quota auto-reset on</code> lets the account spend one by itself when its weekly window is used up and no other account can take a request, one a week at most (the five hours running out never does), and spend the one about to expire about half an hour before it does, if the account's windows have been used. Off until turned on.</li><li><code>magpie quota credits off</code> keeps a Codex account from spending its credits once a window is used up: routing holds it as used up and the request goes to the other accounts, groups and fallbacks. On, the default, lets the task go on.</li></ul>
+    <ul><li><code>magpie quota reset</code> spends one, starting the account's current windows again. It can't be undone, so it asks first; <code>--yes</code> doesn't.</li><li><code>magpie quota auto-reset on</code> lets the account spend one by itself when its weekly window is used up and no other account can take a request, one a week at most (the five hours running out never does), and spend the one about to expire about half an hour before it does, if the account's windows have been used. Off until turned on.</li><li><code>magpie quota auto-reset days 0-7</code> lets a reset be spent by itself only when it has 0 to 7 days left before it expires, counted from now (<code>3-</code> at least 3, <code>default</code> any); the soonest to expire in that range goes first, and one that never expires counts only with no most. Spending one by hand isn't held to it. Also in the Codex editor's Advanced, under Resets.</li><li><code>magpie quota credits off</code> keeps a Codex account from spending its credits once a window is used up: routing holds it as used up and the request goes to the other accounts, groups and fallbacks. On, the default, lets the task go on.</li></ul>
 
     <p><a href="/docs/usage">Token usage and cost per agent</a>: what each agent, model, account and session spent, and a relay's real price.</p>
 
@@ -224,7 +225,7 @@ magpie quota credits off</pre></div>
     <h3>Can an agent read the quota itself?</h3>
     <p>Yes. magpie quota --json and GET http://127.0.0.1:3425/v1/magpie/quotas give the same; magpie's skill magpie-quota teaches an agent to read it and wait for allowance.</p>
 
-    <p style="margin-top:48px">Related: <a href="/docs/routing-groups">Round robin and failover across accounts, keys and providers</a> and <a href="/docs/subscriptions">Use your Claude Pro/Max, ChatGPT Plus/Pro or GitHub Copilot subscription in any coding agent</a>. Something fails? See <a href="/docs/troubleshooting">Fixing common errors: 401, 429, 502, 504 and more</a>, or ask on <a href="https://discord.gg/vGSnD3ZKQF">Discord</a>.</p>
+    <p style="margin-top:48px">Related: <a href="/docs/routing-groups">Round robin and failover across accounts, keys and providers</a> and <a href="/docs/subscriptions">Use your Claude Pro/Max, ChatGPT Plus/Pro or GitHub Copilot subscription in any agent</a>. Something fails? See <a href="/docs/troubleshooting">Fixing common errors: 401, 429, 502, 504 and more</a>, or ask on <a href="https://discord.gg/vGSnD3ZKQF">Discord</a>.</p>
   </article>
 </main>
 

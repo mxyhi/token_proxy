@@ -304,6 +304,15 @@
         <button type="button" id="sessionTerminalSelect" class="sess-pick session-terminal-select" aria-label="Session terminal" aria-haspopup="menu" aria-expanded="false" data-ta></button>
       </div>
     </div>
+    <details class="prefs-more" id="generalMore" hidden>
+      <summary data-t>Advanced</summary>
+      <div class="list prefs">
+        <div class="row pref" id="gpuRow">
+          <div class="who"><div class="name" data-t>GPU rendering</div><div class="sub" id="gpuSub"></div></div>
+          <div id="gpuSegs"></div>
+        </div>
+      </div>
+    </details>
   </section>
   <section class="set-page" id="setPage-usage" role="tabpanel" aria-labelledby="setTab-usage">
     <div class="list prefs">
@@ -380,6 +389,10 @@
           <div class="who"><div class="name" data-t>In without cache</div><div class="sub" data-t>Requests' In counts only input the cache didn't read or write, also where the cache columns are left out</div></div>
           <div id="inUncachedSegs"></div>
         </div>
+        <div class="row pref" id="timeZoneRow">
+          <div class="who"><div class="name" data-t>Time zone</div></div>
+          <div class="val" id="timeZoneVal"></div>
+        </div>
       </div>
     </details>
     <div class="row-head" id="alertHead"><span class="label" data-t>Alerts</span></div>
@@ -446,6 +459,8 @@
     <div class="list prefs" id="corsList"></div>
     <div class="row-head" id="webPageHead"><span class="label" data-t>Browser access</span></div>
     <div class="list prefs" id="webPageList"></div>
+    <div class="row-head" id="passkeyHead" hidden><span class="label" data-t>Passkeys</span></div>
+    <div class="list prefs" id="passkeyList" hidden></div>
     <div class="row-head" id="remoteHead"><span class="label" data-t>Another magpie</span></div>
     <div class="list prefs" id="remoteList"></div>
     <details class="prefs-more" id="netMore">
@@ -551,6 +566,10 @@
     <div class="row pref" id="codexResetLeadRow" hidden>
       <div class="who"><div class="name" data-t>How early before one expires</div><div class="sub wraps" data-t>For every account with "before one expires" on: the reset about to run out unused is used this long before it does. Earlier loses what the account's windows have left then; the default is half an hour.</div></div>
       <div id="codexResetLeadPick"></div>
+    </div>
+    <div class="row pref" id="codexResetDaysRow" hidden>
+      <div class="who"><div class="name" data-t>Days left for one used by itself</div><div class="sub wraps" data-t>Only a reset with this many days left before it expires is used by itself, the soonest first. Empty is any; using one by hand isn't held to it.</div></div>
+      <div id="codexResetDaysPick"></div>
     </div>
   </div>
   <div class="list prefs" id="codexWarmList" data-feature="warmups">

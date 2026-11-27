@@ -193,8 +193,14 @@ func jevState(prev before, effort bool, text string) map[string]string {
 	return st
 }
 
+// intentAsk is what Jev is asked of the kinds: magpie's question, or the
+// group's own instructions (before.Prompt) and which kind the message is
+// by them.
 func intentAsk(prev before) string {
-	q := "The `message` is what a user asked a coding assistant. Which kind of request fits it best?"
+	q := "The `message` is what a user asked an AI assistant. Which kind of request fits it best?"
+	if p := strings.TrimSpace(prev.Prompt); p != "" {
+		q = p + "\n\nBy these instructions, which kind is the `message`?"
+	}
 	if prev.Intent != "" {
 		q += " A message that only carries on from the user's message before it (go on, yes, do it, fix that) is of `previous_message_kind`; one that asks for something of its own is of the kind that fits it."
 	}
@@ -221,14 +227,14 @@ func priorAsk(prev before) string {
 // judged by the work asked for.
 func levelAsk(prev before, work bool) string {
 	q := intentAsk(prev)
-	if work {
+	if work && strings.TrimSpace(prev.Prompt) == "" { // the group's own words judge in place of magpie's
 		q += " The kinds are levels of how much work a request is: judge the work the message asks for, not how short it is — a few words can ask for a whole program."
 	}
 	return q
 }
 
 func effortAsk(prev before) string {
-	q := "How much reasoning does a coding assistant need to handle the `message` well?"
+	q := "How much reasoning does an AI assistant need to handle the `message` well?"
 	if prev.Effort != "" {
 		q += " A message that only carries on from the user's message before it (go on, yes, do it) needs what that one did, `previous_message_reasoning` (low, medium, high or xhigh)."
 	}
@@ -243,10 +249,11 @@ func effortAsk(prev before) string {
 // than a level every message is at, whose torn pick holds (the level half
 // below). Whether an intent came of it is decided where the group's own
 // sure is known, so the answer still tells why it went as it did.
-func readJev(b []byte, intents []string, levels bool, prev before) (verdict, error) {
+func readJev(b []byte, intents []string, levels bool, prev before, effort bool) (verdict, error) {
 	var out struct {
 		Model   string `json:"model"`
 		Answers map[string]struct {
+			Type          string         `json:"type"`
 			Choice        string         `json:"choice"`
 			Score         float64        `json:"score"`
 			Confidence    float64        `json:"confidence"`
@@ -259,6 +266,48 @@ func readJev(b []byte, intents []string, levels bool, prev before) (verdict, err
 	}
 	if err := decodeJSON(b, &out); err != nil {
 		return verdict{}, answerError{fmt.Errorf("not a System One answer")}
+	}
+	// a question the model declined (OpenAI's Decisions API answers it
+	// {"type":"refusal"}), or answered in no shape of the question's, is
+	// no answer: never "none of these" or the lowest effort, which its
+	// empty choice and zero score would read as
+	declined := map[string]string{}
+	for k, a := range out.Answers {
+		switch {
+		case a.Type == "refusal":
+			declined[k] = "declined to say"
+			delete(out.Answers, k)
+		case k != "effort" && (a.Type != "" && a.Type != "choice" || a.Choice == ""),
+			k == "effort" && a.Type != "" && a.Type != "score":
+			declined[k] = fmt.Sprintf("answered a %q, not saying", a.Type)
+			delete(out.Answers, k)
+		}
+	}
+	// what was asked and not answered is said, never read as an answer
+	// (zyh6036 on X: with gpt-6-luna on OpenAI's Decisions API, turns
+	// went to the group's first member, the route saying only that the
+	// classifier said none, while the effort it did answer came back)
+	why := func(k string) string {
+		if w, ok := declined[k]; ok {
+			return w
+		}
+		return "didn't say"
+	}
+	q := "intent"
+	if levels {
+		q = "level"
+	}
+	_, said := out.Answers[q]
+	_, rated := out.Answers["effort"]
+	switch kinds := len(intents) > 0; {
+	case kinds && !said && (!effort || !rated):
+		e := fmt.Errorf("%s %s which kind the message is", modelOr(out.Model), why(q))
+		if effort {
+			e = fmt.Errorf("%s %s which kind the message is, or %s how hard the turn is", modelOr(out.Model), why(q), why("effort"))
+		}
+		return verdict{}, answerError{e}
+	case !kinds && effort && !rated:
+		return verdict{}, answerError{fmt.Errorf("%s %s how hard the turn is", modelOr(out.Model), why("effort"))}
 	}
 	var v verdict
 	if a, ok := out.Answers["intent"]; ok && len(intents) > 0 && !levels {
@@ -286,7 +335,24 @@ func readJev(b []byte, intents []string, levels bool, prev before) (verdict, err
 		i = max(0, min(i, len(jevLevels)-1))
 		v.Effort, v.Score = jevLevels[i].effort, a.Score
 	}
+	switch {
+	case len(intents) > 0 && !said:
+		// the effort it rated holds; no intent came of the turn, and why
+		return v, intentFailed{fmt.Errorf("%s %s which kind the message is", modelOr(out.Model), why(q))}
+	case effort && !rated:
+		// the intent holds; the turn reasons as the agent asked
+		return v, effortFailed{fmt.Errorf("%s %s how hard the turn is", modelOr(out.Model), why("effort"))}
+	}
 	return v, nil
+}
+
+// modelOr is the model an answer names, or "the decision model" when it
+// names none.
+func modelOr(m string) string {
+	if m == "" {
+		return "the decision model"
+	}
+	return m
 }
 
 // sureNeeded is how sure a group asks its classifier to be of an intent:
@@ -349,10 +415,10 @@ func (s *Server) jevLevelled(ctx context.Context, p provider.Provider, model str
 		return l, nil
 	}
 	qs := map[string]any{"levels": map[string]any{"type": "noul",
-		"instructions": "Are these `kinds` levels of one scale that every request to a coding assistant is at, such as how hard, how big or how urgent it is — rather than topics or tasks that a request may be none of?"}}
+		"instructions": "Are these `kinds` levels of one scale that every request to an AI assistant is at, such as how hard, how big or how urgent it is — rather than topics or tasks that a request may be none of?"}}
 	for i := range intents {
 		qs[fmt.Sprintf("work%d", i)] = map[string]any{"type": "score",
-			"instructions": fmt.Sprintf("Taking `kinds` as levels of one scale for requests to a coding assistant, how much work is a request at the level `kinds[%d]`?", i),
+			"instructions": fmt.Sprintf("Taking `kinds` as levels of one scale for requests to an AI assistant, how much work is a request at the level `kinds[%d]`?", i),
 			"criteria":     levelWork}
 	}
 	body, _ := json.Marshal(map[string]any{"model": model, "state": map[string]any{"kinds": intents}, "questions": qs})
@@ -361,13 +427,24 @@ func (s *Server) jevLevelled(ctx context.Context, p provider.Provider, model str
 		return levelling{}, err
 	}
 	var out struct {
+		Model   string `json:"model"`
 		Answers map[string]struct {
+			Type  string   `json:"type"`
 			Noul  *float64 `json:"noul"`
 			Score *float64 `json:"score"`
 		} `json:"answers"`
 	}
-	if decodeJSON(b, &out) != nil || out.Answers["levels"].Noul == nil {
+	if decodeJSON(b, &out) != nil {
 		return levelling{}, answerError{fmt.Errorf("not a System One answer")}
+	}
+	if a := out.Answers["levels"]; a.Noul == nil {
+		// said as the turn's own questions are (readJev): the turn wasn't
+		// asked, as it is asked knowing whether its kinds are levels
+		why := "didn't say"
+		if a.Type == "refusal" {
+			why = "declined to say"
+		}
+		return levelling{}, answerError{fmt.Errorf("%s %s whether the group's kinds are levels of one scale, asked before the turn's own questions", modelOr(out.Model), why)}
 	}
 	l.levels = *out.Answers["levels"].Noul >= 0.5
 	if l.levels {
@@ -425,7 +502,7 @@ func (s *Server) askJev(ctx context.Context, wait time.Duration, p provider.Prov
 	if err != nil {
 		return verdict{}, err
 	}
-	return readJev(b, intents, l.levels, prev)
+	return readJev(b, intents, l.levels, prev, effort)
 }
 
 // maskedState masks what Jev is told of a turn, each as maskedText does.
@@ -452,47 +529,87 @@ func maskedState(ctx context.Context, text, user, reply string) (string, string,
 // and answers in its own way (decideAsk, decideAnswer). With the request
 // archive on it keeps the call as it keeps one a client sent (wangb on
 // Discord: 请求存档开启, 但是 systemone 的请求没有记录下来), its usage row
-// naming it.
+// naming it. Each call is on the Routing page and in Recent calls too
+// (keepDecide), as a chat classifier's call is.
 func (s *Server) systemOne(ctx context.Context, p provider.Provider, model string, body []byte) ([]byte, error) {
 	start := time.Now()
 	d, err := s.postDecideSent(ctx, p, model, body)
 	status, b, header := d.status, d.answer, d.header
-	archived := ""
-	if d.sent != nil {
-		c := Call{Time: start, From: provider.Chat, To: provider.Chat, Model: p.ID + "/" + model, Provider: p.ID,
-			Agent: usage.AgentOf(RouterAgent), Kind: "routing", Millis: time.Since(start).Milliseconds()}
-		if err != nil {
-			c.Error = err.Error()
-		} else if status >= 300 {
-			c.Error = provider.APIError(b, fmt.Sprintf("%d %s", status, http.StatusText(status)))
-		}
-		archived = archiveOwn(c, d.sent, d.body, status, header, b)
-	}
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, errNoAnswer
-		}
-		return nil, err
-	}
-	if status >= 300 {
-		return nil, decideRefused{fmt.Errorf("%s: %s", p.Name, provider.APIError(b, fmt.Sprintf("%d %s", status, http.StatusText(status)))), status, header, b}
-	}
-	var use struct {
-		Model string `json:"model"` // the one that answered, when the reply says
-		Usage struct {
-			Input  int `json:"input_tokens"`
-			Output int `json:"output_tokens"`
-		} `json:"usage"`
-	}
-	_ = decodeJSON(b, &use)
-	var keyID, keyName string
+	rec := usage.Record{Time: start, Agent: usage.AgentOf(RouterAgent), Kind: "routing", Provider: p.ID, Host: p.Where(), Model: model, Requested: model,
+		ProviderAccount: accountOf(p), Status: status}
 	if p.Account == nil && p.Key != "" {
-		keyID, keyName = provider.KeyID(p.Key), p.KeyName
+		rec.ProviderKeyID, rec.ProviderKeyName = provider.KeyID(p.Key), p.KeyName
 	}
-	usage.Append(usage.Record{Time: start, Agent: usage.AgentOf(RouterAgent), Kind: "routing", Provider: p.ID, Host: p.Where(), Model: model, Requested: model, Served: use.Model,
-		ProviderKeyID: keyID, ProviderKeyName: keyName, ProviderAccount: accountOf(p),
-		Input: use.Usage.Input, Output: use.Usage.Output, Millis: time.Since(start).Milliseconds(), Status: status, Archive: archived})
+	// a call that failed is the classifier's record too, with why: the
+	// turn's route says the classifier couldn't, and Recent calls shows
+	// the call it made (zyh6036 on X: OpenAI's Decisions API turning
+	// gpt-6-luna's calls away left no record of them anywhere)
+	var out error
+	switch {
+	case err != nil && ctx.Err() != nil:
+		rec.Status, rec.Error, out = http.StatusGatewayTimeout, errNoAnswer.Error(), errNoAnswer
+	case err != nil:
+		rec.Status, rec.Error, out = http.StatusBadGateway, err.Error(), err
+	case status >= 300:
+		rec.Error = provider.APIError(b, fmt.Sprintf("%d %s", status, http.StatusText(status)))
+		out = decideRefused{fmt.Errorf("%s: %s", p.Name, rec.Error), status, header, b}
+	default:
+		var use struct {
+			Model string `json:"model"` // the one that answered, when the reply says
+			Usage struct {
+				Input  int `json:"input_tokens"`
+				Output int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		_ = decodeJSON(b, &use)
+		rec.Served, rec.Input, rec.Output = use.Model, use.Usage.Input, use.Usage.Output
+	}
+	rec.Millis = time.Since(start).Milliseconds()
+	s.keepDecide(ctx, p, &rec, d)
+	usage.Append(rec)
+	if out != nil {
+		return nil, out
+	}
 	return b, nil
+}
+
+// decideSeat carries the key or account askDecideTries asks a decision
+// model on to systemOne, for the Routing page to name it (keepDecide).
+type decideSeat struct{}
+
+// keepDecide puts a classifier's call to a decision model, rec its usage
+// row as systemOne made it, on the Routing page and in Recent calls, as
+// a chat classifier's call is (it goes through serve, Kind "routing"),
+// and with the request archive on keeps its exchange there; the row gets
+// the route and the archive's name. zyh6036 on X: with gpt-6-luna on
+// OpenAI's Decisions API, the tray's list and the Routing page never
+// showed the classifier's calls, which a chat model's showed every turn.
+func (s *Server) keepDecide(ctx context.Context, p provider.Provider, rec *usage.Record, d decided) {
+	c, ok := ctx.Value(decideSeat{}).(candidate)
+	if !ok {
+		c = candidate{p: p, model: rec.Model, rest: p.ID}
+	}
+	seat := weighed(c, p, weighing{}, false, provider.Chat)
+	model := p.ID + "/" + rec.Model
+	rt := Route{Time: rec.Time, Agent: rec.Agent, Kind: "routing", Model: model, Provider: p.ID, Order: []Weighed{seat},
+		Tries: []Try{{ID: seat.ID, Model: rec.Model, Start: rec.Time, Done: true, Status: rec.Status, Millis: rec.Millis, Error: rec.Error, Served: rec.Served}}}
+	rt.CallerKey, rt.CallerKeyName = callerKeyOf(ctx)
+	tr := s.trace.begin(rt)
+	rec.RouteID = tr.ID
+	call := Call{Route: tr.ID, Time: rec.Time, From: provider.Chat, To: provider.Chat, Model: model, Provider: p.ID,
+		Agent: rec.Agent, Kind: "routing", Status: rec.Status, Millis: rec.Millis, Error: rec.Error,
+		Usage: Usage{Input: rec.Input, Output: rec.Output}}
+	if d.sent != nil {
+		rec.Archive = archiveOwn(call, d.sent, d.body, d.status, d.header, d.answer)
+		call.Archive = rec.Archive
+		call.RequestBody, call.RequestTruncated = captureRequestBody(d.body)
+		call.ResponseBody, call.ResponseTruncated = captureRequestBody(d.answer)
+	}
+	s.record(call)
+	s.trace.update(tr, func(r *Route) {
+		r.Done, r.Status, r.Error, r.Millis, r.Archive = true, rec.Status, rec.Error, rec.Millis, rec.Archive
+		r.Served, r.Tokens, r.Output = rec.Served, rec.Input+rec.Output, rec.Output
+	})
 }
 
 // decided is a decision call as it went and came back: the request magpie
@@ -627,6 +744,15 @@ func (s *Server) serveSystemOneBody(w http.ResponseWriter, r *http.Request, body
 	if keyWho, held := keyHolds(r); held && !modelAllowed(keyWho, p, model) {
 		st, msg := keyModelRefusal(w, keyWho, p.ID+"/"+model)
 		writeError(w, provider.Chat, st, msg)
+		return
+	}
+	// audio goes only to a model that reads it (#7790): any other is
+	// told so, never asked the question without what it was about
+	if audio, msg := systemOneAudio(body); msg != "" {
+		writeError(w, provider.Chat, http.StatusBadRequest, msg)
+		return
+	} else if audio && !(systemOneTarget{p, model}).takesAudio() {
+		writeError(w, provider.Chat, http.StatusBadRequest, noAudioError(asked))
 		return
 	}
 	// its keys or accounts in its routing's order, each asked until one

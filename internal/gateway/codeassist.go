@@ -1031,6 +1031,15 @@ func thinkingConfig(r *Request, model string, claude bool, at string) map[string
 				level = "low"
 			case effort == "medium" && (strings.Contains(m, "flash") || gen > 3):
 				level = "medium"
+			case effort == "xhigh" && gen >= 4:
+				// xhigh is Gemini 4's own level (Google's generateContent
+				// reference lists MINIMAL, LOW, MEDIUM, HIGH, XHIGH), so a
+				// custom Gemini provider's xhigh goes up as xhigh, not held
+				// at high. The effort is already fitted to the model's own
+				// levels (fitFor), so xhigh arrives only for a model whose
+				// catalog has it (gemini-4-neon), or one whose levels aren't
+				// known; every Gemini 3 turns a thinking level xhigh away.
+				level = "xhigh"
 			}
 			// a variant at xhigh (Gemini 4 Hydrogen) is asked at xhigh, which
 			// Google lists for it; a model with no such variant stays at high
@@ -1632,6 +1641,7 @@ type codeAssistDecoder struct {
 	// again with each chunk after it
 	searched bool
 	usage    *Usage
+	prompt   promptCount
 	// held is text that may be the start of a call the model wrote out as
 	// text (see textCall), kept back until it is one or isn't
 	held string
@@ -1665,8 +1675,8 @@ func (d *codeAssistDecoder) decode(data string, emit func(Event)) error {
 	}
 	if c.UsageMetadata != nil {
 		u := c.UsageMetadata
-		d.usage = &Usage{Input: max(u.Prompt-u.Cached, 0), CacheRead: u.Cached,
-			Output: u.Candidates + u.Thoughts, Reasoning: u.Thoughts}
+		fit := d.prompt.fit(Usage{CacheRead: u.Cached, Output: u.Candidates + u.Thoughts, Reasoning: u.Thoughts}, u.Prompt)
+		d.usage = &fit
 	}
 	if !d.started {
 		d.started = true

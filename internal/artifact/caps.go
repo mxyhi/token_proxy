@@ -5,9 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
+
+	"github.com/yetone/magpie/internal/lazyre"
 )
 
 // Capabilities (docs/subsystems/artifacts.md, "Page runtime"): what a page
@@ -26,7 +30,7 @@ var capabilityNames = []string{"artifact", "assets", "comments", "db", "dictatio
 // ServedCaps are the capabilities the page runtime gives a page that declares
 // them; permissions is built in and never declared. self is artifact's
 // former name, and resolves the same namespace.
-var ServedCaps = []string{"artifact", "assets", "db", "self", "user"}
+var ServedCaps = []string{"artifact", "assets", "comments", "db", "dictation", "downloads", "files", "mcp", "room", "sample", "self", "tts", "user"}
 
 // Capabilities is a version's declaration, by name.
 type Capabilities map[string]json.RawMessage
@@ -81,6 +85,31 @@ func ParseCapabilities(raw json.RawMessage) (Capabilities, error) {
 	if v, ok := c["assets"]; ok {
 		if _, err := ParseAssetsConfig(v); err != nil {
 			return nil, fmt.Errorf("capability assets: %w", err)
+		}
+	}
+	if v, ok := c["comments"]; ok {
+		if _, err := ParseCommentsConfig(v); err != nil {
+			return nil, fmt.Errorf("capability comments: %w", err)
+		}
+	}
+	if v, ok := c["sample"]; ok {
+		if _, err := ParseSampleConfig(v); err != nil {
+			return nil, fmt.Errorf("capability sample: %w", err)
+		}
+	}
+	if v, ok := c["mcp"]; ok {
+		if _, err := ParseMCPConfig(v); err != nil {
+			return nil, fmt.Errorf("capability mcp: %w", err)
+		}
+	}
+	if v, ok := c["files"]; ok {
+		if _, err := ParseFilesConfig(v); err != nil {
+			return nil, fmt.Errorf("capability files: %w", err)
+		}
+	}
+	if v, ok := c["room"]; ok {
+		if _, err := ParseRoomConfig(v); err != nil {
+			return nil, fmt.Errorf("capability room: %w", err)
 		}
 	}
 	for _, name := range []string{"artifact", "self"} {
@@ -152,6 +181,264 @@ func ParseArtifactConfig(raw json.RawMessage) (*ArtifactConfig, error) {
 	return a, nil
 }
 
+// CommentsConfig is the comments capability's declaration:
+// composer_only grants only openComposer and anchorFor, which write
+// nothing; customAnchors adds customAnchors().
+type CommentsConfig struct {
+	ComposerOnly  bool `json:"composer_only,omitempty"`
+	CustomAnchors bool `json:"customAnchors,omitempty"`
+}
+
+// ParseCommentsConfig reads the comments capability's declaration.
+func ParseCommentsConfig(raw json.RawMessage) (*CommentsConfig, error) {
+	c := &CommentsConfig{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, c); err != nil {
+			return nil, errors.New("it is {}, {\"composer_only\": true} or {\"customAnchors\": true}")
+		}
+	}
+	return c, nil
+}
+
+// CommentsComposerOnly is whether the version's page declares comments
+// as composer_only: it opens the composer and writes nothing.
+func CommentsComposerOnly(c Capabilities) bool {
+	raw, ok := c["comments"]
+	if !ok {
+		return false
+	}
+	cc, err := ParseCommentsConfig(raw)
+	return err != nil || cc.ComposerOnly
+}
+
+// SampleConfig is the sample capability's declaration: {images: true}
+// lets the page send images with its calls.
+type SampleConfig struct {
+	Images bool `json:"images,omitempty"`
+}
+
+// RoomConfig is the room capability's declaration: the event topics
+// opened below Editors (admin), each to "interact" or "admin". Presence
+// is anyone's in the room.
+type RoomConfig struct {
+	Topics map[string]string `json:"topics,omitempty"`
+}
+
+var (
+	roomTopicRe = lazyre.New(`^[a-z][a-z0-9_.-]{0,47}$`)
+	roomLevels  = []string{"interact", "admin", "owner"}
+)
+
+// ParseRoomConfig reads the room capability's declaration.
+func ParseRoomConfig(raw json.RawMessage) (*RoomConfig, error) {
+	c := &RoomConfig{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, c); err != nil {
+			return nil, errors.New(`it is {} or {"topics": {"move": "interact"}}`)
+		}
+	}
+	if len(c.Topics) > 64 {
+		return nil, errors.New("it opens 64 topics at most")
+	}
+	for t, lvl := range c.Topics {
+		if !roomTopicRe.MatchString(t) {
+			return nil, fmt.Errorf("topic %q: a topic is ^[a-z][a-z0-9_.-]{0,47}$", t)
+		}
+		if !slices.Contains(roomLevels, lvl) {
+			return nil, fmt.Errorf("topic %s: its level is \"interact\" or \"admin\", never %q (Viewers don't send)", t, lvl)
+		}
+	}
+	return c, nil
+}
+
+// ParseSampleConfig reads the sample capability's declaration.
+func ParseSampleConfig(raw json.RawMessage) (*SampleConfig, error) {
+	c := &SampleConfig{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, c); err != nil {
+			return nil, errors.New("it is {} or {\"images\": true}")
+		}
+	}
+	return c, nil
+}
+
+// SampleImages is whether the version's page may send images with its
+// sample calls.
+func (c Capabilities) SampleImages() bool {
+	raw, ok := c["sample"]
+	if !ok {
+		return false
+	}
+	s, err := ParseSampleConfig(raw)
+	return err == nil && s.Images
+}
+
+// MCPConfig is the mcp capability's declaration: the manifest of the
+// servers, and each one's tools, the page may call. A server is a
+// Library MCP server's name, or host:<name> for one on this computer,
+// which in magpie is every Library server too.
+type MCPConfig struct {
+	Servers []MCPServerDecl `json:"servers"`
+}
+
+// MCPServerDecl is one server of the mcp manifest.
+type MCPServerDecl struct {
+	Server string   `json:"server"`
+	Tools  []string `json:"tools"`
+}
+
+const (
+	mcpMostServers = 32
+	mcpMostTools   = 128
+)
+
+func mcpToolName(t string) bool {
+	if len(t) == 0 || len(t) > 128 {
+		return false
+	}
+	for _, r := range t {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+// ParseMCPConfig reads the mcp capability's declaration.
+func ParseMCPConfig(raw json.RawMessage) (*MCPConfig, error) {
+	c := &MCPConfig{}
+	shape := errors.New(`it is {"servers": [{"server": "<name>", "tools": ["<tool>", ...]}]}`)
+	if len(raw) == 0 || json.Unmarshal(raw, c) != nil {
+		return nil, shape
+	}
+	if len(c.Servers) == 0 || len(c.Servers) > mcpMostServers {
+		return nil, fmt.Errorf("servers lists 1 to %d servers: %w", mcpMostServers, shape)
+	}
+	seen := map[string]bool{}
+	for _, s := range c.Servers {
+		if s.Server == "" || len(s.Server) > 200 || strings.ContainsFunc(s.Server, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+			return nil, fmt.Errorf("server %q isn't a server's name", s.Server)
+		}
+		if seen[s.Server] {
+			return nil, fmt.Errorf("server %q is listed twice", s.Server)
+		}
+		seen[s.Server] = true
+		if len(s.Tools) == 0 || len(s.Tools) > mcpMostTools {
+			return nil, fmt.Errorf("server %q lists 1 to %d tools", s.Server, mcpMostTools)
+		}
+		tools := map[string]bool{}
+		for _, t := range s.Tools {
+			if !mcpToolName(t) {
+				return nil, fmt.Errorf("server %q: %q isn't a tool's name", s.Server, t)
+			}
+			if tools[t] {
+				return nil, fmt.Errorf("server %q lists tool %q twice", s.Server, t)
+			}
+			tools[t] = true
+		}
+	}
+	return c, nil
+}
+
+// Tools is the manifest's tools of server, nil if it isn't listed.
+func (c *MCPConfig) Tools(server string) []string {
+	for _, s := range c.Servers {
+		if s.Server == server {
+			return s.Tools
+		}
+	}
+	return nil
+}
+
+// Allows is whether the manifest lists tool of server.
+func (c *MCPConfig) Allows(server, tool string) bool {
+	return slices.Contains(c.Tools(server), tool)
+}
+
+// MCP is the version's mcp manifest, nil if it declares none.
+func (c Capabilities) MCP() *MCPConfig {
+	raw, ok := c["mcp"]
+	if !ok {
+		return nil
+	}
+	m, err := ParseMCPConfig(raw)
+	if err != nil {
+		return nil
+	}
+	return m
+}
+
+// FilesConfig is the files capability's declaration. Claude's project is
+// a Claude Code project's id; here it is a folder on this computer, given
+// as an absolute path, and anything else (Claude's "chan_..." among them)
+// is the folder the publishing agent worked in.
+type FilesConfig struct {
+	Project string `json:"project,omitempty"`
+}
+
+// ParseFilesConfig reads the files capability's declaration.
+func ParseFilesConfig(raw json.RawMessage) (*FilesConfig, error) {
+	c := &FilesConfig{}
+	if len(raw) == 0 || json.Unmarshal(raw, c) != nil {
+		return nil, errors.New(`it is {} for the folder the agent works in, or {"project": "<absolute folder>"}`)
+	}
+	if len(c.Project) > 4096 || strings.ContainsRune(c.Project, 0) {
+		return nil, errors.New("project isn't a folder's path")
+	}
+	return c, nil
+}
+
+// FilesDir is the folder a version declaring files reads: its project
+// when that is an absolute path, else cwd, the folder the publishing
+// agent worked in. It is refused when there is none, when it is a disk's
+// root or the home folder or holds it, and when it isn't a folder.
+func FilesDir(c Capabilities, cwd string) (string, error) {
+	raw, ok := c["files"]
+	if !ok {
+		return "", nil
+	}
+	fc, err := ParseFilesConfig(raw)
+	if err != nil {
+		return "", err
+	}
+	dir := fc.Project
+	if !filepath.IsAbs(dir) {
+		dir = cwd
+	}
+	if dir == "" || !filepath.IsAbs(dir) {
+		return "", errors.New(`files reads the folder the agent works in, and magpie wasn't told yours: declare {"files": {"project": "<absolute folder>"}}`)
+	}
+	dir = filepath.Clean(dir)
+	fi, err := os.Stat(dir)
+	if err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("%s isn't a folder on this computer", dir)
+	}
+	if filesTooWide(fi) {
+		return "", fmt.Errorf("files reads one project's folder, not %s: name the project's own folder", dir)
+	}
+	return dir, nil
+}
+
+// filesTooWide is whether the folder is a disk's root, or the home folder
+// or one that holds it: more than one project's files. It compares the
+// folders themselves, so another spelling (a symlink, /USERS on a disk
+// that ignores case) is caught too, and a home folder it can't find
+// leaves every folder too wide.
+func filesTooWide(dir os.FileInfo) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return true
+	}
+	for h := filepath.Clean(home); ; h = filepath.Dir(h) {
+		if hi, err := os.Stat(h); err == nil && os.SameFile(dir, hi) {
+			return true
+		}
+		if filepath.Dir(h) == h {
+			return false
+		}
+	}
+}
+
 // PagePublishes is whether the version's page may publish itself: it
 // declares artifact (or self) without {publish: false}. declared is
 // whether it declares either at all.
@@ -214,7 +501,7 @@ func ParseDBConfig(raw json.RawMessage) (*DBConfig, error) {
 	c := &DBConfig{}
 	if len(raw) > 0 {
 		if err := json.Unmarshal(raw, c); err != nil {
-			return nil, errors.New("it is {} or {\"rules\": [{\"path\": …, \"read\": …, \"write\": …}]}")
+			return nil, errors.New("it is {} or {\"rules\": [{\"path\": \"votes\", \"read\": \"view\", \"write\": \"owner\"}]}, where read and write are levels: view, interact, admin, owner or self")
 		}
 	}
 	if len(c.Rules) > maxRules {

@@ -37,6 +37,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -84,11 +85,18 @@ type Version struct {
 	Label string    `json:"label,omitempty"`
 	// Agent is who published it, as the gateway knew the caller
 	Agent string `json:"agent,omitempty"`
+	// Cwd is the folder the agent worked in, when it was known: where a
+	// comment sent to an agent finds the session that published it
+	Cwd string `json:"cwd,omitempty"`
 	// Files are the version's files besides the page, by published path
 	Files []string `json:"files,omitempty"`
 	Size  int64    `json:"size"`
 	// Capabilities are what the page may do beyond static HTML (caps.go)
 	Capabilities Capabilities `json:"capabilities,omitempty"`
+	// FilesDir is the folder the page reads with files (FilesDir in
+	// caps.go), set at publish; a publish with no folder of its own (a
+	// page publishing itself) keeps the one before
+	FilesDir string `json:"filesDir,omitempty"`
 }
 
 // Latest is the newest version.
@@ -120,6 +128,7 @@ type Publish struct {
 	Description string
 	Label       string
 	Agent       string
+	Cwd         string
 	// Page is the page itself; on an update nil keeps the one before
 	Page []byte
 	// Files are the files beside the page, by published path; on an
@@ -207,6 +216,32 @@ func writeMeta(a *Artifact) error {
 // Get is the artifact id.
 func Get(id string) (*Artifact, error) { return readMeta(id) }
 
+// clock is the store's clock, in UTC; a variable for the tests.
+var clock = func() time.Time { return time.Now().UTC() }
+
+// lastStamp is the stamp the last publish got, in milliseconds: the next
+// one is after it, so two publishes in the same millisecond don't get the
+// same stamp, and the list's order says which artifact was published last
+// (#7755 — the order fell to the ids, which are random, so a list of two
+// artifacts published in one millisecond was a coin toss).
+var lastStamp atomic.Int64
+
+// nextStamp is the stamp a publish gets: the clock's, in milliseconds, and
+// after the one the last publish got. A clock that stands still, or a
+// coarse one, doesn't change the order.
+func nextStamp() time.Time {
+	for {
+		last := lastStamp.Load()
+		now := clock().Truncate(time.Millisecond)
+		if !now.After(time.UnixMilli(last)) {
+			now = time.UnixMilli(last).UTC().Add(time.Millisecond)
+		}
+		if lastStamp.CompareAndSwap(last, now.UnixMilli()) {
+			return now
+		}
+	}
+}
+
 // List is every artifact, the most recently updated first. One whose
 // meta.json can't be read is left out, and said in the error beside the
 // rest.
@@ -249,7 +284,7 @@ func List() ([]*Artifact, error) {
 func Delete(id string) error {
 	shareMu.Lock()
 	defer shareMu.Unlock()
-	if err := unshare(context.Background(), id); err != nil && !errors.Is(err, ErrNotFound) {
+	if err := unshare(context.Background(), id, false); err != nil && !errors.Is(err, ErrNotFound) {
 		return fmt.Errorf("its shared link couldn't be taken down, so it is kept: %w", err)
 	}
 	defer lock()()
@@ -387,7 +422,7 @@ func PublishPage(p Publish) (*Artifact, error) {
 	desc := oneLine(p.Description, maxDescription)
 
 	defer lock()()
-	now := time.Now().UTC().Truncate(time.Millisecond)
+	now := nextStamp()
 	var a *Artifact
 	var prev *Version
 	if p.ID == "" {
@@ -423,6 +458,21 @@ func PublishPage(p Publish) (*Artifact, error) {
 	n := 1
 	if prev != nil {
 		n = prev.N + 1
+	}
+	caps := p.Capabilities
+	if caps == nil && prev != nil {
+		caps = prev.Capabilities
+	}
+	if len(caps) == 0 {
+		caps = nil
+	}
+	cwd := p.Cwd
+	if cwd == "" && prev != nil {
+		cwd = prev.FilesDir
+	}
+	filesDir, err := FilesDir(caps, cwd)
+	if err != nil {
+		return nil, refuse(ErrInvalid, fmt.Errorf("capability files: %w", err))
 	}
 	// what the version holds: the files kept from the one before, then
 	// those given now
@@ -518,14 +568,7 @@ func PublishPage(p Publish) (*Artifact, error) {
 		a.Description = desc
 	}
 	a.Updated = now
-	caps := p.Capabilities
-	if caps == nil && prev != nil {
-		caps = prev.Capabilities
-	}
-	if len(caps) == 0 {
-		caps = nil
-	}
-	a.Versions = append(a.Versions, Version{N: n, At: now, Label: label, Agent: oneLine(p.Agent, 64), Files: all, Size: size, Capabilities: caps})
+	a.Versions = append(a.Versions, Version{N: n, At: now, Label: label, Agent: oneLine(p.Agent, 64), Cwd: p.Cwd, Files: all, Size: size, Capabilities: caps, FilesDir: filesDir})
 	if err := writeMeta(a); err != nil {
 		os.RemoveAll(versionDir(a.ID, n))
 		return nil, err

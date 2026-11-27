@@ -105,6 +105,14 @@ const get = async (path) => {
   return { body: await res.json(), cc: res.headers.get("Cache-Control") };
 };
 
+test("shares: a path no handler knows is a 404, not an exception", async () => {
+  for (const p of ["/api/shares/aaaaaaaaaaaaaaaaaaaaaaaaaa/rt/live?t=x", "/api/shares/aaaaaaaaaaaaaaaa/nope", "/api/shares/x/session"]) {
+    const res = await worker.fetch(new Request("https://usemagpie.ai" + p, { method: "POST" }), { SHARES_DB: {}, SHARES: {}, LIVE: {}, LIVE_KEY: "k" }, ctx);
+    assert.ok(res instanceof Response, p);
+    assert.equal(res.status, 404, p);
+  }
+});
+
 test("latest: the English alone without lang, the Chinese with zh", async () => {
   for (const q of ["", "?lang=en", "?lang=fr"]) {
     const { body, cc } = await get("/api/latest" + q);
@@ -639,7 +647,7 @@ test("sponsors: the home page and the READMEs link every sponsor through /go", a
       }
     }
   const home = readFileSync(pages.home[0], "utf8");
-  for (const s of SPONSORS.filter((s) => s.home)) assert.ok(home.includes(`href="/go/${s.id}/home"`), s.id);
+  for (const s of SPONSORS.filter((s) => s.home)) assert.equal(home.includes(`href="/go/${s.id}/home"`), !s.homeEnded, s.id);
 });
 
 // HTMLRewriter is Cloudflare's; this stands in for the two uses here: a

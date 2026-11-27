@@ -144,14 +144,31 @@ func readChat(body []byte, facts bool) (*Request, error) {
 		decodeJSON(c.Stop, &r.Stop)
 	}
 	var sys []string
+	replied := false
 	for _, m := range c.Messages {
 		switch m.Role {
 		case "system", "developer":
-			sys = append(sys, stringOrText(m.Content))
+			// a rule's system condition reads every one (systemTexts)
 			r.systemRaw = append(r.systemRaw, m.Content)
+			if replied {
+				// One after a reply or a tool's result (ZCode's reminder
+				// on each turn and tool round) stays where it came, for
+				// the builders to say in that turn (responseInstructions),
+				// as a Responses (#502) or Anthropic client's is. Joined
+				// into the system prompt, each rewrote the top-level
+				// system a Messages upstream caches before the
+				// conversation, and every turn was a full cache write
+				// with no read (#7204).
+				if t := stringOrText(m.Content); t != "" {
+					r.Messages = append(r.Messages, Message{Role: m.Role, Parts: []Part{{Kind: Text, Text: t}}})
+				}
+				continue
+			}
+			sys = append(sys, stringOrText(m.Content))
 		case "user":
 			r.Messages = append(r.Messages, Message{Role: "user", Parts: chatParts(m.Content)})
 		case "assistant":
+			replied = true
 			if facts {
 				r.Messages = append(r.Messages, Message{Role: "assistant"})
 				continue
@@ -174,6 +191,7 @@ func readChat(body []byte, facts bool) (*Request, error) {
 			}
 			r.Messages = append(r.Messages, msg)
 		case "tool":
+			replied = true
 			if facts {
 				r.Messages = append(r.Messages, Message{Role: "user", Parts: []Part{{Kind: ToolResult, CallID: m.ToolCallID}}})
 				continue
@@ -411,8 +429,28 @@ var failedAsText = map[string]bool{"devin": true, "qoder": true, "qoder-cn": tru
 // deepseek-v4.1-flash, whose host doesn't say so), Command Code's
 // plugin, which replays it for a Go key as the built-in did to
 // /alpha/generate, and Qoder's, which sends it on as Qoder's own client
-// does (uk.jent on Discord; plugin 0.2.42).
+// does (uk.jent on Discord; plugin 0.2.42). Each of these is sent
+// noReasoning on a tool turn that has none (chatWantsReasoning).
+//
+// Devin's plugin reads it too (0.1.36, plugins#703) and gives it to a
+// model that isn't Claude as the turn's thinking: swe-2 thinks on a tool
+// loop's later steps only when the steps before carry theirs. Measured
+// 2026-11-25 on swe-2-high through magpie, five read_file steps then the
+// next: a streamed Chat request with each step's reasoning_content
+// thought 5 of 5, the same without it 0 of 5, and a Codex Responses body
+// with each step's reasoning item, built here without it, 0 of 5
+// (@Anotiaww on X). Devin is sent no noReasoning: the plugin would give
+// swe-2 a thought it never had.
 func chatReplaysReasoning(host, model string) bool {
+	return chatWantsReasoning(host, model) || host == "devin"
+}
+
+// chatWantsReasoning is whether a Chat upstream that has a turn's
+// reasoning back (chatReplaysReasoning) wants some on every tool turn,
+// noReasoning when the client kept none: DeepSeek refuses a request
+// without it (#1462), and Command Code's and Qoder's plugins read the
+// space as none.
+func chatWantsReasoning(host, model string) bool {
 	return strings.Contains(host, "deepseek") || strings.Contains(strings.ToLower(model), "deepseek") || host == provider.CommandCodePlanID || host == "qoder" || host == "qoder-cn"
 }
 
@@ -441,7 +479,7 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 	if r.System != "" {
 		msgs = append(msgs, map[string]any{"role": "system", "content": r.System})
 	}
-	replay := chatReplaysReasoning(host, model)
+	replay, wants := chatReplaysReasoning(host, model), chatWantsReasoning(host, model)
 	// MiniMax's own Chat API gives a model's thinking in the text, between
 	// <think> tags, and wants it back there on the turns after (its
 	// interleaved thinking): the decoder takes it out as thinking (#1267),
@@ -462,7 +500,7 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 		if len(p.Images) == 0 {
 			return
 		}
-		of := "tool call " + p.CallID
+		of := "tool call " + provider.BoundCallID(p.CallID)
 		if name := names[p.CallID]; name != "" {
 			of = name + " (" + of + ")"
 		} else if p.Name != "" {
@@ -503,7 +541,13 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 						id = "call_" + newID()
 					}
 					names[id] = p.Name
-					call := map[string]any{"id": id, "type": "function",
+					// an id longer than the 64 characters an upstream
+					// behind OpenAI's schema takes (another provider's:
+					// Cursor's call-<uuid>-<n>__fc_<uuid>_0 is 87, #6941)
+					// goes as provider.BoundCallID has it, as the result
+					// answering it does below: the same id the same way
+					// every turn, so the pair still matches
+					call := map[string]any{"id": provider.BoundCallID(id), "type": "function",
 						"function": map[string]any{"name": p.Name, "arguments": argsString(p)}}
 					if sig := p.Signature; sig != "" && (gemini || r.signer != "" && signerOf(sig) == r.signer) {
 						// Gemini's, or a relay's that gave it there
@@ -547,7 +591,7 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 				}
 			} else if think != "" && replay {
 				am["reasoning_content"] = think
-			} else if replay && (len(calls) > 0 || afterTool) {
+			} else if wants && (len(calls) > 0 || afterTool) {
 				// a tool call with no thinking (another model's turn), or a
 				// reply to a tool result with none, which DeepSeek turns the
 				// whole request away for (#1462, #1822)
@@ -611,7 +655,7 @@ func buildChat(r *Request, model, host string, rejectTemp bool) []byte {
 				if p.IsError && failedAsText[host] {
 					out = "Error: " + out
 				}
-				tool := map[string]any{"role": "tool", "tool_call_id": p.CallID, "content": out}
+				tool := map[string]any{"role": "tool", "tool_call_id": provider.BoundCallID(p.CallID), "content": out}
 				if p.IsError && host == "cursor" {
 					// Cursor's plugin reads it, as the built-in told Cursor
 					// isError; another chat upstream has no such field
@@ -1092,9 +1136,11 @@ func cacheKeyCamel(body []byte) []byte {
 	return bytes.TrimSuffix(out.Bytes(), []byte("\n"))
 }
 
-// thinkingConfigField is Gemini's thinking_config as unfit remembers a
-// provider that refused it.
-const thinkingConfigField = "thinking_config"
+// thinkingConfigRefused is Gemini's thinking_config as unfit remembers a
+// model on a provider that refused it: per model so a local multi-backend
+// router (OmniRoute, #7821) keeps asking its real Gemini routes for thoughts
+// after one backend such as Poe turns google away.
+func thinkingConfigRefused(model string) string { return "thinking_config\x00" + model }
 
 // gemini3Levels are the levels Gemini 3 thinks at, of which a model may
 // take only some (gemini-3.8-flash has no minimal): those it is asked at
@@ -1123,13 +1169,22 @@ func geminiRefusedLevel(body []byte) string {
 }
 
 // refusesThinkingConfig recognizes an upstream turning a request away for
-// the thinking_config it was sent, by its error naming it.
+// the thinking_config it was sent, by its error naming it — or refusing the
+// unwrapped top-level google field when a local router forwarded extra_body's
+// contents to a backend that doesn't know it (#7821).
 func refusesThinkingConfig(status int, body []byte) bool {
 	if !badRequest(status) {
 		return false
 	}
 	b := bytes.ToLower(body)
-	return bodyHas(b, "extra_body") || bodyHas(b, "thinking") || bodyHas(b, "include_thoughts")
+	if bodyHas(b, "extra_body") || bodyHas(b, "thinking") || bodyHas(b, "include_thoughts") {
+		return true
+	}
+	var fault any
+	if decodeJSON(body, &fault) != nil {
+		fault = string(body)
+	}
+	return unsupportedOptionalField(fault, "google")
 }
 
 // aiStudioThinking is the thinking_config asking Gemini for its thoughts at
@@ -1203,6 +1258,14 @@ type cUsage struct {
 }
 
 func (u cUsage) usage() Usage {
+	out, _ := u.counted()
+	return out
+}
+
+// counted is the usage, and whether prompt_tokens took in what was read
+// from the cache and written to it (OpenAI's way, and every other's but
+// a relay's in Anthropic's names that counts less than its cache).
+func (u cUsage) counted() (Usage, bool) {
 	out := Usage{Output: u.CompletionTokens, cacheUnknown: u.MagpieCacheUnknown}
 	if d := u.PromptTokensDetails; d != nil {
 		out.CacheRead, out.CacheWrite = d.CachedTokens, d.CacheWriteTokens
@@ -1236,7 +1299,17 @@ func (u cUsage) usage() Usage {
 		out.Deferred = &Usage{Input: max(d.PromptTokens-d.CachedTokens-d.CacheWriteTokens, 0), Output: d.CompletionTokens,
 			CacheRead: d.CachedTokens, CacheWrite: d.CacheWriteTokens}
 	}
-	return out
+	return out, whole
+}
+
+// streamed is a chunk's usage as the reply's so far: a stream that counts
+// its prompt on more than one chunk tells it once (promptCount).
+func (u cUsage) streamed(p *promptCount) Usage {
+	out, whole := u.counted()
+	if !whole {
+		return out
+	}
+	return p.fit(out, u.PromptTokens)
 }
 
 func (u Usage) chat() map[string]any {
@@ -1264,6 +1337,7 @@ type chatDecoder struct {
 	toolDone  bool      // they are whole JSON: a call that starts now comes after it
 	held      []*heldCall
 	choice    string // index of the first choice seen; an empty string means none yet
+	prompt    promptCount
 	// Gemini's OpenAI-compatible API, asked for thoughts, may give them
 	// in the text as a leading <thought>…</thought>, and MiniMax's Chat
 	// API (#1267), like the open models served without a reasoning
@@ -1511,7 +1585,10 @@ func (d *chatDecoder) decode(data string, emit func(Event)) error {
 	}
 	if ch.Error != nil {
 		code, status, said := filterRefused(data)
-		emit(Event{Kind: KError, Text: cmp.Or(ch.Error.Message, streamErrorText(data)), Code: code, Status: status, Said: said})
+		if status == 0 {
+			status = namedEventStatus(data)
+		}
+		emit(Event{Kind: KError, Text: cmp.Or(ch.Error.Message, streamErrorText(data)), Code: code, Status: status, Said: said, Resets: saidResets(data, time.Now())})
 		return nil
 	}
 	if !d.started {
@@ -1521,7 +1598,7 @@ func (d *chatDecoder) decode(data string, emit func(Event)) error {
 		// Anthropic's message_start does (#1887)
 		var prompt Usage
 		if ch.Usage != nil && ch.Usage.PromptTokens > 0 {
-			u := ch.Usage.usage()
+			u := ch.Usage.streamed(&d.prompt)
 			prompt = Usage{Input: u.Input, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite}
 		}
 		emit(Event{Kind: KStart, MsgID: ch.ID, Model: ch.Model, Usage: prompt})
@@ -1583,7 +1660,7 @@ func (d *chatDecoder) decode(data string, emit func(Event)) error {
 		}
 	}
 	if ch.Usage != nil && (ch.Usage.PromptTokens > 0 || ch.Usage.CompletionTokens > 0 || ch.Usage.MagpieDeferred != nil || ch.Usage.Credit != nil) {
-		emit(Event{Kind: KUsage, Usage: ch.Usage.usage()})
+		emit(Event{Kind: KUsage, Usage: ch.Usage.streamed(&d.prompt)})
 	}
 	return nil
 }
@@ -1789,6 +1866,7 @@ func (e *chatEncoder) event(ev Event) {
 			failed["code"] = ev.Code // preserve the upstream error type, including refusals
 		}
 		saidError(failed, ev.Said)
+		resetsSaid(failed, ev.Resets)
 		e.w.event("", map[string]any{"error": failed})
 	}
 	e.col.add(ev)

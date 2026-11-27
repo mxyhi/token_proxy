@@ -62,6 +62,13 @@ type Share struct {
 	// Version is the artifact's version the link shows
 	Version int       `json:"version"`
 	At      time.Time `json:"at"`
+	// Data: a version shared declared db, so usemagpie.ai may keep the
+	// page's data, which goes back to the store here when it stops being
+	// shared, whatever the version shown then declares
+	Data bool `json:"data,omitempty"`
+	// Note is what didn't go with it (assets left out), for the user;
+	// never kept
+	Note string `json:"-"`
 }
 
 // shareMu is held over each share's talk with usemagpie.ai, so two at
@@ -131,12 +138,26 @@ func ShareLatest(ctx context.Context, id string) (*Share, error) {
 		return nil, err
 	}
 	v := a.Latest()
-	if old != nil && old.Version == v.N {
-		return old, nil
+	var body []byte
+	var ctype string
+	if old == nil || old.Version != v.N {
+		if body, ctype, err = shareBody(a, v); err != nil {
+			return nil, err
+		}
 	}
-	body, ctype, err := shareBody(a, v)
-	if err != nil {
-		return nil, err
+	// its assets go up before the version pointing at them does
+	note := ""
+	if old != nil {
+		if err := syncAssets(ctx, site, id, old); err != nil {
+			if gone, err := sharedGone(id, err); gone {
+				return nil, err
+			}
+			note = err.Error()
+		}
+		if old.Version == v.N {
+			old.Note = note
+			return old, nil
+		}
 	}
 	method, u := http.MethodPost, site+"/api/shares"
 	if old != nil {
@@ -150,26 +171,47 @@ func ShareLatest(ctx context.Context, id string) (*Share, error) {
 	}
 	status, err := shareAsk(ctx, method, u, old, body, ctype, &got)
 	if status == http.StatusNotFound && old != nil {
-		// taken down there: not shared again behind the user's back
-		if err := writeShare(id, nil); err != nil {
-			return nil, err
-		}
-		return nil, ErrSharedGone
+		_, err := sharedGone(id, errShareNotFound)
+		return nil, err
 	}
 	if err != nil {
 		return nil, err
 	}
 	s := &Share{ID: got.ID, URL: got.URL, Token: got.Token, Version: v.N, At: time.Now().UTC()}
 	if old != nil {
-		s.ID, s.URL, s.Token = old.ID, old.URL, old.Token
+		s.ID, s.URL, s.Token, s.Data = old.ID, old.URL, old.Token, old.Data
 	}
+	s.Data = s.Data || v.Capabilities.Has("db")
 	if !validShareID(s.ID) || !strings.HasPrefix(s.URL, "https://") && !strings.HasPrefix(s.URL, site) || s.Token == "" {
 		return nil, fmt.Errorf("usemagpie.ai's answer doesn't read: %+v", got)
 	}
 	if err := writeShare(id, s); err != nil {
 		return nil, err
 	}
+	if old == nil {
+		// shared just now: its link isn't out yet
+		if err := syncAssets(ctx, site, id, s); err != nil {
+			note = err.Error()
+		}
+	}
+	s.Note = note
 	return s, nil
+}
+
+// errShareNotFound is usemagpie.ai's 404 for a share's own address.
+var errShareNotFound = errors.New("usemagpie.ai: no such shared page")
+
+// sharedGone is whether err says the share was taken down there; if so
+// it isn't shared here any more either (never shared again behind the
+// user's back), and the error is ErrSharedGone.
+func sharedGone(id string, err error) (bool, error) {
+	if !errors.Is(err, errShareNotFound) {
+		return false, err
+	}
+	if err := writeShare(id, nil); err != nil {
+		return true, err
+	}
+	return true, ErrSharedGone
 }
 
 // Unshare takes the artifact's shared link down; one not shared, or taken
@@ -177,10 +219,12 @@ func ShareLatest(ctx context.Context, id string) (*Share, error) {
 func Unshare(ctx context.Context, id string) error {
 	shareMu.Lock()
 	defer shareMu.Unlock()
-	return unshare(ctx, id)
+	return unshare(ctx, id, true)
 }
 
-func unshare(ctx context.Context, id string) error {
+// unshare takes the link down; keep takes its data back first, which a
+// delete doesn't.
+func unshare(ctx context.Context, id string, keep bool) error {
 	s, err := Shared(id)
 	if err != nil || s == nil {
 		return err
@@ -189,11 +233,79 @@ func unshare(ctx context.Context, id string) error {
 	if site == "" {
 		return errors.New("sharing is off here")
 	}
+	// what its viewers wrote there comes back first: a page that keeps
+	// its data on usemagpie.ai while shared doesn't lose it
+	if keep {
+		if err := takeBack(ctx, id, site, s); err != nil {
+			return err
+		}
+	}
 	status, err := shareAsk(ctx, http.MethodDelete, site+"/api/shares/"+s.ID, s, nil, "", nil)
 	if err != nil && status != http.StatusNotFound {
 		return err
 	}
 	return writeShare(id, nil)
+}
+
+// takeBack writes the shared page's data on usemagpie.ai into the
+// artifact's store, in place of what it held, when the share keeps any:
+// a version shared declared db, and usemagpie.ai says the data went
+// there. Taken down there, there is nothing to take.
+func takeBack(ctx context.Context, id, site string, s *Share) error {
+	if _, err := readMeta(id); err != nil {
+		return err
+	}
+	if !s.Data {
+		return nil
+	}
+	var got struct {
+		Held bool        `json:"held"`
+		Docs []SharedDoc `json:"docs"`
+	}
+	status, err := shareAsk(ctx, http.MethodGet, site+"/api/shares/"+s.ID+"/data", s, nil, "", &got)
+	if status == http.StatusNotFound {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("the page's data on usemagpie.ai wasn't taken back, so it is still shared: %w", err)
+	}
+	if !got.Held {
+		return nil
+	}
+	if err := RestoreDocs(id, got.Docs); err != nil {
+		return fmt.Errorf("the page's data on usemagpie.ai doesn't fit its store here, so it is still shared: %w", err)
+	}
+	return nil
+}
+
+// OwnerLink is a link that opens the shared page as its owner, once:
+// usemagpie.ai trades its code for a key the browser keeps.
+func OwnerLink(ctx context.Context, id string) (string, error) {
+	s, err := Shared(id)
+	if err != nil {
+		return "", err
+	}
+	if s == nil {
+		return "", errors.New("it isn't shared")
+	}
+	site := ShareSite()
+	if site == "" {
+		return "", errors.New("sharing is off here")
+	}
+	var got struct {
+		URL string `json:"url"`
+	}
+	status, err := shareAsk(ctx, http.MethodPost, site+"/api/shares/"+s.ID+"/owner", s, nil, "", &got)
+	if status == http.StatusNotFound {
+		return "", ErrSharedGone
+	}
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(got.URL, s.URL+"#owner=") {
+		return "", fmt.Errorf("usemagpie.ai's answer doesn't read: %q", got.URL)
+	}
+	return got.URL, nil
 }
 
 func validShareID(id string) bool {
@@ -217,9 +329,32 @@ func shareBody(a *Artifact, v *Version) ([]byte, string, error) {
 	names := append([]string{Page}, v.Files...)
 	var buf bytes.Buffer
 	w := multipart.NewWriter(&buf)
-	meta, _ := json.Marshal(map[string]any{"title": a.Title, "description": a.Description, "files": names})
+	m := map[string]any{"title": a.Title, "description": a.Description, "files": names}
+	rt := SharedRuntime(v)
+	if len(rt.Caps) > 0 {
+		// what usemagpie.ai serves the page (site/live.js), and who on it
+		// is the owner: their data/users/<id>/ stay theirs there
+		m["capabilities"] = rt.Caps
+		owner, err := viewerID()
+		if err != nil {
+			return nil, "", err
+		}
+		m["owner"] = owner
+	}
+	meta, _ := json.Marshal(m)
 	if err := w.WriteField("meta", string(meta)); err != nil {
 		return nil, "", err
+	}
+	// the page's data goes with it; usemagpie.ai takes it only when the
+	// share keeps none of its own yet
+	if v.Capabilities.Has("db") {
+		data, err := sharedDocsJSON(a.ID)
+		if err != nil {
+			return nil, "", err
+		}
+		if err := w.WriteField("data", string(data)); err != nil {
+			return nil, "", err
+		}
 	}
 	for i, name := range names {
 		b, err := os.ReadFile(filepath.Join(versionDir(a.ID, v.N), filepath.FromSlash(name)))
@@ -228,9 +363,9 @@ func shareBody(a *Artifact, v *Version) ([]byte, string, error) {
 		}
 		// its pages run window.claude there too, with nothing served
 		if name == Page {
-			b = WithRuntime(Served(b), SharedRuntime())
+			b = WithRuntime(Served(b), rt)
 		} else if htmlName(name) {
-			b = WithRuntime(b, SharedRuntime())
+			b = WithRuntime(b, rt)
 		}
 		part, err := w.CreateFormFile(fmt.Sprint(i), "file")
 		if err != nil {

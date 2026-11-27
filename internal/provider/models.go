@@ -1449,9 +1449,10 @@ func (p Provider) fixV1(ctx context.Context, base, at string) string {
 
 // servesAtBase reports whether p's OpenAI URL that is base has its
 // endpoint there: a POST of an empty body to base/chat/completions (or
-// /responses) that is answered with anything but 404 or 405 — a 400 for the
-// missing model, a 401 for the key — names a route that exists. A request
-// that fails to connect says nothing, and is taken as the URL being right.
+// /responses) that is answered with anything but 404, 405 or a web page
+// served 200 — a 400 for the missing model, a 401 for the key — names a
+// route that exists. A request that fails to connect says nothing, and is
+// taken as the URL being right.
 func (p Provider) servesAtBase(ctx context.Context, base string) bool {
 	for _, e := range []struct{ at, end string }{{p.Chat, "/chat/completions"}, {p.Responses, "/responses"}} {
 		if strings.TrimRight(strings.TrimSpace(e.at), "/") != base {
@@ -1472,9 +1473,16 @@ func (p Provider) servesAtBase(ctx context.Context, base string) bool {
 			cancel()
 			return true
 		}
-		io.Copy(io.Discard, io.LimitReader(res.Body, 1<<16))
+		// a relay's site answers any path its API isn't at 200 with its
+		// own page (new-api's and one-api's web app): no route of the
+		// API's (sarosaka1023 on X)
+		res = NotAnAPIReply(res, "")
+		b, _ := io.ReadAll(io.LimitReader(res.Body, 1<<16))
 		res.Body.Close()
 		cancel()
+		if res.StatusCode == http.StatusBadGateway && ServedPage(string(b)) {
+			continue
+		}
 		if res.StatusCode != http.StatusNotFound && res.StatusCode != http.StatusMethodNotAllowed {
 			return true
 		}
@@ -2118,20 +2126,74 @@ func (p Provider) Thinks(model string) bool {
 }
 
 // PaidBesideFree says model costs its subscription's credits while the
-// subscription serves other models at no cost to them (catalog.Model's
-// Free: WorkBuddy's "x0.00", Qoder's is_free, Cline's free models). Its
-// credits running out then says nothing of those: they draw on none
-// (Creat.wu on Discord). False for a model not on the list, or where no
-// model is free.
+// subscription serves other models at no cost to them (costsNothing:
+// WorkBuddy's "x0.00", Qoder's is_free, Cline's free models, OpenCode Go's
+// and Zen's). Its credits or windows running out then say nothing of
+// those: they draw on none (Creat.wu on Discord; Go's "If you reach the
+// usage limit, you can continue using the free models", #7496). False for
+// a model not on the list, or where no model is free.
 func (p Provider) PaidBesideFree(model string) bool {
-	listed, paid, free := false, false, false
+	listed, free, freeToo, _ := p.freeBeside(model)
+	return listed && !free && freeToo
+}
+
+// FreeBesidePaid says model is one OpenCode serves at no cost
+// (costsNothing) beside models that cost: a refusal of it for credit or
+// quota is its own, as it draws on neither, and says nothing of the
+// others (ggbdpq, #7496). OpenCode's alone: WorkBuddy refuses even its
+// 0-rate models to an account with no package, a refusal of the account.
+func (p Provider) FreeBesidePaid(model string) bool {
+	listed, free, _, paidToo := p.freeBeside(model)
+	return listed && free && paidToo && p.IsOpenCode()
+}
+
+// ModelsRestAlone says a credit or quota refusal of any model on p's list
+// rests that model alone, never p's key as a whole: each is paid beside
+// free ones (PaidBesideFree) or free beside paid ones (FreeBesidePaid),
+// as at OpenCode Go and Zen. A magpie before v0.1.4818 rested such a key
+// whole, as nothing marked OpenCode's free models; a ladder rest or a
+// notice it left under the whole key held, or showed out, the free models
+// the key still serves (xzhih on X, #7773).
+func (p Provider) ModelsRestAlone() bool {
+	free, paid := false, false
 	for _, m := range p.Available() {
-		if strings.EqualFold(m.ID, model) {
-			listed, paid = true, !m.Free
+		if p.costsNothing(m) {
+			free = true
+		} else {
+			paid = true
 		}
-		free = free || m.Free
 	}
-	return listed && paid && free
+	return free && paid && p.IsOpenCode()
+}
+
+// freeBeside is whether p lists model, whether it costs nothing there
+// (costsNothing), and whether p lists another model that does, and one
+// that doesn't.
+func (p Provider) freeBeside(model string) (listed, free, freeToo, paidToo bool) {
+	for _, m := range p.Available() {
+		f := p.costsNothing(m)
+		switch {
+		case strings.EqualFold(m.ID, model):
+			listed, free = true, f
+		case f:
+			freeToo = true
+		default:
+			paidToo = true
+		}
+	}
+	return listed, free, freeToo, paidToo
+}
+
+// costsNothing says p serves m at no cost to its allowance or credits by
+// its vendor's word: catalog.Model's Free (WorkBuddy's "x0.00", Qoder's
+// is_free, Cline's free models, OpenCode Go's "monthly_usage": null), or,
+// at OpenCode, one of Zen's free models (OpenCodeFree) or of Go's
+// (openCodeGoFree), for a list saved before Go's word was read from it.
+// Not the user's CountFree, which says how Usage counts the provider and
+// nothing of what the vendor holds back, nor another vendor's $0 price:
+// a free tier priced 0 may still draw on the key's limits.
+func (p Provider) costsNothing(m catalog.Model) bool {
+	return m.Free || p.IsOpenCode() && (p.OpenCodeFree(m.ID) || p.openCodeGoFree(m.ID))
 }
 
 // FreeModel says model costs nothing on p: its vendor serves it at no cost
@@ -3948,6 +4010,20 @@ func imagesIn(p *Provider, m catalog.Model, s settings.Settings) (bool, *bool) {
 // with what the user set taken over the vendor's list and models.dev.
 func entryFor(p Provider, m catalog.Model, s settings.Settings) Entry {
 	return sharedEntry(&p, m, s)
+}
+
+// EntriesOf is each of ms, models of p, as the catalog carries a model it
+// lists (sharedEntry): its name, levels, window and reply limit with the
+// user's settings over the vendor's list, the settings read once for them
+// all. ms may go past what agents are offered: the gateway's account list
+// tells every model of p's Available() in /v1/models' shape.
+func EntriesOf(p Provider, ms []catalog.Model) []Entry {
+	s := settings.Load()
+	out := make([]Entry, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, sharedEntry(&p, m, s))
+	}
+	return out
 }
 
 // sharedEntry is entryFor that keeps p itself in the entry, so every model of

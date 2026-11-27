@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 const { chromium, webkit } = require("playwright");
 const { fixture } = require("./fixtures/caller-keys.cjs");
-const { openPart } = require("./reader.cjs");
+const { openPart, watchSettingsReads, settingsDrawn } = require("./reader.cjs");
 
 // Every build carries moejs's third-party notices (THIRD_PARTY_NOTICES,
 // embedded in the binary); Settings › About's Open-source licenses shows
@@ -26,8 +26,10 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         page.on("pageerror", (e) => errors.push(e.message));
         await page.route("**/*", fixture(lang, "light", []));
         await page.route("**/api/notices", (r) => r.fulfill({ json: { text } }));
+        await watchSettingsReads(page);
         await page.goto("http://magpie.test/");
         await page.locator("#prefs").click();
+        await settingsDrawn(page);
         await openPart(page, "about");
         const row = page.locator("#about .row", { has: page.locator(".who", { hasText: words[lang] }) });
         await row.locator("button.text").click();

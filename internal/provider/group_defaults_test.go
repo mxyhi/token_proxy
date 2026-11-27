@@ -132,6 +132,22 @@ func TestFoundGroupsFollowTheirDefaults(t *testing.T) {
 	if auto, _ := found(); auto.Routing != Ordered || auto.Affinity != AffinityTurn {
 		t.Fatalf("after refusals: %q %q", auto.Routing, auto.Affinity)
 	}
+	// Groups of one follow the same defaults when that option is on.
+	if err := Save(Provider{ID: "solo", Name: "Solo", Key: "k", Chat: "http://127.0.0.1:1/v1", Models: []string{"single-model"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetAutoGroupsOfOne(true); err != nil {
+		t.Fatal(err)
+	}
+	if g, ms, ok := FindGroup("auto/single-model"); !ok || len(ms) != 1 || g.Routing != Ordered || g.Affinity != AffinityTurn || !g.RoutedAt.Equal(at) {
+		t.Fatalf("found group of one: %v %d %q %q %s", ok, len(ms), g.Routing, g.Affinity, g.RoutedAt)
+	}
+	if err := SetAutoGroupsOfOne(false); err != nil {
+		t.Fatal(err)
+	}
+	if auto, _ := found(); auto.Routing != Ordered || auto.Affinity != AffinityTurn || !auto.RoutedAt.Equal(at) {
+		t.Fatalf("groups of one off changed defaults: %q %q %s", auto.Routing, auto.Affinity, auto.RoutedAt)
+	}
 	// back to Smart and Auto
 	if err := settings.SetGroupDefaults(settings.GroupDefaults{}); err != nil {
 		t.Fatal(err)

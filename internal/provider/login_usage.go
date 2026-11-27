@@ -89,6 +89,30 @@ type loginRead struct {
 	e    loginUsageEntry
 }
 
+// LoginReadsDone waits, at most till ctx ends, for every account's usage
+// being read now to be read: a read outlives the request that began it,
+// and a test changes what it reads (CodexBase) only once none is.
+func LoginReadsDone(ctx context.Context) {
+	for {
+		c := &loginUsageCache
+		c.Lock()
+		var r *loginRead
+		for _, p := range c.pending {
+			r = p
+			break
+		}
+		c.Unlock()
+		if r == nil {
+			return
+		}
+		select {
+		case <-r.done:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // loginUsageFor, when set, stands in for LoginUsage's readings (tests),
 // as UsageClaudeVia does for Claude's own. It is held for reading while it
 // runs: Allowances reads in the background and returns without waiting,
@@ -414,6 +438,17 @@ func loginProvider(l Login) string {
 	return l.Agent
 }
 
+// savedLoginPlan is the plan logins.json keeps for agent's account user
+// now: "" for none.
+func savedLoginPlan(agent, user string) string {
+	for _, l := range sharedLogins() {
+		if l.Agent == agent && strings.EqualFold(l.User, user) {
+			return l.Plan
+		}
+	}
+	return ""
+}
+
 func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 	ctx = ViaLogin(ctx, loginProvider(l), l.User) // asked through the account's own proxy
 	if strings.HasPrefix(l.Agent, "plugin:") {
@@ -476,6 +511,12 @@ func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 		} else {
 			q.ReadAt = claudeReadAt(l.User)
 		}
+		// the plan as the run left it: Claude Code renews the account's
+		// tier in its directory, which syncSavedClaude keeps (an account
+		// upgraded since l was read, CoderMaurice on X)
+		if plan := savedLoginPlan(l.Agent, l.User); plan != "" {
+			q.Plan = plan
+		}
 		return q
 	}
 	var tok, accountID string
@@ -506,8 +547,12 @@ func loginQuota(ctx context.Context, l Login) SubscriptionQuota {
 			}
 		} else {
 			var plan string
-			if plan, q.Windows, q.Resets, q.Balance, q.Held, err = codexWindowsRenewing(ctx, tok, accountID, renew); plan != "" {
+			var left *float64
+			if plan, q.Windows, q.Resets, q.Balance, left, q.Held, err = codexWindowsLeftRenewing(ctx, tok, accountID, renew); plan != "" {
 				q.Plan = plan
+			}
+			if err == nil {
+				noteWeekCredits(l.User, q.Windows, q.Resets, left, time.Now())
 			}
 			q.Until = codexUntil(codexLoginAuth(l), time.Now())
 		}
@@ -675,8 +720,9 @@ func codexLoginAuth(l Login) []byte {
 	for _, x := range readLogins() {
 		if x.Agent == "codex" && strings.EqualFold(x.User, l.User) {
 			// as Codex keeps it in its other folder, when it is signed in there
+			// on this account's workspace (codexOtherWorkspace)
 			if home := codexHeldIn(x); home != "" {
-				if b, _, err := readCodexLogin(home, false); err == nil {
+				if b, _, err := readCodexLogin(home, false); err == nil && !codexOtherWorkspace(x, b) {
 					return b
 				}
 			}
